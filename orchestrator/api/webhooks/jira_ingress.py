@@ -5,8 +5,13 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.transport_runtime import build_http_transport_action_executors, execute_http_ingress_result
-from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.transport_runtime import (
+    build_http_transport_action_executors,
+    execute_http_ingress_result,
+)
+from orchestrator.api.webhooks.payload_utils import (
+    read_json_payload as _read_json_payload,
+)
 from orchestrator.api.webhooks.contracts import (
     extract_delivery_id,
     extract_issue_payload,
@@ -26,6 +31,7 @@ from orchestrator.core.communications import TransportEnvelope
 from orchestrator.storage.models import Tenant
 
 logger = logging.getLogger(__name__)
+
 
 async def stage_parse_jira_webhook_context(
     *,
@@ -47,8 +53,17 @@ async def stage_parse_jira_webhook_context(
     payload, _ = await _read_json_payload(request, request_id=request_id, source="jira")
     webhook_event = normalize_jira_webhook_event(payload.get("webhookEvent"))
 
-    issue_key, issue_labels, issue_status, issue_status_category_key, issue_summary, issue_description = extract_issue_payload(payload)
-    comment_command, comment_command_argument, comment_command_error = parse_jira_comment_command(payload)
+    (
+        issue_key,
+        issue_labels,
+        issue_status,
+        issue_status_category_key,
+        issue_summary,
+        issue_description,
+    ) = extract_issue_payload(payload)
+    comment_command, comment_command_argument, comment_command_error = (
+        parse_jira_comment_command(payload)
+    )
     delivery_id = extract_delivery_id(request)
     record_jira_webhook_receipt(
         session=session,
@@ -100,10 +115,15 @@ async def ingest_jira_webhook_event(
     settings,  # noqa: ANN001
     request_id: str | None = None,
 ) -> object:
-    normalized_request_id = request_id or request.headers.get("X-Request-Id") or str(uuid4())
+    normalized_request_id = (
+        request_id or request.headers.get("X-Request-Id") or str(uuid4())
+    )
     envelope = TransportEnvelope(
         transport="jira_webhook",
-        event_type=str(request.headers.get("X-Atlassian-Webhook-Identifier") or "").strip() or "jira_webhook",
+        event_type=str(
+            request.headers.get("X-Atlassian-Webhook-Identifier") or ""
+        ).strip()
+        or "jira_webhook",
         request_id=normalized_request_id,
         tenant_id_hint=tenant_id,
     )

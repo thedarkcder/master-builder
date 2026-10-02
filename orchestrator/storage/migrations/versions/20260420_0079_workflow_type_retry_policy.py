@@ -33,11 +33,18 @@ def _default_retry_policy_config() -> dict[str, object]:
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-    workflow_type_columns = {column["name"] for column in inspector.get_columns("workflow_types")}
-    workflow_type_operation_columns = {column["name"] for column in inspector.get_columns("workflow_type_operations")}
+    workflow_type_columns = {
+        column["name"] for column in inspector.get_columns("workflow_types")
+    }
+    workflow_type_operation_columns = {
+        column["name"] for column in inspector.get_columns("workflow_type_operations")
+    }
 
     if "retry_policy_config_json" not in workflow_type_columns:
-        op.add_column("workflow_types", sa.Column("retry_policy_config_json", sa.JSON(), nullable=True))
+        op.add_column(
+            "workflow_types",
+            sa.Column("retry_policy_config_json", sa.JSON(), nullable=True),
+        )
 
     workflow_rows = bind.execute(
         sa.text(
@@ -81,7 +88,9 @@ def upgrade() -> None:
         )
 
     bind.execute(
-        workflow_types.update().where(workflow_types.c.retry_policy_config_json.is_(None)).values(
+        workflow_types.update()
+        .where(workflow_types.c.retry_policy_config_json.is_(None))
+        .values(
             retry_policy_config_json=_default_retry_policy_config(),
         )
     )
@@ -95,7 +104,10 @@ def upgrade() -> None:
     else:
         with op.batch_alter_table("workflow_types") as batch_op:
             batch_op.alter_column("retry_policy_config_json", nullable=False)
-        if "retry_policy_config_json" in workflow_type_operation_columns or "retry_policy" in workflow_type_operation_columns:
+        if (
+            "retry_policy_config_json" in workflow_type_operation_columns
+            or "retry_policy" in workflow_type_operation_columns
+        ):
             with op.batch_alter_table("workflow_type_operations") as batch_op:
                 if "retry_policy_config_json" in workflow_type_operation_columns:
                     batch_op.drop_column("retry_policy_config_json")
@@ -106,21 +118,38 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-    workflow_type_columns = {column["name"] for column in inspector.get_columns("workflow_types")}
-    workflow_type_operation_columns = {column["name"] for column in inspector.get_columns("workflow_type_operations")}
+    workflow_type_columns = {
+        column["name"] for column in inspector.get_columns("workflow_types")
+    }
+    workflow_type_operation_columns = {
+        column["name"] for column in inspector.get_columns("workflow_type_operations")
+    }
 
     if bind.dialect.name != "sqlite":
         if "retry_policy" not in workflow_type_operation_columns:
-            op.add_column("workflow_type_operations", sa.Column("retry_policy", sa.Text(), nullable=True))
+            op.add_column(
+                "workflow_type_operations",
+                sa.Column("retry_policy", sa.Text(), nullable=True),
+            )
         if "retry_policy_config_json" not in workflow_type_operation_columns:
-            op.add_column("workflow_type_operations", sa.Column("retry_policy_config_json", sa.JSON(), nullable=True))
+            op.add_column(
+                "workflow_type_operations",
+                sa.Column("retry_policy_config_json", sa.JSON(), nullable=True),
+            )
     else:
-        if "retry_policy" not in workflow_type_operation_columns or "retry_policy_config_json" not in workflow_type_operation_columns:
+        if (
+            "retry_policy" not in workflow_type_operation_columns
+            or "retry_policy_config_json" not in workflow_type_operation_columns
+        ):
             with op.batch_alter_table("workflow_type_operations") as batch_op:
                 if "retry_policy" not in workflow_type_operation_columns:
-                    batch_op.add_column(sa.Column("retry_policy", sa.Text(), nullable=True))
+                    batch_op.add_column(
+                        sa.Column("retry_policy", sa.Text(), nullable=True)
+                    )
                 if "retry_policy_config_json" not in workflow_type_operation_columns:
-                    batch_op.add_column(sa.Column("retry_policy_config_json", sa.JSON(), nullable=True))
+                    batch_op.add_column(
+                        sa.Column("retry_policy_config_json", sa.JSON(), nullable=True)
+                    )
 
     workflow_types = sa.table(
         "workflow_types",
@@ -142,7 +171,9 @@ def downgrade() -> None:
     for row in workflow_policies:
         bind.execute(
             workflow_type_operations.update()
-            .where(workflow_type_operations.c.workflow_type_key == row["workflow_type_key"])
+            .where(
+                workflow_type_operations.c.workflow_type_key == row["workflow_type_key"]
+            )
             .values(
                 retry_policy="Workflow-level retry policy",
                 retry_policy_config_json=row["retry_policy_config_json"],
@@ -151,7 +182,9 @@ def downgrade() -> None:
 
     if bind.dialect.name != "sqlite":
         op.alter_column("workflow_type_operations", "retry_policy", nullable=False)
-        op.alter_column("workflow_type_operations", "retry_policy_config_json", nullable=False)
+        op.alter_column(
+            "workflow_type_operations", "retry_policy_config_json", nullable=False
+        )
         if "retry_policy_config_json" in workflow_type_columns:
             op.drop_column("workflow_types", "retry_policy_config_json")
     else:

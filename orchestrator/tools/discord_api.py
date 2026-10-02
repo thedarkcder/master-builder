@@ -40,7 +40,9 @@ class DiscordApiClient:
         self._bot_token = token
         self._base_url = "https://discord.com/api/v10"
 
-    def _request_json(self, *, method: str, path: str, payload: dict | None = None) -> dict | list:
+    def _request_json(
+        self, *, method: str, path: str, payload: dict | None = None
+    ) -> dict | list:
         body = None
         headers = {
             "Accept": "application/json",
@@ -62,14 +64,22 @@ class DiscordApiClient:
                 raw_body = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
-            if exc.code == 403 and "Cloudflare" in error_body and "Error 1010" in error_body:
+            if (
+                exc.code == 403
+                and "Cloudflare" in error_body
+                and "Error 1010" in error_body
+            ):
                 raise DiscordApiError(
                     "Discord API request was blocked by Cloudflare (Error 1010). "
                     "This is an egress/IP or client-fingerprint block, not a bot-token validation failure."
                 ) from exc
-            raise DiscordApiError(f"Discord API request failed ({exc.code}): {error_body}") from exc
+            raise DiscordApiError(
+                f"Discord API request failed ({exc.code}): {error_body}"
+            ) from exc
         except URLError as exc:
-            raise DiscordApiError(f"Discord API request failed (network): {exc}") from exc
+            raise DiscordApiError(
+                f"Discord API request failed (network): {exc}"
+            ) from exc
 
         if not raw_body:
             return {}
@@ -87,8 +97,12 @@ class DiscordApiClient:
         file_content_type: str = "application/octet-stream",
     ) -> dict | list:
         boundary = f"----master-builder-discord-boundary-{uuid4().hex}"
-        normalized_content_type = file_content_type.strip() or "application/octet-stream"
-        encoded_payload = json.dumps(payload_json, separators=(",", ":")).encode("utf-8")
+        normalized_content_type = (
+            file_content_type.strip() or "application/octet-stream"
+        )
+        encoded_payload = json.dumps(payload_json, separators=(",", ":")).encode(
+            "utf-8"
+        )
         body = b"".join(
             [
                 f"--{boundary}\r\n".encode("utf-8"),
@@ -123,14 +137,22 @@ class DiscordApiClient:
                 raw_body = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
-            if exc.code == 403 and "Cloudflare" in error_body and "Error 1010" in error_body:
+            if (
+                exc.code == 403
+                and "Cloudflare" in error_body
+                and "Error 1010" in error_body
+            ):
                 raise DiscordApiError(
                     "Discord API request was blocked by Cloudflare (Error 1010). "
                     "This is an egress/IP or client-fingerprint block, not a bot-token validation failure."
                 ) from exc
-            raise DiscordApiError(f"Discord API request failed ({exc.code}): {error_body}") from exc
+            raise DiscordApiError(
+                f"Discord API request failed ({exc.code}): {error_body}"
+            ) from exc
         except URLError as exc:
-            raise DiscordApiError(f"Discord API request failed (network): {exc}") from exc
+            raise DiscordApiError(
+                f"Discord API request failed (network): {exc}"
+            ) from exc
 
         if not raw_body:
             return {}
@@ -154,8 +176,14 @@ class DiscordApiClient:
                 continue
             if not isinstance(name, str) or not name:
                 continue
-            normalized_parent = parent_id if isinstance(parent_id, str) and parent_id.strip() else None
-            channels.append(DiscordTextChannel(channel_id=channel_id, name=name, parent_id=normalized_parent))
+            normalized_parent = (
+                parent_id if isinstance(parent_id, str) and parent_id.strip() else None
+            )
+            channels.append(
+                DiscordTextChannel(
+                    channel_id=channel_id, name=name, parent_id=normalized_parent
+                )
+            )
         return channels
 
     def list_voice_channels(self, *, guild_id: str) -> list[DiscordVoiceChannel]:
@@ -176,8 +204,14 @@ class DiscordApiClient:
                 continue
             if not isinstance(name, str) or not name:
                 continue
-            normalized_parent = parent_id if isinstance(parent_id, str) and parent_id.strip() else None
-            channels.append(DiscordVoiceChannel(channel_id=channel_id, name=name, parent_id=normalized_parent))
+            normalized_parent = (
+                parent_id if isinstance(parent_id, str) and parent_id.strip() else None
+            )
+            channels.append(
+                DiscordVoiceChannel(
+                    channel_id=channel_id, name=name, parent_id=normalized_parent
+                )
+            )
         return channels
 
     def list_channel_categories(self, *, guild_id: str) -> list[DiscordCategoryChannel]:
@@ -200,11 +234,15 @@ class DiscordApiClient:
             categories.append(DiscordCategoryChannel(channel_id=channel_id, name=name))
         return categories
 
-    def create_text_channel(self, *, guild_id: str, name: str, parent_id: str | None = None) -> DiscordTextChannel:
+    def create_text_channel(
+        self, *, guild_id: str, name: str, parent_id: str | None = None
+    ) -> DiscordTextChannel:
         payload: dict = {"name": name, "type": 0}
         if parent_id:
             payload["parent_id"] = parent_id
-        data = self._request_json(method="POST", path=f"/guilds/{guild_id}/channels", payload=payload)
+        data = self._request_json(
+            method="POST", path=f"/guilds/{guild_id}/channels", payload=payload
+        )
         if not isinstance(data, dict):
             raise DiscordApiError("Discord create channel response was not an object")
         channel_id = data.get("id")
@@ -214,14 +252,24 @@ class DiscordApiClient:
             raise DiscordApiError("Discord create channel response missing id")
         if not isinstance(created_name, str) or not created_name:
             raise DiscordApiError("Discord create channel response missing name")
-        normalized_parent = created_parent if isinstance(created_parent, str) and created_parent.strip() else None
-        return DiscordTextChannel(channel_id=channel_id, name=created_name, parent_id=normalized_parent)
+        normalized_parent = (
+            created_parent
+            if isinstance(created_parent, str) and created_parent.strip()
+            else None
+        )
+        return DiscordTextChannel(
+            channel_id=channel_id, name=created_name, parent_id=normalized_parent
+        )
 
-    def create_voice_channel(self, *, guild_id: str, name: str, parent_id: str | None = None) -> DiscordVoiceChannel:
+    def create_voice_channel(
+        self, *, guild_id: str, name: str, parent_id: str | None = None
+    ) -> DiscordVoiceChannel:
         payload: dict = {"name": name, "type": 2}
         if parent_id:
             payload["parent_id"] = parent_id
-        data = self._request_json(method="POST", path=f"/guilds/{guild_id}/channels", payload=payload)
+        data = self._request_json(
+            method="POST", path=f"/guilds/{guild_id}/channels", payload=payload
+        )
         if not isinstance(data, dict):
             raise DiscordApiError("Discord create channel response was not an object")
         channel_id = data.get("id")
@@ -231,8 +279,14 @@ class DiscordApiClient:
             raise DiscordApiError("Discord create channel response missing id")
         if not isinstance(created_name, str) or not created_name:
             raise DiscordApiError("Discord create channel response missing name")
-        normalized_parent = created_parent if isinstance(created_parent, str) and created_parent.strip() else None
-        return DiscordVoiceChannel(channel_id=channel_id, name=created_name, parent_id=normalized_parent)
+        normalized_parent = (
+            created_parent
+            if isinstance(created_parent, str) and created_parent.strip()
+            else None
+        )
+        return DiscordVoiceChannel(
+            channel_id=channel_id, name=created_name, parent_id=normalized_parent
+        )
 
     def post_message(
         self,
@@ -462,7 +516,9 @@ class DiscordApiClient:
             same_parent = channel.parent_id == parent_id
             if channel.name == name and same_parent:
                 return channel
-        return self.create_text_channel(guild_id=guild_id, name=name, parent_id=parent_id)
+        return self.create_text_channel(
+            guild_id=guild_id, name=name, parent_id=parent_id
+        )
 
     def ensure_voice_channel(
         self,
@@ -475,12 +531,16 @@ class DiscordApiClient:
             same_parent = channel.parent_id == parent_id
             if channel.name == name and same_parent:
                 return channel
-        return self.create_voice_channel(guild_id=guild_id, name=name, parent_id=parent_id)
+        return self.create_voice_channel(
+            guild_id=guild_id, name=name, parent_id=parent_id
+        )
 
     def get_application_id(self) -> str:
         payload = self._request_json(method="GET", path="/oauth2/applications/@me")
         if not isinstance(payload, dict):
-            raise DiscordApiError("Discord application metadata response was not an object")
+            raise DiscordApiError(
+                "Discord application metadata response was not an object"
+            )
         app_id = payload.get("id")
         if not isinstance(app_id, str) or not app_id.strip():
             raise DiscordApiError("Discord application metadata response missing id")

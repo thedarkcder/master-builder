@@ -3,13 +3,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from orchestrator.api.admin.github_helpers import get_project_github_branch_head_sha, list_project_github_branches
+from orchestrator.api.admin.github_helpers import (
+    get_project_github_branch_head_sha,
+    list_project_github_branches,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubBranch
 
 
 class _BranchClient:
-    def list_repository_branches(self, *, repo_full_name: str, github_repository: str, limit: int = 100) -> list[GitHubBranch]:
+    def list_repository_branches(
+        self, *, repo_full_name: str, github_repository: str, limit: int = 100
+    ) -> list[GitHubBranch]:
         assert repo_full_name == "example/align"
         assert github_repository == "https://github.com/example/align"
         assert limit == 100
@@ -20,14 +25,18 @@ class _BranchClient:
 
 
 class _BranchHeadClient:
-    def get_repository_branch_head_sha(self, *, repo_full_name: str, github_repository: str, branch: str) -> str:
+    def get_repository_branch_head_sha(
+        self, *, repo_full_name: str, github_repository: str, branch: str
+    ) -> str:
         assert repo_full_name == "example/align"
         assert github_repository == "https://github.com/example/align"
         assert branch == "main"
         return "abcdef1234567890"
 
 
-def test_list_project_github_branches_uses_composition_root_github_ref_signature() -> None:
+def test_list_project_github_branches_uses_composition_root_github_ref_signature() -> (
+    None
+):
     now = datetime.now(timezone.utc)
     tenant = Tenant(
         tenant_id="tenant-1",
@@ -125,7 +134,9 @@ def test_get_project_github_branch_head_sha_uses_project_repo_scope() -> None:
         with_managed_github_refs_fn=lambda github: dict(github),
         resolve_scoped_secret_ref_fn=lambda *_args, **_kwargs: "unused",
         resolve_platform_secret_ref_fn=lambda *_args, **_kwargs: "unused",
-        github_client_from_tenant_config_fn=lambda *_args, **_kwargs: _BranchHeadClient(),
+        github_client_from_tenant_config_fn=lambda *_args, **_kwargs: (
+            _BranchHeadClient()
+        ),
     )
 
     assert head_sha == "abcdef1234567890"

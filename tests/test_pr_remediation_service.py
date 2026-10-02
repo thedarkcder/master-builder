@@ -19,21 +19,27 @@ from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 class PrRemediationServiceTests(unittest.TestCase):
     @staticmethod
-    def _trigger_context_from_bootstrap_plan(bootstrap_plan: object) -> dict[str, object]:
+    def _trigger_context_from_bootstrap_plan(
+        bootstrap_plan: object,
+    ) -> dict[str, object]:
         snapshot = ExecutionSnapshot.load(bootstrap_plan)
         assert snapshot is not None
         return dict(snapshot.trigger_context())
 
-    def _base_context(self) -> tuple[MagicMock, SimpleNamespace, SimpleNamespace, MagicMock, dict, SimpleNamespace]:
+    def _base_context(
+        self,
+    ) -> tuple[
+        MagicMock, SimpleNamespace, SimpleNamespace, MagicMock, dict, SimpleNamespace
+    ]:
         session = MagicMock()
         session.commit = MagicMock()
         session.refresh = MagicMock()
         tenant = SimpleNamespace(
-            tenant_id="example",
+            tenant_id="example-workspace",
             jira_config={"connection_id": "conn-1"},
         )
         project = SimpleNamespace(
-            project_id="example-default",
+            project_id="example-workspace-default",
             jira_project_key="GP",
             github_repository="org/repo",
         )
@@ -82,22 +88,28 @@ class PrRemediationServiceTests(unittest.TestCase):
             }
         ).dump()
         runs = [
-            SimpleNamespace(issue_key="GP-201", plan={"trigger_context": {"source": "legacy"}}, created_at=1),
+            SimpleNamespace(
+                issue_key="GP-201",
+                plan={"trigger_context": {"source": "legacy"}},
+                created_at=1,
+            ),
             SimpleNamespace(issue_key="GP-202", plan=matching_plan, created_at=2),
         ]
         session.execute.return_value.scalars.return_value = runs
 
         issue_key = find_existing_issue_key_for_pr_head(
             session=session,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             pr_number=11,
             head_sha="abc123def456",
         )
 
         self.assertEqual(issue_key, "GP-202")
 
-    def test_find_existing_issue_key_skips_malformed_snapshot_with_warning(self) -> None:
+    def test_find_existing_issue_key_skips_malformed_snapshot_with_warning(
+        self,
+    ) -> None:
         session = MagicMock()
         matching_plan = ExecutionSnapshot.empty(
             trigger_context={
@@ -107,16 +119,25 @@ class PrRemediationServiceTests(unittest.TestCase):
             }
         ).dump()
         runs = [
-            SimpleNamespace(run_id="run-malformed", issue_key="GP-201", plan={"trigger_context": {"source": "legacy"}}, created_at=1),
-            SimpleNamespace(run_id="run-good", issue_key="GP-202", plan=matching_plan, created_at=2),
+            SimpleNamespace(
+                run_id="run-malformed",
+                issue_key="GP-201",
+                plan={"trigger_context": {"source": "legacy"}},
+                created_at=1,
+            ),
+            SimpleNamespace(
+                run_id="run-good", issue_key="GP-202", plan=matching_plan, created_at=2
+            ),
         ]
         session.execute.return_value.scalars.return_value = runs
 
-        with patch("orchestrator.api.webhooks.pr_remediation_issue_service.logger.warning") as warning_mock:
+        with patch(
+            "orchestrator.api.webhooks.pr_remediation_issue_service.logger.warning"
+        ) as warning_mock:
             issue_key = find_existing_issue_key_for_pr_head(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 pr_number=11,
                 head_sha="abc123def456",
             )
@@ -150,8 +171,8 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         total = count_pr_remediation_attempts(
             session=session,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             issue_key="GP-202",
             pr_number=11,
             head_sha="abc123def456",
@@ -159,7 +180,9 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         self.assertEqual(total, 1)
 
-    def test_count_pr_remediation_attempts_skips_malformed_snapshot_with_warning(self) -> None:
+    def test_count_pr_remediation_attempts_skips_malformed_snapshot_with_warning(
+        self,
+    ) -> None:
         session = MagicMock()
         matching_plan = ExecutionSnapshot.empty(
             trigger_context={
@@ -169,16 +192,20 @@ class PrRemediationServiceTests(unittest.TestCase):
             }
         ).dump()
         runs = [
-            SimpleNamespace(run_id="run-malformed", plan={"trigger_context": {"source": "legacy"}}),
+            SimpleNamespace(
+                run_id="run-malformed", plan={"trigger_context": {"source": "legacy"}}
+            ),
             SimpleNamespace(run_id="run-good", plan=matching_plan),
         ]
         session.execute.return_value.scalars.return_value = runs
 
-        with patch("orchestrator.api.webhooks.pr_remediation_service.logger.warning") as warning_mock:
+        with patch(
+            "orchestrator.api.webhooks.pr_remediation_service.logger.warning"
+        ) as warning_mock:
             total = count_pr_remediation_attempts(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 issue_key="GP-202",
                 pr_number=11,
                 head_sha="abc123def456",
@@ -188,7 +215,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         warning_mock.assert_called_once()
 
     def test_non_trigger_event_returns_not_triggered(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
 
         result = enqueue_pr_remediation_if_needed(
             session=session,
@@ -209,7 +238,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         github_client.get_pull_request_details.assert_not_called()
 
     def test_reuses_existing_issue_key_for_same_pr_head(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         queued_run = SimpleNamespace(run_id="run-11", plan={}, branch=None, pr_url=None)
         enqueue_result = EnqueueRunResult(
             enqueued=True,
@@ -223,7 +254,11 @@ class PrRemediationServiceTests(unittest.TestCase):
                 return_value=PrReviewFindingsResult(
                     state="blocked",
                     summary="Fix the failing checks.",
-                    findings=(SimpleNamespace(severity="high", message="Fix the failing checks."),),
+                    findings=(
+                        SimpleNamespace(
+                            severity="high", message="Fix the failing checks."
+                        ),
+                    ),
                 ),
             ),
             patch(
@@ -263,7 +298,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertEqual(bootstrap.pr_url, "https://github.com/org/repo/pull/11")
 
     def test_existing_issue_key_from_automatic_trigger_is_not_reenqueued(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         existing_run = SimpleNamespace(run_id="run-existing", plan={})
         payload = {
             **payload,
@@ -284,7 +321,11 @@ class PrRemediationServiceTests(unittest.TestCase):
                 return_value=PrReviewFindingsResult(
                     state="blocked",
                     summary="Fix the failing checks.",
-                    findings=(SimpleNamespace(severity="high", message="Fix the failing checks."),),
+                    findings=(
+                        SimpleNamespace(
+                            severity="high", message="Fix the failing checks."
+                        ),
+                    ),
                 ),
             ),
             patch(
@@ -322,7 +363,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         enqueue_run_mock.assert_not_called()
 
     def test_check_trigger_with_clear_review_does_not_create_bug(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
             "comment": {"id": 777, "body": "plain comment"},
@@ -341,7 +384,9 @@ class PrRemediationServiceTests(unittest.TestCase):
             patch(
                 "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
             ) as create_bug_mock,
-            patch("orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run") as enqueue_run_mock,
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run"
+            ) as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -364,7 +409,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         enqueue_run_mock.assert_not_called()
 
     def test_check_trigger_fails_hard_when_findings_cannot_be_evaluated(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
             "comment": {"id": 777, "body": "plain comment"},
@@ -379,7 +426,9 @@ class PrRemediationServiceTests(unittest.TestCase):
             patch(
                 "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
             ) as create_bug_mock,
-            patch("orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run") as enqueue_run_mock,
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run"
+            ) as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -397,12 +446,17 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertTrue(result.triggered)
         self.assertFalse(result.enqueued)
         self.assertIsNone(result.issue_key)
-        self.assertEqual(result.reason, "review_findings_evaluation_failed:review service unavailable")
+        self.assertEqual(
+            result.reason,
+            "review_findings_evaluation_failed:review service unavailable",
+        )
         create_bug_mock.assert_not_called()
         enqueue_run_mock.assert_not_called()
 
     def test_manual_fix_request_still_enqueues_when_issue_already_exists(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         enqueue_result = EnqueueRunResult(
             enqueued=True,
             reason=None,
@@ -442,7 +496,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         enqueue_run_mock.assert_called_once()
 
     def test_creates_bug_when_issue_key_missing(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         enqueue_result = EnqueueRunResult(
             enqueued=True,
             reason=None,
@@ -483,7 +539,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         create_bug_mock.assert_called_once()
 
     def test_bug_create_failure_blocks_enqueue(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
 
         with (
             patch(
@@ -494,7 +552,9 @@ class PrRemediationServiceTests(unittest.TestCase):
                 "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
                 side_effect=ValueError("jira down"),
             ),
-            patch("orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run") as enqueue_run_mock,
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run"
+            ) as enqueue_run_mock,
         ):
             result = enqueue_pr_remediation_if_needed(
                 session=session,
@@ -516,7 +576,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         enqueue_run_mock.assert_not_called()
 
     def test_does_not_mutate_existing_active_run_when_enqueue_conflicts(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         active_run = SimpleNamespace(
             run_id="run-active",
             plan={"existing": True},
@@ -557,7 +619,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         session.refresh.assert_not_called()
 
     def test_manual_fix_command_uses_triggering_comment_as_context(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         github_client.list_pull_request_issue_comments.return_value = [
             SimpleNamespace(
                 comment_id=501,
@@ -568,7 +632,12 @@ class PrRemediationServiceTests(unittest.TestCase):
         ]
         payload = {
             **payload,
-            "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            "issue": {
+                "number": 11,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/org/repo/pulls/11"
+                },
+            },
             "comment": {
                 "id": 501,
                 "body": "@mb fix the flaky test",
@@ -620,10 +689,17 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertEqual(requested_comment.get("type"), "issue_comment")
 
     def test_manual_fix_command_enqueues_with_triggering_comment(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
-            "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            "issue": {
+                "number": 11,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/org/repo/pulls/11"
+                },
+            },
             "comment": {
                 "id": 550,
                 "body": "@mb rename this variable",
@@ -677,11 +753,22 @@ class PrRemediationServiceTests(unittest.TestCase):
         enqueue_run_mock.assert_called_once()
 
     def test_manual_fix_command_requires_instruction_text(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
-            "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
-            "comment": {"id": 501, "body": "@mb", "html_url": "https://github.com/org/repo/pull/11#issuecomment-501"},
+            "issue": {
+                "number": 11,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/org/repo/pulls/11"
+                },
+            },
+            "comment": {
+                "id": 501,
+                "body": "@mb",
+                "html_url": "https://github.com/org/repo/pull/11#issuecomment-501",
+            },
         }
 
         result = enqueue_pr_remediation_if_needed(
@@ -701,8 +788,12 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertFalse(result.enqueued)
         self.assertEqual(result.reason, "manual_fix_missing_instruction")
 
-    def test_manual_fix_review_comment_enqueues_with_only_triggering_comment_and_code_context(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+    def test_manual_fix_review_comment_enqueues_with_only_triggering_comment_and_code_context(
+        self,
+    ) -> None:
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
             "comment": {
@@ -767,7 +858,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertIsInstance(manual_fix.get("code_context"), dict)
 
     def test_untagged_review_comment_does_not_trigger_remediation(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
             "comment": {
@@ -795,10 +888,17 @@ class PrRemediationServiceTests(unittest.TestCase):
         github_client.get_pull_request_details.assert_not_called()
 
     def test_manual_fix_issue_comment_trigger_context_is_comment_only(self) -> None:
-        session, tenant, project, github_client, payload, settings = self._base_context()
+        session, tenant, project, github_client, payload, settings = (
+            self._base_context()
+        )
         payload = {
             **payload,
-            "issue": {"number": 11, "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/11"}},
+            "issue": {
+                "number": 11,
+                "pull_request": {
+                    "url": "https://api.github.com/repos/org/repo/pulls/11"
+                },
+            },
             "comment": {
                 "id": 550,
                 "body": "@mb rename this variable",
@@ -847,7 +947,9 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertIsInstance(manual_fix, dict)
         self.assertIsNone(manual_fix.get("code_context"))
 
-    def test_manual_fix_bug_description_uses_comment_and_code_context_only(self) -> None:
+    def test_manual_fix_bug_description_uses_comment_and_code_context_only(
+        self,
+    ) -> None:
         description = build_pr_remediation_bug_description(
             repo_full_name="org/repo",
             pr_number=11,
@@ -855,9 +957,13 @@ class PrRemediationServiceTests(unittest.TestCase):
             head_sha="abc123",
             event="pull_request_review_comment",
             action="created",
-            checks=[SimpleNamespace(name="CI", status="completed", conclusion="failure")],
+            checks=[
+                SimpleNamespace(name="CI", status="completed", conclusion="failure")
+            ],
             reviews=[SimpleNamespace(state="CHANGES_REQUESTED", body="please fix")],
-            review_comments=[SimpleNamespace(path="A.swift", line=5, body="old comment")],
+            review_comments=[
+                SimpleNamespace(path="A.swift", line=5, body="old comment")
+            ],
             issue_comments=[SimpleNamespace(body="old issue comment")],
             manual_fix_request={
                 "requested_by": "owner-a",

@@ -4,7 +4,10 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.api.atlassian_oauth.service import (
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.decision.types import (
     JiraConfigKey,
     WorkerStageEvent,
@@ -41,7 +44,9 @@ def send_stage_update_to_jira(
     if not normalized_stage or normalized_stage not in JIRA_STAGE_COMMENT_EVENTS:
         return
 
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         logger.info(
             "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=missing_connection",
@@ -68,7 +73,9 @@ def send_stage_update_to_jira(
             settings=settings,
             tenant_id=tenant.tenant_id,
         )
-        client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+        client = atlassian_oauth_client(
+            session=session, settings=settings, tenant_id=tenant.tenant_id
+        )
         client.add_issue_comment(
             access_token=access_token,
             cloud_id=connection.cloud_id,
@@ -98,7 +105,9 @@ def transition_issue_status(
     if not normalized_issue_key or not normalized_target_status:
         return
 
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         logger.info(
             "worker_jira_transition_not_sent tenant_id=%s issue_key=%s target_status=%s reason=missing_connection",
@@ -125,7 +134,9 @@ def transition_issue_status(
             settings=settings,
             tenant_id=tenant.tenant_id,
         )
-        client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+        client = atlassian_oauth_client(
+            session=session, settings=settings, tenant_id=tenant.tenant_id
+        )
         client.transition_issue(
             access_token=access_token,
             cloud_id=connection.cloud_id,

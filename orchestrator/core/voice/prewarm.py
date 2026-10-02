@@ -25,7 +25,9 @@ def prewarm_voice_dependencies(*, settings: Settings) -> VoiceDependencyPrewarmR
 
     prewarmed_voice_ids: tuple[str, ...] = ()
     if voice_tts_provider == "pocket_tts":
-        prewarmed_voice_ids = tuple(ensure_voice_reply_provider_ready(settings=settings, allow_download=True))
+        prewarmed_voice_ids = tuple(
+            ensure_voice_reply_provider_ready(settings=settings, allow_download=True)
+        )
 
     return VoiceDependencyPrewarmResult(
         voice_stt_provider=voice_stt_provider or "disabled",

@@ -4,8 +4,12 @@ from datetime import datetime, timezone
 
 from orchestrator.api.schemas import PlatformServiceStatusRead, PlatformStatusRead
 from orchestrator.core.config import Settings
-from orchestrator.core.discord.command_sync_status import get_discord_command_sync_status
-from orchestrator.core.knowledge.jira_sync_status import get_runtime_status as get_knowledge_jira_sync_runtime_status
+from orchestrator.core.discord.command_sync_status import (
+    get_discord_command_sync_status,
+)
+from orchestrator.core.knowledge.jira_sync_status import (
+    get_runtime_status as get_knowledge_jira_sync_runtime_status,
+)
 from orchestrator.core.worker.runtime_status_service import build_worker_service_status
 
 
@@ -93,7 +97,9 @@ def _knowledge_sync_status(*, session, settings: Settings) -> PlatformServiceSta
 
 def _discord_commands_status(*, session) -> PlatformServiceStatusRead:  # noqa: ANN001
     runtime = get_discord_command_sync_status(session=session)
-    updated_at = _coerce_aware(runtime.last_success_at) or _coerce_aware(runtime.last_attempt_at)
+    updated_at = _coerce_aware(runtime.last_success_at) or _coerce_aware(
+        runtime.last_attempt_at
+    )
     if runtime.healthy and runtime.synced:
         status = "healthy"
         summary = f"{runtime.command_count} Discord command{'' if runtime.command_count == 1 else 's'} synced."

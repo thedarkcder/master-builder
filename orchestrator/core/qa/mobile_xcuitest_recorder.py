@@ -12,7 +12,9 @@ def generated_test_method_name(name: str) -> str:
     return f"test{normalized or 'Scenario'}"
 
 
-def discover_xcode_project(*, repo_dir: Path, project_paths: list[Path] | None = None) -> Path:
+def discover_xcode_project(
+    *, repo_dir: Path, project_paths: list[Path] | None = None
+) -> Path:
     candidates = list(project_paths or repo_dir.glob("*.xcodeproj"))
     if not candidates:
         raise ValueError(f"No Xcode project found under {repo_dir}")
@@ -21,7 +23,9 @@ def discover_xcode_project(*, repo_dir: Path, project_paths: list[Path] | None =
     return sorted(preferred, key=lambda path: (len(path.parts), str(path)))[0]
 
 
-def discover_xcuitest_file(*, repo_dir: Path, swift_files: list[Path] | None = None) -> Path:
+def discover_xcuitest_file(
+    *, repo_dir: Path, swift_files: list[Path] | None = None
+) -> Path:
     candidates = list(swift_files or repo_dir.glob("*UITests/*.swift"))
     if not candidates:
         raise ValueError(f"No UI test Swift file found under {repo_dir}")
@@ -31,7 +35,11 @@ def discover_xcuitest_file(*, repo_dir: Path, swift_files: list[Path] | None = N
 
 
 def preferred_simulator_udid(simctl_output: str) -> str:
-    matches = re.findall(r"^\s+(iPhone [^(]+) \(([A-F0-9-]+)\) \(([^)]+)\)\s*$", simctl_output, re.MULTILINE)
+    matches = re.findall(
+        r"^\s+(iPhone [^(]+) \(([A-F0-9-]+)\) \(([^)]+)\)\s*$",
+        simctl_output,
+        re.MULTILINE,
+    )
     if not matches:
         raise ValueError("No available iPhone simulator found")
     prioritized: list[tuple[int, str]] = []
@@ -232,8 +240,12 @@ final class {test_class_name}: XCTestCase {{
 
 def _render_scenario_method(scenario: QaScenario) -> str:
     method_name = generated_test_method_name(scenario.name)
-    launch_arguments = ", ".join(_swift_string(argument) for argument in launch_arguments_for_scenario(scenario))
-    rendered_steps = "\n".join(f"        {_render_step(step)}" for step in scenario.steps)
+    launch_arguments = ", ".join(
+        _swift_string(argument) for argument in launch_arguments_for_scenario(scenario)
+    )
+    rendered_steps = "\n".join(
+        f"        {_render_step(step)}" for step in scenario.steps
+    )
     return f"""    func {method_name}() {{
         launchApp(arguments: [{launch_arguments}])
 {rendered_steps}
@@ -242,38 +254,38 @@ def _render_scenario_method(scenario: QaScenario) -> str:
 
 def _render_step(step: QaStep) -> str:
     if step.action == "click":
-        return f'tap(selector: {_swift_string(_require_selector(step))})'
+        return f"tap(selector: {_swift_string(_require_selector(step))})"
     if step.action == "relaunch_app":
         mode = str(step.value or "preserve").strip().lower()
         if mode == "reset":
             return 'relaunchApp(arguments: ["-uiTesting", "-resetOnboarding"])'
         return 'relaunchApp(arguments: ["-uiTesting"])'
     if step.action == "fill":
-        return f'fill(selector: {_swift_string(_require_selector(step))}, value: {_swift_string(step.value or "")})'
+        return f"fill(selector: {_swift_string(_require_selector(step))}, value: {_swift_string(step.value or '')})"
     if step.action == "assert_visible":
-        return f'assertVisible(selector: {_swift_string(_require_selector(step))})'
+        return f"assertVisible(selector: {_swift_string(_require_selector(step))})"
     if step.action == "wait_for_text":
-        return f'waitForText({_swift_string(_require_value(step))})'
+        return f"waitForText({_swift_string(_require_value(step))})"
     if step.action == "assert_text":
         return (
-            f'assertText(selector: {_swift_string(_require_selector(step))}, '
-            f'expected: {_swift_string(_require_value(step))})'
+            f"assertText(selector: {_swift_string(_require_selector(step))}, "
+            f"expected: {_swift_string(_require_value(step))})"
         )
     if step.action == "press":
         normalized_value = str(step.value or "").strip().lower()
         if normalized_value in {"arrowleft", "left"}:
             if step.selector:
                 return f'swipe(selector: {_swift_string(step.selector)}, direction: "right")'
-            return 'app.swipeRight()'
+            return "app.swipeRight()"
         if normalized_value in {"arrowright", "right"}:
             if step.selector:
                 return f'swipe(selector: {_swift_string(step.selector)}, direction: "left")'
-            return 'app.swipeLeft()'
+            return "app.swipeLeft()"
         if step.selector:
-            return f'fill(selector: {_swift_string(step.selector)}, value: {_swift_string(step.value or "")})'
-        return f'app.typeText({_swift_string(_require_value(step))})'
+            return f"fill(selector: {_swift_string(step.selector)}, value: {_swift_string(step.value or '')})"
+        return f"app.typeText({_swift_string(_require_value(step))})"
     if step.action == "select_option":
-        return f'tap(selector: {_swift_string(step.value or step.selector or "")})'
+        return f"tap(selector: {_swift_string(step.value or step.selector or '')})"
     if step.action == "goto":
         value = str(step.value or "").strip().lower()
         if "returning" in value:
@@ -297,12 +309,7 @@ def _require_value(step: QaStep) -> str:
 
 
 def _swift_string(value: str) -> str:
-    escaped = (
-        str(value)
-        .replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-        .replace("\n", "\\n")
-    )
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'"{escaped}"'
 
 

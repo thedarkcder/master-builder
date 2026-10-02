@@ -48,7 +48,11 @@ class RunDispatchWorkflow:
             ownership_matcher_fn=_run_matches_execution_ownership,
             cleanup_run_workspaces_safe_fn=_cleanup_run_workspaces_safe,
         ).prepare(selection=selection)
-        if prepared is None or getattr(prepared, "run_id", None) is not None or getattr(prepared, "status", None):
+        if (
+            prepared is None
+            or getattr(prepared, "run_id", None) is not None
+            or getattr(prepared, "status", None)
+        ):
             return prepared
 
         def _emit_test_feedback(attempt: int, feedback: str) -> None:
@@ -70,17 +74,24 @@ class RunDispatchWorkflow:
             claim_id=prepared.claim_id,
             heartbeat_interval_seconds=max(
                 5,
-                int(getattr(self._settings, "worker_run_heartbeat_interval_seconds", 30)),
+                int(
+                    getattr(self._settings, "worker_run_heartbeat_interval_seconds", 30)
+                ),
             ),
         )
-        execution_context = _execution_context(workflow_request=prepared.workflow_request)
+        execution_context = _execution_context(
+            workflow_request=prepared.workflow_request
+        )
         _emit_queue_wait_metric(
             session=self._session,
             run=prepared.run,
             project_id=prepared.project.project_id,
             agent_id=prepared.agent_id,
         )
-        if bool(prepared.effective_policy.get("allow_jira_transitions")) and self._deps.project.transition_issue_status_fn is not None:
+        if (
+            bool(prepared.effective_policy.get("allow_jira_transitions"))
+            and self._deps.project.transition_issue_status_fn is not None
+        ):
             self._deps.project.transition_issue_status_fn(
                 session=self._session,
                 tenant=prepared.tenant,
@@ -101,13 +112,15 @@ class RunDispatchWorkflow:
             workflow_result = self._runner.run(
                 prepared.workflow_request,
                 test_feedback_hook=_emit_test_feedback,
-                stage_checkpoint_hook=lambda checkpoint: self._deps.execution.persist_stage_checkpoint_fn(
-                    self._session,
-                    run=prepared.run,
-                    checkpoint=checkpoint,
-                    execution_context=execution_context,
-                    expected_worker_service_instance_id=prepared.worker_service_instance_id,
-                    expected_claim_id=prepared.claim_id,
+                stage_checkpoint_hook=lambda checkpoint: (
+                    self._deps.execution.persist_stage_checkpoint_fn(
+                        self._session,
+                        run=prepared.run,
+                        checkpoint=checkpoint,
+                        execution_context=execution_context,
+                        expected_worker_service_instance_id=prepared.worker_service_instance_id,
+                        expected_claim_id=prepared.claim_id,
+                    )
                 ),
             )
             return RunOutcomePolicy(
@@ -142,14 +155,18 @@ def _run_matches_execution_ownership(
     expected_status: str,
 ) -> bool:
     return (
-        str(getattr(run, "status", "") or "").strip().lower() == str(expected_status or "").strip().lower()
+        str(getattr(run, "status", "") or "").strip().lower()
+        == str(expected_status or "").strip().lower()
         and str(getattr(run, "worker_service_instance_id", "") or "").strip()
         == str(expected_worker_service_instance_id or "").strip()
-        and str(getattr(run, "claim_id", "") or "").strip() == str(expected_claim_id or "").strip()
+        and str(getattr(run, "claim_id", "") or "").strip()
+        == str(expected_claim_id or "").strip()
     )
 
 
-def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: str) -> None:  # noqa: ANN001
+def _emit_queue_wait_metric(
+    *, session, run, project_id: str | None, agent_id: str
+) -> None:  # noqa: ANN001
     if run.started_at is None or run.created_at is None:
         return
     wait_ms = max(0, int((run.started_at - run.created_at).total_seconds() * 1000))

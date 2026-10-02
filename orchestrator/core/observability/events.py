@@ -6,7 +6,10 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.observability.models import EventClass, EventCursor, ProductEvent
 from orchestrator.core.observability import repository as repository_module
-from orchestrator.core.observability.writer import PostgresProductEventNotifier, ProductEventWriter
+from orchestrator.core.observability.writer import (
+    PostgresProductEventNotifier,
+    ProductEventWriter,
+)
 
 
 def initialize_product_event_store() -> None:
@@ -85,9 +88,11 @@ def list_product_events_after_sequence(
     after_sequence: int,
     limit: int,
 ) -> list[ProductEvent]:
-    return repository_module.default_product_event_repository().list_events_after_sequence(
-        event_class=event_class,
-        filters=filters,
-        after_sequence=after_sequence,
-        limit=limit,
+    return (
+        repository_module.default_product_event_repository().list_events_after_sequence(
+            event_class=event_class,
+            filters=filters,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
     )

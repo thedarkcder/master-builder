@@ -20,7 +20,10 @@ from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
-from orchestrator.core.pm.plugin_catalog import plugin_catalog_payload, tool_catalog_payload
+from orchestrator.core.pm.plugin_catalog import (
+    plugin_catalog_payload,
+    tool_catalog_payload,
+)
 from orchestrator.core.pm.tool_executor import execute_pm_tool_calls
 from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
@@ -35,7 +38,10 @@ from orchestrator.core.pm.interview_service import (
     resolve_pm_interview_case,
     upsert_pm_interview_case,
 )
-from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
+from orchestrator.core.discord.personas import (
+    VOICE_ROOM_PERSONA_IDS,
+    resolve_voice_room_persona_profile,
+)
 from orchestrator.core.planning.specialist import (
     SpecialistPlanningRequest,
     build_runtime_seed_planning_package,
@@ -66,8 +72,12 @@ def _pm_brief_markdown(
         return [str(item).strip() for item in value if str(item).strip()]
 
     objective = str(brief.get("objective") or "").strip() or "Objective not provided."
-    user_value = str(brief.get("user_value") or "").strip() or "User value not provided."
-    recommendation = str(brief.get("recommendation") or "").strip() or "Recommendation not provided."
+    user_value = (
+        str(brief.get("user_value") or "").strip() or "User value not provided."
+    )
+    recommendation = (
+        str(brief.get("recommendation") or "").strip() or "Recommendation not provided."
+    )
     acceptance_criteria = _line_list(brief.get("acceptance_criteria"))
     ui_references = _line_list(brief.get("ui_references"))
     scope_in = _line_list(brief.get("scope_in"))
@@ -122,7 +132,9 @@ def _pm_history_question(*, question: str) -> str:
     return f"pm {compact}".strip()
 
 
-def _resolve_pm_project_keys(*, project_keys: list[str], issue_key: str | None) -> list[str]:
+def _resolve_pm_project_keys(
+    *, project_keys: list[str], issue_key: str | None
+) -> list[str]:
     normalized_project_keys = _normalized_project_keys(project_keys)
     if len(normalized_project_keys) == 1:
         return normalized_project_keys
@@ -187,7 +199,11 @@ def _merge_ask_voice_reply_fields(
     command_params: dict[str, Any],
 ) -> dict[str, Any]:
     room_src = str(command_params.get("room_source") or "").strip().lower()
-    room_on = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
+    room_on = str(command_params.get("room_mode") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     if room_on and room_src in {"voice_note", "live_voice"}:
         merged = dict(data)
         merged.update(
@@ -236,7 +252,8 @@ def _extract_pm_interview_evidence(
                 "summary": filename or source_ref,
                 "metadata": {
                     "filename": filename,
-                    "content_type": str(attachment.get("content_type") or "").strip() or None,
+                    "content_type": str(attachment.get("content_type") or "").strip()
+                    or None,
                 },
             }
         )
@@ -299,10 +316,19 @@ def dispatch_ask_command(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Usage: !pm <product request>",
             )
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
-        is_voice_room_mode = str(command_params.get("room_mode") or "").strip().lower() in {"1", "true", "yes"}
-        room_source_mode = str(command_params.get("room_source") or "text").strip().lower() or "text"
-        is_voice_ingress = is_voice_room_mode or room_source_mode in {"voice_note", "live_voice"}
+        command_params = (
+            payload.command_params if isinstance(payload.command_params, dict) else {}
+        )
+        is_voice_room_mode = str(
+            command_params.get("room_mode") or ""
+        ).strip().lower() in {"1", "true", "yes"}
+        room_source_mode = (
+            str(command_params.get("room_source") or "text").strip().lower() or "text"
+        )
+        is_voice_ingress = is_voice_room_mode or room_source_mode in {
+            "voice_note",
+            "live_voice",
+        }
         first_token = arguments[0].strip().lower()
         if first_token == "approve" and not is_voice_ingress:
             raise HTTPException(
@@ -317,15 +343,19 @@ def dispatch_ask_command(
                 detail="Usage: !pm <product request>",
             )
 
-        normalized_issue_key, requested_status, issues, status_counts, _history_context = (
-            collect_ask_context_with_history_context(
-                session=session,
-                tenant=tenant,
-                user_id=normalized_user_id,
-                channel_id=normalized_channel_id,
-                question=question,
-                scoped_issue_key=None,
-            )
+        (
+            normalized_issue_key,
+            requested_status,
+            issues,
+            status_counts,
+            _history_context,
+        ) = collect_ask_context_with_history_context(
+            session=session,
+            tenant=tenant,
+            user_id=normalized_user_id,
+            channel_id=normalized_channel_id,
+            question=question,
+            scoped_issue_key=None,
         )
         settings = get_settings()
         runtime = build_runtime_for_selector(
@@ -342,9 +372,15 @@ def dispatch_ask_command(
             tenant=tenant,
             project_keys=normalized_project_keys,
         )
-        scoped_project = session.get(Project, scoped_project_id) if scoped_project_id else None
-        linked_text_channel_id = str(command_params.get("linked_text_channel_id") or "").strip() or None
-        voice_channel_id = str(command_params.get("voice_channel_id") or "").strip() or None
+        scoped_project = (
+            session.get(Project, scoped_project_id) if scoped_project_id else None
+        )
+        linked_text_channel_id = (
+            str(command_params.get("linked_text_channel_id") or "").strip() or None
+        )
+        voice_channel_id = (
+            str(command_params.get("voice_channel_id") or "").strip() or None
+        )
         history_owner = scoped_project if scoped_project is not None else tenant
         room_history = _history_context
         room_id = None
@@ -374,7 +410,9 @@ def dispatch_ask_command(
         current_assessment = (
             pm_interview_case_from_row(existing_case)
             if existing_case is not None
-            else assess_pm_interview_brief(brief=existing_brief, evidence=existing_evidence)
+            else assess_pm_interview_brief(
+                brief=existing_brief, evidence=existing_evidence
+            )
         )
         new_evidence = normalize_pm_interview_evidence(
             _extract_pm_interview_evidence(
@@ -423,7 +461,9 @@ def dispatch_ask_command(
             evidence=[*existing_evidence, *new_evidence],
             status_hint=str(pm_payload.get("status") or "").strip() or None,
         )
-        explicit_next_question = pm_interview_question_from_payload(pm_payload.get("next_question"))
+        explicit_next_question = pm_interview_question_from_payload(
+            pm_payload.get("next_question")
+        )
         question_history = [
             {
                 "speaker": "user",
@@ -444,10 +484,16 @@ def dispatch_ask_command(
             request_id=request_id,
             source_kind="voice_note" if room_source_mode == "voice_note" else "command",
             channel_id=normalized_channel_id,
-            thread_channel_id=normalized_channel_id if str(command_params.get("request_id") or "").strip() else None,
-            root_message_id=str(command_params.get("root_message_id") or "").strip() or None,
+            thread_channel_id=normalized_channel_id
+            if str(command_params.get("request_id") or "").strip()
+            else None,
+            root_message_id=str(command_params.get("root_message_id") or "").strip()
+            or None,
             owner_user_id=normalized_user_id,
-            parent_issue_key=str(getattr(existing_case, "parent_issue_key", "") or "").strip() or None,
+            parent_issue_key=str(
+                getattr(existing_case, "parent_issue_key", "") or ""
+            ).strip()
+            or None,
             source_text=question,
             status=final_assessment.status,
             brief=final_assessment.brief.to_payload(),
@@ -464,7 +510,9 @@ def dispatch_ask_command(
             user_id=normalized_user_id,
             channel_id=normalized_channel_id,
             question=(
-                _voice_turn_history_question(question=question, room_mode=is_voice_room_mode)
+                _voice_turn_history_question(
+                    question=question, room_mode=is_voice_room_mode
+                )
                 if is_voice_ingress
                 else _pm_history_question(question=question)
             ),
@@ -525,15 +573,21 @@ def dispatch_ask_command(
             "product_brief_markdown": product_brief_markdown,
             "interview_status": final_assessment.status,
             "missing_slots": list(final_assessment.missing_slots),
-            "next_question": explicit_next_question.to_payload() if explicit_next_question is not None else None,
-            "next_question_examples": list(explicit_next_question.examples) if explicit_next_question is not None else [],
+            "next_question": explicit_next_question.to_payload()
+            if explicit_next_question is not None
+            else None,
+            "next_question_examples": list(explicit_next_question.examples)
+            if explicit_next_question is not None
+            else [],
             "ready_to_write": final_assessment.ready_to_write,
             "persona_id": "pm",
             "persona_role": "Product Manager",
             "persona_name": "PM",
             "room_mode": is_voice_room_mode or is_voice_ingress,
             "room_source": room_source_mode,
-            "room_config": getattr(history_owner, "discord_config", None) if is_voice_room_mode else None,
+            "room_config": getattr(history_owner, "discord_config", None)
+            if is_voice_room_mode
+            else None,
         }
         if not final_assessment.ready_to_write:
             return DiscordCommandResponse(
@@ -552,13 +606,22 @@ def dispatch_ask_command(
         if stage_spi_enabled:
             existing_notes = dict(getattr(interview_case, "notes_json", None) or {})
             raw_stage_state = existing_notes.get("stage_spi")
-            stage_state = dict(raw_stage_state) if isinstance(raw_stage_state, dict) else None
+            stage_state = (
+                dict(raw_stage_state) if isinstance(raw_stage_state, dict) else None
+            )
             llm_plan_payload = None
             stage_tool_outputs_from_executor: list[dict[str, Any]] = []
             decision_state = None
-            selected_plugin_id = str(getattr(settings, "stage_spi_default_plugin", None) or "design").strip().lower()
+            selected_plugin_id = (
+                str(getattr(settings, "stage_spi_default_plugin", None) or "design")
+                .strip()
+                .lower()
+            )
             plugin_catalog = plugin_catalog_payload()
-            allowed_plugin_ids = {str(item.get("plugin_id") or "").strip().lower() for item in plugin_catalog}
+            allowed_plugin_ids = {
+                str(item.get("plugin_id") or "").strip().lower()
+                for item in plugin_catalog
+            }
             tool_catalog = tool_catalog_payload()
             if bool(getattr(settings, "stage_spi_llm_planning_enabled", False)):
                 llm_plan_payload = invoke_stage_design_planning_llm(
@@ -569,14 +632,24 @@ def dispatch_ask_command(
                     working_dir=codex_working_dir,
                     issue_key=normalized_issue_key,
                     stage_plugin=selected_plugin_id,
-                    stage_status=str((stage_state or {}).get("stage_status") or "stage_planning").strip().lower()
+                    stage_status=str(
+                        (stage_state or {}).get("stage_status") or "stage_planning"
+                    )
+                    .strip()
+                    .lower()
                     or "stage_planning",
                     stakeholder_text=question,
                     assistant_summary=message,
-                    stage_artifacts=dict((stage_state or {}).get("stage_artifacts") or {}),
-                    stage_open_questions=list((stage_state or {}).get("stage_open_questions") or []),
+                    stage_artifacts=dict(
+                        (stage_state or {}).get("stage_artifacts") or {}
+                    ),
+                    stage_open_questions=list(
+                        (stage_state or {}).get("stage_open_questions") or []
+                    ),
                     stage_tool_outputs=[
-                        dict(x) for x in ((stage_state or {}).get("stage_tool_outputs") or []) if isinstance(x, dict)
+                        dict(x)
+                        for x in ((stage_state or {}).get("stage_tool_outputs") or [])
+                        if isinstance(x, dict)
                     ],
                 )
                 if llm_plan_payload is not None:
@@ -600,7 +673,9 @@ def dispatch_ask_command(
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,
                 request_id=request_id,
-                llm_plan_payload=llm_plan_payload.to_payload() if llm_plan_payload is not None else None,
+                llm_plan_payload=llm_plan_payload.to_payload()
+                if llm_plan_payload is not None
+                else None,
                 explicit_tool_outputs=stage_tool_outputs_from_executor,
                 decision_state=decision_state,
             )
@@ -609,8 +684,12 @@ def dispatch_ask_command(
                 "stage_status": stage_result.stage_status,
                 "stage_artifacts": dict(stage_result.stage_artifacts),
                 "stage_open_questions": list(stage_result.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in stage_result.stage_feedback_log],
-                "stage_tool_outputs": [dict(item) for item in stage_result.stage_tool_outputs],
+                "stage_feedback_log": [
+                    dict(item) for item in stage_result.stage_feedback_log
+                ],
+                "stage_tool_outputs": [
+                    dict(item) for item in stage_result.stage_tool_outputs
+                ],
                 "stage_ready_for_implementation": stage_result.stage_ready_for_implementation,
             }
             interview_case.notes_json = existing_notes
@@ -620,7 +699,9 @@ def dispatch_ask_command(
                     "stage_status": stage_result.stage_status,
                     "stage_artifacts": dict(stage_result.stage_artifacts),
                     "stage_open_questions": list(stage_result.stage_open_questions),
-                    "stage_tool_outputs": [dict(item) for item in stage_result.stage_tool_outputs],
+                    "stage_tool_outputs": [
+                        dict(item) for item in stage_result.stage_tool_outputs
+                    ],
                     "stage_ready_for_implementation": stage_result.stage_ready_for_implementation,
                     "stage_plugin_catalog": plugin_catalog,
                     "stage_tool_catalog": tool_catalog,
@@ -635,12 +716,16 @@ def dispatch_ask_command(
                     "question": stage_result.message,
                     "examples": [],
                 }
-                interview_case.next_question_json = dict(interview_case.current_question_json)
+                interview_case.next_question_json = dict(
+                    interview_case.current_question_json
+                )
                 interview_case.missing_slots_json = ["stage_plugin"]
                 interview_case.updated_at = datetime.now(timezone.utc)
                 staged_message = message
                 if stage_result.message and stage_result.message not in staged_message:
-                    staged_message = f"{staged_message}\n\n{stage_result.message}".strip()
+                    staged_message = (
+                        f"{staged_message}\n\n{stage_result.message}".strip()
+                    )
                 return DiscordCommandResponse(
                     ok=True,
                     command="pm",
@@ -667,19 +752,36 @@ def dispatch_ask_command(
             scoped_project_keys=scoped_pm_project_keys,
             codex_working_dir=codex_working_dir,
             pm_status=PM_INTERVIEW_STATUS_READY_TO_WRITE,
-            pm_interview_notes_json=dict(getattr(interview_case, "notes_json", None) or {}),
+            pm_interview_notes_json=dict(
+                getattr(interview_case, "notes_json", None) or {}
+            ),
         )
-        parent_issue_key = str(
-            (list(parent_seed_data.get("all_parent_issue_keys", [])) or [None])[0] or getattr(interview_case, "parent_issue_key", "") or ""
-        ).strip() or None
+        parent_issue_key = (
+            str(
+                (list(parent_seed_data.get("all_parent_issue_keys", [])) or [None])[0]
+                or getattr(interview_case, "parent_issue_key", "")
+                or ""
+            ).strip()
+            or None
+        )
         response_data.update(
             {
                 "parent_issue_key": parent_issue_key,
-                "created_parent_issue_keys": list(parent_seed_data.get("created_parent_issue_keys", [])),
-                "updated_parent_issue_keys": list(parent_seed_data.get("updated_parent_issue_keys", [])),
-                "created_parent_issue_links": list(parent_seed_data.get("created_parent_issue_links", [])),
-                "updated_parent_issue_links": list(parent_seed_data.get("updated_parent_issue_links", [])),
-                "all_parent_issue_keys": list(parent_seed_data.get("all_parent_issue_keys", [])),
+                "created_parent_issue_keys": list(
+                    parent_seed_data.get("created_parent_issue_keys", [])
+                ),
+                "updated_parent_issue_keys": list(
+                    parent_seed_data.get("updated_parent_issue_keys", [])
+                ),
+                "created_parent_issue_links": list(
+                    parent_seed_data.get("created_parent_issue_links", [])
+                ),
+                "updated_parent_issue_links": list(
+                    parent_seed_data.get("updated_parent_issue_links", [])
+                ),
+                "all_parent_issue_keys": list(
+                    parent_seed_data.get("all_parent_issue_keys", [])
+                ),
             }
         )
 
@@ -691,14 +793,17 @@ def dispatch_ask_command(
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,
                 parent_issue_key=parent_issue_key,
-                parent_summary=str(final_assessment.brief.objective or question).strip() or question,
+                parent_summary=str(final_assessment.brief.objective or question).strip()
+                or question,
                 parent_description=product_brief_markdown,
                 product_brief=final_assessment.brief.to_payload(),
                 project_keys=tuple(scoped_pm_project_keys),
                 related_issues=tuple(issues),
                 status_counts=status_counts,
                 github_context=github_context,
-                conversation_history=tuple(room_history if is_voice_ingress else _history_context),
+                conversation_history=tuple(
+                    room_history if is_voice_ingress else _history_context
+                ),
                 working_dir=codex_working_dir,
             )
             planning_result = run_specialist_planning_fanout(
@@ -715,7 +820,9 @@ def dispatch_ask_command(
                 ),
             )
             planning_state = planning_result.planning_state
-            planning_package = build_runtime_seed_planning_package(result=planning_result)
+            planning_package = build_runtime_seed_planning_package(
+                result=planning_result
+            )
             issue_seed_message, issue_seed_data = seed_issues_with_runtime(
                 session=session,
                 tenant=tenant,
@@ -755,7 +862,9 @@ def dispatch_ask_command(
                     "question": planning_questions.prompts[0],
                     "examples": [],
                 }
-                interview_case.next_question_json = dict(interview_case.current_question_json)
+                interview_case.next_question_json = dict(
+                    interview_case.current_question_json
+                )
                 interview_case.missing_slots_json = ["planning"]
                 interview_case.updated_at = datetime.now(timezone.utc)
 
@@ -777,7 +886,9 @@ def dispatch_ask_command(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Usage: !ask <question> or !ask @ISSUE-123 <question>",
         )
-    ask_command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+    ask_command_params = (
+        payload.command_params if isinstance(payload.command_params, dict) else {}
+    )
     scoped_issue_key: str | None = None
     question_tokens = arguments
     first_token = arguments[0].strip()
@@ -873,7 +984,11 @@ def dispatch_ask_command(
         mode = intent_payload.mode
         summary = intent_payload.summary
         proposed_command = intent_payload.command or ""
-        if mode == "command" and proposed_command.startswith("!") and not proposed_command.lower().startswith("!ask"):
+        if (
+            mode == "command"
+            and proposed_command.startswith("!")
+            and not proposed_command.lower().startswith("!ask")
+        ):
             pending = store_pending_ask_action(
                 session=session,
                 tenant=tenant,
@@ -883,7 +998,9 @@ def dispatch_ask_command(
                 summary=summary or "Proposed operational action from /ask",
                 proposed_command=proposed_command,
             )
-            confirmation_message = summary or "I can run this action for you after approval."
+            confirmation_message = (
+                summary or "I can run this action for you after approval."
+            )
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
@@ -896,7 +1013,9 @@ def dispatch_ask_command(
                 },
             )
 
-        ask_voice_persona = _normalized_voice_ask_persona_id(str(ask_command_params.get("persona_id") or ""))
+        ask_voice_persona = _normalized_voice_ask_persona_id(
+            str(ask_command_params.get("persona_id") or "")
+        )
         message = answer_board_question_with_runtime(
             runtime=build_runtime_for_selector(
                 session=session,
@@ -939,7 +1058,9 @@ def dispatch_ask_command(
             "issues": issues,
             "question": question,
         }
-        ask_data = _merge_ask_voice_reply_fields(ask_data, tenant=tenant, command_params=ask_command_params)
+        ask_data = _merge_ask_voice_reply_fields(
+            ask_data, tenant=tenant, command_params=ask_command_params
+        )
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
@@ -947,7 +1068,9 @@ def dispatch_ask_command(
             data=ask_data,
         )
 
-    ask_voice_persona = _normalized_voice_ask_persona_id(str(ask_command_params.get("persona_id") or ""))
+    ask_voice_persona = _normalized_voice_ask_persona_id(
+        str(ask_command_params.get("persona_id") or "")
+    )
     message, data = ask_board_message(
         session=session,
         tenant=tenant,
@@ -959,7 +1082,9 @@ def dispatch_ask_command(
         answer_persona_id=ask_voice_persona,
     )
     if isinstance(data, dict):
-        merged_data = _merge_ask_voice_reply_fields(dict(data), tenant=tenant, command_params=ask_command_params)
+        merged_data = _merge_ask_voice_reply_fields(
+            dict(data), tenant=tenant, command_params=ask_command_params
+        )
     else:
         merged_data = data
     return DiscordCommandResponse(

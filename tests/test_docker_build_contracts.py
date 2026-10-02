@@ -12,7 +12,11 @@ def _compose_service_block(compose: str, service_name: str) -> str:
     while next_service != -1:
         candidate = compose[next_service + 1 :]
         line = candidate.splitlines()[0]
-        if line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
+        if (
+            line.startswith("  ")
+            and not line.startswith("    ")
+            and line.rstrip().endswith(":")
+        ):
             return compose[start:next_service]
         next_service = compose.find("\n  ", next_service + 1)
     return compose[start:]
@@ -40,16 +44,22 @@ class DockerBuildContractTests(unittest.TestCase):
                 msg=f"{service_marker.rstrip(':')} should build from target {target}.",
             )
 
-        self.assertNotIn("worker-runtime:", compose, msg="Compose should no longer use the mixed worker service.")
+        self.assertNotIn(
+            "worker-runtime:",
+            compose,
+            msg="Compose should no longer use the mixed worker service.",
+        )
 
     def test_python_dependencies_are_installed_before_app_source_copy(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
 
-        deps_copy = 'COPY pyproject.toml ./'
-        deps_install = '"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-base.txt'
+        deps_copy = "COPY pyproject.toml uv.lock ./"
+        deps_install = "uv sync --frozen --no-dev --no-install-project"
         app_source_copy = "COPY orchestrator ./orchestrator"
         bootstrap_script_copy = "COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py"
-        source_compile = '"${VIRTUAL_ENV}/bin/python" -m compileall -q -j 0 /app/orchestrator'
+        source_compile = (
+            '"${VIRTUAL_ENV}/bin/python" -m compileall -q -j 0 /app/orchestrator'
+        )
         local_console_shim = 'exec python -m orchestrator "$@"'
 
         self.assertIn(deps_copy, dockerfile)
@@ -93,9 +103,11 @@ class DockerBuildContractTests(unittest.TestCase):
     def test_voice_target_installs_voice_dependencies_before_source_copy(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
 
-        voice_target = dockerfile.split("FROM python-common-base AS voice-runtime", 1)[1]
+        voice_target = dockerfile.split("FROM python-common-base AS voice-runtime", 1)[
+            1
+        ]
         voice_deps_install = (
-            '"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-voice.txt'
+            "uv sync --frozen --no-dev --no-install-project --extra voice"
         )
         app_source_copy = "COPY orchestrator ./orchestrator"
         local_console_shim = 'exec python -m orchestrator "$@"'
@@ -116,11 +128,15 @@ class DockerBuildContractTests(unittest.TestCase):
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
         helper_copy = "COPY scripts/qa_demo_release_context.py ./scripts/qa_demo_release_context.py"
 
-        app_target = dockerfile.split("FROM python-common-base AS app-runtime-base", 1)[1].split(
+        app_target = dockerfile.split("FROM python-common-base AS app-runtime-base", 1)[
+            1
+        ].split(
             "FROM python-common-base AS python-android-base",
             1,
         )[0]
-        android_target = dockerfile.split("FROM python-android-base AS android-runtime", 1)[1].split(
+        android_target = dockerfile.split(
+            "FROM python-android-base AS android-runtime", 1
+        )[1].split(
             "FROM python-common-base AS voice-runtime",
             1,
         )[0]
@@ -137,14 +153,22 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertIn("faster-whisper", voice_extra)
         self.assertIn("pocket-tts", voice_extra)
         self.assertIn("py-cord[voice", voice_extra)
-        self.assertIn("ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}", compose)
-        self.assertIn("ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}", compose)
+        self.assertIn(
+            "ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}",
+            compose,
+        )
+        self.assertIn(
+            "ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}",
+            compose,
+        )
         self.assertNotIn("INSTALL_LOCAL_STT", compose)
         self.assertNotIn("INSTALL_LOCAL_TTS", compose)
 
     def test_base_target_omits_android_and_voice_transport_layers(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
-        base_target = dockerfile.split("FROM python-common-base AS app-runtime-base", 1)[1].split(
+        base_target = dockerfile.split(
+            "FROM python-common-base AS app-runtime-base", 1
+        )[1].split(
             "FROM python-common-base AS python-android-base",
             1,
         )[0]
@@ -156,13 +180,15 @@ class DockerBuildContractTests(unittest.TestCase):
 
     def test_android_target_keeps_android_tooling_out_of_the_common_base(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
-        android_target = dockerfile.split("FROM python-common-base AS python-android-base", 1)[1].split(
+        android_target = dockerfile.split(
+            "FROM python-common-base AS python-android-base", 1
+        )[1].split(
             "FROM python-android-base AS android-runtime",
             1,
         )[0]
 
         self.assertIn("ANDROID_SDK_ROOT", android_target)
-        self.assertIn('/usr/lib/android-sdk/build-tools/debian', android_target)
+        self.assertIn("/usr/lib/android-sdk/build-tools/debian", android_target)
         self.assertIn("adb", android_target)
         self.assertIn("aapt", android_target)
         self.assertIn("android-sdk-build-tools", android_target)
@@ -175,9 +201,13 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertNotIn('"emulator"', android_target)
         self.assertNotIn("system-images;", android_target)
 
-    def test_common_base_installs_browser_runtime_deps_without_playwright_with_deps(self) -> None:
+    def test_common_base_installs_browser_runtime_deps_without_playwright_with_deps(
+        self,
+    ) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
-        common_base = dockerfile.split("FROM python:3.11-slim-trixie AS python-common-base", 1)[1].split(
+        common_base = dockerfile.split(
+            "FROM python:3.11-slim-trixie AS python-common-base", 1
+        )[1].split(
             "COPY pyproject.toml ./",
             1,
         )[0]
@@ -190,17 +220,25 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertNotIn("ttf-unifont", common_base)
         self.assertNotIn("ttf-ubuntu-font-family", common_base)
 
-    def test_common_base_extends_network_timeouts_for_browser_and_python_dependency_downloads(self) -> None:
+    def test_common_base_extends_network_timeouts_for_browser_and_python_dependency_downloads(
+        self,
+    ) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
-        common_base = dockerfile.split("FROM python:3.11-slim-trixie AS python-common-base", 1)[1].split(
+        common_base = dockerfile.split(
+            "FROM python:3.11-slim-trixie AS python-common-base", 1
+        )[1].split(
             "FROM python-common-base AS app-runtime-base",
             1,
         )[0]
 
         self.assertIn("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000", common_base)
-        self.assertIn('"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120', common_base)
+        self.assertIn("ENV UV_HTTP_TIMEOUT=120", common_base)
+        self.assertIn("ENV UV_HTTP_RETRIES=10", common_base)
+        self.assertIn("uv sync --frozen --no-dev --no-install-project", common_base)
 
-    def test_local_compose_api_does_not_repeat_migrations_after_migrate_service(self) -> None:
+    def test_local_compose_api_does_not_repeat_migrations_after_migrate_service(
+        self,
+    ) -> None:
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         api_block = _compose_service_block(compose, "api")
 
@@ -211,16 +249,30 @@ class DockerBuildContractTests(unittest.TestCase):
             api_block,
         )
 
-    def test_local_compose_api_defaults_to_single_worker_for_fast_dev_health(self) -> None:
+    def test_local_compose_api_defaults_to_single_worker_for_fast_dev_health(
+        self,
+    ) -> None:
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-        prod_compose = (ROOT / "deploy" / "hetzner" / "docker-compose.prod.yml").read_text(encoding="utf-8")
+        prod_compose = (
+            ROOT / "deploy" / "hetzner" / "docker-compose.prod.yml"
+        ).read_text(encoding="utf-8")
         api_block = _compose_service_block(compose, "api")
         prod_api_block = _compose_service_block(prod_compose, "api")
 
-        self.assertIn("ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-1}", api_block)
-        self.assertIn('uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-1}"', api_block)
-        self.assertIn("ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}", prod_api_block)
-        self.assertIn('uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"', prod_api_block)
+        self.assertIn(
+            "ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-1}", api_block
+        )
+        self.assertIn(
+            'uvicorn orchestrator.api.main:app --no-proxy-headers --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-1}"',
+            api_block,
+        )
+        self.assertIn(
+            "ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}", prod_api_block
+        )
+        self.assertIn(
+            'uvicorn orchestrator.api.main:app --no-proxy-headers --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"',
+            prod_api_block,
+        )
 
     def test_dockerignore_excludes_local_workdirs_from_build_context(self) -> None:
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -257,7 +309,9 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertNotIn('"4100:4100"', compose)
         self.assertNotIn('"4402:5432"', compose)
 
-    def test_run_worker_prewarms_models_before_processing_queue_in_dev_and_prod(self) -> None:
+    def test_run_worker_prewarms_models_before_processing_queue_in_dev_and_prod(
+        self,
+    ) -> None:
         expected_lines = (
             "HF_HOME: /root/.cache/huggingface",
             "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}",
@@ -266,7 +320,10 @@ class DockerBuildContractTests(unittest.TestCase):
             "huggingface-cache:/root/.cache/huggingface",
         )
 
-        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+        for relative_path in (
+            "docker-compose.yml",
+            "deploy/hetzner/docker-compose.prod.yml",
+        ):
             compose = (ROOT / relative_path).read_text(encoding="utf-8")
             service_block = compose.split("run-worker:", 1)[1]
             for expected_line in expected_lines:
@@ -276,7 +333,9 @@ class DockerBuildContractTests(unittest.TestCase):
                     msg=f"run-worker in {relative_path} should preload cached HF models before starting the queue loop.",
                 )
 
-    def test_webhook_worker_prewarms_voice_models_before_processing_webhooks_in_dev_and_prod(self) -> None:
+    def test_webhook_worker_prewarms_voice_models_before_processing_webhooks_in_dev_and_prod(
+        self,
+    ) -> None:
         expected_lines = (
             "HF_HOME: /root/.cache/huggingface",
             "HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}",
@@ -287,7 +346,10 @@ class DockerBuildContractTests(unittest.TestCase):
             "ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}",
         )
 
-        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+        for relative_path in (
+            "docker-compose.yml",
+            "deploy/hetzner/docker-compose.prod.yml",
+        ):
             compose = (ROOT / relative_path).read_text(encoding="utf-8")
             service_block = compose.split("webhook-worker:", 1)[1]
             for expected_line in expected_lines:
@@ -334,7 +396,10 @@ class DockerBuildContractTests(unittest.TestCase):
             )
 
     def test_api_worker_startup_timeout_is_explicit_in_dev_and_prod(self) -> None:
-        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+        for relative_path in (
+            "docker-compose.yml",
+            "deploy/hetzner/docker-compose.prod.yml",
+        ):
             compose = (ROOT / relative_path).read_text(encoding="utf-8")
             api_block = _compose_service_block(compose, "api")
 
@@ -350,8 +415,12 @@ class DockerBuildContractTests(unittest.TestCase):
                 msg=f"api in {relative_path} should not use Uvicorn's 5s default worker startup healthcheck.",
             )
 
-    def test_tailscale_bootstrap_clears_stale_funnel_config_before_enabling_funnel(self) -> None:
-        script = (ROOT / "scripts" / "tailscale" / "funnel-bootstrap.sh").read_text(encoding="utf-8")
+    def test_tailscale_bootstrap_clears_stale_funnel_config_before_enabling_funnel(
+        self,
+    ) -> None:
+        script = (ROOT / "scripts" / "tailscale" / "funnel-bootstrap.sh").read_text(
+            encoding="utf-8"
+        )
 
         funnel_reset = 'tailscale --socket="$SOCKET" funnel reset'
         serve_reset = 'tailscale --socket="$SOCKET" serve reset'

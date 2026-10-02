@@ -31,13 +31,21 @@ class WorkflowWorkUnitRetryPolicy:
 
     def __post_init__(self) -> None:
         if self.max_attempts < 1:
-            raise ValueError("Workflow work unit retry policy max_attempts must be >= 1")
+            raise ValueError(
+                "Workflow work unit retry policy max_attempts must be >= 1"
+            )
         if self.initial_interval_seconds < 0:
-            raise ValueError("Workflow work unit retry policy initial interval must be >= 0")
+            raise ValueError(
+                "Workflow work unit retry policy initial interval must be >= 0"
+            )
         if self.max_interval_seconds < 0:
-            raise ValueError("Workflow work unit retry policy max interval must be >= 0")
+            raise ValueError(
+                "Workflow work unit retry policy max interval must be >= 0"
+            )
         if self.backoff_coefficient < 1.0:
-            raise ValueError("Workflow work unit retry policy backoff coefficient must be >= 1.0")
+            raise ValueError(
+                "Workflow work unit retry policy backoff coefficient must be >= 1.0"
+            )
 
 
 @dataclass(frozen=True)
@@ -51,8 +59,12 @@ class WorkflowWorkUnitDefinition:
     step_key: str
     label: str
     kind: WorkflowWorkUnitKind
-    retry_policy: WorkflowWorkUnitRetryPolicy = field(default_factory=WorkflowWorkUnitRetryPolicy)
-    idempotency_policy: WorkflowWorkUnitIdempotencyPolicy = field(default_factory=WorkflowWorkUnitIdempotencyPolicy)
+    retry_policy: WorkflowWorkUnitRetryPolicy = field(
+        default_factory=WorkflowWorkUnitRetryPolicy
+    )
+    idempotency_policy: WorkflowWorkUnitIdempotencyPolicy = field(
+        default_factory=WorkflowWorkUnitIdempotencyPolicy
+    )
     required: bool = True
     description: str | None = None
     graph_index: int = 0
@@ -97,7 +109,9 @@ class WorkflowDefinition:
     label: str
     description: str
     orchestration_backend: str
-    retry_policy: WorkflowRetryPolicyDefinition = field(default_factory=WorkflowRetryPolicyDefinition)
+    retry_policy: WorkflowRetryPolicyDefinition = field(
+        default_factory=WorkflowRetryPolicyDefinition
+    )
     capabilities: dict[str, object] = field(default_factory=dict)
     steps: tuple[WorkflowStepDefinition, ...] = ()
     work_units: tuple[WorkflowWorkUnitDefinition, ...] = ()
@@ -107,7 +121,9 @@ class WorkflowDefinition:
         for definition in self.steps:
             if definition.key == normalized:
                 return definition
-        raise LookupError(f"Workflow {self.workflow_type_key} has no step: {normalized}")
+        raise LookupError(
+            f"Workflow {self.workflow_type_key} has no step: {normalized}"
+        )
 
     def has_step(self, key: str) -> bool:
         normalized = _normalize_key(key, field_name="step key")
@@ -118,7 +134,9 @@ class WorkflowDefinition:
         for definition in self.work_units:
             if definition.key == normalized:
                 return definition
-        raise LookupError(f"Workflow {self.workflow_type_key} has no work unit: {normalized}")
+        raise LookupError(
+            f"Workflow {self.workflow_type_key} has no work unit: {normalized}"
+        )
 
 
 def _normalize_key(value: str, *, field_name: str) -> str:
@@ -142,7 +160,9 @@ def workflow_step(
     if not isinstance(kind, WorkflowStepKind):
         raise ValueError("Workflow step kind must be a WorkflowStepKind enum value")
     normalized_after = _normalize_key_tuple(after, field_name="step dependency")
-    normalized_supports = _normalize_key_tuple(supports, field_name="step support owner")
+    normalized_supports = _normalize_key_tuple(
+        supports, field_name="step support owner"
+    )
     definition = WorkflowStepDefinition(
         key=_normalize_key(key, field_name="step key"),
         label=_normalize_key(label, field_name="step label"),
@@ -151,7 +171,9 @@ def workflow_step(
         supports=normalized_supports,
         required=required,
         retryable=retryable,
-        description=str(description).strip() if description is not None and str(description).strip() else None,
+        description=str(description).strip()
+        if description is not None and str(description).strip()
+        else None,
     )
 
     def _decorate(fn: Callable) -> Callable:
@@ -174,35 +196,47 @@ def workflow_work_unit(
     description: str | None = None,
 ) -> Callable:
     if not isinstance(kind, WorkflowWorkUnitKind):
-        raise ValueError("Workflow work unit kind must be a WorkflowWorkUnitKind enum value")
+        raise ValueError(
+            "Workflow work unit kind must be a WorkflowWorkUnitKind enum value"
+        )
     definition = WorkflowWorkUnitDefinition(
         key=_normalize_key(key, field_name="work unit key"),
         step_key=_normalize_key(step_key, field_name="work unit step key"),
         label=_normalize_key(label, field_name="work unit label"),
         kind=kind,
         retry_policy=retry_policy or WorkflowWorkUnitRetryPolicy(),
-        idempotency_policy=idempotency_policy or WorkflowWorkUnitIdempotencyPolicy(
-            required=kind in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
+        idempotency_policy=idempotency_policy
+        or WorkflowWorkUnitIdempotencyPolicy(
+            required=kind
+            in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
         ),
         required=required,
-        description=str(description).strip() if description is not None and str(description).strip() else None,
+        description=str(description).strip()
+        if description is not None and str(description).strip()
+        else None,
     )
 
     def _decorate(fn: Callable) -> Callable:
         existing = getattr(fn, "__workflow_work_unit_definitions__", ())
-        setattr(fn, "__workflow_work_unit_definitions__", tuple(existing) + (definition,))
+        setattr(
+            fn, "__workflow_work_unit_definitions__", tuple(existing) + (definition,)
+        )
         return fn
 
     return _decorate
 
 
-def _normalize_key_tuple(value: str | Iterable[str], *, field_name: str) -> tuple[str, ...]:
+def _normalize_key_tuple(
+    value: str | Iterable[str], *, field_name: str
+) -> tuple[str, ...]:
     if isinstance(value, str):
         return (_normalize_key(value, field_name=field_name),) if value.strip() else ()
     return tuple(_normalize_key(item, field_name=field_name) for item in value)
 
 
-def infer_workflow_work_units(workflow_cls: type) -> tuple[WorkflowWorkUnitDefinition, ...]:
+def infer_workflow_work_units(
+    workflow_cls: type,
+) -> tuple[WorkflowWorkUnitDefinition, ...]:
     discovered: list[WorkflowWorkUnitDefinition] = []
     for name in dir(workflow_cls):
         value = getattr(workflow_cls, name)
@@ -243,7 +277,9 @@ def infer_workflow_steps(workflow_cls: type) -> tuple[WorkflowStepDefinition, ..
     return _topological_steps(discovered)
 
 
-def _topological_steps(discovered: list[WorkflowStepDefinition]) -> tuple[WorkflowStepDefinition, ...]:
+def _topological_steps(
+    discovered: list[WorkflowStepDefinition],
+) -> tuple[WorkflowStepDefinition, ...]:
     by_key: dict[str, WorkflowStepDefinition] = {}
     for definition in discovered:
         if definition.key in by_key:
@@ -252,12 +288,18 @@ def _topological_steps(discovered: list[WorkflowStepDefinition]) -> tuple[Workfl
     for definition in discovered:
         for dependency in definition.after:
             if dependency not in by_key:
-                raise ValueError(f"Workflow step {definition.key} depends on unknown step {dependency}")
+                raise ValueError(
+                    f"Workflow step {definition.key} depends on unknown step {dependency}"
+                )
         for owner in definition.supports:
             if owner not in by_key:
-                raise ValueError(f"Workflow step {definition.key} supports unknown step {owner}")
+                raise ValueError(
+                    f"Workflow step {definition.key} supports unknown step {owner}"
+                )
             if owner == definition.key:
-                raise ValueError(f"Workflow step {definition.key} cannot support itself")
+                raise ValueError(
+                    f"Workflow step {definition.key} cannot support itself"
+                )
 
     ordered: list[WorkflowStepDefinition] = []
     visiting: set[str] = set()
@@ -304,9 +346,13 @@ class WorkflowDefinitionRegistry:
     def register(self, definition: WorkflowDefinition) -> None:
         self._validate_definition(definition)
         if definition.workflow_type_key in self._by_key:
-            raise ValueError(f"Duplicate workflow type key: {definition.workflow_type_key}")
+            raise ValueError(
+                f"Duplicate workflow type key: {definition.workflow_type_key}"
+            )
         if definition.handler_key in self._by_handler:
-            raise ValueError(f"Duplicate workflow handler key: {definition.handler_key}")
+            raise ValueError(
+                f"Duplicate workflow handler key: {definition.handler_key}"
+            )
         if definition.system_key in self._by_system_key:
             raise ValueError(f"Duplicate workflow system key: {definition.system_key}")
         self._by_key[definition.workflow_type_key] = definition
@@ -325,19 +371,30 @@ class WorkflowDefinitionRegistry:
         try:
             return self._by_handler[normalized]
         except KeyError as exc:
-            raise LookupError(f"Workflow type not registered for handler key: {normalized}") from exc
+            raise LookupError(
+                f"Workflow type not registered for handler key: {normalized}"
+            ) from exc
 
     def get_by_system_key(self, system_key: str) -> WorkflowDefinition:
         normalized = _normalize_key(system_key, field_name="workflow system key")
         try:
             return self._by_system_key[normalized]
         except KeyError as exc:
-            raise LookupError(f"Workflow type not registered for system key: {normalized}") from exc
+            raise LookupError(
+                f"Workflow type not registered for system key: {normalized}"
+            ) from exc
 
     def list(self) -> tuple[WorkflowDefinition, ...]:
-        return tuple(sorted(self._by_key.values(), key=lambda definition: (definition.label, definition.workflow_type_key)))
+        return tuple(
+            sorted(
+                self._by_key.values(),
+                key=lambda definition: (definition.label, definition.workflow_type_key),
+            )
+        )
 
-    def validate_operation_type(self, *, workflow_type_key: str, operation_type: str) -> WorkflowStepDefinition:
+    def validate_operation_type(
+        self, *, workflow_type_key: str, operation_type: str
+    ) -> WorkflowStepDefinition:
         definition = self.get(workflow_type_key)
         return definition.step(operation_type)
 
@@ -347,7 +404,10 @@ class WorkflowDefinitionRegistry:
         _normalize_key(definition.system_key, field_name="workflow system key")
         _normalize_key(definition.handler_key, field_name="workflow handler key")
         _normalize_key(definition.label, field_name="workflow label")
-        _normalize_key(definition.orchestration_backend, field_name="workflow orchestration backend")
+        _normalize_key(
+            definition.orchestration_backend,
+            field_name="workflow orchestration backend",
+        )
         steps = _topological_steps(list(definition.steps))
         step_keys = {step.key for step in steps}
         work_unit_keys: set[str] = set()
@@ -360,7 +420,10 @@ class WorkflowDefinitionRegistry:
                     f"Workflow work unit {work_unit.key} belongs to unknown step {work_unit.step_key}"
                 )
             if (
-                work_unit.kind in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
+                work_unit.kind
+                in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
                 and not work_unit.idempotency_policy.required
             ):
-                raise ValueError(f"Workflow work unit {work_unit.key} requires idempotency policy")
+                raise ValueError(
+                    f"Workflow work unit {work_unit.key} requires idempotency policy"
+                )

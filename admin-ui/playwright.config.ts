@@ -1,4 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+
+// The local E2E server and its cookie-generating test sender share one ephemeral key.
+if (!process.env.AUTH_SECRET) {
+  process.env.AUTH_SECRET = randomBytes(32).toString("hex");
+}
 
 function defaultCiPlaywrightPort(): string {
   const runId = Number.parseInt(process.env.GITHUB_RUN_ID ?? "", 10);
@@ -34,14 +40,15 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: `npx next dev --webpack -p ${PLAYWRIGHT_APP_PORT}`,
+    command: `npx next start -p ${PLAYWRIGHT_APP_PORT}`,
     url: `${PLAYWRIGHT_BASE_URL}/login`,
     timeout: 120_000,
     reuseExistingServer: !process.env.CI,
     env: {
+      AUTH_SECRET: process.env.AUTH_SECRET,
+      ORCHESTRATOR_API_BASE_URL: process.env.PLAYWRIGHT_API_BASE_URL ?? "http://localhost:60001",
       AUTH_TRUST_HOST: "true",
       NEXT_TELEMETRY_DISABLED: "1",
-      NEXT_DIST_DIR: ".next-playwright",
     },
   },
   projects: [

@@ -83,14 +83,20 @@ def decode_trigger_context(raw: object) -> TriggerContext | None:
     return _decode_pr_remediation_context(raw)
 
 
-def require_github_pr_remediation_context(raw: object) -> GithubPrRemediationTriggerContext:
+def require_github_pr_remediation_context(
+    raw: object,
+) -> GithubPrRemediationTriggerContext:
     parsed = decode_trigger_context(raw)
     if not isinstance(parsed, GithubPrRemediationTriggerContext):
-        raise TriggerContextDecodeError("Trigger context is not a GitHub PR remediation payload")
+        raise TriggerContextDecodeError(
+            "Trigger context is not a GitHub PR remediation payload"
+        )
     return parsed
 
 
-def _decode_pr_remediation_context(raw: dict[str, object]) -> GithubPrRemediationTriggerContext:
+def _decode_pr_remediation_context(
+    raw: dict[str, object],
+) -> GithubPrRemediationTriggerContext:
     pr_number = _positive_int(raw.get("pr_number"))
     head_sha = _normalized_text(raw.get("head_sha"))
 
@@ -139,7 +145,11 @@ def _decode_requested_comment(raw: object) -> RequestedComment | None:
         return None
     comment_id = _positive_int(raw.get("id"))
     comment_type = _normalized_text(raw.get("type"))
-    if comment_id is None or comment_type is None or comment_type not in _MANUAL_FIX_COMMENT_TYPES:
+    if (
+        comment_id is None
+        or comment_type is None
+        or comment_type not in _MANUAL_FIX_COMMENT_TYPES
+    ):
         return None
     line_value = _positive_int(raw.get("line"))
     return RequestedComment(
@@ -160,7 +170,10 @@ def _decode_manual_fix_request(
 ) -> ManualFixRequestContext | None:
     if not isinstance(raw, dict):
         return None
-    requested_comment = _decode_requested_comment(raw.get("requested_comment")) or fallback_requested_comment
+    requested_comment = (
+        _decode_requested_comment(raw.get("requested_comment"))
+        or fallback_requested_comment
+    )
     code_context = _decode_code_context(raw.get("code_context"))
     return ManualFixRequestContext(
         requested_by=_normalized_text(raw.get("requested_by")),

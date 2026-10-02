@@ -38,7 +38,9 @@ def test_connect_temporal_client_registers_telemetry_interceptor(monkeypatch) ->
     assert len(captured["kwargs"]["interceptors"]) == 1
 
 
-def test_temporal_client_outbound_interceptor_traces_start_workflow(monkeypatch) -> None:
+def test_temporal_client_outbound_interceptor_traces_start_workflow(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
 
     @contextmanager
@@ -68,7 +70,10 @@ def test_temporal_client_outbound_interceptor_traces_start_workflow(monkeypatch)
     assert result == "ok"
     assert captured["name"] == "temporal.client.start_workflow"
     assert captured["attributes"]["workflow.id"] == "parent_planning:MAB-215"
-    assert captured["attributes"]["temporal.handle_id"] == "workflow:parent_planning:MAB-215"
+    assert (
+        captured["attributes"]["temporal.handle_id"]
+        == "workflow:parent_planning:MAB-215"
+    )
     assert captured["attributes"]["temporal.task_queue"] == "master-builder"
 
 
@@ -107,7 +112,9 @@ def test_temporal_activity_interceptor_traces_execute_activity(monkeypatch) -> N
     result = asyncio.run(
         interceptor.execute_activity(
             SimpleNamespace(
-                fn=SimpleNamespace(__name__="process_handler_workflow_advance_activity"),
+                fn=SimpleNamespace(
+                    __name__="process_handler_workflow_advance_activity"
+                ),
                 args=(),
                 headers={},
             )
@@ -118,7 +125,10 @@ def test_temporal_activity_interceptor_traces_execute_activity(monkeypatch) -> N
     assert captured["name"] == "temporal.activity.execute"
     assert captured["attributes"]["workflow.id"] == "parent_planning:MAB-215"
     assert captured["attributes"]["temporal.activity_attempt"] == 2
-    assert captured["attributes"]["temporal.activity_type"] == "process_handler_workflow_advance_activity"
+    assert (
+        captured["attributes"]["temporal.activity_type"]
+        == "process_handler_workflow_advance_activity"
+    )
 
 
 def test_run_temporal_worker_registers_activity_interceptor(monkeypatch) -> None:
@@ -133,7 +143,10 @@ def test_run_temporal_worker_registers_activity_interceptor(monkeypatch) -> None
             captured["ran"] = True
 
     monkeypatch.setattr("temporalio.worker.Worker", _FakeWorker)
-    monkeypatch.setattr("orchestrator.temporal.worker.connect_temporal_client", lambda _settings: asyncio.sleep(0, result="client"))
+    monkeypatch.setattr(
+        "orchestrator.temporal.worker.connect_temporal_client",
+        lambda _settings: asyncio.sleep(0, result="client"),
+    )
     monkeypatch.setattr(
         "orchestrator.temporal.worker.get_settings",
         lambda: SimpleNamespace(
@@ -142,8 +155,12 @@ def test_run_temporal_worker_registers_activity_interceptor(monkeypatch) -> None
             sentry_release="test-release",
         ),
     )
-    monkeypatch.setattr("orchestrator.temporal.worker.configure_logging", lambda *args, **kwargs: None)
-    monkeypatch.setattr("orchestrator.temporal.worker.initialize_telemetry", lambda **kwargs: True)
+    monkeypatch.setattr(
+        "orchestrator.temporal.worker.configure_logging", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.worker.initialize_telemetry", lambda **kwargs: True
+    )
 
     asyncio.run(run_temporal_worker())
 

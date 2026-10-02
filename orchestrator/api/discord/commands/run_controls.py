@@ -41,7 +41,9 @@ from orchestrator.core.decision.state_machine import (
     build_execution_admission_block,
 )
 from orchestrator.core.decision.types import PrecheckOutcome
-from orchestrator.core.development.self_executable_contract import resolve_self_executable_planning_contract
+from orchestrator.core.development.self_executable_contract import (
+    resolve_self_executable_planning_contract,
+)
 from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
@@ -61,7 +63,9 @@ def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     return getattr(oauth_context, field, None)
 
 
-def _is_knowledge_enabled_for_project(*, tenant_policy: dict, project_overrides: dict) -> tuple[bool, str]:
+def _is_knowledge_enabled_for_project(
+    *, tenant_policy: dict, project_overrides: dict
+) -> tuple[bool, str]:
     effective_policy = resolve_effective_policy(
         tenant_policy=tenant_policy,
         project_overrides=project_overrides,
@@ -144,9 +148,14 @@ def _queue_run_from_issue_context(
                     ),
                     issue_key=issue_key,
                     classification=clarification_presentation.mode,
-                    decision_gate_reason=clarification_presentation.decision_gate_reason or "",
-                    decision_gate_questions=list(clarification_presentation.decision_gate_questions),
-                    gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
+                    decision_gate_reason=clarification_presentation.decision_gate_reason
+                    or "",
+                    decision_gate_questions=list(
+                        clarification_presentation.decision_gate_questions
+                    ),
+                    gtd_missing_criteria=list(
+                        clarification_presentation.gtd_missing_criteria
+                    ),
                     gtd_questions=list(clarification_presentation.gtd_questions),
                     missing_slots=list(clarification_presentation.missing_slots),
                 ),
@@ -163,7 +172,9 @@ def _queue_run_from_issue_context(
                 },
             )
         conflict = present_discord_admission_conflict(admission=admission)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict.detail)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=conflict.detail
+        )
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
         tenant_id=tenant_id,
@@ -193,7 +204,9 @@ def _queue_run_from_issue_context(
     return DiscordCommandResponse(
         ok=True,
         command="retry" if source == "discord_retry" else "run",
-        message=success_message.format(run_id=enqueue_result.run.run_id, issue_key=issue_key),
+        message=success_message.format(
+            run_id=enqueue_result.run.run_id, issue_key=issue_key
+        ),
         data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
     )
 
@@ -240,7 +253,9 @@ def _queue_ready_self_executable_parent_run(
     return DiscordCommandResponse(
         ok=True,
         command=command,
-        message=success_message.format(run_id=enqueue_result.run.run_id, issue_key=issue_key),
+        message=success_message.format(
+            run_id=enqueue_result.run.run_id, issue_key=issue_key
+        ),
         data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
     )
 
@@ -267,30 +282,43 @@ def dispatch_run_control_command(
 ) -> DiscordCommandResponse | None:
     if command_name == "run":
         if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !run <ISSUE_KEY>")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !run <ISSUE_KEY>",
+            )
         issue_key = arguments[0].strip().upper()
         project = resolve_project_for_issue(
             session=session,
             tenant=tenant,
             issue_key=issue_key,
         )
-        if scope.project_keys and project.jira_project_key not in set(scope.project_keys):
+        if scope.project_keys and project.jira_project_key not in set(
+            scope.project_keys
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {issue_key} is outside the mapped project scope",
             )
-        issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
+        issue_preview = fetch_issue_preview(
+            session=session, tenant=tenant, issue_key=issue_key
+        )
         issue_description: str | None = None
         issue_labels: list[str] | None = None
         issue_detail = None
         try:
-            issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=issue_key)
-            refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
+            issue_detail = fetch_issue_detail(
+                session=session, tenant=tenant, issue_key=issue_key
+            )
+            refreshed_description = str(
+                getattr(issue_detail, "description", "") or ""
+            ).strip()
             if refreshed_description:
                 issue_description = refreshed_description
             labels_raw = getattr(issue_detail, "labels", None)
             if isinstance(labels_raw, list):
-                issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+                issue_labels = [
+                    str(label).strip() for label in labels_raw if str(label).strip()
+                ]
         except HTTPException:
             issue_description = None
             issue_labels = None
@@ -334,11 +362,17 @@ def dispatch_run_control_command(
 
     if command_name == "cancel":
         if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !cancel <RUN_ID>")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !cancel <RUN_ID>",
+            )
         run_id = arguments[0].strip()
         run = session.get(Run, run_id)
         if run is None or run.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run {run_id} was not found",
+            )
         if scope.project_id and run.project_id != scope.project_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -354,7 +388,10 @@ def dispatch_run_control_command(
 
     if command_name == "retry":
         if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !retry <ISSUE_KEY|RUN_ID>")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !retry <ISSUE_KEY|RUN_ID>",
+            )
         target = arguments[0].strip()
         run = session.get(Run, target)
         if run is None:
@@ -380,18 +417,26 @@ def dispatch_run_control_command(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Run {run.run_id} is {run.status}; only failed/blocked/cancelled runs can be retried",
             )
-        issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
+        issue_preview = fetch_issue_preview(
+            session=session, tenant=tenant, issue_key=run.issue_key
+        )
         issue_description = run.issue_description
         issue_labels: list[str] | None = None
         issue_detail = None
         try:
-            issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=run.issue_key)
-            refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
+            issue_detail = fetch_issue_detail(
+                session=session, tenant=tenant, issue_key=run.issue_key
+            )
+            refreshed_description = str(
+                getattr(issue_detail, "description", "") or ""
+            ).strip()
             if refreshed_description:
                 issue_description = refreshed_description
             labels_raw = getattr(issue_detail, "labels", None)
             if isinstance(labels_raw, list):
-                issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+                issue_labels = [
+                    str(label).strip() for label in labels_raw if str(label).strip()
+                ]
         except HTTPException:
             issue_description = run.issue_description
             issue_labels = None
@@ -400,7 +445,9 @@ def dispatch_run_control_command(
             tenant=tenant,
             issue_key=run.issue_key,
         )
-        if scope.project_keys and project.jira_project_key not in set(scope.project_keys):
+        if scope.project_keys and project.jira_project_key not in set(
+            scope.project_keys
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {run.issue_key} is outside the mapped project scope",
@@ -444,7 +491,9 @@ def dispatch_run_control_command(
         )
 
     if command_name == "reply":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        command_params = (
+            payload.command_params if isinstance(payload.command_params, dict) else {}
+        )
         issue_key = str(command_params.get("issue_key") or "").strip().upper()
         reply_text = str(command_params.get("reply_text") or "").strip()
         source_ref = str(command_params.get("source_ref") or "").strip() or None
@@ -485,12 +534,18 @@ def dispatch_run_control_command(
         issue_description: str | None = None
         codex_working_dir: str | None = None
         try:
-            oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
+            oauth = tenant_atlassian_oauth_context(
+                session=session, tenant=tenant, settings=settings
+            )
             oauth_client = _oauth_context_value(oauth, "client")
             oauth_connection = _oauth_context_value(oauth, "connection")
             oauth_access_token = _oauth_context_value(oauth, "access_token")
             cloud_id = getattr(oauth_connection, "cloud_id", None)
-            if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+            if (
+                oauth_client is None
+                or oauth_access_token is None
+                or not str(cloud_id or "").strip()
+            ):
                 raise RuntimeError("Tenant Atlassian context is incomplete")
             issue_detail = oauth_client.get_issue_detail(
                 access_token=oauth_access_token,
@@ -510,10 +565,18 @@ def dispatch_run_control_command(
                 project_id=project.project_id,
                 project_keys=[project.jira_project_key],
             )
-            issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or None
-            issue_description = str(getattr(issue_detail, "description", "") or "").strip() or None
+            issue_summary = (
+                str(getattr(issue_detail, "summary", "") or "").strip() or None
+            )
+            issue_description = (
+                str(getattr(issue_detail, "description", "") or "").strip() or None
+            )
             labels_raw = getattr(issue_detail, "labels", None)
-            issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()] if isinstance(labels_raw, list) else None
+            issue_labels = (
+                [str(label).strip() for label in labels_raw if str(label).strip()]
+                if isinstance(labels_raw, list)
+                else None
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -557,9 +620,14 @@ def dispatch_run_control_command(
                 issue_description=issue_description,
                 cycle=active_cycle,
                 reply_text=reply_text,
-                existing_answers=list_cycle_answers(session=session, cycle_id=active_cycle.cycle_id),
+                existing_answers=list_cycle_answers(
+                    session=session, cycle_id=active_cycle.cycle_id
+                ),
             )
-            if not any(action.type == "capture_decision_answer" for action in interpreted_reply.actions):
+            if not any(
+                action.type == "capture_decision_answer"
+                for action in interpreted_reply.actions
+            ):
                 question_feedback = load_cycle_question_feedback(
                     session=session,
                     cycle_id=active_cycle.cycle_id,
@@ -581,7 +649,9 @@ def dispatch_run_control_command(
                         "knowledge_mode": None,
                     },
                 )
-            if not any(action.type == "recheck_gate" for action in interpreted_reply.actions):
+            if not any(
+                action.type == "recheck_gate" for action in interpreted_reply.actions
+            ):
                 capture = capture_decision_reply(
                     session=session,
                     settings=settings,
@@ -612,7 +682,9 @@ def dispatch_run_control_command(
                     message=interpreted_reply.message,
                     data={
                         "issue_key": issue_key,
-                        "actions_applied": [action.type for action in interpreted_reply.actions],
+                        "actions_applied": [
+                            action.type for action in interpreted_reply.actions
+                        ],
                         "recheck_requested": False,
                         "evidence_id": capture.evidence_id,
                         "knowledge_mode": None,
@@ -620,34 +692,36 @@ def dispatch_run_control_command(
                 )
 
         try:
-            reply_result = decision_clarification_port.capture_decision_reply_and_recheck(
-                session=session,
-                settings=settings,
-                tenant=tenant,
-                project=project,
-                issue_key=issue_key,
-                reply_text=reply_text,
-                source_transport="discord",
-                source_ref=source_ref,
-                actor_ref=payload.user_id,
-                metadata={
-                    "channel_id": payload.channel_id,
-                    "ingress": "discord",
-                },
-                decision_event_factory=lambda capture: DecisionEventInput(
-                    source="discord_reply",
-                    event_type="discord_discord_reply",
-                    idempotency_key=f"decision-reply:{capture.evidence_id}",
+            reply_result = (
+                decision_clarification_port.capture_decision_reply_and_recheck(
+                    session=session,
+                    settings=settings,
+                    tenant=tenant,
+                    project=project,
                     issue_key=issue_key,
-                    issue_summary=issue_summary,
-                    issue_description=issue_description,
-                    issue_labels=issue_labels,
-                ),
-                tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
-                evaluate_pre_run_check_fn=evaluate_pre_run_check,
-                oauth_context=oauth,
-                publish_jira_comment_fn=_publish_jira_comment,
-                interpreted_reply=interpreted_reply,
+                    reply_text=reply_text,
+                    source_transport="discord",
+                    source_ref=source_ref,
+                    actor_ref=payload.user_id,
+                    metadata={
+                        "channel_id": payload.channel_id,
+                        "ingress": "discord",
+                    },
+                    decision_event_factory=lambda capture: DecisionEventInput(
+                        source="discord_reply",
+                        event_type="discord_discord_reply",
+                        idempotency_key=f"decision-reply:{capture.evidence_id}",
+                        issue_key=issue_key,
+                        issue_summary=issue_summary,
+                        issue_description=issue_description,
+                        issue_labels=issue_labels,
+                    ),
+                    tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
+                    evaluate_pre_run_check_fn=evaluate_pre_run_check,
+                    oauth_context=oauth,
+                    publish_jira_comment_fn=_publish_jira_comment,
+                    interpreted_reply=interpreted_reply,
+                )
             )
         except ValueError as exc:
             raise HTTPException(
@@ -698,9 +772,14 @@ def dispatch_run_control_command(
                     ),
                     issue_key=issue_key,
                     classification=clarification_presentation.mode,
-                    decision_gate_reason=clarification_presentation.decision_gate_reason or "",
-                    decision_gate_questions=list(clarification_presentation.decision_gate_questions),
-                    gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
+                    decision_gate_reason=clarification_presentation.decision_gate_reason
+                    or "",
+                    decision_gate_questions=list(
+                        clarification_presentation.decision_gate_questions
+                    ),
+                    gtd_missing_criteria=list(
+                        clarification_presentation.gtd_missing_criteria
+                    ),
                     gtd_questions=list(clarification_presentation.gtd_questions),
                     missing_slots=list(clarification_presentation.missing_slots),
                 ),
@@ -708,7 +787,9 @@ def dispatch_run_control_command(
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message=interpreted_reply.message if interpreted_reply is not None else clarification_response.message,
+                message=interpreted_reply.message
+                if interpreted_reply is not None
+                else clarification_response.message,
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
@@ -726,13 +807,21 @@ def dispatch_run_control_command(
             thread_channel_id=thread_channel_id or None,
         )
 
-        issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
+        issue_preview = fetch_issue_preview(
+            session=session, tenant=tenant, issue_key=issue_key
+        )
         rechecked_issue_labels = getattr(decision_result, "issue_labels", None)
         effective_issue_labels = list(rechecked_issue_labels or issue_labels or [])
-        pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
+        pre_check = getattr(
+            getattr(decision_result, "decision", None), "pre_check", None
+        )
         ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
         ready_label_present = bool(getattr(pre_check, "ready_label_present", False))
-        if ready_label and ready_label_present and ready_label not in effective_issue_labels:
+        if (
+            ready_label
+            and ready_label_present
+            and ready_label not in effective_issue_labels
+        ):
             effective_issue_labels.append(ready_label)
         return _queue_run_from_issue_context(
             session=session,
@@ -749,7 +838,9 @@ def dispatch_run_control_command(
             tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
             build_codex_runtime=build_codex_runtime,
             resolve_codex_working_dir=resolve_codex_working_dir,
-            conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",
+            conflict_prefix="Retry could not be queued"
+            if has_retryable_run
+            else "Run could not be queued",
             success_message=(
                 "Queued retry run {run_id} for {issue_key}"
                 if has_retryable_run

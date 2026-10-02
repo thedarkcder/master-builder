@@ -25,7 +25,9 @@ from orchestrator.api.discord.shared.state import (
     live_voice_enabled_from_discord_config,
     live_voice_room_links_from_discord_config,
 )
-from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
+from orchestrator.api.discord.shared.state_repository import (
+    resolve_project_for_discord_channel,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.runtime.working_dir import resolve_codex_working_dir
 from orchestrator.core.config import Settings
@@ -112,7 +114,9 @@ class DiscordLiveVoiceService:
         session_factory=None,
         secret_resolver=resolve_platform_secret_ref,
         discord_api_client_factory=DiscordApiClient,
-        transport_client_factory: Callable[..., Any] = build_live_voice_transport_client,
+        transport_client_factory: Callable[
+            ..., Any
+        ] = build_live_voice_transport_client,
         stop_event: threading.Event | None = None,
     ) -> None:
         self._settings = settings
@@ -126,7 +130,6 @@ class DiscordLiveVoiceService:
                 on_turn_discarded=self._on_turn_discarded,
             )
         )
-        self._hikari: Any | None = None
         self._bot: Any | None = None
         self._bot_loop: asyncio.AbstractEventLoop | None = None
         self._transport_client: Any | None = None
@@ -156,11 +159,16 @@ class DiscordLiveVoiceService:
             ensure_transcription_provider_ready(settings=self._settings)
             ensure_opus_decoder_ready()
         except VoiceTranscriptionError as exc:
-            raise DiscordLiveVoiceDependencyFailure(f"Live voice transcription is not ready: {exc}") from exc
+            raise DiscordLiveVoiceDependencyFailure(
+                f"Live voice transcription is not ready: {exc}"
+            ) from exc
         except LiveVoiceAudioError as exc:
             raise DiscordLiveVoiceDependencyFailure(str(exc)) from exc
 
-        if str(self._settings.voice_stt_provider or "").strip().lower() in {"", "disabled"}:
+        if str(self._settings.voice_stt_provider or "").strip().lower() in {
+            "",
+            "disabled",
+        }:
             raise DiscordLiveVoiceDependencyFailure(
                 "Live voice requires ORCHESTRATOR_VOICE_STT_PROVIDER to be configured."
             )
@@ -171,7 +179,9 @@ class DiscordLiveVoiceService:
 
         bot_token = self._resolve_bot_token()
         if not bot_token:
-            raise DiscordLiveVoiceDependencyFailure("Discord bot token is not configured.")
+            raise DiscordLiveVoiceDependencyFailure(
+                "Discord bot token is not configured."
+            )
 
         try:
             transport_client = self._transport_client_factory(
@@ -190,7 +200,11 @@ class DiscordLiveVoiceService:
                 self._refresh_room_registry()
                 self._sync_rooms_with_sidecar()
                 self._drain_finalized_turns()
-                self._stop_event.wait(timeout=max(0.25, float(self._settings.discord_live_voice_poll_seconds)))
+                self._stop_event.wait(
+                    timeout=max(
+                        0.25, float(self._settings.discord_live_voice_poll_seconds)
+                    )
+                )
         finally:
             self._stop_event.set()
             self._close_transport_client()
@@ -245,25 +259,43 @@ class DiscordLiveVoiceService:
                 wake_event.set()
         with self._runtime_lock:
             session = self._runtime.get_session(binding=room.binding)
-            if session is not None and session.state != LiveVoiceSessionState.DISCONNECTED:
+            if (
+                session is not None
+                and session.state != LiveVoiceSessionState.DISCONNECTED
+            ):
                 self._runtime.leave_room(binding=room.binding)
 
     def _handle_transport_event(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "").strip()
-        session_id = str(event.get("session_id") or "").strip() or self._transport_session_id
+        session_id = (
+            str(event.get("session_id") or "").strip() or self._transport_session_id
+        )
         if session_id != self._transport_session_id:
-            logger.info("discord_live_voice_transport_event_ignored reason=unknown_session type=%s session_id=%s", event_type, session_id)
+            logger.info(
+                "discord_live_voice_transport_event_ignored reason=unknown_session type=%s session_id=%s",
+                event_type,
+                session_id,
+            )
             return
 
         if event_type == "transport_ready":
             self._transport_ready = True
-            logger.info("discord_live_voice_transport_ready session_id=%s backend=%s", session_id, event.get("backend"))
+            logger.info(
+                "discord_live_voice_transport_ready session_id=%s backend=%s",
+                session_id,
+                event.get("backend"),
+            )
             return
 
         if event_type == "transport_failed":
             stage = str(event.get("stage") or "").strip()
             retryable = bool(event.get("retryable"))
-            if not retryable or stage in {"process_exit", "open_session", "client_new", "open_gateway"}:
+            if not retryable or stage in {
+                "process_exit",
+                "open_session",
+                "client_new",
+                "open_gateway",
+            }:
                 self._transport_ready = False
             logger.warning(
                 "discord_live_voice_transport_failed session_id=%s stage=%s error=%s retryable=%s",
@@ -276,7 +308,11 @@ class DiscordLiveVoiceService:
 
         room = self._room_for_transport_event(event=event)
         if room is None:
-            logger.info("discord_live_voice_transport_event_ignored reason=unmapped_room type=%s session_id=%s", event_type, session_id)
+            logger.info(
+                "discord_live_voice_transport_event_ignored reason=unmapped_room type=%s session_id=%s",
+                event_type,
+                session_id,
+            )
             return
 
         if event_type == "room_state":
@@ -291,7 +327,9 @@ class DiscordLiveVoiceService:
             with self._runtime_lock:
                 session = self._runtime.get_session(binding=room.binding)
                 if session is not None and session.bot_speaking:
-                    self._runtime.mark_bot_speaking(binding=room.binding, speaking=False)
+                    self._runtime.mark_bot_speaking(
+                        binding=room.binding, speaking=False
+                    )
             logger.info(
                 "discord_live_voice_playback_finished room_key=%s playback_frames=%s",
                 room.room_key,
@@ -321,10 +359,14 @@ class DiscordLiveVoiceService:
         for room in self._rooms_by_key.values():
             with self._runtime_lock:
                 if self._runtime.get_session(binding=room.binding) is None:
-                    self._runtime.register_room(binding=room.binding, bot_user_id=None, human_member_count=0)
+                    self._runtime.register_room(
+                        binding=room.binding, bot_user_id=None, human_member_count=0
+                    )
 
         rooms = [
-            LiveVoiceTransportRoom(guild_id=room.guild_id, channel_id=room.voice_channel_id)
+            LiveVoiceTransportRoom(
+                guild_id=room.guild_id, channel_id=room.voice_channel_id
+            )
             for room in self._rooms_by_key.values()
         ]
         try:
@@ -340,11 +382,14 @@ class DiscordLiveVoiceService:
         self._synced_room_keys = set(self._rooms_by_key)
         self._synced_rooms_by_key = dict(self._rooms_by_key)
         self._synced_room_signatures = {
-            room_key: self._room_sync_signature(room=room) for room_key, room in self._rooms_by_key.items()
+            room_key: self._room_sync_signature(room=room)
+            for room_key, room in self._rooms_by_key.items()
         }
 
     @staticmethod
-    def _room_sync_signature(*, room: ConfiguredLiveVoiceRoom) -> tuple[str, str, str, str, str]:
+    def _room_sync_signature(
+        *, room: ConfiguredLiveVoiceRoom
+    ) -> tuple[str, str, str, str, str]:
         return (
             room.tenant_id,
             room.guild_id,
@@ -353,31 +398,48 @@ class DiscordLiveVoiceService:
             room.project_id or "",
         )
 
-    def _room_for_transport_event(self, *, event: dict[str, Any]) -> ConfiguredLiveVoiceRoom | None:
+    def _room_for_transport_event(
+        self, *, event: dict[str, Any]
+    ) -> ConfiguredLiveVoiceRoom | None:
         guild_id = str(event.get("guild_id") or "").strip()
         channel_id = str(event.get("channel_id") or "").strip()
         if not guild_id or not channel_id:
             return None
         return self._room_for_channel(guild_id=guild_id, channel_id=channel_id)
 
-    def _apply_room_state_event(self, *, room: ConfiguredLiveVoiceRoom, event: dict[str, Any]) -> None:
+    def _apply_room_state_event(
+        self, *, room: ConfiguredLiveVoiceRoom, event: dict[str, Any]
+    ) -> None:
         joined = bool(event.get("joined"))
         human_count = max(0, int(event.get("human_count") or 0))
         if joined:
             self._connected_room_keys.add(room.room_key)
             self._active_room_key_by_guild_id[room.guild_id] = room.room_key
             self._mark_room_joined(room=room, human_count=human_count)
-            logger.info("discord_live_voice_room_joined room_key=%s human_count=%s", room.room_key, human_count)
+            logger.info(
+                "discord_live_voice_room_joined room_key=%s human_count=%s",
+                room.room_key,
+                human_count,
+            )
             return
 
         self._handle_transport_disconnect(room=room)
-        logger.info("discord_live_voice_room_left room_key=%s human_count=%s", room.room_key, human_count)
+        logger.info(
+            "discord_live_voice_room_left room_key=%s human_count=%s",
+            room.room_key,
+            human_count,
+        )
 
-    def _handle_opus_frame_event(self, *, room: ConfiguredLiveVoiceRoom, event: dict[str, Any]) -> None:
+    def _handle_opus_frame_event(
+        self, *, room: ConfiguredLiveVoiceRoom, event: dict[str, Any]
+    ) -> None:
         encoded_frame = str(event.get("opus_frame_base64") or "").strip()
         user_id = str(event.get("user_id") or "").strip()
         if not encoded_frame or not user_id:
-            logger.info("discord_live_voice_opus_frame_ignored room_key=%s reason=missing_payload", room.room_key)
+            logger.info(
+                "discord_live_voice_opus_frame_ignored room_key=%s reason=missing_payload",
+                room.room_key,
+            )
             return
         if user_id == "0":
             logger.info(
@@ -388,11 +450,17 @@ class DiscordLiveVoiceService:
         try:
             opus_packet = base64.b64decode(encoded_frame.encode("ascii"))
         except Exception:  # noqa: BLE001
-            logger.exception("discord_live_voice_opus_frame_decode_failed room_key=%s user_id=%s", room.room_key, user_id)
+            logger.exception(
+                "discord_live_voice_opus_frame_decode_failed room_key=%s user_id=%s",
+                room.room_key,
+                user_id,
+            )
             return
 
         try:
-            pcm_bytes, sample_rate_hz, channels = self._decode_member_speech(room.room_key, user_id, [opus_packet])
+            pcm_bytes, sample_rate_hz, channels = self._decode_member_speech(
+                room.room_key, user_id, [opus_packet]
+            )
         except LiveVoiceAudioError as exc:
             logger.warning(
                 "discord_live_voice_opus_frame_ignored room_key=%s user_id=%s reason=decode_failed error=%s",
@@ -470,7 +538,11 @@ class DiscordLiveVoiceService:
                 with self._turn_worker_lock:
                     pending = self._pending_turns.get(room_key)
                     latest_event = self._turn_events.get(room_key)
-                    if pending is None and latest_event is wake_event and not latest_event.is_set():
+                    if (
+                        pending is None
+                        and latest_event is wake_event
+                        and not latest_event.is_set()
+                    ):
                         self._turn_workers.pop(room_key, None)
                         self._turn_events.pop(room_key, None)
                         self._pending_turns.pop(room_key, None)
@@ -488,21 +560,30 @@ class DiscordLiveVoiceService:
             try:
                 self._process_turn(turn=turn, turn_version=version)
             except Exception:  # noqa: BLE001
-                logger.exception("discord_live_voice_turn_processing_failed room_key=%s", room_key)
+                logger.exception(
+                    "discord_live_voice_turn_processing_failed room_key=%s", room_key
+                )
 
     def _refresh_room_registry(self) -> None:
         with self._session_factory() as session:
-            tenants = session.execute(
-                select(Tenant).where(Tenant.is_enabled.is_(True))
-            ).scalars().all()
+            tenants = (
+                session.execute(select(Tenant).where(Tenant.is_enabled.is_(True)))
+                .scalars()
+                .all()
+            )
             tenant_by_id = {str(tenant.tenant_id): tenant for tenant in tenants}
             refreshed: dict[str, ConfiguredLiveVoiceRoom] = {}
 
             for tenant in tenants:
                 guild_id = _tenant_guild_id(tenant=tenant, settings=self._settings)
-                if not guild_id or not live_voice_enabled_from_discord_config(tenant.discord_config):
+                if not guild_id or not live_voice_enabled_from_discord_config(
+                    tenant.discord_config
+                ):
                     continue
-                for voice_channel_id, linked_text_channel_id in live_voice_room_links_from_discord_config(
+                for (
+                    voice_channel_id,
+                    linked_text_channel_id,
+                ) in live_voice_room_links_from_discord_config(
                     tenant.discord_config
                 ).items():
                     project = resolve_project_for_discord_channel(
@@ -519,17 +600,24 @@ class DiscordLiveVoiceService:
                     )
                     refreshed[room.room_key] = room
 
-            projects = session.execute(
-                select(Project).where(Project.is_archived.is_(False))
-            ).scalars().all()
+            projects = (
+                session.execute(select(Project).where(Project.is_archived.is_(False)))
+                .scalars()
+                .all()
+            )
             for project in projects:
                 tenant = tenant_by_id.get(str(project.tenant_id))
                 if tenant is None:
                     continue
                 guild_id = _tenant_guild_id(tenant=tenant, settings=self._settings)
-                if not guild_id or not live_voice_enabled_from_discord_config(project.discord_config):
+                if not guild_id or not live_voice_enabled_from_discord_config(
+                    project.discord_config
+                ):
                     continue
-                for voice_channel_id, linked_text_channel_id in live_voice_room_links_from_discord_config(
+                for (
+                    voice_channel_id,
+                    linked_text_channel_id,
+                ) in live_voice_room_links_from_discord_config(
                     project.discord_config
                 ).items():
                     room = ConfiguredLiveVoiceRoom(
@@ -551,7 +639,9 @@ class DiscordLiveVoiceService:
                             human_member_count=0,
                         )
 
-    def _mark_room_joined(self, *, room: ConfiguredLiveVoiceRoom, human_count: int) -> None:
+    def _mark_room_joined(
+        self, *, room: ConfiguredLiveVoiceRoom, human_count: int
+    ) -> None:
         with self._runtime_lock:
             session = self._runtime.get_session(binding=room.binding)
             if session is None:
@@ -561,14 +651,24 @@ class DiscordLiveVoiceService:
                     human_member_count=human_count,
                 )
                 session = self._runtime.get_session(binding=room.binding)
-            if session is not None and session.state == LiveVoiceSessionState.DISCONNECTED:
-                self._runtime.join_room(binding=room.binding, human_member_count=human_count)
+            if (
+                session is not None
+                and session.state == LiveVoiceSessionState.DISCONNECTED
+            ):
+                self._runtime.join_room(
+                    binding=room.binding, human_member_count=human_count
+                )
 
-    def _room_for_channel(self, *, guild_id: str, channel_id: str) -> ConfiguredLiveVoiceRoom | None:
+    def _room_for_channel(
+        self, *, guild_id: str, channel_id: str
+    ) -> ConfiguredLiveVoiceRoom | None:
         normalized_guild_id = str(guild_id or "").strip()
         normalized_channel_id = str(channel_id or "").strip()
         for room in self._rooms_by_key.values():
-            if room.guild_id == normalized_guild_id and room.voice_channel_id == normalized_channel_id:
+            if (
+                room.guild_id == normalized_guild_id
+                and room.voice_channel_id == normalized_channel_id
+            ):
                 return room
         return None
 
@@ -577,7 +677,9 @@ class DiscordLiveVoiceService:
             if key.startswith(f"{room_key}:"):
                 self._decoder_by_key.pop(key, None)
 
-    def _interrupt_playback(self, *, room: ConfiguredLiveVoiceRoom, reason: str) -> None:
+    def _interrupt_playback(
+        self, *, room: ConfiguredLiveVoiceRoom, reason: str
+    ) -> None:
         transport_client = self._transport_client
         if transport_client is None:
             return
@@ -586,12 +688,20 @@ class DiscordLiveVoiceService:
             try:
                 stop_audio(binding=room.binding)
             except Exception:  # noqa: BLE001
-                logger.exception("discord_live_voice_stop_audio_failed room_key=%s reason=%s", room.room_key, reason)
+                logger.exception(
+                    "discord_live_voice_stop_audio_failed room_key=%s reason=%s",
+                    room.room_key,
+                    reason,
+                )
         with self._runtime_lock:
             session = self._runtime.get_session(binding=room.binding)
             if session is not None and session.bot_speaking:
                 self._runtime.mark_bot_speaking(binding=room.binding, speaking=False)
-        logger.info("discord_live_voice_playback_interrupted room_key=%s reason=%s", room.room_key, reason)
+        logger.info(
+            "discord_live_voice_playback_interrupted room_key=%s reason=%s",
+            room.room_key,
+            reason,
+        )
 
     def _collect_live_voice_context(
         self,
@@ -651,7 +761,9 @@ class DiscordLiveVoiceService:
             brief=brief,
             router_confidence=rc,
             router_reason=str(entry_reason or "").strip(),
-            room_config=build_voice_room_config(tenant_discord_config, project_discord_config),
+            room_config=build_voice_room_config(
+                tenant_discord_config, project_discord_config
+            ),
         )
 
     def _turn_version_is_current(self, *, room_key: str, turn_version: int) -> bool:
@@ -665,9 +777,7 @@ class DiscordLiveVoiceService:
         turn: LiveVoiceTurn,
         turn_version: int,
     ) -> str:
-        return (
-            f"live-voice:{room.room_key}:{turn.user_id}:{turn.turn_index}:{turn_version}"
-        )
+        return f"live-voice:{room.room_key}:{turn.user_id}:{turn.turn_index}:{turn_version}"
 
     @staticmethod
     def _live_voice_reply_correlation_id(
@@ -689,7 +799,9 @@ class DiscordLiveVoiceService:
             return
         self._process_turn_locked(room=room, turn=turn, turn_version=turn_version)
 
-    def _process_turn_locked(self, *, room: ConfiguredLiveVoiceRoom, turn: LiveVoiceTurn, turn_version: int) -> None:
+    def _process_turn_locked(
+        self, *, room: ConfiguredLiveVoiceRoom, turn: LiveVoiceTurn, turn_version: int
+    ) -> None:
         transcript: str | None = None
         transcription_started_at = time.perf_counter()
         logger.info(
@@ -708,12 +820,18 @@ class DiscordLiveVoiceService:
                     room.room_key,
                 )
                 return
-            project = session.get(Project, room.project_id) if room.project_id else resolve_project_for_discord_channel(
-                session=session,
-                tenant_id=tenant.tenant_id,
-                channel_id=room.linked_text_channel_id,
+            project = (
+                session.get(Project, room.project_id)
+                if room.project_id
+                else resolve_project_for_discord_channel(
+                    session=session,
+                    tenant_id=tenant.tenant_id,
+                    channel_id=room.linked_text_channel_id,
+                )
             )
-            scoped_project_id = str(getattr(project, "project_id", "") or "").strip() or None
+            scoped_project_id = (
+                str(getattr(project, "project_id", "") or "").strip() or None
+            )
             turn_correlation_id = self._live_voice_turn_correlation_id(
                 room=room,
                 turn=turn,
@@ -762,11 +880,13 @@ class DiscordLiveVoiceService:
             )
 
             context_started_at = time.perf_counter()
-            normalized_issue_key, requested_status, project_keys, codex_working_dir = self._collect_live_voice_context(
-                session=session,
-                tenant=tenant,
-                project=project,
-                transcript=transcript,
+            normalized_issue_key, requested_status, project_keys, codex_working_dir = (
+                self._collect_live_voice_context(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    transcript=transcript,
+                )
             )
             logger.info(
                 "discord_live_voice_turn_context_ready room_key=%s user_id=%s context_ms=%s issue_key=%s",
@@ -819,7 +939,11 @@ class DiscordLiveVoiceService:
             }
 
             tenant_dc = getattr(tenant, "discord_config", None) or {}
-            project_dc = getattr(project, "discord_config", None) if project is not None else None
+            project_dc = (
+                getattr(project, "discord_config", None)
+                if project is not None
+                else None
+            )
 
             answer_started_at = time.perf_counter()
             result: VoiceRoomTurnResult
@@ -871,40 +995,55 @@ class DiscordLiveVoiceService:
                             project_discord_config=project_dc,
                         )
                         session.refresh(history_owner)
-                        history_config, _ = self._room_history.append_room_history_entry(
-                            discord_config=getattr(history_owner, "discord_config", None),
-                            room_id=room.linked_text_channel_id,
-                            channel_id=room.linked_text_channel_id,
-                            voice_channel_id=room.voice_channel_id,
-                            linked_text_channel_id=room.linked_text_channel_id,
-                            speaker_type="user",
-                            source_mode="live_voice",
-                            text=transcript,
-                            user_id=turn.user_id,
-                            issue_key=normalized_issue_key,
-                            status_name=requested_status,
-                            metadata={"finalization_reason": turn.finalization_reason, "voice_entry_lane": "ask"},
+                        history_config, _ = (
+                            self._room_history.append_room_history_entry(
+                                discord_config=getattr(
+                                    history_owner, "discord_config", None
+                                ),
+                                room_id=room.linked_text_channel_id,
+                                channel_id=room.linked_text_channel_id,
+                                voice_channel_id=room.voice_channel_id,
+                                linked_text_channel_id=room.linked_text_channel_id,
+                                speaker_type="user",
+                                source_mode="live_voice",
+                                text=transcript,
+                                user_id=turn.user_id,
+                                issue_key=normalized_issue_key,
+                                status_name=requested_status,
+                                metadata={
+                                    "finalization_reason": turn.finalization_reason,
+                                    "voice_entry_lane": "ask",
+                                },
+                            )
                         )
-                        _set_discord_config(target=history_owner, discord_config=history_config)
-                        history_config, _ = self._room_history.append_room_history_entry(
-                            discord_config=getattr(history_owner, "discord_config", None),
-                            room_id=room.linked_text_channel_id,
-                            channel_id=room.linked_text_channel_id,
-                            voice_channel_id=room.voice_channel_id,
-                            linked_text_channel_id=room.linked_text_channel_id,
-                            speaker_type="persona",
-                            source_mode="live_voice",
-                            text=result.message,
-                            persona_id=result.persona_id,
-                            issue_key=normalized_issue_key,
-                            status_name=requested_status,
-                            metadata={
-                                "router_confidence": result.router_confidence,
-                                "router_reason": result.router_reason,
-                                "voice_entry_lane": "ask",
-                            },
+                        _set_discord_config(
+                            target=history_owner, discord_config=history_config
                         )
-                        _set_discord_config(target=history_owner, discord_config=history_config)
+                        history_config, _ = (
+                            self._room_history.append_room_history_entry(
+                                discord_config=getattr(
+                                    history_owner, "discord_config", None
+                                ),
+                                room_id=room.linked_text_channel_id,
+                                channel_id=room.linked_text_channel_id,
+                                voice_channel_id=room.voice_channel_id,
+                                linked_text_channel_id=room.linked_text_channel_id,
+                                speaker_type="persona",
+                                source_mode="live_voice",
+                                text=result.message,
+                                persona_id=result.persona_id,
+                                issue_key=normalized_issue_key,
+                                status_name=requested_status,
+                                metadata={
+                                    "router_confidence": result.router_confidence,
+                                    "router_reason": result.router_reason,
+                                    "voice_entry_lane": "ask",
+                                },
+                            )
+                        )
+                        _set_discord_config(
+                            target=history_owner, discord_config=history_config
+                        )
             except HTTPException as exc:
                 session.rollback()
                 self._post_text_notice(
@@ -926,7 +1065,9 @@ class DiscordLiveVoiceService:
                 round((time.perf_counter() - answer_started_at) * 1000, 2),
             )
 
-            if not self._turn_version_is_current(room_key=room.room_key, turn_version=turn_version):
+            if not self._turn_version_is_current(
+                room_key=room.room_key, turn_version=turn_version
+            ):
                 logger.info(
                     "discord_live_voice_turn_skipped room_key=%s turn_version=%s reason=superseded",
                     room.room_key,
@@ -943,9 +1084,13 @@ class DiscordLiveVoiceService:
             result.persona_id,
             len(result.message),
         )
-        self._schedule_persona_reply(room=room, result=result, turn_version=turn_version)
+        self._schedule_persona_reply(
+            room=room, result=result, turn_version=turn_version
+        )
 
-    def _schedule_persona_reply(self, *, room: ConfiguredLiveVoiceRoom, result, turn_version: int) -> None:  # noqa: ANN001
+    def _schedule_persona_reply(
+        self, *, room: ConfiguredLiveVoiceRoom, result, turn_version: int
+    ) -> None:  # noqa: ANN001
         loop = self._bot_loop
         if loop is None:
             threading.Thread(
@@ -957,16 +1102,28 @@ class DiscordLiveVoiceService:
             return
 
         future = asyncio.run_coroutine_threadsafe(
-            self._play_persona_reply(room=room, result=result, turn_version=turn_version),
+            self._play_persona_reply(
+                room=room, result=result, turn_version=turn_version
+            ),
             loop,
         )
-        future.add_done_callback(lambda completed: self._handle_playback_future(room=room, future=completed))
+        future.add_done_callback(
+            lambda completed: self._handle_playback_future(room=room, future=completed)
+        )
 
-    def _run_persona_reply_task(self, *, room: ConfiguredLiveVoiceRoom, result, turn_version: int) -> None:  # noqa: ANN001
+    def _run_persona_reply_task(
+        self, *, room: ConfiguredLiveVoiceRoom, result, turn_version: int
+    ) -> None:  # noqa: ANN001
         try:
-            asyncio.run(self._play_persona_reply(room=room, result=result, turn_version=turn_version))
+            asyncio.run(
+                self._play_persona_reply(
+                    room=room, result=result, turn_version=turn_version
+                )
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("discord_live_voice_playback_task_failed room_key=%s", room.room_key)
+            logger.exception(
+                "discord_live_voice_playback_task_failed room_key=%s", room.room_key
+            )
             self._post_text_notice(
                 channel_id=room.linked_text_channel_id,
                 content=f"Live voice playback failed: {exc}",
@@ -976,20 +1133,26 @@ class DiscordLiveVoiceService:
         try:
             future.result()
         except Exception as exc:  # noqa: BLE001
-            logger.exception("discord_live_voice_playback_task_failed room_key=%s", room.room_key)
+            logger.exception(
+                "discord_live_voice_playback_task_failed room_key=%s", room.room_key
+            )
             self._post_text_notice(
                 channel_id=room.linked_text_channel_id,
                 content=f"Live voice playback failed: {exc}",
             )
 
-    async def _play_persona_reply(self, *, room: ConfiguredLiveVoiceRoom, result, turn_version: int) -> None:  # noqa: ANN001
+    async def _play_persona_reply(
+        self, *, room: ConfiguredLiveVoiceRoom, result, turn_version: int
+    ) -> None:  # noqa: ANN001
         if self._transport_client is None:
             self._post_text_notice(
                 channel_id=room.linked_text_channel_id,
                 content="Live voice reply failed: the live voice transport is not running.",
             )
             return
-        if not self._turn_version_is_current(room_key=room.room_key, turn_version=turn_version):
+        if not self._turn_version_is_current(
+            room_key=room.room_key, turn_version=turn_version
+        ):
             logger.info(
                 "discord_live_voice_playback_skipped room_key=%s turn_version=%s reason=superseded_before_tts",
                 room.room_key,
@@ -1037,7 +1200,9 @@ class DiscordLiveVoiceService:
             result.persona_id,
             round((time.perf_counter() - tts_started_at) * 1000, 2),
         )
-        if not self._turn_version_is_current(room_key=room.room_key, turn_version=turn_version):
+        if not self._turn_version_is_current(
+            room_key=room.room_key, turn_version=turn_version
+        ):
             logger.info(
                 "discord_live_voice_playback_skipped room_key=%s turn_version=%s reason=superseded_before_playback",
                 room.room_key,
@@ -1075,7 +1240,11 @@ class DiscordLiveVoiceService:
                 round((time.perf_counter() - playback_started_at) * 1000, 2),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("discord_live_voice_playback_failed room_key=%s persona_id=%s", room.room_key, result.persona_id)
+            logger.exception(
+                "discord_live_voice_playback_failed room_key=%s persona_id=%s",
+                room.room_key,
+                result.persona_id,
+            )
             persona_label = format_voice_room_persona_label(
                 persona_id=result.persona_id,
                 persona_name=result.persona_name,
@@ -1088,7 +1257,9 @@ class DiscordLiveVoiceService:
             with self._runtime_lock:
                 session = self._runtime.get_session(binding=room.binding)
                 if session is not None and session.bot_speaking:
-                    self._runtime.mark_bot_speaking(binding=room.binding, speaking=False)
+                    self._runtime.mark_bot_speaking(
+                        binding=room.binding, speaking=False
+                    )
 
     def _post_text_notice(self, *, channel_id: str, content: str) -> None:
         if not self._bot_token:
@@ -1099,19 +1270,29 @@ class DiscordLiveVoiceService:
                 content=content,
             )
         except (DiscordApiError, ValueError) as exc:
-            logger.exception("discord_live_voice_text_post_failed channel_id=%s error=%s", channel_id, exc)
+            logger.exception(
+                "discord_live_voice_text_post_failed channel_id=%s error=%s",
+                channel_id,
+                exc,
+            )
 
     def _resolve_bot_token(self) -> str | None:
         with self._session_factory() as session:
             return self._secret_resolver(
                 session,
                 secret_ref=PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
-                encryption_key=str(getattr(self._settings, "secrets_encryption_key", "") or "").strip(),
+                encryption_key=str(
+                    getattr(self._settings, "secrets_encryption_key", "") or ""
+                ).strip(),
                 allow_environment_fallback=True,
             )
 
     def _on_turn_discarded(self, *, session, reason: str) -> None:  # noqa: ANN001
-        logger.warning("discord_live_voice_turn_discarded room_key=%s reason=%s", session.room_key, reason)
+        logger.warning(
+            "discord_live_voice_turn_discarded room_key=%s reason=%s",
+            session.room_key,
+            reason,
+        )
 
 
 def _tenant_guild_id(*, tenant: Tenant, settings: Settings) -> str | None:
@@ -1122,7 +1303,9 @@ def _tenant_guild_id(*, tenant: Tenant, settings: Settings) -> str | None:
     return None
 
 
-def _set_discord_config(*, target: Tenant | Project, discord_config: dict[str, Any]) -> None:
+def _set_discord_config(
+    *, target: Tenant | Project, discord_config: dict[str, Any]
+) -> None:
     target.discord_config = dict(discord_config)
     if hasattr(target, "updated_at"):
         target.updated_at = datetime.now(timezone.utc)

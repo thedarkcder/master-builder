@@ -24,7 +24,9 @@ def _decompress_prefix(artifact_path: str) -> str:
     return "gunzip -c" if str(artifact_path).strip().lower().endswith(".gz") else "cat"
 
 
-def build_restore_command(context: DeploymentRestoreExecutionContext, *, artifact_via_stdin: bool = False) -> list[str]:
+def build_restore_command(
+    context: DeploymentRestoreExecutionContext, *, artifact_via_stdin: bool = False
+) -> list[str]:
     database_type = str(context.database_type or "").strip().lower()
     username = _quoted(context.username)
     database_name = _quoted(context.database_name)
@@ -51,18 +53,26 @@ def build_restore_command(context: DeploymentRestoreExecutionContext, *, artifac
         return ["sh", "-lc", restore]
 
     if database_type == "mysql":
-        restore = _with_artifact_prefix(f"mysql --host {host} --port {port} --user {username} {database_name}")
+        restore = _with_artifact_prefix(
+            f"mysql --host {host} --port {port} --user {username} {database_name}"
+        )
         return ["sh", "-lc", restore]
 
     if database_type == "mariadb":
-        restore = _with_artifact_prefix(f"mariadb --host {host} --port {port} --user {username} {database_name}")
+        restore = _with_artifact_prefix(
+            f"mariadb --host {host} --port {port} --user {username} {database_name}"
+        )
         return ["sh", "-lc", restore]
 
     raise ValueError(f"Unsupported restore database type: {context.database_type}")
 
 
-def build_docker_exec_restore_command(context: DeploymentRestoreExecutionContext) -> str:
-    return build_docker_exec_restore_command_text(context=context, container_reference=_quoted(context.container_name))
+def build_docker_exec_restore_command(
+    context: DeploymentRestoreExecutionContext,
+) -> str:
+    return build_docker_exec_restore_command_text(
+        context=context, container_reference=_quoted(context.container_name)
+    )
 
 
 def build_docker_exec_restore_command_text(
@@ -79,6 +89,8 @@ def build_docker_exec_restore_command_text(
         env_prefix = f"PGPASSWORD={_quoted(context.password)}"
     else:
         env_prefix = f"MYSQL_PWD={_quoted(context.password)}"
-    runtime_command = _quoted(str(container_runtime_command or "docker").strip() or "docker")
+    runtime_command = _quoted(
+        str(container_runtime_command or "docker").strip() or "docker"
+    )
     docker_exec = f"{runtime_command} exec -i {container_reference} sh -lc {_quoted(f'{env_prefix} {command_text}')}"
     return f"{reader} {artifact_path} | {docker_exec}"

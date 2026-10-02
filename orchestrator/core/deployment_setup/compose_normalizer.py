@@ -10,7 +10,9 @@ class CoolifyComposeNormalizationResult:
     exposed_ports_by_service: dict[str, list[str]]
 
 
-def normalize_compose_for_coolify(compose_raw: str) -> CoolifyComposeNormalizationResult:
+def normalize_compose_for_coolify(
+    compose_raw: str,
+) -> CoolifyComposeNormalizationResult:
     """Convert host-bound compose ports into internal exposes for Coolify routing."""
 
     normalized_raw = str(compose_raw or "").strip()
@@ -43,7 +45,9 @@ def normalize_compose_for_coolify(compose_raw: str) -> CoolifyComposeNormalizati
     )
 
 
-def normalize_generated_compose_for_coolify(compose_raw: str) -> CoolifyComposeNormalizationResult:
+def normalize_generated_compose_for_coolify(
+    compose_raw: str,
+) -> CoolifyComposeNormalizationResult:
     result = normalize_compose_for_coolify(compose_raw)
     parsed = yaml.safe_load(result.compose_raw)
     if not isinstance(parsed, dict):
@@ -62,14 +66,18 @@ def normalize_generated_compose_for_coolify(compose_raw: str) -> CoolifyComposeN
             continue
         dockerfile_inline = build_config.get("dockerfile_inline")
         if isinstance(dockerfile_inline, str) and "FROM node:" in dockerfile_inline:
-            build_config["dockerfile_inline"] = _normalize_generated_node_dockerfile(dockerfile_inline)
+            build_config["dockerfile_inline"] = _normalize_generated_node_dockerfile(
+                dockerfile_inline
+            )
     return CoolifyComposeNormalizationResult(
         compose_raw=yaml.safe_dump(parsed, sort_keys=False),
         exposed_ports_by_service=result.exposed_ports_by_service,
     )
 
 
-def _normalize_generated_internal_resource_hosts(services: dict[object, object]) -> None:
+def _normalize_generated_internal_resource_hosts(
+    services: dict[object, object],
+) -> None:
     resource_aliases = {
         "postgres": "mb-postgres",
         "activemq": "mb-activemq",
@@ -117,7 +125,9 @@ def _normalize_generated_internal_resource_hosts(services: dict[object, object])
             _ensure_default_network_membership(service_config)
 
 
-def _ensure_default_network_alias(service_config: dict[str, object], alias: str) -> None:
+def _ensure_default_network_alias(
+    service_config: dict[str, object], alias: str
+) -> None:
     networks = service_config.get("networks")
     if networks is None:
         service_config["networks"] = {"default": {"aliases": [alias]}}
@@ -143,7 +153,9 @@ def _ensure_default_network_membership(service_config: dict[str, object]) -> Non
         service_config["networks"] = {"default": {}}
         return
     if isinstance(networks, list):
-        network_mapping = {str(network): {} for network in networks if str(network).strip()}
+        network_mapping = {
+            str(network): {} for network in networks if str(network).strip()
+        }
         network_mapping.setdefault("default", {})
         service_config["networks"] = network_mapping
         return
@@ -182,9 +194,7 @@ def _strip_generated_proxy_labels(service_config: dict[str, object]) -> None:
 
     if isinstance(labels, list):
         filtered_labels = [
-            item
-            for item in labels
-            if not _is_generated_proxy_label(item)
+            item for item in labels if not _is_generated_proxy_label(item)
         ]
         if filtered_labels:
             service_config["labels"] = filtered_labels

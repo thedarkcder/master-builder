@@ -34,7 +34,9 @@ class AlertDedupRegistry:
         with self._lock:
             if prune_missing_keys:
                 next_keys = {candidate.alert_key for candidate in candidates}
-                stale_keys = [key for key in self._active_last_emitted if key not in next_keys]
+                stale_keys = [
+                    key for key in self._active_last_emitted if key not in next_keys
+                ]
                 for key in stale_keys:
                     self._active_last_emitted.pop(key, None)
 

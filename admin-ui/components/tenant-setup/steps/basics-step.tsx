@@ -17,7 +17,7 @@ export function BasicsStep({ name, tenantIdPreview, onNameChange }: BasicsStepPr
           id="tenant-name"
           value={name}
           onChange={(event) => onNameChange(event.target.value)}
-          placeholder="example"
+          placeholder="Your workspace name"
           className="h-14 rounded-2xl border-slate-200 bg-white text-base"
         />
       </div>

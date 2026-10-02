@@ -6,8 +6,13 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.api.admin.github_helpers import get_project_github_branch_head_sha
-from orchestrator.api.admin.deployment_release_service import create_project_deployment_release
-from orchestrator.api.deployment_schemas import ProjectDeploymentConfigWrite, ProjectDeploymentPolicyRead
+from orchestrator.api.admin.deployment_release_service import (
+    create_project_deployment_release,
+)
+from orchestrator.api.deployment_schemas import (
+    ProjectDeploymentConfigWrite,
+    ProjectDeploymentPolicyRead,
+)
 from orchestrator.api.schemas import ProjectDeploymentReleaseCreate
 from orchestrator.core.config import get_settings
 from orchestrator.core.deployment_setup.artifacts import (
@@ -19,7 +24,9 @@ from orchestrator.core.deployment_setup.workflow import (
     DEPLOYMENT_SETUP_STEP_PREPARE,
     DEPLOYMENT_SETUP_STEP_RELEASE,
 )
-from orchestrator.core.deployment_setup.compose_normalizer import normalize_compose_for_coolify
+from orchestrator.core.deployment_setup.compose_normalizer import (
+    normalize_compose_for_coolify,
+)
 from orchestrator.core.deployment_setup.planner import run_project_deployment_planning
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
@@ -35,13 +42,28 @@ from orchestrator.core.workflow.operation_service import (
 )
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, ProjectApp, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
-from orchestrator.temporal.payloads import ProjectDeploymentSetupActivityResult, ProjectDeploymentSetupWorkflowInput
-from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError, project_repo_dir
+from orchestrator.storage.models import (
+    Project,
+    ProjectApp,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
+from orchestrator.temporal.payloads import (
+    ProjectDeploymentSetupActivityResult,
+    ProjectDeploymentSetupWorkflowInput,
+)
+from orchestrator.tools.project_repo_checkout import (
+    ProjectRepoCheckoutError,
+    project_repo_dir,
+)
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio import activity
-except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
+except (
+    ImportError
+) as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
 
 
@@ -53,19 +75,31 @@ def _app_deployment_config_for_setup(
     existing = dict(app.deployment_config or {})
     source_strategy = existing.get("source_strategy") or app.build_strategy
     if source_strategy == "nixpacks":
-        raise RuntimeError(f"Deployment setup cannot release app {app.slug} without generated deployment files")
-    resources = list(existing.get("resources") if isinstance(existing.get("resources"), list) else [])
-    resources_by_key = {str(item.get("key") or "").strip(): dict(item) for item in resources if isinstance(item, dict)}
+        raise RuntimeError(
+            f"Deployment setup cannot release app {app.slug} without generated deployment files"
+        )
+    resources = list(
+        existing.get("resources") if isinstance(existing.get("resources"), list) else []
+    )
+    resources_by_key = {
+        str(item.get("key") or "").strip(): dict(item)
+        for item in resources
+        if isinstance(item, dict)
+    }
     for resource in policy.resources:
         resources_by_key[resource.key] = resource.model_dump(exclude_none=True)
-    generated_compose_raw = str(existing.get("generated_compose_raw") or "").strip() or None
+    generated_compose_raw = (
+        str(existing.get("generated_compose_raw") or "").strip() or None
+    )
     normalized = ProjectDeploymentConfigWrite.model_validate(
         {
             **existing,
             "enabled": True,
             "environment_name": existing.get("environment_name") or "production",
             "source_strategy": source_strategy,
-            "resources": [item for key, item in sorted(resources_by_key.items()) if key],
+            "resources": [
+                item for key, item in sorted(resources_by_key.items()) if key
+            ],
         }
     )
     payload = normalized.model_dump(exclude_none=True)
@@ -76,12 +110,20 @@ def _app_deployment_config_for_setup(
     return payload
 
 
-def _deployment_setup_lifecycle(*, session, workflow_id: str) -> WorkflowExecutionProjection:  # noqa: ANN001
+def _deployment_setup_lifecycle(
+    *, session, workflow_id: str
+) -> WorkflowExecutionProjection:  # noqa: ANN001
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
-        raise RuntimeError(f"Deployment setup workflow execution is missing for {workflow_id}")
-    workflow_type = get_workflow_type(session, workflow_type_key="project_deployment_setup")
-    return WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+        raise RuntimeError(
+            f"Deployment setup workflow execution is missing for {workflow_id}"
+        )
+    workflow_type = get_workflow_type(
+        session, workflow_type_key="project_deployment_setup"
+    )
+    return WorkflowExecutionProjection(
+        session=session, workflow=workflow, workflow_type=workflow_type
+    )
 
 
 def _create_initial_setup_release(
@@ -116,18 +158,24 @@ def _supersede_failed_deployment_setup_executions(
     replacement_workflow_id: str,
 ) -> int:  # noqa: ANN001
     now = datetime.now(timezone.utc)
-    previous_executions = session.execute(
-        select(WorkflowExecution).where(
-            WorkflowExecution.tenant_id == tenant_id,
-            WorkflowExecution.project_id == project_id,
-            WorkflowExecution.workflow_type_key == "project_deployment_setup",
-            WorkflowExecution.workflow_id != replacement_workflow_id,
-            WorkflowExecution.status == "failed",
+    previous_executions = (
+        session.execute(
+            select(WorkflowExecution).where(
+                WorkflowExecution.tenant_id == tenant_id,
+                WorkflowExecution.project_id == project_id,
+                WorkflowExecution.workflow_type_key == "project_deployment_setup",
+                WorkflowExecution.workflow_id != replacement_workflow_id,
+                WorkflowExecution.status == "failed",
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for workflow in previous_executions:
         workflow.status = "superseded"
-        workflow.last_error = f"Superseded by deployment setup workflow {replacement_workflow_id}"
+        workflow.last_error = (
+            f"Superseded by deployment setup workflow {replacement_workflow_id}"
+        )
         workflow.source_workflow_id = replacement_workflow_id
         workflow.finished_at = workflow.finished_at or now
         workflow.updated_at = now
@@ -145,7 +193,11 @@ def _touch_deployment_setup_attempt_heartbeat(
         attempt = (
             session.execute(
                 select(WorkflowOperationAttempt)
-                .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id)
+                .join(
+                    WorkflowOperation,
+                    WorkflowOperation.operation_id
+                    == WorkflowOperationAttempt.operation_id,
+                )
                 .where(
                     WorkflowOperation.workflow_id == workflow_id,
                     WorkflowOperation.operation_id == operation_id,
@@ -185,13 +237,19 @@ def run_project_deployment_setup_activity(
             project = session.get(Project, project_id)
             if project is None or project.tenant_id != tenant_id:
                 raise RuntimeError(f"Deployment setup is missing project {project_id}")
-            policy = ProjectDeploymentPolicyRead.model_validate(dict(project.deployment_config or {}))
+            policy = ProjectDeploymentPolicyRead.model_validate(
+                dict(project.deployment_config or {})
+            )
             if not policy.enabled:
-                raise RuntimeError("Deployment setup cannot start an initial release while deployments are disabled")
+                raise RuntimeError(
+                    "Deployment setup cannot start an initial release while deployments are disabled"
+                )
             branch = str(policy.production_branch or "").strip()
             if not branch:
                 raise RuntimeError("Deployment setup requires a production branch")
-            lifecycle = _deployment_setup_lifecycle(session=session, workflow_id=workflow_id)
+            lifecycle = _deployment_setup_lifecycle(
+                session=session, workflow_id=workflow_id
+            )
             analyze_operation, analyze_attempt = lifecycle.start_operation_attempt(
                 operation_type=DEPLOYMENT_SETUP_STEP_ANALYZE,
                 target_system="github",
@@ -203,7 +261,9 @@ def run_project_deployment_setup_activity(
                 github_client_from_tenant_config,
                 with_managed_github_refs,
             )
-            from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
+            from orchestrator.api.admin.route_helpers import (
+                ensure_project_repository_checkout,
+            )
 
             commit_sha = get_project_github_branch_head_sha(
                 tenant=tenant,
@@ -218,16 +278,24 @@ def run_project_deployment_setup_activity(
                 github_client_from_tenant_config_fn=github_client_from_tenant_config,
             )
             try:
-                ensure_project_repository_checkout(session=session, tenant=tenant, project=project)
+                ensure_project_repository_checkout(
+                    session=session, tenant=tenant, project=project
+                )
             except ProjectRepoCheckoutError as exc:
-                raise RuntimeError(f"Unable to ensure project repository checkout: {exc}") from exc
+                raise RuntimeError(
+                    f"Unable to ensure project repository checkout: {exc}"
+                ) from exc
 
             checkout_path = project_repo_dir(
-                base_dir=str(getattr(settings, "project_repo_checkout_base_dir", "") or ""),
+                base_dir=str(
+                    getattr(settings, "project_repo_checkout_base_dir", "") or ""
+                ),
                 tenant_id=tenant_id,
                 project_id=project_id,
             )
-            _checkout_branch_commit(repo_dir=checkout_path, branch=branch, commit_sha=commit_sha)
+            _checkout_branch_commit(
+                repo_dir=checkout_path, branch=branch, commit_sha=commit_sha
+            )
 
             result = run_project_deployment_planning(
                 tenant=tenant,
@@ -242,10 +310,12 @@ def run_project_deployment_setup_activity(
                 operation_id=analyze_operation.operation_id,
                 attempt_id=analyze_attempt.attempt_id,
                 attempt_number=analyze_attempt.attempt_number,
-                extra_on_log_line=lambda _stream, _line: _touch_deployment_setup_attempt_heartbeat(
-                    workflow_id=workflow_id,
-                    operation_id=analyze_operation.operation_id,
-                    attempt_id=analyze_attempt.attempt_id,
+                extra_on_log_line=lambda _stream, _line: (
+                    _touch_deployment_setup_attempt_heartbeat(
+                        workflow_id=workflow_id,
+                        operation_id=analyze_operation.operation_id,
+                        attempt_id=analyze_attempt.attempt_id,
+                    )
                 ),
             )
             github_client = github_client_from_tenant_config(
@@ -263,29 +333,44 @@ def run_project_deployment_setup_activity(
                     encryption_key=settings.secrets_encryption_key,
                 ),
             )
-            normalized_compose_raw = normalize_compose_for_coolify(result.plan.compose_raw).compose_raw
-            deployment_branch, deployment_commit_sha, deployment_compose_path = _ensure_deployment_compose_artifact(
-                repo_dir=checkout_path,
-                project_id=project_id,
-                source_branch=branch,
-                source_commit_sha=commit_sha,
-                compose_raw=normalized_compose_raw,
-                npm_service_source_paths=tuple(
-                    service.source_path for service in result.plan.services if service.build_strategy == "npm"
-                ),
-                token=github_client.get_installation_token(),
-            )
-            obsolete_setup_apps = session.execute(
-                select(ProjectApp).where(
-                    ProjectApp.tenant_id == tenant_id,
-                    ProjectApp.project_id == project_id,
-                    ProjectApp.analysis_source == "deployment_setup",
-                    ProjectApp.source_path != ".",
+            normalized_compose_raw = normalize_compose_for_coolify(
+                result.plan.compose_raw
+            ).compose_raw
+            deployment_branch, deployment_commit_sha, deployment_compose_path = (
+                _ensure_deployment_compose_artifact(
+                    repo_dir=checkout_path,
+                    project_id=project_id,
+                    source_branch=branch,
+                    source_commit_sha=commit_sha,
+                    compose_raw=normalized_compose_raw,
+                    npm_service_source_paths=tuple(
+                        service.source_path
+                        for service in result.plan.services
+                        if service.build_strategy == "npm"
+                    ),
+                    token=github_client.get_installation_token(),
                 )
-            ).scalars().all()
+            )
+            obsolete_setup_apps = (
+                session.execute(
+                    select(ProjectApp).where(
+                        ProjectApp.tenant_id == tenant_id,
+                        ProjectApp.project_id == project_id,
+                        ProjectApp.analysis_source == "deployment_setup",
+                        ProjectApp.source_path != ".",
+                    )
+                )
+                .scalars()
+                .all()
+            )
             for obsolete_app in obsolete_setup_apps:
                 session.delete(obsolete_app)
-            ensured_app = ensure_project_app(session, tenant_id=tenant_id, project_id=project_id, candidate=result.app)
+            ensured_app = ensure_project_app(
+                session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                candidate=result.app,
+            )
             ensured_config = dict(ensured_app.deployment_config or {})
             ensured_config["source_branch"] = branch
             ensured_config["source_commit_sha"] = commit_sha
@@ -307,19 +392,27 @@ def run_project_deployment_setup_activity(
                 target_ref=branch,
                 summary=f"Prepare deployment configuration for {branch}.",
             )
-            apps = session.execute(
-                select(ProjectApp)
-                .where(
-                    ProjectApp.tenant_id == tenant_id,
-                    ProjectApp.project_id == project_id,
-                    ProjectApp.source_path == ".",
+            apps = (
+                session.execute(
+                    select(ProjectApp)
+                    .where(
+                        ProjectApp.tenant_id == tenant_id,
+                        ProjectApp.project_id == project_id,
+                        ProjectApp.source_path == ".",
+                    )
+                    .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
                 )
-                .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not apps:
-                raise RuntimeError("Deployment setup did not persist the project deployment")
+                raise RuntimeError(
+                    "Deployment setup did not persist the project deployment"
+                )
             for app in apps:
-                app.deployment_config = _app_deployment_config_for_setup(app=app, policy=policy)
+                app.deployment_config = _app_deployment_config_for_setup(
+                    app=app, policy=policy
+                )
                 if str(app.status or "").strip().lower() not in {"deploying", "live"}:
                     app.status = "ready"
                 app.updated_at = datetime.now(timezone.utc)
@@ -335,24 +428,40 @@ def run_project_deployment_setup_activity(
             tenant = release_session.get(Tenant, tenant_id)
             project = release_session.get(Project, project_id)
             if tenant is None or project is None:
-                raise RuntimeError("Deployment setup lost tenant/project before release creation")
-            lifecycle = _deployment_setup_lifecycle(session=release_session, workflow_id=workflow_id)
-            deployment_app = release_session.execute(
-                select(ProjectApp)
-                .where(
-                    ProjectApp.tenant_id == tenant_id,
-                    ProjectApp.project_id == project_id,
-                    ProjectApp.source_path == ".",
+                raise RuntimeError(
+                    "Deployment setup lost tenant/project before release creation"
                 )
-                .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
-            ).scalars().first()
+            lifecycle = _deployment_setup_lifecycle(
+                session=release_session, workflow_id=workflow_id
+            )
+            deployment_app = (
+                release_session.execute(
+                    select(ProjectApp)
+                    .where(
+                        ProjectApp.tenant_id == tenant_id,
+                        ProjectApp.project_id == project_id,
+                        ProjectApp.source_path == ".",
+                    )
+                    .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
+                )
+                .scalars()
+                .first()
+            )
             if deployment_app is None:
-                raise RuntimeError("Deployment setup lost project deployment app before release creation")
+                raise RuntimeError(
+                    "Deployment setup lost project deployment app before release creation"
+                )
             deployment_config = dict(deployment_app.deployment_config or {})
-            release_branch = str(deployment_config.get("deployment_branch") or "").strip()
-            release_commit_sha = str(deployment_config.get("deployment_commit_sha") or "").strip()
+            release_branch = str(
+                deployment_config.get("deployment_branch") or ""
+            ).strip()
+            release_commit_sha = str(
+                deployment_config.get("deployment_commit_sha") or ""
+            ).strip()
             if not release_branch or not release_commit_sha:
-                raise RuntimeError("Deployment setup did not publish a deployment compose branch before release creation")
+                raise RuntimeError(
+                    "Deployment setup did not publish a deployment compose branch before release creation"
+                )
             release_operation, release_attempt = lifecycle.start_operation_attempt(
                 operation_type=DEPLOYMENT_SETUP_STEP_RELEASE,
                 target_system="deployment",
@@ -409,7 +518,10 @@ def _mark_setup_failed(*, workflow_id: str, message: str) -> None:
             return
         running_pairs = session.execute(
             select(WorkflowOperation, WorkflowOperationAttempt)
-            .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
+            .join(
+                WorkflowOperationAttempt,
+                WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id,
+            )
             .where(
                 WorkflowOperation.workflow_id == workflow_id,
                 WorkflowOperation.status == OPERATION_STATUS_RUNNING,
@@ -424,5 +536,7 @@ def _mark_setup_failed(*, workflow_id: str, message: str) -> None:
                 category="deployment_setup_failure",
                 message=message,
             )
-        mark_workflow_failed(workflow=workflow, message=message, now=datetime.now(timezone.utc))
+        mark_workflow_failed(
+            workflow=workflow, message=message, now=datetime.now(timezone.utc)
+        )
         session.commit()

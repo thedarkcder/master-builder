@@ -54,7 +54,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             secrets_encryption_key="enc",
         )
         session = MagicMock()
-        with patch("orchestrator.core.discord.gateway_listener.create_session_factory", return_value=lambda: self._ctx(session)):
+        with patch(
+            "orchestrator.core.discord.gateway_listener.create_session_factory",
+            return_value=lambda: self._ctx(session),
+        ):
             listener = DiscordGatewayListener(settings=settings)
         return listener, session
 
@@ -77,7 +80,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
     def test_run_loop_skips_without_websockets_or_token_ref(self) -> None:
         listener, _session = self._listener()
         listener._stop_event.set()
-        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None):
+        with patch(
+            "orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref",
+            return_value=None,
+        ):
             asyncio.run(listener._run_loop())
 
         listener, _session = self._listener()
@@ -97,7 +103,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_run_thread_catches_asyncio_run_failure(self) -> None:
         listener, _session = self._listener()
-        with patch("orchestrator.core.discord.gateway_listener.asyncio.run", side_effect=RuntimeError("boom")):
+        with patch(
+            "orchestrator.core.discord.gateway_listener.asyncio.run",
+            side_effect=RuntimeError("boom"),
+        ):
             listener._run_thread()
 
     def test_run_loop_waits_for_token_then_runs_connection(self) -> None:
@@ -117,8 +126,15 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with (
             patch("orchestrator.core.discord.gateway_listener.websockets", object()),
             patch.object(listener, "_resolve_bot_token", side_effect=["", "bot-token"]),
-            patch.object(listener, "_run_single_connection", side_effect=_fake_run_single_connection),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.sleep", side_effect=_fake_sleep),
+            patch.object(
+                listener,
+                "_run_single_connection",
+                side_effect=_fake_run_single_connection,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.sleep",
+                side_effect=_fake_sleep,
+            ),
         ):
             asyncio.run(listener._run_loop())
 
@@ -127,10 +143,20 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_resolve_bot_token(self) -> None:
         listener, session = self._listener()
-        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=" token "):
-            self.assertEqual(listener._resolve_bot_token(token_ref="DISCORD_BOT_TOKEN"), "token")
-        with patch("orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref", return_value=None):
-            self.assertEqual(listener._resolve_bot_token(token_ref="DISCORD_BOT_TOKEN"), "")
+        with patch(
+            "orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref",
+            return_value=" token ",
+        ):
+            self.assertEqual(
+                listener._resolve_bot_token(token_ref="DISCORD_BOT_TOKEN"), "token"
+            )
+        with patch(
+            "orchestrator.core.discord.gateway_listener.resolve_platform_secret_ref",
+            return_value=None,
+        ):
+            self.assertEqual(
+                listener._resolve_bot_token(token_ref="DISCORD_BOT_TOKEN"), ""
+            )
         self.assertIsNotNone(session)
 
     def test_run_single_connection_identify_and_resume_paths(self) -> None:
@@ -139,7 +165,15 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         ws = _FakeWebSocket(
             [
                 {"d": {"heartbeat_interval": 100}},
-                {"op": 0, "t": "READY", "d": {"session_id": "sess-1", "resume_gateway_url": "wss://resume.test"}, "s": 1},
+                {
+                    "op": 0,
+                    "t": "READY",
+                    "d": {
+                        "session_id": "sess-1",
+                        "resume_gateway_url": "wss://resume.test",
+                    },
+                    "s": 1,
+                },
                 {"op": 7, "t": "", "d": {}, "s": 2},
             ]
         )
@@ -148,9 +182,18 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             fn(*args)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws))),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.to_thread", side_effect=_fake_to_thread),
+            patch(
+                "orchestrator.core.discord.gateway_listener.websockets",
+                SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws)),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.create_task",
+                side_effect=self._fake_create_task,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.to_thread",
+                side_effect=_fake_to_thread,
+            ),
         ):
             asyncio.run(listener._run_single_connection(bot_token="bot-token"))
 
@@ -167,8 +210,16 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             ]
         )
         with (
-            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws_resume))),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
+            patch(
+                "orchestrator.core.discord.gateway_listener.websockets",
+                SimpleNamespace(
+                    connect=lambda *a, **k: _FakeWebSocketContext(ws_resume)
+                ),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.create_task",
+                side_effect=self._fake_create_task,
+            ),
         ):
             asyncio.run(listener._run_single_connection(bot_token="bot-token"))
 
@@ -189,9 +240,18 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             return
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws))),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.sleep", side_effect=_fake_sleep),
+            patch(
+                "orchestrator.core.discord.gateway_listener.websockets",
+                SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws)),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.create_task",
+                side_effect=self._fake_create_task,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.sleep",
+                side_effect=_fake_sleep,
+            ),
         ):
             asyncio.run(listener._run_single_connection(bot_token="bot-token"))
 
@@ -208,7 +268,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             calls["count"] += 1
             listener._stop_event.set()
 
-        with patch("orchestrator.core.discord.gateway_listener.asyncio.sleep", side_effect=_fake_sleep):
+        with patch(
+            "orchestrator.core.discord.gateway_listener.asyncio.sleep",
+            side_effect=_fake_sleep,
+        ):
             asyncio.run(listener._heartbeat_loop(websocket, 0.01))
 
         websocket.send.assert_awaited_once()
@@ -237,10 +300,19 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             fn(*args)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws))),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
+            patch(
+                "orchestrator.core.discord.gateway_listener.websockets",
+                SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws)),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.create_task",
+                side_effect=self._fake_create_task,
+            ),
             patch.object(listener, "_handle_message_create", side_effect=_handle),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.to_thread", side_effect=_fake_to_thread),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.to_thread",
+                side_effect=_fake_to_thread,
+            ),
         ):
             asyncio.run(listener._run_single_connection(bot_token="bot-token"))
 
@@ -251,15 +323,28 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         ws = _FakeWebSocket(
             [
                 {"d": {"heartbeat_interval": 100}},
-                {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "i1", "token": "tok"}, "s": 1},
+                {
+                    "op": 0,
+                    "t": "INTERACTION_CREATE",
+                    "d": {"id": "i1", "token": "tok"},
+                    "s": 1,
+                },
                 {"op": 7, "t": "", "d": {}, "s": 2},
             ]
         )
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.websockets", SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws))),
-            patch("orchestrator.core.discord.gateway_listener.asyncio.create_task", side_effect=self._fake_create_task),
-            patch.object(listener, "_handle_interaction_create", new=AsyncMock()) as handle_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.websockets",
+                SimpleNamespace(connect=lambda *a, **k: _FakeWebSocketContext(ws)),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.asyncio.create_task",
+                side_effect=self._fake_create_task,
+            ),
+            patch.object(
+                listener, "_handle_interaction_create", new=AsyncMock()
+            ) as handle_mock,
         ):
             asyncio.run(listener._run_single_connection(bot_token="bot-token"))
 

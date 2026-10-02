@@ -11,11 +11,11 @@ import {
 } from "./support/admin-ui";
 
 test("empty deployment list does not expose a branch deploy trigger", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
 
   await seedAdminSession(page);
@@ -23,21 +23,21 @@ test("empty deployment list does not expose a branch deploy trigger", async ({ p
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, []);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/analysis-runs") {
       return fulfillJson(route, []);
     }
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployments");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployments");
 
   await expect(page.getByRole("heading", { name: "No deployments yet" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Open deployment settings" })).toHaveAttribute(
     "href",
-    "/bsktpay-2/projects/bsktpay-2-default/deployment",
+    "/example-tenant-2/projects/example-tenant-2-default/deployment",
   );
   await expect(page.getByText("Deploy branch")).toBeHidden();
   await expect(page.getByText("Create app")).toBeHidden();
@@ -45,11 +45,11 @@ test("empty deployment list does not expose a branch deploy trigger", async ({ p
 });
 
 test("project deployment setup starts durable setup workflow without exposing infrastructure internals", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
   let savedPayload: Record<string, unknown> | null = null;
 
@@ -58,15 +58,15 @@ test("project deployment setup starts durable setup workflow without exposing in
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/github/branches") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/github/branches") {
       return fulfillJson(route, [
         { name: "develop", protected: false },
         { name: "main", protected: true },
       ]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/deployment-setup") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/deployment-setup") {
       savedPayload = route.request().postDataJSON() as Record<string, unknown>;
       return fulfillJson(route, {
         workflow_id: "deploy-setup:setup-run-1",
@@ -74,7 +74,7 @@ test("project deployment setup starts durable setup workflow without exposing in
         policy: savedPayload,
       });
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/deployment-policy") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/deployment-policy") {
       return fulfillJson(route, {
         enabled: false,
         production_branch: null,
@@ -86,8 +86,8 @@ test("project deployment setup starts durable setup workflow without exposing in
         resources: [],
       });
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, []);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/analysis-runs") {
       return fulfillJson(route, [
         {
           run_id: "deploy-setup:setup-run-1",
@@ -108,7 +108,7 @@ test("project deployment setup starts durable setup workflow without exposing in
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployment");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployment");
 
   await expect(page.getByRole("heading", { name: "Deployments", exact: true })).toBeVisible();
   await expect(page.getByLabel("Deployment setup steps")).toContainText("Enable deployments");
@@ -131,17 +131,18 @@ test("project deployment setup starts durable setup workflow without exposing in
   await page.getByLabel("Generated URLs").selectOption("production_and_preview");
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.locator("section").getByRole("heading", { name: "Environment", exact: true })).toBeVisible();
+  await page.getByLabel("Environment branch scope").selectOption("main");
   await page.getByRole("button", { name: "Add variable" }).click();
   await page.getByLabel("Environment variable ENV_1 name").fill("APP_MODE");
   await page.getByLabel("Environment variable APP_MODE value").fill("production");
   await page.getByRole("button", { name: "Add secret ref" }).click();
   await page.getByLabel("Secret ref SECRET_1 name").fill("DATABASE_URL");
-  await page.getByLabel("Secret ref DATABASE_URL value").fill("tenant/bsktpay-2/DATABASE_URL");
+  await page.getByLabel("Secret ref DATABASE_URL value").fill("tenant/example-tenant-2/DATABASE_URL");
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.locator("section").getByRole("heading", { name: "Finish", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Back" })).toBeEnabled();
   await Promise.all([
-    page.waitForURL(/\/bsktpay-2\/projects\/bsktpay-2-default\/deployments$/, { timeout: 15000 }),
+    page.waitForURL(/\/example-tenant-2\/projects\/example-tenant-2-default\/deployments$/, { timeout: 15000 }),
     page.getByRole("button", { name: "Finish setup" }).click(),
   ]);
 
@@ -158,22 +159,24 @@ test("project deployment setup starts durable setup workflow without exposing in
           APP_MODE: "production",
         },
         secret_refs: {
-          DATABASE_URL: "tenant/bsktpay-2/DATABASE_URL",
+          DATABASE_URL: "tenant/example-tenant-2/DATABASE_URL",
         },
       },
     },
     resources: [],
+    services: [],
+    volumes: [],
   });
   await expect(page.getByRole("heading", { name: "Deployment setup is running" })).toBeVisible();
   await expect(page.getByText("MB is analyzing the selected branch")).toBeVisible();
 });
 
 test("configured deployment policy renders as settings instead of setup wizard", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
   let savedPayload: Record<string, unknown> | null = null;
 
@@ -182,15 +185,15 @@ test("configured deployment policy renders as settings instead of setup wizard",
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/github/branches") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/github/branches") {
       return fulfillJson(route, [
         { name: "main", protected: true },
         { name: "develop", protected: false },
       ]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/deployment-policy") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/deployment-policy") {
       if (route.request().method() === "PUT") {
         savedPayload = route.request().postDataJSON() as Record<string, unknown>;
         return fulfillJson(route, savedPayload);
@@ -205,19 +208,19 @@ test("configured deployment policy renders as settings instead of setup wizard",
         branch_settings: {
           main: {
             environment: { APP_MODE: "production" },
-            secret_refs: { DATABASE_URL: "tenant/bsktpay-2/DATABASE_URL" },
+            secret_refs: { DATABASE_URL: "tenant/example-tenant-2/DATABASE_URL" },
           },
         },
         resources: [],
       });
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/deployment-setup") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/deployment-setup") {
       throw new Error("configured policy save must not call deployment setup");
     }
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployment");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployment");
 
   await expect(page.getByRole("heading", { name: "Deployment policy" })).toBeVisible();
   await expect(page.getByTestId("deployment-policy-page")).not.toHaveClass(/max-w-5xl|mx-auto/);
@@ -274,15 +277,15 @@ test("configured deployment policy renders as settings instead of setup wizard",
       },
     },
   });
-  await expect(page).toHaveURL(/\/bsktpay-2\/projects\/bsktpay-2-default\/deployment$/);
+  await expect(page).toHaveURL(/\/example-tenant-2\/projects\/example-tenant-2-default\/deployment$/);
 });
 
 test("disabled deployment setup jumps to finish instead of showing skipped environment setup", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
 
   await seedAdminSession(page);
@@ -290,12 +293,12 @@ test("disabled deployment setup jumps to finish instead of showing skipped envir
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/github/branches") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/github/branches") {
       return fulfillJson(route, [{ name: "main", protected: true }]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/deployment-policy") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/deployment-policy") {
       return fulfillJson(route, {
         enabled: false,
         production_branch: null,
@@ -310,7 +313,7 @@ test("disabled deployment setup jumps to finish instead of showing skipped envir
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployment");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployment");
 
   await expect(page.getByRole("radio", { name: /Disabled/ })).toBeChecked();
   await page.getByRole("button", { name: "Next", exact: true }).click();
@@ -321,11 +324,11 @@ test("disabled deployment setup jumps to finish instead of showing skipped envir
 });
 
 test("lists existing deployments and opens the deployment admin route from manage", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
   const app = makeProjectAppRecord({
     app_id: "app-1",
@@ -385,18 +388,18 @@ test("lists existing deployments and opens the deployment admin route from manag
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/github/branches") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/github/branches") {
       return fulfillJson(route, [
         { name: "main", protected: true },
         { name: "stage", protected: true },
       ]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, [app]);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1") return fulfillJson(route, app);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") return fulfillJson(route, []);
-    if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-config")) {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps") return fulfillJson(route, [app]);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1") return fulfillJson(route, app);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/analysis-runs") return fulfillJson(route, []);
+    if (pathname.endsWith("/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-config")) {
       return fulfillJson(route, makeProjectAppDeploymentConfig({
         app_id: app.app_id,
         environment: { APP_MODE: "production" },
@@ -415,10 +418,10 @@ test("lists existing deployments and opens the deployment admin route from manag
         ],
       }));
     }
-    if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases")) {
+    if (pathname.endsWith("/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-releases")) {
       return fulfillJson(route, [release]);
     }
-    if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases/release-1/logs")) {
+    if (pathname.endsWith("/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-releases/release-1/logs")) {
       return fulfillJson(route, {
         provider: "internal_coolify",
         release_id: "release-1",
@@ -430,20 +433,20 @@ test("lists existing deployments and opens the deployment admin route from manag
         fetched_at: "2026-05-07T12:01:05Z",
       });
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-backups/restore-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-backups/restore-runs") {
       return fulfillJson(route, []);
     }
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployments");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployments");
 
   await expect(page.getByRole("link", { name: /main @ abcdef12 live Latest release main @ abcdef12 Manage/ })).toBeVisible();
   await expect(page.getByText("api/docker")).toHaveCount(0);
   await expect(page.getByText("docker", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Deploy branch")).toBeHidden();
   await Promise.all([
-    page.waitForURL(/\/bsktpay-2\/projects\/bsktpay-2-default\/deployments\/app-1$/, { timeout: 15000 }),
+    page.waitForURL(/\/example-tenant-2\/projects\/example-tenant-2-default\/deployments\/app-1$/, { timeout: 15000 }),
     page.getByRole("link", { name: /Manage/ }).click(),
   ]);
   const appControls = page.getByLabel("Deployment technical controls");
@@ -514,11 +517,11 @@ test("lists existing deployments and opens the deployment admin route from manag
 });
 
 test("regenerates a selected preview through the run preview endpoint", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
   const app = makeProjectAppRecord({
     app_id: "app-1",
@@ -562,12 +565,12 @@ test("regenerates a selected preview through the run preview endpoint", async ({
     release_id: "preview-1",
     release_kind: "run_preview",
     status: "route_activating",
-    git_ref: "mb/deploy/bsktpay-2-default/feature-ap-293-old",
+    git_ref: "mb/deploy/example-tenant-2-default/feature-ap-293-old",
     commit_sha: "1111111111111111",
-    release_name: "AP-293: Add Equifax production credit bureau provider contract",
+    release_name: "AP-293: Example provider integration",
     source_run_id: "run-1",
     source_issue_key: "AP-293",
-    source_issue_summary: "Add Equifax production credit bureau provider contract",
+    source_issue_summary: "Example provider integration",
     service_urls: [
       {
         service_key: "admin-website",
@@ -584,14 +587,14 @@ test("regenerates a selected preview through the run preview endpoint", async ({
   const regeneratedPreview = {
     ...previewRelease,
     release_id: "preview-2",
-    git_ref: "mb/deploy/bsktpay-2-default/feature-ap-293-new",
+    git_ref: "mb/deploy/example-tenant-2-default/feature-ap-293-new",
     commit_sha: "2222222222222222",
     service_urls: [
       {
         service_key: "admin-website",
         service_name: "Admin Website",
         service_kind: "website",
-        url: "http://admin.preview.192-168-0-118.sslip.io:8088",
+        url: "http://admin.preview.192-0-2-10.sslip.io:8088",
         url_kind: "generated",
         status: "pending",
       },
@@ -609,22 +612,22 @@ test("regenerates a selected preview through the run preview endpoint", async ({
     const pathname = url.pathname.replace(/\/$/, "");
     const method = route.request().method().toUpperCase();
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, [app]);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1") return fulfillJson(route, app);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") return fulfillJson(route, []);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-config") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps") return fulfillJson(route, [app]);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1") return fulfillJson(route, app);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/analysis-runs") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-config") {
       return fulfillJson(route, makeProjectAppDeploymentConfig({ app_id: app.app_id }));
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-releases") {
       if (method === "POST") {
         productionPostCount += 1;
         return fulfillJson(route, productionRelease);
       }
       return fulfillJson(route, releases);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-backups/restore-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-backups/restore-runs") {
       return fulfillJson(route, []);
     }
     if (pathname === "/api/bff/api/admin/runs/run-1") {
@@ -633,8 +636,8 @@ test("regenerates a selected preview through the run preview endpoint", async ({
         tenant_id: tenant.tenant_id,
         project_id: project.project_id,
         issue_key: "AP-293",
-        issue_summary: "Add Equifax production credit bureau provider contract",
-        issue_url: "https://example.atlassian.net/browse/AP-293",
+        issue_summary: "Example provider integration",
+        issue_url: "https://example-tenant.atlassian.net/browse/AP-293",
         status: "succeeded",
         created_at: "2026-05-08T10:00:00Z",
         updated_at: "2026-05-08T11:00:00Z",
@@ -653,34 +656,34 @@ test("regenerates a selected preview through the run preview endpoint", async ({
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployments/app-1?release=preview-1");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployments/app-1?release=preview-1");
 
   await expect(page.getByRole("button", { name: "Generate preview" })).toBeVisible();
   await page.getByRole("button", { name: "Generate preview" }).click();
 
   await expect(page.getByText("Preview started")).toBeVisible();
   await expect(page).toHaveURL(/release=preview-2/);
-  await expect(page.getByRole("link", { name: "http://admin.preview.192-168-0-118.sslip.io:8088" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "http://admin.preview.192-0-2-10.sslip.io:8088" })).toBeVisible();
   await expect(page.getByRole("link", { name: "http://admin.old.localhost:8088" })).toHaveCount(0);
   expect(previewPostCount).toBe(1);
   expect(productionPostCount).toBe(0);
 });
 
 test("removes a deployment from the danger area after slug confirmation", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const tenant = makeTenant({ tenant_id: "example-tenant-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
-    project_id: "bsktpay-2-default",
-    name: "BsktPay",
+    project_id: "example-tenant-2-default",
+    name: "Example Tenant",
   });
   const app = makeProjectAppRecord({
     app_id: "app-1",
     tenant_id: tenant.tenant_id,
     project_id: project.project_id,
-    name: "BsktPay Web",
-    slug: "bsktpay-web",
+    name: "Example Tenant Web",
+    slug: "example-tenant-web",
     status: "ready",
-    source_path: "apps/web",
+    source_path: ".",
   });
   let appRemoved = false;
 
@@ -689,36 +692,36 @@ test("removes a deployment from the danger area after slug confirmation", async 
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, appRemoved ? [] : [app]);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") return fulfillJson(route, []);
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps") return fulfillJson(route, appRemoved ? [] : [app]);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/analysis-runs") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1") {
       if (route.request().method() === "DELETE") {
         appRemoved = true;
         return route.fulfill({ status: 204, body: "" });
       }
       return fulfillJson(route, app);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-config") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-config") {
       return fulfillJson(route, makeProjectAppDeploymentConfig({ app_id: app.app_id }));
     }
-    if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases")) {
+    if (pathname.endsWith("/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-releases")) {
       return fulfillJson(route, []);
     }
-    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-backups/restore-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-tenant-2/projects/example-tenant-2-default/apps/app-1/deployment-backups/restore-runs") {
       return fulfillJson(route, []);
     }
     return route.fallback();
   });
 
-  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployments/app-1");
+  await page.goto("/example-tenant-2/projects/example-tenant-2-default/deployments/app-1");
 
   await page.getByRole("button", { name: "Danger" }).click();
   await expect(page.getByRole("button", { name: "Remove deployment" })).toBeDisabled();
-  await page.getByLabel("Type deployment slug to confirm").fill("bsktpay-web");
+  await page.getByLabel("Type deployment slug to confirm").fill("example-tenant-web");
   await page.getByRole("button", { name: "Remove deployment" }).click();
 
-  await expect(page).toHaveURL(/\/bsktpay-2\/projects\/bsktpay-2-default\/deployments$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/example-tenant-2\/projects\/example-tenant-2-default\/deployments$/, { timeout: 15000 });
   expect(appRemoved).toBe(true);
 });

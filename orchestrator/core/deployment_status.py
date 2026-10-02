@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-DEPLOYMENT_RELEASE_ACTIVE_STATUSES = frozenset({"queued", "provisioning", "deploying", "route_activating"})
-DEPLOYMENT_RELEASE_TERMINAL_STATUSES = frozenset({"live", "failed", "rolled_back", "destroyed"})
+DEPLOYMENT_RELEASE_ACTIVE_STATUSES = frozenset(
+    {"queued", "provisioning", "deploying", "route_activating"}
+)
+DEPLOYMENT_RELEASE_TERMINAL_STATUSES = frozenset(
+    {"live", "failed", "rolled_back", "destroyed"}
+)
 
 _COOLIFY_SUCCESS_STATUSES = {
     "completed",
@@ -64,7 +68,9 @@ def classify_coolify_deployment_status(value: object) -> str | None:
     return "unknown"
 
 
-def resolve_polling_release_status(*, current_status: str, observed_status: object) -> str | None:
+def resolve_polling_release_status(
+    *, current_status: str, observed_status: object
+) -> str | None:
     normalized_current = normalize_deployment_status(current_status)
     if normalized_current in DEPLOYMENT_RELEASE_TERMINAL_STATUSES:
         return None
@@ -100,7 +106,11 @@ def resolve_event_release_status(
             return "failed"
         if "rollback" in normalized_event or "cancel" in normalized_event:
             return "rolled_back"
-        if "deploy" in normalized_event or "container" in normalized_event or "status" in normalized_event:
+        if (
+            "deploy" in normalized_event
+            or "container" in normalized_event
+            or "status" in normalized_event
+        ):
             normalized_current = normalize_deployment_status(current_status)
             if normalized_current == "queued":
                 return "provisioning"
@@ -108,5 +118,7 @@ def resolve_event_release_status(
                 return "deploying"
 
     if observed_status is not None:
-        return resolve_polling_release_status(current_status=current_status, observed_status=observed_status)
+        return resolve_polling_release_status(
+            current_status=current_status, observed_status=observed_status
+        )
     return None

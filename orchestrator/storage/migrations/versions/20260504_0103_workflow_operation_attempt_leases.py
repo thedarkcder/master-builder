@@ -18,11 +18,17 @@ depends_on = None
 
 
 def _has_column(bind: sa.engine.Connection, table_name: str, column_name: str) -> bool:
-    return any(column["name"] == column_name for column in sa.inspect(bind).get_columns(table_name))
+    return any(
+        column["name"] == column_name
+        for column in sa.inspect(bind).get_columns(table_name)
+    )
 
 
 def _index_exists(bind: sa.engine.Connection, table_name: str, index_name: str) -> bool:
-    return any(index["name"] == index_name for index in sa.inspect(bind).get_indexes(table_name))
+    return any(
+        index["name"] == index_name
+        for index in sa.inspect(bind).get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -42,13 +48,21 @@ def upgrade() -> None:
             "workflow_operation_attempts",
             sa.Column("lease_owner", sa.String(length=128), nullable=True),
         )
-    if not _index_exists(bind, "workflow_operation_attempts", "ix_workflow_operation_attempts_last_heartbeat_at"):
+    if not _index_exists(
+        bind,
+        "workflow_operation_attempts",
+        "ix_workflow_operation_attempts_last_heartbeat_at",
+    ):
         op.create_index(
             "ix_workflow_operation_attempts_last_heartbeat_at",
             "workflow_operation_attempts",
             ["last_heartbeat_at"],
         )
-    if not _index_exists(bind, "workflow_operation_attempts", "ix_workflow_operation_attempts_lease_expires_at"):
+    if not _index_exists(
+        bind,
+        "workflow_operation_attempts",
+        "ix_workflow_operation_attempts_lease_expires_at",
+    ):
         op.create_index(
             "ix_workflow_operation_attempts_lease_expires_at",
             "workflow_operation_attempts",
@@ -79,4 +93,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Workflow operation attempt lease migration cannot be downgraded")
+    raise RuntimeError(
+        "Workflow operation attempt lease migration cannot be downgraded"
+    )

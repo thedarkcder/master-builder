@@ -29,7 +29,11 @@ def _parse_json_list(value: object) -> list[object]:
 
 
 def _json_expr(bind: sa.engine.Connection, parameter_name: str) -> str:
-    return f"CAST(:{parameter_name} AS JSON)" if bind.dialect.name == "postgresql" else f":{parameter_name}"
+    return (
+        f"CAST(:{parameter_name} AS JSON)"
+        if bind.dialect.name == "postgresql"
+        else f":{parameter_name}"
+    )
 
 
 def _question_requires_followup(item: dict[str, object]) -> bool:
@@ -41,7 +45,9 @@ def _question_requires_followup(item: dict[str, object]) -> bool:
     return status in {"", "open", "answered"}
 
 
-def _normalize_question_set(question_set: list[object]) -> tuple[list[object], list[str], bool]:
+def _normalize_question_set(
+    question_set: list[object],
+) -> tuple[list[object], list[str], bool]:
     changed = False
     normalized_items: list[object] = []
     unresolved_ids: list[str] = []
@@ -50,7 +56,9 @@ def _normalize_question_set(question_set: list[object]) -> tuple[list[object], l
             normalized_items.append(item)
             continue
         normalized = dict(item)
-        question_id = str(normalized.get("id") or normalized.get("question_id") or "").strip()
+        question_id = str(
+            normalized.get("id") or normalized.get("question_id") or ""
+        ).strip()
         requires_followup = _question_requires_followup(normalized)
         if normalized.get("unresolved") is not requires_followup:
             normalized["unresolved"] = requires_followup
@@ -87,7 +95,9 @@ def upgrade() -> None:
         )
     ).mappings()
     for row in rows:
-        question_set, unresolved_ids, changed = _normalize_question_set(_parse_json_list(row["question_set_json"]))
+        question_set, unresolved_ids, changed = _normalize_question_set(
+            _parse_json_list(row["question_set_json"])
+        )
         existing_unresolved_ids = [
             str(item).strip()
             for item in _parse_json_list(row["unresolved_question_ids_json"])
@@ -102,10 +112,14 @@ def upgrade() -> None:
             {
                 "cycle_id": row["cycle_id"],
                 "question_set_json": json.dumps(question_set, sort_keys=True),
-                "unresolved_question_ids_json": json.dumps(unresolved_ids, sort_keys=True),
+                "unresolved_question_ids_json": json.dumps(
+                    unresolved_ids, sort_keys=True
+                ),
             },
         )
 
 
 def downgrade() -> None:
-    raise RuntimeError("Decision Gate unresolved question normalization cannot be downgraded")
+    raise RuntimeError(
+        "Decision Gate unresolved question normalization cannot be downgraded"
+    )

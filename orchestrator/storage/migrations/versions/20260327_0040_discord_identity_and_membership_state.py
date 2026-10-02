@@ -24,18 +24,30 @@ def _table_exists(table_name: str) -> bool:
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _column_exists("tenant_memberships", "discord_state"):
         with op.batch_alter_table("tenant_memberships", recreate="auto") as batch_op:
-            batch_op.add_column(sa.Column("discord_state", sa.JSON(), nullable=False, server_default=sa.text("'{}'")))
+            batch_op.add_column(
+                sa.Column(
+                    "discord_state",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'{}'"),
+                )
+            )
 
     if not _table_exists("tenant_user_discord_identities"):
         op.create_table(
@@ -47,11 +59,16 @@ def upgrade() -> None:
             sa.Column("discord_avatar_hash", sa.String(length=255), nullable=True),
             sa.Column("linked_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["user_id"], ["tenant_users.user_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["user_id"], ["tenant_users.user_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("user_id"),
             sa.UniqueConstraint("discord_user_id"),
         )
-    if not _has_index("tenant_user_discord_identities", "ix_tenant_user_discord_identities_discord_user_id"):
+    if not _has_index(
+        "tenant_user_discord_identities",
+        "ix_tenant_user_discord_identities_discord_user_id",
+    ):
         op.create_index(
             "ix_tenant_user_discord_identities_discord_user_id",
             "tenant_user_discord_identities",
@@ -62,7 +79,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if _table_exists("tenant_user_discord_identities"):
-        if _has_index("tenant_user_discord_identities", "ix_tenant_user_discord_identities_discord_user_id"):
+        if _has_index(
+            "tenant_user_discord_identities",
+            "ix_tenant_user_discord_identities_discord_user_id",
+        ):
             op.drop_index(
                 "ix_tenant_user_discord_identities_discord_user_id",
                 table_name="tenant_user_discord_identities",

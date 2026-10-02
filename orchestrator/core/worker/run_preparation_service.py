@@ -57,10 +57,14 @@ class RunPreparationService:
 
         worker_workspace_key = self._workspace_key_resolver_fn(settings=self._settings)
         agent_id = self._deps.identity.resolve_agent_id_fn()
-        worker_service_instance_id = str(claimed_run.worker_service_instance_id or "").strip()
+        worker_service_instance_id = str(
+            claimed_run.worker_service_instance_id or ""
+        ).strip()
         claim_id = str(claimed_run.claim_id or "").strip()
         if not worker_service_instance_id or not claim_id:
-            raise RuntimeError("Claimed run is missing required worker ownership identity")
+            raise RuntimeError(
+                "Claimed run is missing required worker ownership identity"
+            )
         run = claimed_run.run
         tenant = claimed_run.tenant
         self._deps.identity.logger.info(
@@ -84,11 +88,17 @@ class RunPreparationService:
 
         project = claimed_run.project
         if project is None:
-            project = self._deps.project.resolve_project_for_run_fn(self._session, run=run)
+            project = self._deps.project.resolve_project_for_run_fn(
+                self._session, run=run
+            )
         if project is None:
-            return self._deps.project.fail_missing_project_mapping_fn(self._session, run=run)
+            return self._deps.project.fail_missing_project_mapping_fn(
+                self._session, run=run
+            )
         if project.is_archived:
-            return self._deps.project.block_archived_project_fn(self._session, run=run, project=project)
+            return self._deps.project.block_archived_project_fn(
+                self._session, run=run, project=project
+            )
 
         notifier = RunStageNotifier(
             session=self._session,
@@ -208,7 +218,9 @@ class RunPreparationService:
             expected_claim_id=claim_id,
             expected_status=self._deps.statuses.running,
         ):
-            current_owner = str(getattr(run, "worker_service_instance_id", "") or "").strip()
+            current_owner = str(
+                getattr(run, "worker_service_instance_id", "") or ""
+            ).strip()
             current_claim_id = str(getattr(run, "claim_id", "") or "").strip()
             current_status = str(getattr(run, "status", "") or "").strip().lower()
             if (
@@ -262,8 +274,12 @@ class RunPreparationService:
         jira_issue_url: str | None,
         run_dashboard_url: str | None,
     ):
-        fail_project_repository_setup_fn = self._deps.execution.fail_project_repository_setup_fn
-        requeue_run_for_repo_setup_fn = self._deps.execution.requeue_run_for_repo_setup_fn
+        fail_project_repository_setup_fn = (
+            self._deps.execution.fail_project_repository_setup_fn
+        )
+        requeue_run_for_repo_setup_fn = (
+            self._deps.execution.requeue_run_for_repo_setup_fn
+        )
 
         try:
             return self._deps.execution.workflow_request_for_run_fn(
@@ -282,7 +298,9 @@ class RunPreparationService:
                 run.issue_key,
                 error_text,
             )
-            repo_setup_attempts = repo_setup_attempt_count_from_plan(getattr(run, "plan", None)) + 1
+            repo_setup_attempts = (
+                repo_setup_attempt_count_from_plan(getattr(run, "plan", None)) + 1
+            )
             max_repo_setup_attempts = max(
                 1,
                 int(getattr(self._settings, "worker_repo_setup_max_attempts", 3)),
@@ -297,7 +315,10 @@ class RunPreparationService:
                 workspace_key=worker_workspace_key,
             )
             if repo_setup_attempts < max_repo_setup_attempts:
-                if self._deps.stage_updates.run_requeued_repo_setup_update_fn is not None:
+                if (
+                    self._deps.stage_updates.run_requeued_repo_setup_update_fn
+                    is not None
+                ):
                     notifier.append(
                         self._deps.stage_updates.run_requeued_repo_setup_update_fn(
                             tenant_id=run.tenant_id,

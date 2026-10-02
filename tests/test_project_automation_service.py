@@ -48,7 +48,7 @@ class ProjectAutomationServiceTests(unittest.TestCase):
     def test_upsert_and_list_project_automations(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             assert project is not None
             upsert_project_automation(
                 session=session,
@@ -75,7 +75,7 @@ class ProjectAutomationServiceTests(unittest.TestCase):
     def test_upsert_automation_without_channel_field(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             assert project is not None
             upsert_project_automation(
                 session=session,
@@ -101,7 +101,7 @@ class ProjectAutomationServiceTests(unittest.TestCase):
     def test_enqueue_due_slots_creates_execution_and_job_once(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             assert project is not None
             automation = upsert_project_automation(
                 session=session,
@@ -128,7 +128,7 @@ class ProjectAutomationServiceTests(unittest.TestCase):
     def test_upsert_recomputes_next_run_at_when_schedule_fields_change(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             assert project is not None
             automation = upsert_project_automation(
                 session=session,
@@ -172,10 +172,12 @@ class ProjectAutomationServiceTests(unittest.TestCase):
             ),
         )
 
-    def test_enqueue_run_now_creates_execution_without_waiting_for_schedule(self) -> None:
+    def test_enqueue_run_now_creates_execution_without_waiting_for_schedule(
+        self,
+    ) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             assert project is not None
             automation = upsert_project_automation(
                 session=session,

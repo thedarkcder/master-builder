@@ -6,8 +6,13 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
-from orchestrator.api.atlassian_oauth.connection_service import resolve_tenant_atlassian_connection, tenant_atlassian_oauth_context
-from orchestrator.core.runtime.agent_runtime_resolver import resolve_agent_execution_profile
+from orchestrator.api.atlassian_oauth.connection_service import (
+    resolve_tenant_atlassian_connection,
+    tenant_atlassian_oauth_context,
+)
+from orchestrator.core.runtime.agent_runtime_resolver import (
+    resolve_agent_execution_profile,
+)
 from orchestrator.core.projects import policy as project_policy
 from orchestrator.core.communications import integration_contracts
 
@@ -56,7 +61,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(normalized["staging_admission_enabled"], True)
         self.assertEqual(normalized["staging_branch"], "stage")
 
-    def test_normalize_project_policy_overrides_includes_execution_profiles(self) -> None:
+    def test_normalize_project_policy_overrides_includes_execution_profiles(
+        self,
+    ) -> None:
         normalized = project_policy.normalize_project_policy_overrides(
             {
                 "execution_profiles": {
@@ -74,8 +81,14 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 },
             }
         )
-        self.assertEqual(normalized["execution_profiles"]["pm_conversation"]["cli_command"], "chat-cli")
-        self.assertEqual(normalized["execution_profile_routing"]["discord.pm_answer"], "pm_conversation")
+        self.assertEqual(
+            normalized["execution_profiles"]["pm_conversation"]["cli_command"],
+            "chat-cli",
+        )
+        self.assertEqual(
+            normalized["execution_profile_routing"]["discord.pm_answer"],
+            "pm_conversation",
+        )
 
     def test_resolve_effective_policy_caps_and_intersections(self) -> None:
         effective = project_policy.resolve_effective_policy(
@@ -146,7 +159,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         )
         self.assertEqual(effective["qa_demo_recording_enabled"], True)
 
-    def test_resolve_agent_execution_profile_prefers_selector_specific_profile(self) -> None:
+    def test_resolve_agent_execution_profile_prefers_selector_specific_profile(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             codex_cli_command="codex",
             codex_model="gpt-5.3-codex",
@@ -181,7 +196,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(profile.model, "gpt-5.4")
         self.assertFalse(profile.tool_bridge_allowed)
 
-    def test_resolve_agent_execution_profile_preserves_explicit_engineering_profile(self) -> None:
+    def test_resolve_agent_execution_profile_preserves_explicit_engineering_profile(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             codex_cli_command="codex",
             codex_model="gpt-5.3-codex",
@@ -213,7 +230,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(profile.model, "gpt-5.4-mini")
         self.assertEqual(profile.reasoning_effort, "low")
 
-    def test_resolve_agent_execution_profile_prefers_platform_named_agent_routing(self) -> None:
+    def test_resolve_agent_execution_profile_prefers_platform_named_agent_routing(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             codex_cli_command="codex",
             codex_model="gpt-5.4",
@@ -241,7 +260,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(profile.runtime_kind, "chat_cli")
         self.assertEqual(profile.reasoning_effort, "low")
 
-    def test_resolve_agent_execution_profile_prefers_platform_role_over_selector(self) -> None:
+    def test_resolve_agent_execution_profile_prefers_platform_role_over_selector(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             codex_cli_command="codex",
             codex_model="gpt-5.4",
@@ -292,10 +313,18 @@ class JiraConnectionServiceTests(unittest.TestCase):
         settings = SimpleNamespace()
 
         with (
-            patch("orchestrator.api.atlassian_oauth.connection_service.refresh_atlassian_connection_tokens", return_value="tok"),
-            patch("orchestrator.api.atlassian_oauth.connection_service.atlassian_oauth_client", return_value="client"),
+            patch(
+                "orchestrator.api.atlassian_oauth.connection_service.refresh_atlassian_connection_tokens",
+                return_value="tok",
+            ),
+            patch(
+                "orchestrator.api.atlassian_oauth.connection_service.atlassian_oauth_client",
+                return_value="client",
+            ),
         ):
-            context = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
+            context = tenant_atlassian_oauth_context(
+                session=session, tenant=tenant, settings=settings
+            )
 
         self.assertEqual(context.connection, connection)
         self.assertEqual(context.access_token, "tok")
@@ -305,10 +334,20 @@ class JiraConnectionServiceTests(unittest.TestCase):
 class IntegrationContractsTests(unittest.TestCase):
     def test_protocol_default_bodies_execute(self) -> None:
         # These calls exercise protocol method bodies so they are covered.
-        self.assertIsNone(integration_contracts.InboundAdapter.verify(object(), headers={}, body=b""))
-        self.assertIsNone(integration_contracts.InboundAdapter.parse(object(), headers={}, body=b""))
-        self.assertIsNone(integration_contracts.OutboundAdapter.send(object(), event=object()))
-        self.assertIsNone(integration_contracts.TransportActionExecutor.execute(object(), action=object()))
+        self.assertIsNone(
+            integration_contracts.InboundAdapter.verify(object(), headers={}, body=b"")
+        )
+        self.assertIsNone(
+            integration_contracts.InboundAdapter.parse(object(), headers={}, body=b"")
+        )
+        self.assertIsNone(
+            integration_contracts.OutboundAdapter.send(object(), event=object())
+        )
+        self.assertIsNone(
+            integration_contracts.TransportActionExecutor.execute(
+                object(), action=object()
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -4,8 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestrator.core.planning.specialist.models import PLANNING_STAGES, SpecialistPlanningRequest
-from orchestrator.core.planning.specialist.stage_runner import SpecialistPlanningStageRunner
+from orchestrator.core.planning.specialist.models import (
+    PLANNING_STAGES,
+    SpecialistPlanningRequest,
+)
+from orchestrator.core.planning.specialist.stage_runner import (
+    SpecialistPlanningStageRunner,
+)
 
 
 def test_run_stage_requires_session_for_attempt_scoped_work_unit(monkeypatch) -> None:
@@ -43,7 +48,9 @@ def test_run_stage_requires_session_for_attempt_scoped_work_unit(monkeypatch) ->
                         ],
                         "selected_option_id": "operation-state",
                         "rationale": "The workflow operation already owns child execution visibility.",
-                        "evidence": ["This test exercises workflow operation attempt context"],
+                        "evidence": [
+                            "This test exercises workflow operation attempt context"
+                        ],
                         "confidence": "high",
                         "product_impact": "none",
                     }
@@ -81,7 +88,7 @@ def test_run_stage_requires_session_for_attempt_scoped_work_unit(monkeypatch) ->
     )
 
     request = SpecialistPlanningRequest(
-        tenant_id="example",
+        tenant_id="example-workspace",
         project_id="project-1",
         parent_issue_key="MAB-215",
         parent_summary="Parent summary",

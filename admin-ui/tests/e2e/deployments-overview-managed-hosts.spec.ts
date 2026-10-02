@@ -11,7 +11,7 @@ import type { DeploymentHostRecord, TenantDeploymentPlaneRecord } from "../../li
 test.setTimeout(60000);
 
 test("platform admin can create and assign a managed host from deployments overview", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "example" });
+  const tenant = makeTenant({ tenant_id: "example-workspace" });
   const createdHost: DeploymentHostRecord = {
     host_id: "host-2",
     label: "Primary managed host",
@@ -70,10 +70,10 @@ test("platform admin can create and assign a managed host from deployments overv
     if (pathname === "/api/bff/api/app/auth/me") {
       return fulfillJson(route, makePlatformAdminPrincipal());
     }
-    if (pathname === "/api/bff/api/admin/tenants/example") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace") {
       return fulfillJson(route, tenant);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/deployments/overview") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/deployments/overview") {
       return fulfillJson(route, {
         summary: {
           total_apps: 0,
@@ -104,10 +104,10 @@ test("platform admin can create and assign a managed host from deployments overv
         201,
       );
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/deployment-plane" && route.request().method() === "GET") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/deployment-plane" && route.request().method() === "GET") {
       return fulfillJson(route, deploymentPlane);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/deployment-plane" && route.request().method() === "PUT") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/deployment-plane" && route.request().method() === "PUT") {
       updatePlaneBody = route.request().postDataJSON() as Record<string, unknown>;
       deploymentPlane = {
         ...deploymentPlane,
@@ -118,7 +118,7 @@ test("platform admin can create and assign a managed host from deployments overv
     return route.fallback();
   });
 
-  await page.goto("/example/deployments", { waitUntil: "domcontentloaded" });
+  await page.goto("/example-workspace/deployments", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByRole("heading", { name: "Managed hosts" })).toBeVisible();
 

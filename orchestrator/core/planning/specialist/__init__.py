@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from orchestrator.core.planning.specialist.assembly import build_runtime_seed_planning_package
+from orchestrator.core.planning.specialist.assembly import (
+    build_runtime_seed_planning_package,
+)
 from orchestrator.core.planning.specialist.constants import (
     PLANNING_STATE_BLOCKED,
     PLANNING_STATE_COMPLETED,

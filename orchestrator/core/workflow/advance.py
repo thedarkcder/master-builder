@@ -61,17 +61,15 @@ class WorkflowOperationRetryRequest:
 
 class WorkflowAdvanceLifecycle(Protocol):
     @property
-    def workflow_type(self):
-        ...
+    def workflow_type(self): ...
 
-    def has_execution(self) -> bool:
-        ...
+    def has_execution(self) -> bool: ...
 
-    def ensure_execution(self, *, display_name: str | None, description: object | None) -> None:
-        ...
+    def ensure_execution(
+        self, *, display_name: str | None, description: object | None
+    ) -> None: ...
 
-    def mark_running(self) -> None:
-        ...
+    def mark_running(self) -> None: ...
 
     def start_operation_attempt(
         self,
@@ -82,8 +80,7 @@ class WorkflowAdvanceLifecycle(Protocol):
         target_system: str | None = None,
         target_ref: str | None = None,
         summary: str | None = None,
-    ):
-        ...
+    ): ...
 
     def complete_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
         ...
@@ -95,8 +92,7 @@ class WorkflowAdvanceLifecycle(Protocol):
         attempt,  # noqa: ANN001
         category: str,
         message: str,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def wait_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
         ...
@@ -104,11 +100,9 @@ class WorkflowAdvanceLifecycle(Protocol):
     def complete_waiting_operation_attempt(self, *, operation_type: str, summary: str):  # noqa: ANN001
         ...
 
-    def mark_workflow_waiting_for_input(self) -> None:
-        ...
+    def mark_workflow_waiting_for_input(self) -> None: ...
 
-    def mark_completed_if_ready(self) -> None:
-        ...
+    def mark_completed_if_ready(self) -> None: ...
 
 
 class DurableWorkflowLifecycle:
@@ -162,7 +156,9 @@ class DurableWorkflowLifecycle:
         )
         return self._session.get(WorkflowExecution, workflow_id) is not None
 
-    def ensure_execution(self, *, display_name: str | None, description: object | None) -> None:
+    def ensure_execution(
+        self, *, display_name: str | None, description: object | None
+    ) -> None:
         self._display_name = display_name
         self._description = description
         self._projection = ensure_workflow_execution(
@@ -200,7 +196,9 @@ class DurableWorkflowLifecycle:
         return operation, attempt
 
     def complete_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
-        self._ensure_projection().complete_started_operation(operation=operation, attempt=attempt, summary=summary)
+        self._ensure_projection().complete_started_operation(
+            operation=operation, attempt=attempt, summary=summary
+        )
         self._session.commit()
 
     def fail_started_operation(
@@ -220,7 +218,9 @@ class DurableWorkflowLifecycle:
         self._session.commit()
 
     def wait_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
-        self._ensure_projection().wait_started_operation(operation=operation, attempt=attempt, summary=summary)
+        self._ensure_projection().wait_started_operation(
+            operation=operation, attempt=attempt, summary=summary
+        )
         self._session.commit()
 
     def complete_waiting_operation_attempt(self, *, operation_type: str, summary: str):  # noqa: ANN001
@@ -249,20 +249,20 @@ class WorkflowAdvanceHandler(Protocol):
         workflow_type,
         request: WorkflowAdvanceRequest,
         lifecycle: WorkflowAdvanceLifecycle,
-    ) -> WorkflowAdvanceOutcome:
-        ...
+    ) -> WorkflowAdvanceOutcome: ...
 
 
 class WorkflowOperationRetryHandler(Protocol):
-    def operation_retry_capabilities(self, workflow_type) -> tuple[WorkflowOperationRetryCapability, ...]:  # noqa: ANN001
+    def operation_retry_capabilities(
+        self, workflow_type
+    ) -> tuple[WorkflowOperationRetryCapability, ...]:  # noqa: ANN001
         ...
 
     def retry_operation(
         self,
         *,
         request: WorkflowOperationRetryRequest,
-    ) -> WorkflowOperationHandle:
-        ...
+    ) -> WorkflowOperationHandle: ...
 
 
 class UnsupportedWorkflowOperationRetryError(RuntimeError):
@@ -307,8 +307,12 @@ def execute_workflow_operation_retry(
     operation: WorkflowOperation,
     resolve_operation_retry_handler_fn: Callable[[str], WorkflowOperationRetryHandler],
 ) -> WorkflowOperationHandle:
-    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
-    handler = resolve_operation_retry_handler_fn(str(workflow_type.handler_key or "").strip())
+    workflow_type = get_workflow_type(
+        session, workflow_type_key=workflow.workflow_type_key
+    )
+    handler = resolve_operation_retry_handler_fn(
+        str(workflow_type.handler_key or "").strip()
+    )
     return handler.retry_operation(
         request=WorkflowOperationRetryRequest(
             session=session,

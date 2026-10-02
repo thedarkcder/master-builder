@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 
 from orchestrator.core.clarification.questions import ClarificationQuestion
 
+
 @dataclass(frozen=True)
 class ActorIdentity:
     actor_id: str

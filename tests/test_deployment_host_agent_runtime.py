@@ -12,7 +12,9 @@ from orchestrator.core.deployment_host_agent_runtime import (
 )
 
 
-def _agent_config(*, access_token_path: Path, bootstrap_token: str | None = None) -> DeploymentHostAgentConfig:
+def _agent_config(
+    *, access_token_path: Path, bootstrap_token: str | None = None
+) -> DeploymentHostAgentConfig:
     return DeploymentHostAgentConfig(
         api_base_url="http://localhost:4000",
         bootstrap_token=bootstrap_token,
@@ -65,12 +67,12 @@ def _local_preview_route_command() -> dict[str, object]:
             "route_bindings": [
                 {
                     "service_key": "admin-website",
-                    "host": "admin.preview.192-168-0-118.sslip.io",
+                    "host": "admin.preview.192-0-2-10.sslip.io",
                     "port": "80",
                 },
                 {
                     "service_key": "management-api",
-                    "host": "management.preview.192-168-0-118.sslip.io",
+                    "host": "management.preview.192-0-2-10.sslip.io",
                     "port": "8080",
                 },
             ],
@@ -84,16 +86,45 @@ def test_agent_bootstraps_and_persists_access_token() -> None:
         events: list[tuple[str, object]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.api_base_url = api_base_url
                 self.access_token = access_token
 
-            def register(self, *, bootstrap_token: str, agent_version: str, advertised_capabilities: tuple[str, ...]) -> dict[str, object]:
-                events.append(("register", (bootstrap_token, agent_version, advertised_capabilities)))
+            def register(
+                self,
+                *,
+                bootstrap_token: str,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+            ) -> dict[str, object]:
+                events.append(
+                    (
+                        "register",
+                        (bootstrap_token, agent_version, advertised_capabilities),
+                    )
+                )
                 return {"access_token": "access-token-1", "host": {"host_id": "host-1"}}
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
-                events.append(("heartbeat", (self.access_token, agent_version, tuple(advertised_capabilities), state)))
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
+                events.append(
+                    (
+                        "heartbeat",
+                        (
+                            self.access_token,
+                            agent_version,
+                            tuple(advertised_capabilities),
+                            state,
+                        ),
+                    )
+                )
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
@@ -101,7 +132,9 @@ def test_agent_bootstraps_and_persists_access_token() -> None:
                 return None
 
         agent = DeploymentHostAgent(
-            config=_agent_config(access_token_path=token_path, bootstrap_token="bootstrap-token-1"),
+            config=_agent_config(
+                access_token_path=token_path, bootstrap_token="bootstrap-token-1"
+            ),
             client_factory=_FakeClient,
         )
 
@@ -122,23 +155,55 @@ def test_agent_bootstraps_from_token_file_and_removes_it_after_registration() ->
         events: list[tuple[str, object]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.api_base_url = api_base_url
                 self.access_token = access_token
 
-            def register(self, *, bootstrap_token: str, agent_version: str, advertised_capabilities: tuple[str, ...]) -> dict[str, object]:
-                events.append(("register", (bootstrap_token, agent_version, advertised_capabilities)))
+            def register(
+                self,
+                *,
+                bootstrap_token: str,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+            ) -> dict[str, object]:
+                events.append(
+                    (
+                        "register",
+                        (bootstrap_token, agent_version, advertised_capabilities),
+                    )
+                )
                 return {"access_token": "access-token-1", "host": {"host_id": "host-1"}}
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
-                events.append(("heartbeat", (self.access_token, agent_version, tuple(advertised_capabilities), state)))
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
+                events.append(
+                    (
+                        "heartbeat",
+                        (
+                            self.access_token,
+                            agent_version,
+                            tuple(advertised_capabilities),
+                            state,
+                        ),
+                    )
+                )
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
                 events.append(("claim", self.access_token))
                 return None
 
-        config = replace(_agent_config(access_token_path=access_token_path), bootstrap_token_path=bootstrap_path)
+        config = replace(
+            _agent_config(access_token_path=access_token_path),
+            bootstrap_token_path=bootstrap_path,
+        )
         agent = DeploymentHostAgent(config=config, client_factory=_FakeClient)
 
         result = agent.process_once()
@@ -149,7 +214,9 @@ def test_agent_bootstraps_from_token_file_and_removes_it_after_registration() ->
         assert events[0][0] == "register"
 
 
-def test_agent_reauthenticates_with_bootstrap_token_when_access_token_is_rejected() -> None:
+def test_agent_reauthenticates_with_bootstrap_token_when_access_token_is_rejected() -> (
+    None
+):
     with TemporaryDirectory() as tmp_dir:
         bootstrap_path = Path(tmp_dir) / "bootstrap-token"
         access_token_path = Path(tmp_dir) / "agent-token"
@@ -158,27 +225,56 @@ def test_agent_reauthenticates_with_bootstrap_token_when_access_token_is_rejecte
         events: list[tuple[str, object]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.api_base_url = api_base_url
                 self.access_token = access_token
 
-            def register(self, *, bootstrap_token: str, agent_version: str, advertised_capabilities: tuple[str, ...]) -> dict[str, object]:
-                events.append(("register", (bootstrap_token, agent_version, advertised_capabilities)))
-                return {"access_token": "fresh-access-token", "host": {"host_id": "host-1"}}
+            def register(
+                self,
+                *,
+                bootstrap_token: str,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+            ) -> dict[str, object]:
+                events.append(
+                    (
+                        "register",
+                        (bootstrap_token, agent_version, advertised_capabilities),
+                    )
+                )
+                return {
+                    "access_token": "fresh-access-token",
+                    "host": {"host_id": "host-1"},
+                }
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 events.append(("heartbeat", self.access_token))
                 if self.access_token == "stale-access-token":
-                    from orchestrator.core.deployment_host_agent_runtime import DeploymentHostControlPlaneError
+                    from orchestrator.core.deployment_host_agent_runtime import (
+                        DeploymentHostControlPlaneError,
+                    )
 
-                    raise DeploymentHostControlPlaneError("unauthorized", status_code=401)
+                    raise DeploymentHostControlPlaneError(
+                        "unauthorized", status_code=401
+                    )
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
                 events.append(("claim", self.access_token))
                 return None
 
-        config = replace(_agent_config(access_token_path=access_token_path), bootstrap_token_path=bootstrap_path)
+        config = replace(
+            _agent_config(access_token_path=access_token_path),
+            bootstrap_token_path=bootstrap_path,
+        )
         agent = DeploymentHostAgent(config=config, client_factory=_FakeClient)
 
         result = agent.process_once()
@@ -186,7 +282,14 @@ def test_agent_reauthenticates_with_bootstrap_token_when_access_token_is_rejecte
         assert result.processed is False
         assert access_token_path.read_text(encoding="utf-8") == "fresh-access-token"
         assert ("heartbeat", "stale-access-token") in events
-        assert ("register", ("bootstrap-token-1", "test-agent", ("restore_database", "postgres", "local_preview_routes"))) in events
+        assert (
+            "register",
+            (
+                "bootstrap-token-1",
+                "test-agent",
+                ("restore_database", "postgres", "local_preview_routes"),
+            ),
+        ) in events
         assert ("claim", "fresh-access-token") in events
 
 
@@ -198,16 +301,26 @@ def test_agent_process_once_executes_restore_and_reports_success() -> None:
         starts: list[tuple[str, str]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.access_token = access_token
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
                 return _restore_command()
 
-            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+            def start_command(
+                self, *, command_id: str, claim_id: str
+            ) -> dict[str, object]:
                 starts.append((command_id, claim_id))
                 return {"command_id": command_id}
 
@@ -224,7 +337,9 @@ def test_agent_process_once_executes_restore_and_reports_success() -> None:
                 return {"command_id": command_id, "status": status}
 
         def _fake_run(command: list[str], **_: object) -> SimpleNamespace:
-            return SimpleNamespace(returncode=0, stdout="restore complete", stderr="", command=command)
+            return SimpleNamespace(
+                returncode=0, stdout="restore complete", stderr="", command=command
+            )
 
         agent = DeploymentHostAgent(
             config=_agent_config(access_token_path=token_path),
@@ -249,16 +364,26 @@ def test_agent_process_once_reports_failed_restore_when_all_candidates_fail() ->
         completions: list[tuple[str, dict[str, object], str | None]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.access_token = access_token
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
                 return _restore_command()
 
-            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+            def start_command(
+                self, *, command_id: str, claim_id: str
+            ) -> dict[str, object]:
                 return {"command_id": command_id}
 
             def complete_command(
@@ -274,7 +399,9 @@ def test_agent_process_once_reports_failed_restore_when_all_candidates_fail() ->
                 return {"command_id": command_id, "status": status}
 
         def _fake_run(command: list[str], **_: object) -> SimpleNamespace:
-            return SimpleNamespace(returncode=1, stdout="", stderr=f"failed: {' '.join(command)}")
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr=f"failed: {' '.join(command)}"
+            )
 
         agent = DeploymentHostAgent(
             config=_agent_config(access_token_path=token_path),
@@ -286,7 +413,9 @@ def test_agent_process_once_reports_failed_restore_when_all_candidates_fail() ->
 
         assert result.processed is True
         assert completions[0][0] == "failed"
-        assert completions[0][2] == "Restore command failed for every container candidate"
+        assert (
+            completions[0][2] == "Restore command failed for every container candidate"
+        )
         assert len(completions[0][1]["attempts"]) == 2
 
 
@@ -298,10 +427,18 @@ def test_agent_process_once_rejects_app_deployment_commands() -> None:
         starts: list[tuple[str, str]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.access_token = access_token
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
@@ -312,7 +449,9 @@ def test_agent_process_once_rejects_app_deployment_commands() -> None:
                     "payload": {"source_path": "api/docker"},
                 }
 
-            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+            def start_command(
+                self, *, command_id: str, claim_id: str
+            ) -> dict[str, object]:
                 starts.append((command_id, claim_id))
                 return {"command_id": command_id}
 
@@ -340,7 +479,10 @@ def test_agent_process_once_rejects_app_deployment_commands() -> None:
         assert starts == [("command-1", "claim-1")]
         assert completions[0][0] == "failed"
         assert completions[0][1] == {"kind": "deploy_docker_compose"}
-        assert completions[0][2] == "Unsupported deployment host command kind 'deploy_docker_compose'"
+        assert (
+            completions[0][2]
+            == "Unsupported deployment host command kind 'deploy_docker_compose'"
+        )
 
 
 def test_agent_process_once_syncs_local_preview_routes() -> None:
@@ -352,16 +494,26 @@ def test_agent_process_once_syncs_local_preview_routes() -> None:
         starts: list[tuple[str, str]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.access_token = access_token
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
                 return _local_preview_route_command()
 
-            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+            def start_command(
+                self, *, command_id: str, claim_id: str
+            ) -> dict[str, object]:
                 starts.append((command_id, claim_id))
                 return {"command_id": command_id}
 
@@ -379,23 +531,38 @@ def test_agent_process_once_syncs_local_preview_routes() -> None:
 
         def _fake_run(command: list[str], **_: object) -> SimpleNamespace:
             if command[:4] == ["docker", "ps", "-q", "--filter"]:
-                return SimpleNamespace(returncode=0, stdout="container-1\ncontainer-2\n", stderr="")
+                return SimpleNamespace(
+                    returncode=0, stdout="container-1\ncontainer-2\n", stderr=""
+                )
             if command[:2] == ["docker", "inspect"]:
                 payload = [
                     {
-                        "Config": {"Labels": {"com.docker.compose.service": "admin-website"}},
-                        "NetworkSettings": {"Networks": {"coolify": {"IPAddress": "172.20.0.18"}}},
+                        "Config": {
+                            "Labels": {"com.docker.compose.service": "admin-website"}
+                        },
+                        "NetworkSettings": {
+                            "Networks": {"coolify": {"IPAddress": "172.20.0.18"}}
+                        },
                     },
                     {
-                        "Config": {"Labels": {"com.docker.compose.service": "management-api"}},
-                        "NetworkSettings": {"Networks": {"coolify": {"IPAddress": "172.20.0.7"}}},
+                        "Config": {
+                            "Labels": {"com.docker.compose.service": "management-api"}
+                        },
+                        "NetworkSettings": {
+                            "Networks": {"coolify": {"IPAddress": "172.20.0.7"}}
+                        },
                     },
                 ]
-                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(payload), stderr="")
+                return SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(payload), stderr=""
+                )
             raise AssertionError(f"Unexpected docker command: {command}")
 
         agent = DeploymentHostAgent(
-            config=replace(_agent_config(access_token_path=token_path), local_preview_proxy_dynamic_dir=proxy_dir),
+            config=replace(
+                _agent_config(access_token_path=token_path),
+                local_preview_proxy_dynamic_dir=proxy_dir,
+            ),
             client_factory=_FakeClient,
             subprocess_run_fn=_fake_run,
         )
@@ -410,7 +577,7 @@ def test_agent_process_once_syncs_local_preview_routes() -> None:
         route_file = proxy_dir / "mb-preview-release-.yaml"
         assert route_file.exists()
         route_yaml = route_file.read_text(encoding="utf-8")
-        assert "admin.preview.192-168-0-118.sslip.io" in route_yaml
+        assert "admin.preview.192-0-2-10.sslip.io" in route_yaml
         assert "http://172.20.0.18:80" in route_yaml
         assert "http://172.20.0.7:8080" in route_yaml
 
@@ -449,10 +616,18 @@ def test_agent_process_once_removes_stale_local_preview_routes_for_same_host() -
         completions: list[tuple[str, dict[str, object], str | None]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.access_token = access_token
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
@@ -468,7 +643,9 @@ def test_agent_process_once_removes_stale_local_preview_routes_for_same_host() -
                 ]
                 return command
 
-            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+            def start_command(
+                self, *, command_id: str, claim_id: str
+            ) -> dict[str, object]:
                 return {"command_id": command_id}
 
             def complete_command(
@@ -490,14 +667,21 @@ def test_agent_process_once_removes_stale_local_preview_routes_for_same_host() -
                 payload = [
                     {
                         "Config": {"Labels": {"com.docker.compose.service": "repo"}},
-                        "NetworkSettings": {"Networks": {"coolify": {"IPAddress": "172.20.0.21"}}},
+                        "NetworkSettings": {
+                            "Networks": {"coolify": {"IPAddress": "172.20.0.21"}}
+                        },
                     }
                 ]
-                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(payload), stderr="")
+                return SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(payload), stderr=""
+                )
             raise AssertionError(f"Unexpected docker command: {command}")
 
         agent = DeploymentHostAgent(
-            config=replace(_agent_config(access_token_path=token_path), local_preview_proxy_dynamic_dir=proxy_dir),
+            config=replace(
+                _agent_config(access_token_path=token_path),
+                local_preview_proxy_dynamic_dir=proxy_dir,
+            ),
             client_factory=_FakeClient,
             subprocess_run_fn=_fake_run,
         )
@@ -515,7 +699,9 @@ def test_agent_process_once_removes_stale_local_preview_routes_for_same_host() -
         assert "http://172.20.0.21:19006" in route_yaml
 
 
-def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_service_label_is_generated() -> None:
+def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_service_label_is_generated() -> (
+    None
+):
     with TemporaryDirectory() as tmp_dir:
         token_path = Path(tmp_dir) / "agent-token"
         token_path.write_text("access-token-1", encoding="utf-8")
@@ -523,10 +709,18 @@ def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_se
         completions: list[tuple[str, dict[str, object], str | None]] = []
 
         class _FakeClient:
-            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+            def __init__(
+                self, *, api_base_url: str, access_token: str | None = None
+            ) -> None:
                 self.access_token = access_token
 
-            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+            def heartbeat(
+                self,
+                *,
+                agent_version: str,
+                advertised_capabilities: tuple[str, ...],
+                state: str,
+            ) -> dict[str, object]:
                 return {"host_id": "host-1"}
 
             def claim_command(self) -> dict[str, object] | None:
@@ -536,13 +730,15 @@ def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_se
                 command["payload"]["route_bindings"] = [
                     {
                         "service_key": "repo",
-                        "host": "app.preview.192-168-0-118.sslip.io",
+                        "host": "app.preview.192-0-2-10.sslip.io",
                         "port": "19006",
                     }
                 ]
                 return command
 
-            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+            def start_command(
+                self, *, command_id: str, claim_id: str
+            ) -> dict[str, object]:
                 return {"command_id": command_id}
 
             def complete_command(
@@ -563,15 +759,26 @@ def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_se
             if command[:2] == ["docker", "inspect"]:
                 payload = [
                     {
-                        "Config": {"Labels": {"com.docker.compose.service": "app-uuid-single-123456"}},
-                        "NetworkSettings": {"Networks": {"coolify": {"IPAddress": "172.20.0.21"}}},
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.service": "app-uuid-single-123456"
+                            }
+                        },
+                        "NetworkSettings": {
+                            "Networks": {"coolify": {"IPAddress": "172.20.0.21"}}
+                        },
                     }
                 ]
-                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(payload), stderr="")
+                return SimpleNamespace(
+                    returncode=0, stdout=__import__("json").dumps(payload), stderr=""
+                )
             raise AssertionError(f"Unexpected docker command: {command}")
 
         agent = DeploymentHostAgent(
-            config=replace(_agent_config(access_token_path=token_path), local_preview_proxy_dynamic_dir=proxy_dir),
+            config=replace(
+                _agent_config(access_token_path=token_path),
+                local_preview_proxy_dynamic_dir=proxy_dir,
+            ),
             client_factory=_FakeClient,
             subprocess_run_fn=_fake_run,
         )
@@ -583,5 +790,5 @@ def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_se
         assert completions[0][2] is None
         route_file = proxy_dir / "mb-preview-release-.yaml"
         route_yaml = route_file.read_text(encoding="utf-8")
-        assert "app.preview.192-168-0-118.sslip.io" in route_yaml
+        assert "app.preview.192-0-2-10.sslip.io" in route_yaml
         assert "http://172.20.0.21:19006" in route_yaml

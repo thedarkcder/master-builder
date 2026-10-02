@@ -5,7 +5,11 @@ from dataclasses import is_dataclass
 from jinja2 import meta
 
 from orchestrator.core.prompt_domain_models import _DOMAIN_MODELS_BY_TEMPLATE
-from orchestrator.core.prompt_templates import _jinja_environment, _prompts_dir, render_prompt
+from orchestrator.core.prompt_templates import (
+    _jinja_environment,
+    _prompts_dir,
+    render_prompt,
+)
 from orchestrator.core.prompt_domain_models import (
     prompt_domain_model_for_template,
     registered_prompt_domain_model_templates,
@@ -16,11 +20,7 @@ def _template_context(template_name: str) -> dict[str, object]:
     env = _jinja_environment()
     source = (_prompts_dir() / template_name).read_text(encoding="utf-8")
     variables = meta.find_undeclared_variables(env.parse(source))
-    return {
-        variable: "{}"
-        for variable in variables
-        if variable != "domain_model"
-    }
+    return {variable: "{}" for variable in variables if variable != "domain_model"}
 
 
 def test_registered_prompt_templates_render_injected_domain_model() -> None:
@@ -32,7 +32,9 @@ def test_registered_prompt_templates_render_injected_domain_model() -> None:
         assert domain_model
         assert "{{ domain_model" in raw_template
 
-        rendered_prompt = render_prompt(template_name, **_template_context(template_name))
+        rendered_prompt = render_prompt(
+            template_name, **_template_context(template_name)
+        )
         assert str(domain_model["name"]) in rendered_prompt
 
 
@@ -68,7 +70,12 @@ def test_prompt_domain_contracts_are_generated_from_typed_payload_models() -> No
 def test_prompt_domain_contracts_do_not_use_parallel_generic_domain_models() -> None:
     repo_root = _prompts_dir().parents[1]
     offenders: list[str] = []
-    banned_markers = ("DomainModel", "DomainField", "domain_field", "JsonOutputContract")
+    banned_markers = (
+        "DomainModel",
+        "DomainField",
+        "domain_field",
+        "JsonOutputContract",
+    )
 
     for relative_path in (
         "orchestrator/core/prompt_domain_models.py",
@@ -82,7 +89,9 @@ def test_prompt_domain_contracts_do_not_use_parallel_generic_domain_models() -> 
 
     assert not (repo_root / "orchestrator/core/domain_spec.py").exists()
     assert not (repo_root / "orchestrator/core/decision/domain_models.py").exists()
-    assert not (repo_root / "orchestrator/core/integrations/atlassian/domain_models.py").exists()
+    assert not (
+        repo_root / "orchestrator/core/integrations/atlassian/domain_models.py"
+    ).exists()
     assert not (repo_root / "orchestrator/core/issue_fanout_domain_models.py").exists()
     assert not (repo_root / "orchestrator/core/planning/domain_models.py").exists()
     assert not (repo_root / "orchestrator/core/pm/domain_models.py").exists()

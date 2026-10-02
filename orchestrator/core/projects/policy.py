@@ -8,7 +8,10 @@ from orchestrator.core.runtime.agent_execution_profiles import (
     normalize_execution_profile_routing,
     normalize_execution_profiles,
 )
-from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.runtime.models import (
+    normalize_codex_model,
+    normalize_codex_reasoning_effort,
+)
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
 
 POLICY_OVERRIDE_FIELDS = {
@@ -93,7 +96,11 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
         if key not in raw:
             continue
         value = raw[key]
-        if key in _BOOLEAN_CAP_FIELDS or key in _BOOLEAN_OVERRIDE_FIELDS or key == "require_agents_md":
+        if (
+            key in _BOOLEAN_CAP_FIELDS
+            or key in _BOOLEAN_OVERRIDE_FIELDS
+            or key == "require_agents_md"
+        ):
             if isinstance(value, bool):
                 normalized[key] = value
             continue
@@ -189,7 +196,9 @@ def resolve_effective_policy(
         elif field not in effective:
             effective[field] = _BOOLEAN_DEFAULTS.get(field, False)
 
-    tenant_default_worker_capability = _normalize_worker_capability(effective.get("default_worker_capability"))
+    tenant_default_worker_capability = _normalize_worker_capability(
+        effective.get("default_worker_capability")
+    )
     if tenant_default_worker_capability is not None:
         effective["default_worker_capability"] = tenant_default_worker_capability
     else:
@@ -200,24 +209,42 @@ def resolve_effective_policy(
     if "staging_branch" in overrides:
         effective["staging_branch"] = overrides["staging_branch"]
     if "staging_admission_enabled" in overrides:
-        effective["staging_admission_enabled"] = bool(overrides["staging_admission_enabled"])
+        effective["staging_admission_enabled"] = bool(
+            overrides["staging_admission_enabled"]
+        )
 
     if "allowed_commands" in overrides:
-        tenant_commands = [str(item).strip() for item in effective.get("allowed_commands") or [] if str(item).strip()]
-        override_commands = [str(item).strip() for item in overrides.get("allowed_commands") or [] if str(item).strip()]
+        tenant_commands = [
+            str(item).strip()
+            for item in effective.get("allowed_commands") or []
+            if str(item).strip()
+        ]
+        override_commands = [
+            str(item).strip()
+            for item in overrides.get("allowed_commands") or []
+            if str(item).strip()
+        ]
         if tenant_commands:
             tenant_set = set(tenant_commands)
-            effective["allowed_commands"] = [command for command in override_commands if command in tenant_set]
+            effective["allowed_commands"] = [
+                command for command in override_commands if command in tenant_set
+            ]
         else:
             effective["allowed_commands"] = []
 
-    if "require_agents_md" in overrides and isinstance(overrides["require_agents_md"], bool):
-        effective["require_agents_md"] = bool(effective.get("require_agents_md")) or overrides["require_agents_md"]
+    if "require_agents_md" in overrides and isinstance(
+        overrides["require_agents_md"], bool
+    ):
+        effective["require_agents_md"] = (
+            bool(effective.get("require_agents_md")) or overrides["require_agents_md"]
+        )
 
     tenant_mode = str(effective.get("knowledge_auto_answer_mode") or "").strip().lower()
     if tenant_mode not in _KNOWLEDGE_AUTO_ANSWER_MODES:
         tenant_mode = "aggressive"
-    override_mode = str(overrides.get("knowledge_auto_answer_mode") or "").strip().lower()
+    override_mode = (
+        str(overrides.get("knowledge_auto_answer_mode") or "").strip().lower()
+    )
     if override_mode in _KNOWLEDGE_AUTO_ANSWER_MODES:
         effective["knowledge_auto_answer_mode"] = override_mode
     else:
@@ -233,9 +260,15 @@ def resolve_effective_policy(
     elif default_model is not None:
         effective["codex_model"] = default_model
 
-    project_reasoning_effort = normalize_codex_reasoning_effort(overrides.get("codex_reasoning_effort"))
-    tenant_reasoning_effort = normalize_codex_reasoning_effort(effective.get("codex_reasoning_effort"))
-    default_reasoning_effort = normalize_codex_reasoning_effort(default_codex_reasoning_effort)
+    project_reasoning_effort = normalize_codex_reasoning_effort(
+        overrides.get("codex_reasoning_effort")
+    )
+    tenant_reasoning_effort = normalize_codex_reasoning_effort(
+        effective.get("codex_reasoning_effort")
+    )
+    default_reasoning_effort = normalize_codex_reasoning_effort(
+        default_codex_reasoning_effort
+    )
     if project_reasoning_effort is not None:
         effective["codex_reasoning_effort"] = project_reasoning_effort
     elif tenant_reasoning_effort is not None:
@@ -243,15 +276,23 @@ def resolve_effective_policy(
     elif default_reasoning_effort is not None:
         effective["codex_reasoning_effort"] = default_reasoning_effort
 
-    tenant_execution_profiles = normalize_execution_profiles(effective.get("execution_profiles"))
-    project_execution_profiles = normalize_execution_profiles(overrides.get("execution_profiles"))
+    tenant_execution_profiles = normalize_execution_profiles(
+        effective.get("execution_profiles")
+    )
+    project_execution_profiles = normalize_execution_profiles(
+        overrides.get("execution_profiles")
+    )
     if tenant_execution_profiles or project_execution_profiles:
         merged_profiles = dict(tenant_execution_profiles)
         merged_profiles.update(project_execution_profiles)
         effective["execution_profiles"] = merged_profiles
 
-    tenant_execution_profile_routing = normalize_execution_profile_routing(effective.get("execution_profile_routing"))
-    project_execution_profile_routing = normalize_execution_profile_routing(overrides.get("execution_profile_routing"))
+    tenant_execution_profile_routing = normalize_execution_profile_routing(
+        effective.get("execution_profile_routing")
+    )
+    project_execution_profile_routing = normalize_execution_profile_routing(
+        overrides.get("execution_profile_routing")
+    )
     if tenant_execution_profile_routing or project_execution_profile_routing:
         merged_routing = dict(tenant_execution_profile_routing)
         merged_routing.update(project_execution_profile_routing)

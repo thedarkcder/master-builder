@@ -16,7 +16,9 @@ def list_tenant_repo_bootstrap_states(
 ):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     states = list_repo_bootstrap_states_fn(session=session, tenant_id=tenant_id)
     return [
@@ -41,8 +43,12 @@ def get_release_bootstrap_report(
 ):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    return release_bootstrap_report_from_config_fn(tenant_id=tenant_id, jira_config=dict(tenant.jira_config or {}))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    return release_bootstrap_report_from_config_fn(
+        tenant_id=tenant_id, jira_config=dict(tenant.jira_config or {})
+    )
 
 
 def run_release_bootstrap(
@@ -58,7 +64,9 @@ def run_release_bootstrap(
 ):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     ok, checks, details, report_payload = compute_release_bootstrap_result_fn(
         session=session,
         tenant=tenant,

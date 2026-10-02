@@ -2,11 +2,15 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from orchestrator.core.observability.agent_observability import prune_agent_lifecycle_events, record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import (
+    prune_agent_lifecycle_events,
+    record_agent_lifecycle_event,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -18,7 +22,9 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.database_url = f"sqlite:///{self.temp_dir.name}/agent_lifecycle.db"
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
@@ -53,6 +59,34 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
             self.assertEqual(events[0].tenant_id, "tenant-a")
             self.assertEqual(events[0].event_type, "TASK_STARTED")
 
+    def test_record_agent_lifecycle_event_keeps_primary_record_when_downstream_observability_fails(
+        self,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.observability.agent_observability.record_audit_event",
+                side_effect=TimeoutError("timed out"),
+            ):
+                record_agent_lifecycle_event(
+                    session=session,
+                    event_type="TASK_STARTED",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    run_id="run-1",
+                    issue_key="TP-1",
+                    agent_id="worker-1",
+                    recorded_at=now,
+                )
+            session.commit()
+
+        with self.session_factory() as session:
+            events = session.execute(select(AgentLifecycleEvent)).scalars().all()
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].run_id, "run-1")
+            self.assertEqual(events[0].event_type, "TASK_STARTED")
+
     def test_prune_agent_lifecycle_event_applies_retention_cap(self) -> None:
         now = datetime.now(timezone.utc)
 
@@ -72,13 +106,19 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
             session.commit()
 
         with self.session_factory() as session:
-            events = session.execute(
-                select(AgentLifecycleEvent)
-                .where(AgentLifecycleEvent.tenant_id == "tenant-a")
-                .order_by(AgentLifecycleEvent.recorded_at.asc())
-            ).scalars().all()
+            events = (
+                session.execute(
+                    select(AgentLifecycleEvent)
+                    .where(AgentLifecycleEvent.tenant_id == "tenant-a")
+                    .order_by(AgentLifecycleEvent.recorded_at.asc())
+                )
+                .scalars()
+                .all()
+            )
             self.assertEqual(len(events), 3)
-            self.assertEqual([event.run_id for event in events], ["run-3", "run-4", "run-5"])
+            self.assertEqual(
+                [event.run_id for event in events], ["run-3", "run-4", "run-5"]
+            )
 
 
 if __name__ == "__main__":

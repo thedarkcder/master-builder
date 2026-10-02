@@ -7,10 +7,16 @@ from typing import Any
 
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.runtime.runtime import CodexRuntimeError
-from orchestrator.core.pm.plugin_catalog import plugin_catalog_payload, tool_catalog_payload
+from orchestrator.core.pm.plugin_catalog import (
+    plugin_catalog_payload,
+    tool_catalog_payload,
+)
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.payload_models import DesignPlanning
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 
 
 def invoke_stage_design_planning_llm(
@@ -56,11 +62,21 @@ def invoke_stage_design_planning_llm(
             stage_status=stage_status,
             stakeholder_text=stakeholder_text,
             assistant_summary=assistant_summary,
-            stage_artifacts_json=json.dumps(stage_artifacts, ensure_ascii=False, sort_keys=True),
-            stage_open_questions_json=json.dumps(stage_open_questions, ensure_ascii=False, sort_keys=True),
-            stage_tool_outputs_json=json.dumps(stage_tool_outputs, ensure_ascii=False, sort_keys=True),
-            plugin_catalog_json=json.dumps(plugin_catalog_payload(), ensure_ascii=False, sort_keys=True),
-            tool_catalog_json=json.dumps(tool_catalog_payload(), ensure_ascii=False, sort_keys=True),
+            stage_artifacts_json=json.dumps(
+                stage_artifacts, ensure_ascii=False, sort_keys=True
+            ),
+            stage_open_questions_json=json.dumps(
+                stage_open_questions, ensure_ascii=False, sort_keys=True
+            ),
+            stage_tool_outputs_json=json.dumps(
+                stage_tool_outputs, ensure_ascii=False, sort_keys=True
+            ),
+            plugin_catalog_json=json.dumps(
+                plugin_catalog_payload(), ensure_ascii=False, sort_keys=True
+            ),
+            tool_catalog_json=json.dumps(
+                tool_catalog_payload(), ensure_ascii=False, sort_keys=True
+            ),
         ),
     )
     try:

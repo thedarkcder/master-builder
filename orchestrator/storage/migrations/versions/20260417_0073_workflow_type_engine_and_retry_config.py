@@ -18,10 +18,19 @@ depends_on = None
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
-    return column_name in {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)}
+    return column_name in {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)
+    }
 
 
-def _retry_config(*, manual_retry_enabled: bool, max_attempts: int, initial_interval_seconds: int, max_interval_seconds: int, backoff_coefficient: float) -> dict[str, object]:
+def _retry_config(
+    *,
+    manual_retry_enabled: bool,
+    max_attempts: int,
+    initial_interval_seconds: int,
+    max_interval_seconds: int,
+    backoff_coefficient: float,
+) -> dict[str, object]:
     return {
         "manual_retry_enabled": manual_retry_enabled,
         "max_attempts": max_attempts,
@@ -33,8 +42,12 @@ def _retry_config(*, manual_retry_enabled: bool, max_attempts: int, initial_inte
 
 def upgrade() -> None:
     bind = op.get_bind()
-    added_orchestration_backend = not _has_column("workflow_types", "orchestration_backend")
-    added_retry_policy_config = not _has_column("workflow_type_operations", "retry_policy_config_json")
+    added_orchestration_backend = not _has_column(
+        "workflow_types", "orchestration_backend"
+    )
+    added_retry_policy_config = not _has_column(
+        "workflow_type_operations", "retry_policy_config_json"
+    )
     if added_orchestration_backend:
         op.add_column(
             "workflow_types",
@@ -53,7 +66,11 @@ def upgrade() -> None:
     )
     bind.execute(
         workflow_types.update()
-        .where(workflow_types.c.workflow_type_key.in_(("issue_execution", "pr_remediation")))
+        .where(
+            workflow_types.c.workflow_type_key.in_(
+                ("issue_execution", "pr_remediation")
+            )
+        )
         .values(
             orchestration_backend="temporal",
         )
@@ -153,7 +170,9 @@ def upgrade() -> None:
         if added_orchestration_backend:
             op.alter_column("workflow_types", "orchestration_backend", nullable=False)
         if added_retry_policy_config:
-            op.alter_column("workflow_type_operations", "retry_policy_config_json", nullable=False)
+            op.alter_column(
+                "workflow_type_operations", "retry_policy_config_json", nullable=False
+            )
     else:
         if added_orchestration_backend:
             with op.batch_alter_table("workflow_types") as batch_op:
@@ -161,6 +180,7 @@ def upgrade() -> None:
         if added_retry_policy_config:
             with op.batch_alter_table("workflow_type_operations") as batch_op:
                 batch_op.alter_column("retry_policy_config_json", nullable=False)
+
 
 def downgrade() -> None:
     op.drop_column("workflow_type_operations", "retry_policy_config_json")

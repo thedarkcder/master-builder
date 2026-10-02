@@ -12,7 +12,9 @@ from orchestrator.core.decision.types import PrecheckOutcome
 from orchestrator.core.config import get_settings
 from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
-from orchestrator.core.runtime.requirements import resolve_required_runtime_kinds_for_workflow
+from orchestrator.core.runtime.requirements import (
+    resolve_required_runtime_kinds_for_workflow,
+)
 from orchestrator.core.worker.capabilities import infer_required_worker_capability
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.attempt_factory import (
@@ -31,8 +33,17 @@ from orchestrator.core.workflow.execution_snapshot import (
     load_parsed_trigger_context_from_plan,
 )
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
-from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
-from orchestrator.storage.models import Project, Run, Tenant, WebhookDelivery, WorkflowExecution
+from orchestrator.core.workflow.transitions import (
+    ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES,
+    is_workflow_terminal,
+)
+from orchestrator.storage.models import (
+    Project,
+    Run,
+    Tenant,
+    WebhookDelivery,
+    WorkflowExecution,
+)
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_DEDUPE_SCOPE_ISSUE_EXECUTION = "issue_execution"
@@ -152,10 +163,14 @@ def resolve_required_worker_capability_for_enqueue(
     required_worker_capability: str | None = None,
     required_worker_capability_source_plan: object | None = None,
 ) -> str | None:
-    normalized_capability = _normalize_required_worker_capability(required_worker_capability)
+    normalized_capability = _normalize_required_worker_capability(
+        required_worker_capability
+    )
     if normalized_capability is not None:
         return normalized_capability
-    return resolve_required_worker_capability_from_plan(required_worker_capability_source_plan)
+    return resolve_required_worker_capability_from_plan(
+        required_worker_capability_source_plan
+    )
 
 
 def infer_required_worker_capability_for_enqueue(
@@ -189,7 +204,9 @@ def infer_required_worker_capability_for_enqueue(
                 tenant_policy=tenant_policy,
                 project_overrides=dict(getattr(project, "policy_overrides", {}) or {}),
             )
-            project_default_worker_capability = str(effective_policy.get("default_worker_capability") or "").strip()
+            project_default_worker_capability = str(
+                effective_policy.get("default_worker_capability") or ""
+            ).strip()
     inferred = infer_required_worker_capability(
         issue_summary=issue_summary,
         issue_description=issue_description,
@@ -259,14 +276,19 @@ def require_ready_for_agent_enqueue(
 
 
 def is_ready_for_agent_precheck(plan: object | None) -> bool:
-    return PrecheckOutcome.parse(resolve_precheck_outcome_from_plan(plan)) is PrecheckOutcome.READY_FOR_AGENT
+    return (
+        PrecheckOutcome.parse(resolve_precheck_outcome_from_plan(plan))
+        is PrecheckOutcome.READY_FOR_AGENT
+    )
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _active_workflow_for_issue(session: Session, tenant_id: str, issue_key: str, *, dedupe_scope: str) -> WorkflowExecution | None:
+def _active_workflow_for_issue(
+    session: Session, tenant_id: str, issue_key: str, *, dedupe_scope: str
+) -> WorkflowExecution | None:
     return session.execute(
         select(WorkflowExecution).where(
             WorkflowExecution.tenant_id == tenant_id,
@@ -284,13 +306,17 @@ def _run_for_workflow(session: Session, workflow: WorkflowExecution) -> Run | No
         active_run = session.get(Run, active_run_id)
         if active_run is not None and active_run.status in ACTIVE_RUN_STATUSES:
             return active_run
-    return session.execute(
-        select(Run)
-        .where(Run.workflow_id == workflow.workflow_id)
-        .where(Run.status.in_(ACTIVE_RUN_STATUSES))
-        .order_by(Run.attempt_number.desc())
-        .limit(1)
-    ).scalars().first()
+    return (
+        session.execute(
+            select(Run)
+            .where(Run.workflow_id == workflow.workflow_id)
+            .where(Run.status.in_(ACTIVE_RUN_STATUSES))
+            .order_by(Run.attempt_number.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
 
 
 def _active_run_count_for_tenant(session: Session, tenant_id: str) -> int:
@@ -326,7 +352,9 @@ def _coerce_positive_limit(value: int | None) -> int | None:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise RunStateTransitionError(f"Invalid max_concurrent_runs value: {value}") from exc
+        raise RunStateTransitionError(
+            f"Invalid max_concurrent_runs value: {value}"
+        ) from exc
     return max(1, parsed)
 
 
@@ -339,15 +367,21 @@ def _build_initial_plan(
     if bootstrap is not None and bootstrap.plan is not None:
         snapshot = ExecutionSnapshot.load(bootstrap.plan)
         if snapshot is None:
-            raise RunStateTransitionError("Bootstrap plan must be a canonical execution snapshot")
+            raise RunStateTransitionError(
+                "Bootstrap plan must be a canonical execution snapshot"
+            )
     else:
         snapshot = ExecutionSnapshot.empty()
     if normalized_precheck_outcome is not None:
-        snapshot.context.execution_context["pre_check_outcome"] = normalized_precheck_outcome
+        snapshot.context.execution_context["pre_check_outcome"] = (
+            normalized_precheck_outcome
+        )
     return snapshot.dump()
 
 
-def _run_bootstrap_required_worker_capability(bootstrap: RunBootstrap | None) -> str | None:
+def _run_bootstrap_required_worker_capability(
+    bootstrap: RunBootstrap | None,
+) -> str | None:
     if bootstrap is None:
         return None
     return resolve_required_worker_capability_for_enqueue(
@@ -356,7 +390,9 @@ def _run_bootstrap_required_worker_capability(bootstrap: RunBootstrap | None) ->
     )
 
 
-def _run_bootstrap_required_runtime_kinds(bootstrap: RunBootstrap | None) -> list[str] | None:
+def _run_bootstrap_required_runtime_kinds(
+    bootstrap: RunBootstrap | None,
+) -> list[str] | None:
     if bootstrap is None:
         return None
     raw_value = getattr(bootstrap, "required_runtime_kinds_json", None)
@@ -434,7 +470,9 @@ def enqueue_run(
                 run=run,
             )
 
-    bootstrap_workflow_id = str(bootstrap.workflow_id or "").strip() if bootstrap is not None else ""
+    bootstrap_workflow_id = (
+        str(bootstrap.workflow_id or "").strip() if bootstrap is not None else ""
+    )
     if bootstrap_workflow_id:
         return enqueue_attempt_for_workflow(
             session,
@@ -466,7 +504,9 @@ def enqueue_run(
         if active_count >= normalized_limit:
             active_run = _first_active_run_for_tenant(session, tenant_id=tenant_id)
             if active_run is None:
-                raise RunStateTransitionError("Concurrency limit reached but no active run was found")
+                raise RunStateTransitionError(
+                    "Concurrency limit reached but no active run was found"
+                )
             return EnqueueRunResult(
                 enqueued=False,
                 reason=EnqueueFailureReason.TENANT_CONCURRENCY_LIMIT_REACHED,
@@ -483,22 +523,28 @@ def enqueue_run(
         precheck_outcome=normalized_precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
-    normalized_required_worker_capability = infer_required_worker_capability_for_enqueue(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        issue_key=issue_key,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-        required_worker_capability=required_worker_capability,
-        required_worker_capability_source_plan=(
-            bootstrap.plan if bootstrap is not None and isinstance(bootstrap.plan, dict) else precheck_source_plan
-        ),
+    normalized_required_worker_capability = (
+        infer_required_worker_capability_for_enqueue(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            issue_key=issue_key,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            required_worker_capability=required_worker_capability,
+            required_worker_capability_source_plan=(
+                bootstrap.plan
+                if bootstrap is not None and isinstance(bootstrap.plan, dict)
+                else precheck_source_plan
+            ),
+        )
     )
     normalized_pr_url = resolve_pr_url_for_enqueue(
         pr_url=bootstrap.pr_url if bootstrap is not None else None,
         pr_url_source_plan=(
-            bootstrap.plan if bootstrap is not None and isinstance(bootstrap.plan, dict) else precheck_source_plan
+            bootstrap.plan
+            if bootstrap is not None and isinstance(bootstrap.plan, dict)
+            else precheck_source_plan
         ),
     )
     initial_plan = _build_initial_plan(
@@ -531,7 +577,9 @@ def enqueue_run(
         dedupe_scope=normalized_dedupe_scope,
         status=RUN_STATUS_QUEUED,
         active_run_id=run_id,
-        latest_checkpoint_id=bootstrap.entry_checkpoint_id if bootstrap is not None else None,
+        latest_checkpoint_id=bootstrap.entry_checkpoint_id
+        if bootstrap is not None
+        else None,
         source_workflow_id=None,
         source_run_id=bootstrap.parent_run_id if bootstrap is not None else None,
         created_at=now,
@@ -550,9 +598,13 @@ def enqueue_run(
         pr_url=normalized_pr_url,
         attempt_number=1,
         parent_run_id=bootstrap.parent_run_id if bootstrap is not None else None,
-        entry_mode=str(bootstrap.entry_mode or "fresh").strip() if bootstrap is not None else "fresh",
+        entry_mode=str(bootstrap.entry_mode or "fresh").strip()
+        if bootstrap is not None
+        else "fresh",
         entry_stage=_resolve_entry_stage(bootstrap=bootstrap),
-        entry_checkpoint_id=bootstrap.entry_checkpoint_id if bootstrap is not None else None,
+        entry_checkpoint_id=bootstrap.entry_checkpoint_id
+        if bootstrap is not None
+        else None,
         dedupe_scope=normalized_dedupe_scope,
         plan=initial_plan,
         status=RUN_STATUS_QUEUED,
@@ -621,13 +673,17 @@ def enqueue_run(
             if active_count >= normalized_limit:
                 active_run = _first_active_run_for_tenant(session, tenant_id=tenant_id)
                 if active_run is None:
-                    raise RunStateTransitionError("Concurrency limit reached but no active run was found")
+                    raise RunStateTransitionError(
+                        "Concurrency limit reached but no active run was found"
+                    )
                 return EnqueueRunResult(
                     enqueued=False,
                     reason=EnqueueFailureReason.TENANT_CONCURRENCY_LIMIT_REACHED,
                     run=active_run,
                 )
-        raise RunStateTransitionError("Failed to enqueue run due to unknown integrity conflict")
+        raise RunStateTransitionError(
+            "Failed to enqueue run due to unknown integrity conflict"
+        )
     session.refresh(run)
     return EnqueueRunResult(enqueued=True, reason=None, run=run)
 
@@ -672,17 +728,25 @@ def _enqueue_attempt_for_workflow(
         raise RunStateTransitionError(f"Workflow not found: {workflow_id}")
     if workflow.status in {RUN_STATUS_QUEUED, RUN_STATUS_RUNNING}:
         active_run = _run_for_workflow(session, workflow)
-        if active_run is None and str(bootstrap.entry_mode or "").strip().lower() == "resume":
+        if (
+            active_run is None
+            and str(bootstrap.entry_mode or "").strip().lower() == "resume"
+        ):
             workflow.active_run_id = None
         elif active_run is None:
-            raise RunStateTransitionError(f"Workflow {workflow_id} is active but has no attempt rows")
+            raise RunStateTransitionError(
+                f"Workflow {workflow_id} is active but has no attempt rows"
+            )
         else:
             return EnqueueRunResult(
                 enqueued=False,
                 reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
                 run=active_run,
             )
-    if is_workflow_terminal(workflow.status) and str(bootstrap.entry_mode or "").strip().lower() != "resume":
+    if (
+        is_workflow_terminal(workflow.status)
+        and str(bootstrap.entry_mode or "").strip().lower() != "resume"
+    ):
         raise RunStateTransitionError(
             f"Workflow {workflow_id} is terminal; create a new workflow execution instead of reusing it"
         )
@@ -695,7 +759,9 @@ def _enqueue_attempt_for_workflow(
         precheck_outcome=bootstrap.precheck_outcome,
         precheck_source_plan=bootstrap.plan,
     )
-    normalized_required_worker_capability = _run_bootstrap_required_worker_capability(bootstrap)
+    normalized_required_worker_capability = _run_bootstrap_required_worker_capability(
+        bootstrap
+    )
     normalized_pr_url = resolve_pr_url_for_enqueue(
         pr_url=bootstrap.pr_url or workflow.pr_url,
         pr_url_source_plan=bootstrap.plan,
@@ -731,12 +797,15 @@ def _enqueue_attempt_for_workflow(
         required_runtime_kinds_json=normalized_required_runtime_kinds,
         created_at=now,
     )
-    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    workflow_type = get_workflow_type(
+        session, workflow_type_key=workflow.workflow_type_key
+    )
     orchestration_backend = str(workflow_type.orchestration_backend).strip().lower()
     apply_execution_for_new_attempt(
         session=session,
         run=run,
-        latest_checkpoint_id=bootstrap.entry_checkpoint_id or workflow.latest_checkpoint_id,
+        latest_checkpoint_id=bootstrap.entry_checkpoint_id
+        or workflow.latest_checkpoint_id,
         orchestration_backend=orchestration_backend,
         now=now,
     )
@@ -762,7 +831,9 @@ def mark_run_running(session: Session, *, run_id: str) -> Run:
     if run.status == RUN_STATUS_RUNNING:
         return run
     if run.status not in {RUN_STATUS_QUEUED, RUN_STATUS_DISPATCHING}:
-        raise RunStateTransitionError(f"Cannot move run {run_id} to running from status {run.status}")
+        raise RunStateTransitionError(
+            f"Cannot move run {run_id} to running from status {run.status}"
+        )
     now = _now()
     run.status = RUN_STATUS_RUNNING
     run.claim_id = None
@@ -793,17 +864,23 @@ def mark_run_terminal(
     run = session.get(Run, run_id)
     if run is None:
         raise RunStateTransitionError(f"Run not found: {run_id}")
-    normalized_expected_worker_service_instance_id = str(expected_worker_service_instance_id or "").strip() or None
+    normalized_expected_worker_service_instance_id = (
+        str(expected_worker_service_instance_id or "").strip() or None
+    )
     normalized_expected_claim_id = str(expected_claim_id or "").strip() or None
     if (
         normalized_expected_worker_service_instance_id is not None
-        and str(run.worker_service_instance_id or "").strip() != normalized_expected_worker_service_instance_id
+        and str(run.worker_service_instance_id or "").strip()
+        != normalized_expected_worker_service_instance_id
     ):
         raise RunStateTransitionError(
             "Worker owner mismatch while terminalizing run "
             f"{run_id}: expected {normalized_expected_worker_service_instance_id} got {run.worker_service_instance_id}"
         )
-    if normalized_expected_claim_id is not None and str(run.claim_id or "").strip() != normalized_expected_claim_id:
+    if (
+        normalized_expected_claim_id is not None
+        and str(run.claim_id or "").strip() != normalized_expected_claim_id
+    ):
         raise RunStateTransitionError(
             f"Claim mismatch while terminalizing run {run_id}: expected {normalized_expected_claim_id} got {run.claim_id}"
         )
@@ -846,7 +923,9 @@ def cancel_run(
     if run is None:
         raise RunStateTransitionError(f"Run not found: {run_id}")
     if run.status in TERMINAL_RUN_STATUSES:
-        raise RunStateTransitionError(f"Cannot cancel run {run_id} from terminal status {run.status}")
+        raise RunStateTransitionError(
+            f"Cannot cancel run {run_id} from terminal status {run.status}"
+        )
     now = _now()
     run.status = RUN_STATUS_CANCELLED
     run.last_error = f"Cancelled by {cancelled_by}"
@@ -916,7 +995,9 @@ def cancel_queued_issue_runs(
         run.finished_at = now
         run.last_heartbeat_at = None
         run.worker_service_instance_id = None
-        workflow_active_counts[run.workflow_id] = max(0, workflow_active_counts.get(run.workflow_id, 0) - 1)
+        workflow_active_counts[run.workflow_id] = max(
+            0, workflow_active_counts.get(run.workflow_id, 0) - 1
+        )
         apply_execution_for_cancelled_attempt(
             session=session,
             run=run,

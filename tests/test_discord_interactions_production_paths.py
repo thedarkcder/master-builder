@@ -36,7 +36,11 @@ class _FakeDiscordApiClient:
     def __init__(self) -> None:
         self.posted_messages: list[dict[str, object]] = []
         self.created_threads: list[dict[str, str]] = []
-        self._next_message_ids = ["123456789012345", "123456789012346", "123456789012347"]
+        self._next_message_ids = [
+            "123456789012345",
+            "123456789012346",
+            "123456789012347",
+        ]
 
     def post_message(self, *, channel_id: str, content: str, components=None):  # noqa: ANN001
         payload = {
@@ -45,10 +49,16 @@ class _FakeDiscordApiClient:
             "components": components,
         }
         self.posted_messages.append(payload)
-        message_id = self._next_message_ids.pop(0) if self._next_message_ids else f"msg-{len(self.posted_messages)}"
+        message_id = (
+            self._next_message_ids.pop(0)
+            if self._next_message_ids
+            else f"msg-{len(self.posted_messages)}"
+        )
         return {"id": message_id}
 
-    def create_thread_from_message(self, *, channel_id: str, message_id: str, name: str) -> str:
+    def create_thread_from_message(
+        self, *, channel_id: str, message_id: str, name: str
+    ) -> str:
         self.created_threads.append(
             {
                 "channel_id": channel_id,
@@ -58,7 +68,9 @@ class _FakeDiscordApiClient:
         )
         return "thread-1"
 
-    def ensure_thread_for_message(self, *, channel_id: str, message_id: str, thread_name: str) -> str:
+    def ensure_thread_for_message(
+        self, *, channel_id: str, message_id: str, thread_name: str
+    ) -> str:
         self.created_threads.append(
             {
                 "channel_id": channel_id,
@@ -69,17 +81,21 @@ class _FakeDiscordApiClient:
         return "thread-1"
 
     def get_channel(self, *, channel_id: str) -> dict[str, str]:
-        return {"id": channel_id, "name": f"example-ask-{channel_id[-6:]}"}
+        return {"id": channel_id, "name": f"example-workspace-ask-{channel_id[-6:]}"}
 
 
 class DiscordInteractionsProductionPathTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/discord_interactions_production.db"
+        self.database_url = (
+            f"sqlite:///{self.temp_dir.name}/discord_interactions_production.db"
+        )
         self.checkout_dir = os.path.join(self.temp_dir.name, "checkouts")
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
         os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.checkout_dir
 
         get_settings.cache_clear()
@@ -89,10 +105,14 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
 
         self._seed_runtime_state()
         self.private_key = Ed25519PrivateKey.generate()
-        public_key_hex = self.private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        ).hex()
+        public_key_hex = (
+            self.private_key.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            .hex()
+        )
         with self.session_factory() as session:
             platform_secret_service.upsert_secret(
                 session=session,
@@ -123,8 +143,8 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
-                tenant_id="example",
-                name="example",
+                tenant_id="example-workspace",
+                name="Example Workspace",
                 is_enabled=True,
                 jira_config={
                     "connection_id": "conn-1",
@@ -158,9 +178,9 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 updated_at=now,
             )
             project = Project(
-                project_id="example-default",
-                tenant_id="example",
-                name="example Default",
+                project_id="example-workspace-default",
+                tenant_id="example-workspace",
+                name="Example Workspace Default",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
                 policy_overrides={},
@@ -199,7 +219,9 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
 
     def _signed_headers(self, payload_bytes: bytes) -> dict[str, str]:
         timestamp = str(int(datetime.now(timezone.utc).timestamp()))
-        signature = self.private_key.sign(timestamp.encode("utf-8") + payload_bytes).hex()
+        signature = self.private_key.sign(
+            timestamp.encode("utf-8") + payload_bytes
+        ).hex()
         return {
             "Content-Type": "application/json",
             "X-Signature-Ed25519": signature,
@@ -207,7 +229,9 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
         }
 
     def _post_interaction(self, payload: dict) -> object:
-        payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        payload_bytes = json.dumps(
+            payload, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
         return self.client.post(
             "/discord/interactions",
             content=payload_bytes,
@@ -222,9 +246,13 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 owner_id="worker:test",
             )
 
-    def test_application_help_command_runs_real_queued_followup_and_creates_thread(self) -> None:
+    def test_application_help_command_runs_real_queued_followup_and_creates_thread(
+        self,
+    ) -> None:
         discord_client = _FakeDiscordApiClient()
-        payload = load_json_fixture("discord", "interactions", "application_command_help.json")
+        payload = load_json_fixture(
+            "discord", "interactions", "application_command_help.json"
+        )
 
         with (
             patch(
@@ -238,25 +266,37 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             self._process_one_job()
 
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             self.assertIsNotNone(project)
             discord_config = dict(project.discord_config or {})
-            self.assertEqual(discord_config.get("ask_thread_by_message_id", {}).get("123456789012345"), "thread-1")
+            self.assertEqual(
+                discord_config.get("ask_thread_by_message_id", {}).get(
+                    "123456789012345"
+                ),
+                "thread-1",
+            )
             self.assertIn("thread-1", discord_config.get("ask_thread_channel_ids", []))
 
         self.assertEqual(len(discord_client.created_threads), 1)
-        self.assertEqual(discord_client.created_threads[0]["channel_id"], "discord-channel-1")
+        self.assertEqual(
+            discord_client.created_threads[0]["channel_id"], "discord-channel-1"
+        )
         self.assertEqual(len(discord_client.posted_messages), 2)
-        self.assertEqual(discord_client.posted_messages[0]["channel_id"], "discord-channel-1")
+        self.assertEqual(
+            discord_client.posted_messages[0]["channel_id"], "discord-channel-1"
+        )
         self.assertIn("!help", str(discord_client.posted_messages[0]["content"]))
         self.assertEqual(discord_client.posted_messages[1]["channel_id"], "thread-1")
-        self.assertIn("Continue here with follow-up questions", str(discord_client.posted_messages[1]["content"]))
+        self.assertIn(
+            "Continue here with follow-up questions",
+            str(discord_client.posted_messages[1]["content"]),
+        )
 
     def test_stale_issue_bound_reply_modal_falls_back_to_ask_followup(self) -> None:
         discord_client = _FakeDiscordApiClient()
         issue_key = "TP-42"
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
+            project = session.get(Project, "example-workspace-default")
             self.assertIsNotNone(project)
             project.discord_config = {
                 **dict(project.discord_config or {}),
@@ -267,8 +307,8 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             session.add(
                 DecisionCase(
                     case_id="case-closed",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     issue_key=issue_key,
                     state="blocked",
                     blocked_reason="decision_gate_required",
@@ -289,7 +329,9 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             )
             session.commit()
 
-        payload = load_json_fixture("discord", "interactions", "modal_submit_ask_reply.json")
+        payload = load_json_fixture(
+            "discord", "interactions", "modal_submit_ask_reply.json"
+        )
         fake_jira_client = type(
             "FakeJiraClient",
             (),
@@ -327,7 +369,9 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
-                return_value=AskIntent(mode="answer", summary="Board answer", command=None),
+                return_value=AskIntent(
+                    mode="answer", summary="Board answer", command=None
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
@@ -343,7 +387,10 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
         self.assertEqual(len(discord_client.posted_messages), 1)
         self.assertEqual(discord_client.posted_messages[0]["channel_id"], "thread-1")
         self.assertIn("Board answer", str(discord_client.posted_messages[0]["content"]))
-        self.assertNotIn("No active Decision Gate cycle exists", str(discord_client.posted_messages[0]["content"]))
+        self.assertNotIn(
+            "No active Decision Gate cycle exists",
+            str(discord_client.posted_messages[0]["content"]),
+        )
 
 
 if __name__ == "__main__":

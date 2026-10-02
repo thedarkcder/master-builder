@@ -122,7 +122,9 @@ async def spawn_worker_child_process(
 
 async def terminate_worker_child_processes(
     *,
-    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle],
+    active_children: dict[
+        asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle
+    ],
 ) -> None:
     handles = list(active_children.values())
     for handle in handles:
@@ -130,6 +132,8 @@ async def terminate_worker_child_processes(
             continue
         with suppress(ProcessLookupError):
             handle.process.terminate()
-    waiters: list[asyncio.Task[WorkerChildProcessResult]] = [handle.wait_task for handle in handles]
+    waiters: list[asyncio.Task[WorkerChildProcessResult]] = [
+        handle.wait_task for handle in handles
+    ]
     if waiters:
         await asyncio.gather(*waiters, return_exceptions=True)

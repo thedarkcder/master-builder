@@ -71,12 +71,14 @@ class ErrorObservabilityTests(unittest.TestCase):
                 event="discord_command_followup_send_failed",
                 error_ref="ref-1",
                 exc=error,
-                context={"tenant_id": "example"},
+                context={"tenant_id": "example-workspace"},
             )
 
         self.assertIs(captured["exception"], error)
         self.assertIsNotNone(captured["scope"])
-        self.assertEqual(captured["scope"].tags["event_type"], "discord_command_followup_send_failed")
+        self.assertEqual(
+            captured["scope"].tags["event_type"], "discord_command_followup_send_failed"
+        )
         self.assertEqual(captured["scope"].tags["error_ref"], "ref-1")
 
 

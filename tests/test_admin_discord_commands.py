@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.command_sync_status import DiscordCommandSyncStatusSnapshot
+from orchestrator.core.discord.command_sync_status import (
+    DiscordCommandSyncStatusSnapshot,
+)
 
 pytestmark = pytest.mark.contract
 
@@ -18,7 +20,9 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
+        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = (
+            "admin-token-secret-for-tests-0123456789"
+        )
         get_settings.cache_clear()
 
     def tearDown(self) -> None:
@@ -51,7 +55,9 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False) as client:
-                response = client.get("/api/admin/discord/commands/status", auth=("admin", "secret"))
+                response = client.get(
+                    "/api/admin/discord/commands/status", auth=("admin", "secret")
+                )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -88,7 +94,9 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
             patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.api.routes.admin_discord_commands.sync_discord_guild_commands") as sync_mock,
+            patch(
+                "orchestrator.api.routes.admin_discord_commands.sync_discord_guild_commands"
+            ) as sync_mock,
             patch(
                 "orchestrator.api.routes.admin_discord_commands.get_discord_command_sync_status",
                 return_value=status,
@@ -96,7 +104,9 @@ class AdminDiscordCommandsRouteTests(unittest.TestCase):
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False) as client:
-                response = client.post("/api/admin/discord/commands/sync", auth=("admin", "secret"))
+                response = client.post(
+                    "/api/admin/discord/commands/sync", auth=("admin", "secret")
+                )
 
         self.assertEqual(response.status_code, 200)
         sync_mock.assert_called_once()

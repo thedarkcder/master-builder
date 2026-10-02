@@ -15,7 +15,9 @@ def _tenant_primary_channel_id(tenant: Tenant) -> str | None:
     return normalized_channel_id or None
 
 
-def resolve_project_for_discord_channel(*, session, tenant_id: str, channel_id: str | None) -> Project | None:
+def resolve_project_for_discord_channel(
+    *, session, tenant_id: str, channel_id: str | None
+) -> Project | None:
     normalized_channel_id = str(channel_id or "").strip()
     if not normalized_channel_id:
         return None
@@ -26,24 +28,36 @@ def resolve_project_for_discord_channel(*, session, tenant_id: str, channel_id: 
     )
     if followup_project is not None:
         return followup_project
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for project in projects:
-        if normalized_channel_id in channel_ids_from_discord_config(dict(project.discord_config or {})):
+        if normalized_channel_id in channel_ids_from_discord_config(
+            dict(project.discord_config or {})
+        ):
             return project
     tenant = session.get(Tenant, tenant_id)
     if tenant is not None:
         tenant_channel_id = _tenant_primary_channel_id(tenant)
-        if tenant_channel_id and normalized_channel_id == tenant_channel_id and len(projects) == 1:
+        if (
+            tenant_channel_id
+            and normalized_channel_id == tenant_channel_id
+            and len(projects) == 1
+        ):
             return projects[0]
     return None
 
 
-def _resolve_project_from_active_followup_context(*, session, tenant_id: str, channel_id: str) -> Project | None:
+def _resolve_project_from_active_followup_context(
+    *, session, tenant_id: str, channel_id: str
+) -> Project | None:
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_channel_id = str(channel_id or "").strip()
     if not normalized_tenant_id or not normalized_channel_id:
@@ -69,21 +83,31 @@ def _resolve_project_from_active_followup_context(*, session, tenant_id: str, ch
     if len(project_ids) != 1:
         return None
     project = session.get(Project, project_ids[0])
-    if project is None or project.tenant_id != normalized_tenant_id or project.is_archived:
+    if (
+        project is None
+        or project.tenant_id != normalized_tenant_id
+        or project.is_archived
+    ):
         return None
     return project
 
 
 def project_allowed_channel_ids(*, session, tenant_id: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     allowed: set[str] = set()
     for project in projects:
-        allowed.update(channel_ids_from_discord_config(dict(project.discord_config or {})))
+        allowed.update(
+            channel_ids_from_discord_config(dict(project.discord_config or {}))
+        )
     return allowed
 
 
@@ -95,7 +119,9 @@ def tenant_allowed_channel_ids(*, session, tenant: Tenant) -> set[str]:
     return allowed
 
 
-def save_project_allowlist_requests(*, session, tenant: Tenant, project: Project, requests: list[dict]) -> None:
+def save_project_allowlist_requests(
+    *, session, tenant: Tenant, project: Project, requests: list[dict]
+) -> None:
     discord_config = dict(project.discord_config or {})
     discord_config["allowlist_requests"] = requests
     project.discord_config = discord_config
@@ -120,7 +146,9 @@ def save_seed_followups(
             if isinstance(raw_seed_thread_ids, list)
             else []
         )
-        seed_thread_ids = [value for value in seed_thread_ids if value not in removed_channel_ids]
+        seed_thread_ids = [
+            value for value in seed_thread_ids if value not in removed_channel_ids
+        ]
         discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids
     tenant.discord_config = discord_config
     tenant.updated_at = datetime.now(timezone.utc)

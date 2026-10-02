@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from orchestrator.core.signal_templates import format_stage_discord_update, format_stage_jira_update
+from orchestrator.core.signal_templates import (
+    format_stage_discord_update,
+    format_stage_jira_update,
+)
 from orchestrator.core.worker.stage_event_types import WorkerStageEvent
 
 

@@ -91,43 +91,69 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      - name: Install dependencies for audit
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          if [ -f "pyproject.toml" ]; then
-            python -m pip install -e .[dev] || python -m pip install -e .
-          elif [ -f "requirements.txt" ]; then
-            python -m pip install -r requirements.txt
-          fi
-          python -m pip install pip-audit
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
 
-      - name: Run pip-audit
-        shell: bash
-        run: |
-          set -euo pipefail
-          pip-audit --progress-spinner off
+      - name: Export frozen runtime dependencies
+        run: uv export --frozen --no-emit-project --no-dev --no-default-groups --no-hashes --format requirements.txt --output-file /tmp/runtime-requirements.txt
+
+      - name: Audit frozen runtime dependencies
+        run: uv tool run --from pip-audit==2.10.1 pip-audit --no-deps --disable-pip --strict --progress-spinner off --requirement /tmp/runtime-requirements.txt
+
+  node-dependency-audit:
+    name: UI lockfile dependency audit
+    needs: detect
+    if: needs.detect.outputs.is_node == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: admin-ui
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Audit committed lockfile
+        run: npm audit --package-lock-only
 
   gitleaks:
     name: Secret scanning (gitleaks)
     needs: detect
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ""
+      # The CLI is MIT licensed; organization action licensing is unnecessary.
+      # https://github.com/gitleaks/gitleaks/blob/v8.30.1/LICENSE
+      # https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+      - name: Run checksum-verified Gitleaks CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/gitleaks.XXXXXX")"
+          trap 'rm -rf -- "$tool_dir"' EXIT
+          archive="$tool_dir/gitleaks.tar.gz"
+          curl --fail --show-error --silent --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$archive"
+          printf '%s  %s\n' \
+            551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$tool_dir" gitleaks
+          python3 scripts/verify_secret_scanner.py --gitleaks "$tool_dir/gitleaks"
+          "$tool_dir/gitleaks" git --config .gitleaks.toml \
+            --log-opts="--all --full-history --reflog" \
+            --ignore-gitleaks-allow --redact=100 --no-banner .
 
   codeql:
     name: SAST (CodeQL)

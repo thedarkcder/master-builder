@@ -72,7 +72,9 @@ def _operation(now: datetime) -> WorkflowOperation:
     )
 
 
-def _attempt(now: datetime, *, attempt_id: str, attempt_number: int, status: str = "running") -> WorkflowOperationAttempt:
+def _attempt(
+    now: datetime, *, attempt_id: str, attempt_number: int, status: str = "running"
+) -> WorkflowOperationAttempt:
     return WorkflowOperationAttempt(
         attempt_id=attempt_id,
         operation_id="operation-backlog-planning",
@@ -94,7 +96,9 @@ def _attempt(now: datetime, *, attempt_id: str, attempt_number: int, status: str
 
 class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-work-units")
+        self.database_url = self._prepare_test_database(
+            name_prefix="workflow-work-units"
+        )
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
@@ -118,7 +122,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 unit_key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
                 idempotency_key="MAB-900:architecture",
                 input_payload={"brief": "same"},
-                execute=lambda _context: calls.__setitem__("architecture", calls["architecture"] + 1) or {"ok": True},
+                execute=lambda _context: (
+                    calls.__setitem__("architecture", calls["architecture"] + 1)
+                    or {"ok": True}
+                ),
                 serialize=lambda result: {"result": result},
                 deserialize=lambda payload: dict(payload["result"]),
             )
@@ -135,7 +142,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 unit_key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
                 idempotency_key="MAB-900:architecture",
                 input_payload={"brief": "same"},
-                execute=lambda _context: calls.__setitem__("architecture", calls["architecture"] + 1) or {"ok": False},
+                execute=lambda _context: (
+                    calls.__setitem__("architecture", calls["architecture"] + 1)
+                    or {"ok": False}
+                ),
                 serialize=lambda result: {"result": result},
                 deserialize=lambda payload: dict(payload["result"]),
             )
@@ -150,7 +160,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 .order_by(WorkflowOperationWorkUnitAttempt.attempt_number.asc())
                 .all()
             )
-            assert [item.operation_attempt_id for item in attempts] == ["attempt-1", "attempt-2"]
+            assert [item.operation_attempt_id for item in attempts] == [
+                "attempt-1",
+                "attempt-2",
+            ]
             assert [item.status for item in attempts] == ["completed", "completed"]
 
     def test_same_idempotency_key_with_different_input_fails_hard(self) -> None:
@@ -206,8 +219,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 unit_key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
                 idempotency_key="MAB-900:architecture",
                 input_payload={"brief": "same"},
-                execute=lambda _context: calls.__setitem__("architecture", calls["architecture"] + 1)
-                or {"architecture": "done"},
+                execute=lambda _context: (
+                    calls.__setitem__("architecture", calls["architecture"] + 1)
+                    or {"architecture": "done"}
+                ),
                 serialize=lambda result: {"result": result},
                 deserialize=lambda payload: dict(payload["result"]),
             )
@@ -219,8 +234,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                     unit_key=PARENT_WU_BACKLOG_SECURITY_MODEL,
                     idempotency_key="MAB-900:security",
                     input_payload={"brief": "same"},
-                    execute=lambda _context: calls.__setitem__("security", calls["security"] + 1)
-                    or (_ for _ in ()).throw(RuntimeError("bad security payload")),
+                    execute=lambda _context: (
+                        calls.__setitem__("security", calls["security"] + 1)
+                        or (_ for _ in ()).throw(RuntimeError("bad security payload"))
+                    ),
                     serialize=lambda result: {"result": result},
                     deserialize=lambda payload: dict(payload["result"]),
                 )
@@ -237,8 +254,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 unit_key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
                 idempotency_key="MAB-900:architecture",
                 input_payload={"brief": "same"},
-                execute=lambda _context: calls.__setitem__("architecture", calls["architecture"] + 1)
-                or {"architecture": "rerun"},
+                execute=lambda _context: (
+                    calls.__setitem__("architecture", calls["architecture"] + 1)
+                    or {"architecture": "rerun"}
+                ),
                 serialize=lambda result: {"result": result},
                 deserialize=lambda payload: dict(payload["result"]),
             )
@@ -249,8 +268,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 unit_key=PARENT_WU_BACKLOG_SECURITY_MODEL,
                 idempotency_key="MAB-900:security",
                 input_payload={"brief": "same"},
-                execute=lambda _context: calls.__setitem__("security", calls["security"] + 1)
-                or {"security": "done"},
+                execute=lambda _context: (
+                    calls.__setitem__("security", calls["security"] + 1)
+                    or {"security": "done"}
+                ),
                 serialize=lambda result: {"result": result},
                 deserialize=lambda payload: dict(payload["result"]),
             )
@@ -279,14 +300,20 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                         unit_key=PARENT_WU_BACKLOG_SECURITY_MODEL,
                         idempotency_key="MAB-900:security",
                         input_payload={"brief": "same"},
-                        execute=lambda _context: calls.__setitem__("security", calls["security"] + 1)
-                        or (_ for _ in ()).throw(RuntimeError("temporary projection failure")),
+                        execute=lambda _context: (
+                            calls.__setitem__("security", calls["security"] + 1)
+                            or (_ for _ in ()).throw(
+                                RuntimeError("temporary projection failure")
+                            )
+                        ),
                         serialize=lambda result: {"result": result},
                         deserialize=lambda payload: dict(payload["result"]),
                     )
                 session.commit()
 
-            with pytest.raises(WorkflowWorkUnitRetryExhaustedError, match="exhausted 3 attempts"):
+            with pytest.raises(
+                WorkflowWorkUnitRetryExhaustedError, match="exhausted 3 attempts"
+            ):
                 run_work_unit(
                     session,
                     operation=operation,
@@ -320,7 +347,9 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
             assert recovered == {"security": "done"}
             assert calls["security"] == 3
 
-    def test_run_work_unit_starts_and_stops_operation_heartbeat_controller(self) -> None:
+    def test_run_work_unit_starts_and_stops_operation_heartbeat_controller(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -333,7 +362,9 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
             controller_events: list[tuple[str, str | None, str | None]] = []
 
             class _Controller:
-                def __init__(self, *, database_url: str, attempt_id: str, lease_owner: str) -> None:
+                def __init__(
+                    self, *, database_url: str, attempt_id: str, lease_owner: str
+                ) -> None:
                     controller_events.append(("init", attempt_id, lease_owner))
 
                 def start(self) -> None:
@@ -342,7 +373,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                 def stop(self) -> None:
                     controller_events.append(("stop", None, None))
 
-            with patch("orchestrator.core.workflow.work_units.WorkflowOperationAttemptHeartbeatController", _Controller):
+            with patch(
+                "orchestrator.core.workflow.work_units.WorkflowOperationAttemptHeartbeatController",
+                _Controller,
+            ):
                 result = run_work_unit(
                     session,
                     operation=operation,
@@ -350,7 +384,10 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
                     unit_key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
                     idempotency_key="MAB-900:architecture",
                     input_payload={"brief": "same"},
-                    execute=lambda _context: controller_events.append(("execute", None, None)) or {"ok": True},
+                    execute=lambda _context: (
+                        controller_events.append(("execute", None, None))
+                        or {"ok": True}
+                    ),
                     serialize=lambda payload: {"result": payload},
                     deserialize=lambda payload: dict(payload["result"]),
                 )

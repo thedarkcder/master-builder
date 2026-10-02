@@ -9,7 +9,12 @@ from orchestrator.core.observability.repository import (
     configure_product_event_repository_for_tests,
     reset_product_event_repository_for_tests,
 )
-from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput, JiraIssueCreateResult, JiraIssueDetail, JiraIssuePreview
+from orchestrator.tools.atlassian_oauth import (
+    JiraIssueCreateInput,
+    JiraIssueCreateResult,
+    JiraIssueDetail,
+    JiraIssuePreview,
+)
 from tests.test_support.product_events import RecordingProductEventRepository
 
 
@@ -32,7 +37,10 @@ class BoundaryTelemetryProbe:
         return any(row.event_kind == event_kind for row in self._repository.inserted)
 
     def all_operation_events_have_attempt_ids(self) -> bool:
-        return all(not row.operation_id or bool(row.attempt_id) for row in self._repository.inserted)
+        return all(
+            not row.operation_id or bool(row.attempt_id)
+            for row in self._repository.inserted
+        )
 
 
 class BoundaryRuntime:
@@ -73,7 +81,10 @@ class BoundaryRuntime:
             on_usage({"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20})
         if on_log_line is not None:
             on_log_line("stdout", f"boundary runtime call {call_number} started")
-            on_log_line("stdout", '{"type":"turn.completed","input_tokens":12,"output_tokens":8}')
+            on_log_line(
+                "stdout",
+                '{"type":"turn.completed","input_tokens":12,"output_tokens":8}',
+            )
         if not self._responses:
             raise AssertionError("Boundary runtime received more calls than expected")
         return self._responses.pop(0)
@@ -133,7 +144,10 @@ class BoundaryJiraClient:
     ) -> None:
         del access_token, cloud_id
         record = self.issues[issue_id_or_key]
-        merged = [*record.labels, *[label for label in labels if label not in record.labels]]
+        merged = [
+            *record.labels,
+            *[label for label in labels if label not in record.labels],
+        ]
         self.issues[issue_id_or_key] = _replace_issue(record, labels=merged)
 
     def list_project_issue_types_for_create(
@@ -159,15 +173,22 @@ class BoundaryJiraClient:
         normalized_jql = jql.casefold()
         if "parent =" in normalized_jql or "labels =" in normalized_jql:
             parent_key = _quoted_value(jql, "parent")
-            if parent_key is None and f"parent-{self.parent_issue_key.casefold()}" in normalized_jql:
+            if (
+                parent_key is None
+                and f"parent-{self.parent_issue_key.casefold()}" in normalized_jql
+            ):
                 parent_key = self.parent_issue_key
             return [
-                JiraIssuePreview(key=record.key, summary=record.summary, status=record.status)
+                JiraIssuePreview(
+                    key=record.key, summary=record.summary, status=record.status
+                )
                 for record in self.issues.values()
                 if record.parent_issue_key == parent_key
             ]
         return [
-            JiraIssuePreview(key=record.key, summary=record.summary, status=record.status)
+            JiraIssuePreview(
+                key=record.key, summary=record.summary, status=record.status
+            )
             for record in self.issues.values()
         ]
 
@@ -266,7 +287,10 @@ class BoundaryJiraClient:
     ) -> dict[str, object]:
         del access_token, cloud_id
         self.comments.append((issue_id_or_key, comment))
-        return {"id": f"comment-{issue_id_or_key}-{len(self.comments)}", "body": comment}
+        return {
+            "id": f"comment-{issue_id_or_key}-{len(self.comments)}",
+            "body": comment,
+        }
 
     def transition_issue(
         self,
@@ -298,7 +322,9 @@ class JiraParentWorkflowBoundaryHarness:
             issue_summary=issue_summary,
             issue_description=issue_description,
         )
-        self.runtime = BoundaryRuntime(_runtime_responses(issue_key=issue_key, issue_summary=issue_summary))
+        self.runtime = BoundaryRuntime(
+            _runtime_responses(issue_key=issue_key, issue_summary=issue_summary)
+        )
         self.event_repository = RecordingProductEventRepository()
         self.telemetry = BoundaryTelemetryProbe(self.event_repository)
 
@@ -323,16 +349,28 @@ class JiraParentWorkflowBoundaryHarness:
             ):
                 stack.enter_context(patch(target, return_value=oauth_object))
             stack.enter_context(
-                patch("orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context", return_value=oauth_object)
+                patch(
+                    "orchestrator.runtime.issue_fanout.tenant_atlassian_oauth_context",
+                    return_value=oauth_object,
+                )
             )
             stack.enter_context(
-                patch("orchestrator.api.webhooks.contracts.tenant_atlassian_oauth_context", return_value=oauth_object)
+                patch(
+                    "orchestrator.api.webhooks.contracts.tenant_atlassian_oauth_context",
+                    return_value=oauth_object,
+                )
             )
             stack.enter_context(
-                patch("orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector", return_value=self.runtime)
+                patch(
+                    "orchestrator.api.webhooks.jira_parent_child_sync.build_runtime_for_selector",
+                    return_value=self.runtime,
+                )
             )
             stack.enter_context(
-                patch("orchestrator.runtime.issue_fanout.build_runtime_for_selector", return_value=self.runtime)
+                patch(
+                    "orchestrator.runtime.issue_fanout.build_runtime_for_selector",
+                    return_value=self.runtime,
+                )
             )
             yield self
 
@@ -369,16 +407,22 @@ def _child_spec() -> dict[str, object]:
         "capability": "Workflow boundary verification",
         "delivery": "Build a boundary harness that proves the webhook workflow path.",
         "expected_outcome": "Parent planning regressions fail at the behavior boundary.",
-        "acceptance_criteria": ["Webhook processing creates durable attempts and Jira children."],
+        "acceptance_criteria": [
+            "Webhook processing creates durable attempts and Jira children."
+        ],
         "how_to_test": ["Run workflow boundary path tests."],
-        "done_means": ["The boundary test proves attempt-scoped telemetry and Jira fanout."],
+        "done_means": [
+            "The boundary test proves attempt-scoped telemetry and Jira fanout."
+        ],
         "dependencies": [],
         "risks": [],
         "labels": ["engineering-child"],
     }
 
 
-def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, object]]:
+def _runtime_responses(
+    *, issue_key: str, issue_summary: str
+) -> list[dict[str, object]]:
     child_spec = _child_spec()
     technical_decision = {
         "decision_id": "workflow-boundary-harness",
@@ -405,12 +449,16 @@ def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, 
             "brief": {
                 "objective": issue_summary,
                 "user_value": "Operators can trust parent planning execution state.",
-                "acceptance_criteria": ["Workflow attempts and telemetry are persisted."],
+                "acceptance_criteria": [
+                    "Workflow attempts and telemetry are persisted."
+                ],
                 "scope_in": ["Webhook to workflow to fanout boundary"],
                 "scope_out": ["External Atlassian network access"],
                 "constraints": ["No internal workflow methods are patched."],
                 "risks": ["Patch-heavy tests can miss production wiring regressions."],
-                "success_outcomes": ["A Jira parent feature creates a completed workflow with a child ticket."],
+                "success_outcomes": [
+                    "A Jira parent feature creates a completed workflow with a child ticket."
+                ],
                 "recommendation": "Create one engineering child story.",
                 "open_questions": [],
                 "next_steps": ["Seed the child ticket."],
@@ -437,7 +485,9 @@ def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, 
         },
         {
             "findings": ["The acceptance path requires end-to-end verification."],
-            "recommendations": ["Exercise real webhook worker and persistence boundaries."],
+            "recommendations": [
+                "Exercise real webhook worker and persistence boundaries."
+            ],
             "required_tasks": ["Add boundary test coverage."],
             "technical_decisions": [technical_decision],
             "pm_decision_requests": [],
@@ -453,9 +503,13 @@ def _runtime_responses(*, issue_key: str, issue_summary: str) -> list[dict[str, 
                 "recommendation": "Create one engineering child story.",
                 "scope_in": ["Webhook to workflow to fanout boundary"],
                 "scope_out": ["External Atlassian network access"],
-                "acceptance_criteria": ["Workflow attempts and telemetry are persisted."],
+                "acceptance_criteria": [
+                    "Workflow attempts and telemetry are persisted."
+                ],
                 "ui_references": [],
-                "success_outcomes": ["A Jira parent feature creates a completed workflow with a child ticket."],
+                "success_outcomes": [
+                    "A Jira parent feature creates a completed workflow with a child ticket."
+                ],
                 "dependencies": [],
                 "risks": ["Patch-heavy tests can miss production wiring regressions."],
                 "open_questions": [],

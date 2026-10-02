@@ -93,7 +93,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return self._settings_obj
 
-    def _seed_tenant(self, *, tenant_id: str, guild_id: str | None, enabled: bool = True) -> None:
+    def _seed_tenant(
+        self, *, tenant_id: str, guild_id: str | None, enabled: bool = True
+    ) -> None:
         with self._session_factory() as session:
             now = datetime.now(timezone.utc)
             session.add(
@@ -105,7 +107,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                     github_config={},
                     repos_config={},
                     policy_config={},
-                    discord_config={"guild_id": guild_id} if guild_id is not None else {},
+                    discord_config={"guild_id": guild_id}
+                    if guild_id is not None
+                    else {},
                     created_at=now,
                     updated_at=now,
                 )
@@ -163,7 +167,10 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(client.overwrite_guild_commands.call_count, 2)
         self.assertEqual(
-            [call.kwargs["guild_id"] for call in client.overwrite_guild_commands.call_args_list],
+            [
+                call.kwargs["guild_id"]
+                for call in client.overwrite_guild_commands.call_args_list
+            ],
             ["guild-tenant-1", "guild-tenant-2"],
         )
         status = get_discord_command_sync_status(settings=settings)
@@ -186,7 +193,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertEqual(status.last_failure_reason, "discord_api_error")
         self.assertIn("boom", status.last_error or "")
 
-    def test_sync_discord_guild_commands_ignores_legacy_global_guild_setting(self) -> None:
+    def test_sync_discord_guild_commands_ignores_legacy_global_guild_setting(
+        self,
+    ) -> None:
         settings = self._settings()
         settings.discord_guild_id = "legacy-global-guild"
 
@@ -200,7 +209,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
                 settings=settings,
                 session_factory=self._session_factory,
                 secret_resolver=_resolver,
-                client_factory=MagicMock(side_effect=AssertionError("should not attempt sync")),
+                client_factory=MagicMock(
+                    side_effect=AssertionError("should not attempt sync")
+                ),
             )
         )
 
@@ -208,7 +219,9 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
         self.assertEqual(status.last_failure_reason, "missing_guild_id")
         self.assertFalse(status.guild_id_configured)
 
-    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(self) -> None:
+    def test_sync_discord_guild_commands_does_not_clobber_persisted_status_when_lock_busy(
+        self,
+    ) -> None:
         settings = self._settings()
         self._seed_tenant(tenant_id="tenant-1", guild_id="guild-1")
 
@@ -229,13 +242,18 @@ class DiscordCommandSyncRuntimeTests(unittest.TestCase):
             )
         )
 
-        with patch("orchestrator.core.discord.commands_sync._try_acquire_command_sync_lock", return_value=False):
+        with patch(
+            "orchestrator.core.discord.commands_sync._try_acquire_command_sync_lock",
+            return_value=False,
+        ):
             self.assertTrue(
                 sync_discord_guild_commands(
                     settings=settings,
                     session_factory=self._session_factory,
                     secret_resolver=_resolver,
-                    client_factory=MagicMock(side_effect=AssertionError("should not sync while lock busy")),
+                    client_factory=MagicMock(
+                        side_effect=AssertionError("should not sync while lock busy")
+                    ),
                 )
             )
 
@@ -258,7 +276,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             pocket_tts_voice="",
         )
         session = MagicMock()
-        with patch("orchestrator.core.discord.gateway_listener.create_session_factory", return_value=_SessionFactory(session)):
+        with patch(
+            "orchestrator.core.discord.gateway_listener.create_session_factory",
+            return_value=_SessionFactory(session),
+        ):
             listener = DiscordGatewayListener(
                 settings=settings,
                 transcribe_audio_attachment=transcribe_audio_attachment,
@@ -268,9 +289,15 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
     def test_handle_message_create_ignores_bots_and_slash_commands(self) -> None:
         listener, _session = self._listener()
 
-        with patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls:
+        with patch(
+            "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+        ) as client_cls:
             listener._handle_message_create(
-                {"author": {"bot": True, "id": "u1"}, "channel_id": "c1", "content": "!run MAB-1"},
+                {
+                    "author": {"bot": True, "id": "u1"},
+                    "channel_id": "c1",
+                    "content": "!run MAB-1",
+                },
                 bot_token="token",
             )
             listener._handle_message_create(
@@ -284,9 +311,16 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         listener, _session = self._listener()
         listener._find_tenant_for_channel = MagicMock(return_value=None)
 
-        with patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls:
+        with patch(
+            "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+        ) as client_cls:
             listener._handle_message_create(
-                {"author": {"id": "u1"}, "channel_id": "c1", "content": "!run MAB-1", "attachments": []},
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "c1",
+                    "content": "!run MAB-1",
+                    "attachments": [],
+                },
                 bot_token="token",
             )
 
@@ -305,7 +339,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             "application_id": "app-1",
             "channel_id": "channel-1",
             "user": {"id": "user-1"},
-            "data": {"name": "bug", "options": [{"type": 3, "name": "summary", "value": "Login fails"}]},
+            "data": {
+                "name": "bug",
+                "options": [{"type": 3, "name": "summary", "value": "Login fails"}],
+            },
         }
         result = IngressResult(
             actions=(
@@ -323,7 +360,9 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
                 "orchestrator.core.discord.gateway_listener.build_discord_interaction_ingress_result",
                 new=AsyncMock(return_value=result),
             ) as build_mock,
-            patch("orchestrator.core.discord.gateway_listener.send_discord_interaction_callback") as callback_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.send_discord_interaction_callback"
+            ) as callback_mock,
         ):
             asyncio.run(listener._handle_interaction_create(payload))
 
@@ -338,26 +377,48 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         session = MagicMock()
         with patch(
             "orchestrator.core.discord.gateway_listener.resolve_followup_context",
-            return_value=SimpleNamespace(context_type="decision_gate", issue_key="gp-80"),
+            return_value=SimpleNamespace(
+                context_type="decision_gate", issue_key="gp-80"
+            ),
         ):
             self.assertEqual(
-                _decision_gate_issue_for_thread(session=session, tenant_id="example", channel_id="thread-1"),
+                _decision_gate_issue_for_thread(
+                    session=session,
+                    tenant_id="example-workspace",
+                    channel_id="thread-1",
+                ),
                 "GP-80",
             )
 
     def test_handle_message_create_http_exception_and_internal_exception(self) -> None:
         listener, session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", side_effect=HTTPException(status_code=409, detail="blocked")),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                side_effect=HTTPException(status_code=409, detail="blocked"),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
-                {"author": {"id": "u1"}, "channel_id": "c1", "content": "!run MAB-1", "attachments": []},
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "c1",
+                    "content": "!run MAB-1",
+                    "attachments": [],
+                },
                 bot_token="token",
             )
         self.assertTrue(client_cls.return_value.post_message.called)
@@ -366,14 +427,33 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         client_cls.reset_mock()
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", side_effect=RuntimeError("boom")),
-            patch("orchestrator.core.discord.gateway_listener.emit_hard_error") as emit_mock,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient", return_value=client_cls.return_value),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.emit_hard_error"
+            ) as emit_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient",
+                return_value=client_cls.return_value,
+            ),
         ):
             listener._handle_message_create(
-                {"author": {"id": "u1"}, "channel_id": "c1", "content": "!run MAB-1", "attachments": []},
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "c1",
+                    "content": "!run MAB-1",
+                    "attachments": [],
+                },
                 bot_token="token",
             )
         self.assertTrue(emit_mock.called)
@@ -383,7 +463,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_resumes_pending_human_input_request(self) -> None:
         listener, session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         request = SimpleNamespace(
             request_id="request-1",
@@ -395,7 +475,9 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with (
             patch(
                 "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
-                return_value=_matched_followup_resolution(context_type="human_input", request_id="request-1"),
+                return_value=_matched_followup_resolution(
+                    context_type="human_input", request_id="request-1"
+                ),
             ),
             patch(
                 "orchestrator.core.discord.gateway_listener.pending_human_input_for_request_id",
@@ -409,7 +491,9 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
                 "orchestrator.core.discord.gateway_listener.resume_workflow_from_human_input_answer",
                 return_value=resumed_run,
             ) as resume_mock,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -428,9 +512,11 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertIn("queued workflow attempt `run-2`", post_kwargs["content"])
         self.assertIn("GP-122", post_kwargs["content"])
 
-    def test_handle_message_create_seed_followup_rewrites_command_and_sets_components(self) -> None:
+    def test_handle_message_create_seed_followup_rewrites_command_and_sets_components(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         command_response = SimpleNamespace(
@@ -442,20 +528,44 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         with (
             patch(
                 "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
-                return_value=_matched_followup_resolution(context_type="seed_followup", request_id="req-1"),
+                return_value=_matched_followup_resolution(
+                    context_type="seed_followup", request_id="req-1"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch("orchestrator.core.discord.gateway_listener.build_ask_confirmation_components", return_value=[{"type": 1}]),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_ask_confirmation_components",
+                return_value=[{"type": 1}],
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
                     "author": {"id": "u1"},
                     "channel_id": "thread-1",
                     "content": "follow up text",
-                    "attachments": [{"id": "a1", "url": "https://x", "filename": "x.txt", "content_type": "text/plain", "size": 1}],
+                    "attachments": [
+                        {
+                            "id": "a1",
+                            "url": "https://x",
+                            "filename": "x.txt",
+                            "content_type": "text/plain",
+                            "size": 1,
+                        }
+                    ],
                 },
                 bot_token="token",
             )
@@ -465,14 +575,21 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         post_kwargs = client_cls.return_value.post_message.call_args.kwargs
         self.assertEqual(post_kwargs["components"], [{"type": 1}])
 
-    def test_handle_message_create_seed_followup_thread_without_context_does_not_rewrite(self) -> None:
+    def test_handle_message_create_seed_followup_thread_without_context_does_not_rewrite(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command") as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
+                return_value=_no_followup_resolution(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command"
+            ) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -487,14 +604,25 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         command_mock.assert_not_called()
 
-    def test_handle_message_create_root_channel_plain_text_without_context_is_ignored(self) -> None:
+    def test_handle_message_create_root_channel_plain_text_without_context_is_ignored(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command") as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
+                return_value=_no_followup_resolution(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command"
+            ) as command_mock,
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -509,20 +637,33 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         command_mock.assert_not_called()
 
-    def test_handle_message_create_seed_followup_thread_uses_user_project_fallback_context(self) -> None:
+    def test_handle_message_create_seed_followup_thread_uses_user_project_fallback_context(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="ask", message="ok", data={})
 
         with (
             patch(
                 "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
-                return_value=_matched_followup_resolution(context_type="seed_followup", request_id="req-1"),
+                return_value=_matched_followup_resolution(
+                    context_type="seed_followup", request_id="req-1"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -538,21 +679,36 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "!issues followup follow up text")
 
-    def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_command(self) -> None:
+    def test_handle_message_create_decision_gate_thread_routes_to_decision_gate_reply_command(
+        self,
+    ) -> None:
         listener, session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="reply", message="ok", data={})
 
         with (
             patch(
                 "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
-                return_value=_matched_followup_resolution(context_type="decision_gate", issue_key="GP-80"),
+                return_value=_matched_followup_resolution(
+                    context_type="decision_gate", issue_key="GP-80"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -568,25 +724,40 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "!reply")
         self.assertEqual(payload.command_params["issue_key"], "GP-80")
-        self.assertEqual(payload.command_params["reply_text"], "Objective and acceptance details")
+        self.assertEqual(
+            payload.command_params["reply_text"], "Objective and acceptance details"
+        )
         self.assertEqual(payload.command_params["source_ref"], "m-1")
         session.commit.assert_not_called()
         client_cls.return_value.post_message.assert_called_once()
 
-    def test_handle_message_create_parent_channel_reply_passes_root_message_id_to_followup_resolution(self) -> None:
+    def test_handle_message_create_parent_channel_reply_passes_root_message_id_to_followup_resolution(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="reply", message="ok", data={})
 
         with (
             patch(
                 "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
-                return_value=_matched_followup_resolution(context_type="decision_gate", issue_key="GP-124"),
+                return_value=_matched_followup_resolution(
+                    context_type="decision_gate", issue_key="GP-124"
+                ),
             ) as resolve_context_mock,
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -609,19 +780,29 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             "root-message-1",
         )
 
-    def test_handle_message_create_does_not_manage_session_when_command_fails(self) -> None:
+    def test_handle_message_create_does_not_manage_session_when_command_fails(
+        self,
+    ) -> None:
         listener, session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
             patch(
                 "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
                 side_effect=HTTPException(status_code=409, detail="blocked"),
             ),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -637,9 +818,11 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         session.rollback.assert_not_called()
         client_cls.return_value.post_message.assert_called_once()
 
-    def test_handle_message_create_routes_to_reply_using_real_thread_issue_mapping(self) -> None:
+    def test_handle_message_create_routes_to_reply_using_real_thread_issue_mapping(
+        self,
+    ) -> None:
         listener, session = self._listener()
-        tenant_for_channel = SimpleNamespace(tenant_id="example")
+        tenant_for_channel = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant_for_channel)
         command_response = SimpleNamespace(command="reply", message="ok", data={})
 
@@ -651,18 +834,33 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             }
         )
         project_without_mapping = SimpleNamespace(discord_config={})
-        session.execute.return_value.scalars.return_value.all.return_value = [project_without_mapping]
+        session.execute.return_value.scalars.return_value.all.return_value = [
+            project_without_mapping
+        ]
         session.get.return_value = mapped_tenant
 
         with (
             patch(
                 "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
-                return_value=_matched_followup_resolution(context_type="decision_gate", issue_key="GP-114"),
+                return_value=_matched_followup_resolution(
+                    context_type="decision_gate", issue_key="GP-114"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -684,23 +882,48 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         )
         client_cls.return_value.post_message.assert_called_once()
 
-    def test_handle_message_create_non_seed_command_keeps_original_and_limits_attachments(self) -> None:
+    def test_handle_message_create_non_seed_command_keeps_original_and_limits_attachments(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="run", message="ok", data={})
         attachments = [
-            {"id": str(i), "url": f"https://file/{i}", "filename": f"f{i}.txt", "content_type": "text/plain", "size": i}
+            {
+                "id": str(i),
+                "url": f"https://file/{i}",
+                "filename": f"f{i}.txt",
+                "content_type": "text/plain",
+                "size": i,
+            }
             for i in range(8)
         ]
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -719,21 +942,45 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_room_routes_plain_text_to_pm_command(self) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value={"voice-room-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value={"voice-room-1"},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="interview", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(
+                    lane="interview", persona="pm", confidence=0.9, reason="test"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -747,12 +994,20 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         payload = command_mock.call_args.kwargs["payload"]
-        self.assertEqual(payload.command, "!pm Need a product brief for checkout retry failures")
+        self.assertEqual(
+            payload.command, "!pm Need a product brief for checkout retry failures"
+        )
         self.assertEqual(payload.command_params["room_mode"], "true")
 
-    def test_handle_message_create_live_voice_linked_text_channel_routes_plain_text_to_room_mode(self) -> None:
+    def test_handle_message_create_live_voice_linked_text_channel_routes_plain_text_to_room_mode(
+        self,
+    ) -> None:
         listener, session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         project = SimpleNamespace(
             discord_config={
                 "live_voice_room_links": {
@@ -765,16 +1020,36 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
+                return_value=_no_followup_resolution(),
+            ),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="ask", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(
+                    lane="ask", persona="pm", confidence=0.9, reason="test"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -788,28 +1063,58 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         payload = command_mock.call_args.kwargs["payload"]
-        self.assertEqual(payload.command, "!pm Need a product brief for checkout retry failures")
+        self.assertEqual(
+            payload.command, "!pm Need a product brief for checkout retry failures"
+        )
         self.assertEqual(payload.command_params["room_mode"], "true")
 
-    def test_handle_message_create_room_audio_only_uses_transcription_hook(self) -> None:
+    def test_handle_message_create_room_audio_only_uses_transcription_hook(
+        self,
+    ) -> None:
         listener, _session = self._listener(
-            transcribe_audio_attachment=lambda _attachment: "Transcribed PM note from voice memo",
+            transcribe_audio_attachment=lambda _attachment: (
+                "Transcribed PM note from voice memo"
+            ),
         )
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value={"voice-room-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value={"voice-room-1"},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="interview", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(
+                    lane="interview", persona="pm", confidence=0.9, reason="test"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -834,34 +1139,62 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command, "!pm Transcribed PM note from voice memo")
         self.assertEqual(payload.command_params["room_mode"], "true")
 
-    def test_handle_message_create_live_voice_linked_text_channel_audio_only_routes_to_room_mode(self) -> None:
+    def test_handle_message_create_live_voice_linked_text_channel_audio_only_routes_to_room_mode(
+        self,
+    ) -> None:
         listener, session = self._listener(
-            transcribe_audio_attachment=lambda _attachment: "Transcribed PM note from voice memo",
+            transcribe_audio_attachment=lambda _attachment: (
+                "Transcribed PM note from voice memo"
+            ),
         )
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         project = SimpleNamespace(
             jira_project_key="TP",
             discord_config={
                 "live_voice_room_links": {
                     "voice-room-1": "text-room-1",
                 },
-            }
+            },
         )
         session.execute.return_value.scalars.return_value.all.return_value = [project]
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
+                return_value=_no_followup_resolution(),
+            ),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="ask", persona="pm", confidence=0.9, reason="test"),
+                return_value=VoiceEntryRoute(
+                    lane="ask", persona="pm", confidence=0.9, reason="test"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -887,15 +1220,28 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         self.assertEqual(payload.command_params["room_mode"], "true")
         self.assertEqual(payload.command_params["room_source"], "voice_note")
 
-    def test_handle_message_create_room_audio_only_without_transcription_posts_guidance(self) -> None:
+    def test_handle_message_create_room_audio_only_without_transcription_posts_guidance(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value={"voice-room-1"}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command") as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value={"voice-room-1"},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command"
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -916,15 +1262,25 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             )
 
         command_mock.assert_not_called()
-        post_content = str(client_cls.return_value.post_message.call_args.kwargs["content"]).lower()
+        post_content = str(
+            client_cls.return_value.post_message.call_args.kwargs["content"]
+        ).lower()
         self.assertIn("voice transcription", post_content)
 
-    def test_handle_message_create_non_room_audio_only_routes_to_voice_router_and_posts_voice_reply(self) -> None:
+    def test_handle_message_create_non_room_audio_only_routes_to_voice_router_and_posts_voice_reply(
+        self,
+    ) -> None:
         listener, _session = self._listener(
-            transcribe_audio_attachment=lambda _attachment: "Summarize the deployment blockers",
+            transcribe_audio_attachment=lambda _attachment: (
+                "Summarize the deployment blockers"
+            ),
         )
         listener._settings.voice_tts_provider = "pocket_tts"
-        tenant = SimpleNamespace(tenant_id="example", discord_config={}, jira_config={"project_keys": ["TP"]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={},
+            jira_config={"project_keys": ["TP"]},
+        )
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(
             command="pm",
@@ -944,19 +1300,48 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.resolve_followup_context_match", return_value=_no_followup_resolution()),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_followup_context_match",
+                return_value=_no_followup_resolution(),
+            ),
             patch(
                 "orchestrator.core.discord.gateway_listener.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="ask", persona="engineer", confidence=0.91, reason="router"),
+                return_value=VoiceEntryRoute(
+                    lane="ask", persona="engineer", confidence=0.91, reason="router"
+                ),
             ),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch.object(listener, "_build_room_voice_reply_action", return_value=(voice_action, None)) as build_voice_reply,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch.object(
+                listener,
+                "_build_room_voice_reply_action",
+                return_value=(voice_action, None),
+            ) as build_voice_reply,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -978,7 +1363,14 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         payload = command_mock.call_args.kwargs["payload"]
         self.assertEqual(payload.command, "!ask Summarize the deployment blockers")
-        self.assertEqual(payload.command_params, {"room_mode": "true", "room_source": "voice_note", "persona_id": "engineer"})
+        self.assertEqual(
+            payload.command_params,
+            {
+                "room_mode": "true",
+                "room_source": "voice_note",
+                "persona_id": "engineer",
+            },
+        )
         client_cls.return_value.post_message_with_attachment.assert_called_once_with(
             channel_id="tenant-chat-1",
             content="ok",
@@ -988,7 +1380,10 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             components=None,
         )
         build_voice_reply.assert_called_once()
-        self.assertEqual(build_voice_reply.call_args.kwargs["text"], "Deployment is blocked on the worker image rebuild.")
+        self.assertEqual(
+            build_voice_reply.call_args.kwargs["text"],
+            "Deployment is blocked on the worker image rebuild.",
+        )
         self.assertEqual(build_voice_reply.call_args.kwargs["persona_id"], "pm")
         self.assertEqual(build_voice_reply.call_args.kwargs["persona_name"], "PM")
         self.assertEqual(build_voice_reply.call_args.kwargs["content_override"], "ok")
@@ -1012,7 +1407,7 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             },
             bot_token="token",
             correlation_id="message-1",
-            tenant_id="example",
+            tenant_id="example-workspace",
             project_id="project-1",
         )
 
@@ -1022,28 +1417,48 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
             [
                 {
                     "correlation_id": "message-1",
-                    "tenant_id": "example",
+                    "tenant_id": "example-workspace",
                     "project_id": "project-1",
                     "agent_id": None,
                 }
             ],
         )
 
-    def test_handle_message_create_text_plus_audio_attachment_keeps_original_text_command(self) -> None:
+    def test_handle_message_create_text_plus_audio_attachment_keeps_original_text_command(
+        self,
+    ) -> None:
         listener, _session = self._listener(
             transcribe_audio_attachment=lambda _attachment: "this should not be used",
         )
-        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        tenant = SimpleNamespace(tenant_id="example-workspace", discord_config={})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="pm", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response) as command_mock,
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ) as command_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch("orchestrator.core.discord.gateway_listener.DiscordApiClient"),
         ):
             listener._handle_message_create(
@@ -1070,20 +1485,28 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
     def test_find_tenant_for_channel_accepts_voice_room_channel_ids(self) -> None:
         listener, _session = self._listener()
         session = MagicMock()
-        project = SimpleNamespace(tenant_id="example", discord_config={"voice_room_channel_ids": ["voice-room-1"]})
-        tenant = SimpleNamespace(tenant_id="example", is_enabled=True)
+        project = SimpleNamespace(
+            tenant_id="example-workspace",
+            discord_config={"voice_room_channel_ids": ["voice-room-1"]},
+        )
+        tenant = SimpleNamespace(tenant_id="example-workspace", is_enabled=True)
         session.execute.return_value.scalars.return_value.all.return_value = [project]
         session.get.return_value = tenant
 
-        with patch("orchestrator.core.discord.gateway_listener.resolve_tenant_for_discord_channel", return_value=None):
-            resolved = listener._find_tenant_for_channel(session=session, channel_id="voice-room-1")
+        with patch(
+            "orchestrator.core.discord.gateway_listener.resolve_tenant_for_discord_channel",
+            return_value=None,
+        ):
+            resolved = listener._find_tenant_for_channel(
+                session=session, channel_id="voice-room-1"
+            )
 
         self.assertIs(resolved, tenant)
 
     def test_handle_message_create_room_voice_reply_uses_persona_metadata(self) -> None:
         listener, _session = self._listener()
         listener._settings.voice_tts_provider = "pocket_tts"
-        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        tenant = SimpleNamespace(tenant_id="example-workspace", discord_config={})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(
             command="pm",
@@ -1100,14 +1523,36 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value={"voice-room-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch("orchestrator.core.discord.gateway_listener.synthesize_reply_audio") as synth_mock,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value={"voice-room-1"},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.synthesize_reply_audio"
+            ) as synth_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             synth_mock.return_value = SimpleNamespace(
                 filename="reply.mp3",
@@ -1126,10 +1571,16 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
         synth_kwargs = synth_mock.call_args.kwargs
         self.assertEqual(synth_kwargs["persona_id"], "architect")
-        self.assertEqual(synth_kwargs["room_config"]["persona_voices"]["architect"], "javert")
-        self.assertEqual(synth_kwargs["text"], "Soren from Architecture. Architect answer")
         self.assertEqual(
-            client_cls.return_value.post_message_with_attachment.call_args.kwargs["content"],
+            synth_kwargs["room_config"]["persona_voices"]["architect"], "javert"
+        )
+        self.assertEqual(
+            synth_kwargs["text"], "Soren from Architecture. Architect answer"
+        )
+        self.assertEqual(
+            client_cls.return_value.post_message_with_attachment.call_args.kwargs[
+                "content"
+            ],
             "<@u1> Voice reply from Soren from Architecture",
         )
 
@@ -1139,9 +1590,14 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         captured_contexts: list[dict[str, str | None]] = []
 
         with (
-            patch("orchestrator.core.discord.gateway_listener.synthesize_reply_audio") as synth_mock,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.synthesize_reply_audio"
+            ) as synth_mock,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
+
             def _synthesize(**_kwargs):  # noqa: ANN003
                 captured_contexts.append(dict(current_log_context()))
                 return SimpleNamespace(
@@ -1163,35 +1619,43 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
                 content_override="<@u1> Combined response",
                 components=[{"type": 1}],
                 correlation_id="message-2",
-                tenant_id="example",
+                tenant_id="example-workspace",
                 project_id="project-1",
             )
 
         self.assertIsNone(error)
-        self.assertEqual(synth_mock.call_args.kwargs["text"], "Andy from Product. PM answer")
+        self.assertEqual(
+            synth_mock.call_args.kwargs["text"], "Andy from Product. PM answer"
+        )
         self.assertEqual(
             captured_contexts,
             [
                 {
                     "correlation_id": "message-2",
-                    "tenant_id": "example",
+                    "tenant_id": "example-workspace",
                     "project_id": "project-1",
                     "agent_id": None,
                 }
             ],
         )
         self.assertEqual(
-            client_cls.return_value.post_message_with_attachment.call_args.kwargs["content"],
+            client_cls.return_value.post_message_with_attachment.call_args.kwargs[
+                "content"
+            ],
             "<@u1> Combined response",
         )
         self.assertEqual(
-            client_cls.return_value.post_message_with_attachment.call_args.kwargs["components"],
+            client_cls.return_value.post_message_with_attachment.call_args.kwargs[
+                "components"
+            ],
             [{"type": 1}],
         )
 
-    def test_handle_message_create_room_skips_voice_reply_when_feature_disabled(self) -> None:
+    def test_handle_message_create_room_skips_voice_reply_when_feature_disabled(
+        self,
+    ) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example", discord_config={})
+        tenant = SimpleNamespace(tenant_id="example-workspace", discord_config={})
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(
             command="pm",
@@ -1205,14 +1669,34 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_room_channel_ids", return_value={"voice-room-1"}),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_room_channel_ids",
+                return_value={"voice-room-1"},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
             patch.object(listener, "_post_room_voice_reply") as post_voice_reply,
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
             listener._handle_message_create(
                 {
@@ -1229,31 +1713,59 @@ class DiscordGatewayListenerRuntimeTests(unittest.TestCase):
 
     def test_handle_message_create_discord_post_failure_is_swallowed(self) -> None:
         listener, _session = self._listener()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         listener._find_tenant_for_channel = MagicMock(return_value=tenant)
         command_response = SimpleNamespace(command="run", message="ok", data={})
 
         with (
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids", return_value=set()),
-            patch("orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys", return_value={}),
-            patch("orchestrator.core.discord.gateway_listener.execute_tenant_discord_command", return_value=command_response),
-            patch("orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url", return_value="https://jira.example.com"),
-            patch("orchestrator.core.discord.gateway_listener.build_command_followup_message", return_value="ok"),
-            patch("orchestrator.core.discord.gateway_listener.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener._project_seed_followup_thread_project_keys",
+                return_value={},
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.execute_tenant_discord_command",
+                return_value=command_response,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.resolve_tenant_jira_browse_base_url",
+                return_value="https://jira.example.com",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.build_command_followup_message",
+                return_value="ok",
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_listener.DiscordApiClient"
+            ) as client_cls,
         ):
-            client_cls.return_value.post_message.side_effect = DiscordApiError("send failed")
+            client_cls.return_value.post_message.side_effect = DiscordApiError(
+                "send failed"
+            )
             listener._handle_message_create(
-                {"author": {"id": "u1"}, "channel_id": "channel-1", "content": "!run MAB-1", "attachments": []},
+                {
+                    "author": {"id": "u1"},
+                    "channel_id": "channel-1",
+                    "content": "!run MAB-1",
+                    "attachments": [],
+                },
                 bot_token="token",
             )
 
     def test_project_seed_followup_thread_ids_filters_archived_projects(self) -> None:
-        active = SimpleNamespace(discord_config={"seed_followup_thread_channel_ids": ["t-1", "  ", None]})
+        active = SimpleNamespace(
+            discord_config={"seed_followup_thread_channel_ids": ["t-1", "  ", None]}
+        )
         session = MagicMock()
         # The helper relies on DB query already filtering archived projects; feed only active result set.
         session.execute.return_value.scalars.return_value.all.return_value = [active]
 
-        thread_ids = _project_seed_followup_thread_ids(session=session, tenant_id="example")
+        thread_ids = _project_seed_followup_thread_ids(
+            session=session, tenant_id="example-workspace"
+        )
         self.assertEqual(thread_ids, {"t-1"})
 
 

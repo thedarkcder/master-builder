@@ -8,7 +8,10 @@ import pytest
 from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
 from orchestrator.core.workflow.advance import (
     DurableWorkflowLifecycle,
     WorkflowAdvanceLifecycle,
@@ -21,9 +24,17 @@ from orchestrator.api.admin.workflows.operation_stale_recovery_service import (
     close_active_operation_attempts_for_terminal_workflows,
     recover_stale_workflow_operation_attempts,
 )
-from orchestrator.core.workflow.type_catalog import get_workflow_type, validate_persisted_workflow_definitions
+from orchestrator.core.workflow.type_catalog import (
+    get_workflow_type,
+    validate_persisted_workflow_definitions,
+)
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -48,7 +59,9 @@ class _LifecycleCaseHandler:
             description="Exercise durable lifecycle ownership",
         )
         if self.case == "waiting":
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="backlog_planning")
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="backlog_planning"
+            )
             lifecycle.wait_started_operation(
                 operation=operation,
                 attempt=attempt,
@@ -56,7 +69,9 @@ class _LifecycleCaseHandler:
             )
             return WorkflowAdvanceOutcome(handled=True, reason="waiting")
         if self.case == "failed":
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="jira_child_fanout"
+            )
             lifecycle.fail_started_operation(
                 operation=operation,
                 attempt=attempt,
@@ -67,7 +82,9 @@ class _LifecycleCaseHandler:
         if self.case == "completed":
             for definition in workflow_type.steps:
                 if definition.required:
-                    operation, attempt = lifecycle.start_operation_attempt(operation_type=definition.key)
+                    operation, attempt = lifecycle.start_operation_attempt(
+                        operation_type=definition.key
+                    )
                     lifecycle.complete_started_operation(
                         operation=operation,
                         attempt=attempt,
@@ -80,7 +97,9 @@ class _LifecycleCaseHandler:
 
 class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-lifecycle")
+        self.database_url = self._prepare_test_database(
+            name_prefix="workflow-lifecycle"
+        )
         self.session_factory = create_session_factory(self.database_url)
 
     def tearDown(self) -> None:
@@ -104,14 +123,18 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
     def test_unhandled_workflow_does_not_create_durable_lifecycle(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
 
             result = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=self._request(issue_key="MAB-300"),
-                resolve_advance_handler_fn=lambda _key: _LifecycleCaseHandler(case="unhandled"),
+                resolve_advance_handler_fn=lambda _key: _LifecycleCaseHandler(
+                    case="unhandled"
+                ),
             )
 
             assert result.handled is False
@@ -125,14 +148,18 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
         }
         for index, (case, expected) in enumerate(cases.items(), start=1):
             with self.session_factory() as session:
-                workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+                workflow_type = get_workflow_type(
+                    session, workflow_type_key="parent_planning"
+                )
 
                 result = execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=self._request(issue_key=f"MAB-30{index}"),
-                    resolve_advance_handler_fn=lambda _key, selected=case: _LifecycleCaseHandler(case=selected),
+                    resolve_advance_handler_fn=lambda _key, selected=case: (
+                        _LifecycleCaseHandler(case=selected)
+                    ),
                 )
                 session.commit()
 
@@ -155,7 +182,9 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
     def test_started_attempt_is_durable_before_external_work_runs(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             request = self._request(issue_key="MAB-399")
             lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -169,17 +198,23 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 description="Runtime telemetry validates attempts from a separate writer session.",
             )
 
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="brief_normalization")
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="brief_normalization"
+            )
 
             with self.session_factory() as observer:
-                persisted_attempt = observer.get(WorkflowOperationAttempt, attempt.attempt_id)
+                persisted_attempt = observer.get(
+                    WorkflowOperationAttempt, attempt.attempt_id
+                )
                 assert persisted_attempt is not None
                 assert persisted_attempt.operation_id == operation.operation_id
                 assert persisted_attempt.status == "running"
 
     def test_completed_attempt_transition_survives_later_session_rollback(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             request = self._request(issue_key="MAB-398")
             lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -192,7 +227,9 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 display_name="Attempt completion durability",
                 description="Completed work remains completed even if a later step rolls back.",
             )
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="brief_normalization")
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="brief_normalization"
+            )
             lifecycle.complete_started_operation(
                 operation=operation,
                 attempt=attempt,
@@ -202,14 +239,18 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
             session.rollback()
 
             with self.session_factory() as observer:
-                persisted_attempt = observer.get(WorkflowOperationAttempt, attempt.attempt_id)
+                persisted_attempt = observer.get(
+                    WorkflowOperationAttempt, attempt.attempt_id
+                )
                 assert persisted_attempt is not None
                 assert persisted_attempt.operation_id == operation.operation_id
                 assert persisted_attempt.status == "completed"
 
     def test_failure_category_does_not_control_manual_retryability(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             request = self._request(issue_key="MAB-397")
             lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -222,7 +263,9 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 display_name="Failure category is diagnostic only",
                 description="Workflow retry policy owns manual retryability.",
             )
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="jira_child_fanout"
+            )
             lifecycle.fail_started_operation(
                 operation=operation,
                 attempt=attempt,
@@ -240,7 +283,11 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 operation_events={},
             )
 
-            fanout_read = next(item for item in operation_reads if item.operation_type == "jira_child_fanout")
+            fanout_read = next(
+                item
+                for item in operation_reads
+                if item.operation_type == "jira_child_fanout"
+            )
             assert workflow_type_read.key == "parent_planning"
             assert attempt.retryable is True
             assert fanout_read.can_retry is True
@@ -248,7 +295,9 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
     def test_stale_running_attempt_exposes_restart_not_retry(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             request = self._request(issue_key="MAB-398")
             lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -261,9 +310,15 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 display_name="Stale fanout restart",
                 description="Running operation restart is separate from failed retry.",
             )
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
-            attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=20)
-            attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="jira_child_fanout"
+            )
+            attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(
+                minutes=20
+            )
+            attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(
+                minutes=15
+            )
             session.flush()
 
             _, operation_reads = workflow_operation_reads(
@@ -274,14 +329,22 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 operation_events={},
             )
 
-            fanout_read = next(item for item in operation_reads if item.operation_type == "jira_child_fanout")
+            fanout_read = next(
+                item
+                for item in operation_reads
+                if item.operation_type == "jira_child_fanout"
+            )
             assert fanout_read.can_retry is False
             assert fanout_read.can_restart is True
             assert fanout_read.restart_unavailable_reason is None
 
-    def test_stale_recovery_calls_restart_use_case_and_ignores_waiting_attempts(self) -> None:
+    def test_stale_recovery_calls_restart_use_case_and_ignores_waiting_attempts(
+        self,
+    ) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             running_request = self._request(issue_key="MAB-399")
             running_lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -290,11 +353,21 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 project_id=running_request.project_id,
                 execution=running_request.execution,
             )
-            running_lifecycle.ensure_execution(display_name="Running stale", description="Restart this attempt.")
-            running_operation, running_attempt = running_lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            running_lifecycle.ensure_execution(
+                display_name="Running stale", description="Restart this attempt."
+            )
+            running_operation, running_attempt = (
+                running_lifecycle.start_operation_attempt(
+                    operation_type="jira_child_fanout"
+                )
+            )
             running_operation_id = running_operation.operation_id
-            running_attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=20)
-            running_attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+            running_attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(
+                minutes=20
+            )
+            running_attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(
+                minutes=15
+            )
 
             waiting_request = self._request(issue_key="MAB-400")
             waiting_lifecycle = DurableWorkflowLifecycle(
@@ -304,8 +377,15 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 project_id=waiting_request.project_id,
                 execution=waiting_request.execution,
             )
-            waiting_lifecycle.ensure_execution(display_name="Waiting stale", description="Do not restart waiting attempts.")
-            waiting_operation, waiting_attempt = waiting_lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            waiting_lifecycle.ensure_execution(
+                display_name="Waiting stale",
+                description="Do not restart waiting attempts.",
+            )
+            waiting_operation, waiting_attempt = (
+                waiting_lifecycle.start_operation_attempt(
+                    operation_type="jira_child_fanout"
+                )
+            )
             waiting_lifecycle.wait_started_operation(
                 operation=waiting_operation,
                 attempt=waiting_attempt,
@@ -329,9 +409,13 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
         assert recovered == 1
         assert restarted_operation_ids == [running_operation_id]
 
-    def test_stale_operation_recovery_skips_unsupported_restart_without_crashing_startup(self) -> None:
+    def test_stale_operation_recovery_skips_unsupported_restart_without_crashing_startup(
+        self,
+    ) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             running_request = self._request(issue_key="MAB-401")
             lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -340,10 +424,19 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 project_id=running_request.project_id,
                 execution=running_request.execution,
             )
-            lifecycle.ensure_execution(display_name="Unsupported stale", description="Skip unsupported restart.")
-            _running_operation, running_attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
-            running_attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=20)
-            running_attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+            lifecycle.ensure_execution(
+                display_name="Unsupported stale",
+                description="Skip unsupported restart.",
+            )
+            _running_operation, running_attempt = lifecycle.start_operation_attempt(
+                operation_type="jira_child_fanout"
+            )
+            running_attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(
+                minutes=20
+            )
+            running_attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(
+                minutes=15
+            )
             session.commit()
 
         def _unsupported_restart(**_kwargs):  # noqa: ANN001
@@ -363,7 +456,9 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
     def test_terminal_workflow_active_attempts_are_closed_before_recovery(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             running_request = self._request(issue_key="MAB-402")
             lifecycle = DurableWorkflowLifecycle(
                 session=session,
@@ -372,9 +467,13 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
                 project_id=running_request.project_id,
                 execution=running_request.execution,
             )
-            lifecycle.ensure_execution(display_name="Terminal stale", description="Close terminal attempts.")
+            lifecycle.ensure_execution(
+                display_name="Terminal stale", description="Close terminal attempts."
+            )
             workflow = lifecycle.workflow
-            operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            operation, attempt = lifecycle.start_operation_attempt(
+                operation_type="jira_child_fanout"
+            )
             workflow.status = "failed"
             session.commit()
 
@@ -395,7 +494,9 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
 class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-validation")
+        self.database_url = self._prepare_test_database(
+            name_prefix="workflow-validation"
+        )
         self.session_factory = create_session_factory(self.database_url)
 
     def tearDown(self) -> None:
@@ -422,7 +523,9 @@ class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):
             )
         )
 
-    def _insert_workflow(self, *, session, workflow_id: str, workflow_type_key: str) -> None:  # noqa: ANN001
+    def _insert_workflow(
+        self, *, session, workflow_id: str, workflow_type_key: str
+    ) -> None:  # noqa: ANN001
         now = datetime.now(timezone.utc)
         session.add(
             WorkflowExecution(
@@ -454,7 +557,9 @@ class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):
             )
         )
 
-    def test_validate_persisted_workflow_definitions_keeps_registered_project_deployment_setup_rows(self) -> None:
+    def test_validate_persisted_workflow_definitions_keeps_registered_project_deployment_setup_rows(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             self._insert_tenant(session=session, tenant_id="tenant-validation")
             self._insert_workflow(
@@ -468,7 +573,9 @@ class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):
 
             assert session.get(WorkflowExecution, "workflow-legacy") is not None
 
-    def test_validate_persisted_workflow_definitions_still_fails_for_unknown_non_legacy_workflow(self) -> None:
+    def test_validate_persisted_workflow_definitions_still_fails_for_unknown_non_legacy_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             self._insert_tenant(session=session, tenant_id="tenant-validation")
             self._insert_workflow(
@@ -478,5 +585,8 @@ class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-            with pytest.raises(LookupError, match="Workflow type not registered: unknown_removed_workflow"):
+            with pytest.raises(
+                LookupError,
+                match="Workflow type not registered: unknown_removed_workflow",
+            ):
                 validate_persisted_workflow_definitions(session=session)

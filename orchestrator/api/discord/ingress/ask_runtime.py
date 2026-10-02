@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.ask.board_service import ask_board_message as _ask_board_message_impl
+from orchestrator.api.discord.ask.board_service import (
+    ask_board_message as _ask_board_message_impl,
+)
 from orchestrator.api.discord.ask.context import (
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
@@ -12,9 +14,13 @@ from orchestrator.api.discord.ask.memory import (
     collect_ask_context_with_history_context as _collect_ask_context_with_history_context_impl,
     drop_issue_key_from_ask_history as _drop_issue_key_from_ask_history_impl,
 )
-from orchestrator.api.discord.ask.query_service import collect_ask_context as _collect_ask_context_impl
+from orchestrator.api.discord.ask.query_service import (
+    collect_ask_context as _collect_ask_context_impl,
+)
 from orchestrator.api.discord.ingress import ask_history_runtime, github_context
-from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord.shared.channel_scope_repository import (
+    SqlAlchemyDiscordChannelScopeRepository,
+)
 from orchestrator.api.discord.shared.scope_service import normalize_scope_channel_id
 from orchestrator.core.runtime.agents import answer_board_question_with_runtime
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
@@ -103,10 +109,14 @@ def collect_github_ask_context(
         tenant=tenant,
         project_keys=project_keys,
         get_settings_fn=get_settings_fn or get_settings,
-        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref_fn or resolve_scoped_secret_ref,
-        resolve_platform_secret_ref_fn=resolve_platform_secret_ref_fn or resolve_platform_secret_ref,
-        github_client_from_tenant_config_fn=github_client_from_tenant_config_fn or github_client_from_tenant_config,
-        collect_local_repo_context_fn=collect_local_repo_context_fn or collect_local_repo_context,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref_fn
+        or resolve_scoped_secret_ref,
+        resolve_platform_secret_ref_fn=resolve_platform_secret_ref_fn
+        or resolve_platform_secret_ref,
+        github_client_from_tenant_config_fn=github_client_from_tenant_config_fn
+        or github_client_from_tenant_config,
+        collect_local_repo_context_fn=collect_local_repo_context_fn
+        or collect_local_repo_context,
     )
 
 
@@ -128,13 +138,21 @@ def ask_board_message(
     collect_local_repo_context_fn=None,
 ) -> tuple[str, dict]:
     get_settings_impl = get_settings_fn or get_settings
-    resolve_codex_working_dir_impl = resolve_codex_working_dir_fn or resolve_codex_working_dir
-    resolve_scoped_secret_ref_impl = resolve_scoped_secret_ref_fn or resolve_scoped_secret_ref
-    resolve_platform_secret_ref_impl = resolve_platform_secret_ref_fn or resolve_platform_secret_ref
+    resolve_codex_working_dir_impl = (
+        resolve_codex_working_dir_fn or resolve_codex_working_dir
+    )
+    resolve_scoped_secret_ref_impl = (
+        resolve_scoped_secret_ref_fn or resolve_scoped_secret_ref
+    )
+    resolve_platform_secret_ref_impl = (
+        resolve_platform_secret_ref_fn or resolve_platform_secret_ref
+    )
     github_client_from_tenant_config_impl = (
         github_client_from_tenant_config_fn or github_client_from_tenant_config
     )
-    collect_local_repo_context_impl = collect_local_repo_context_fn or collect_local_repo_context
+    collect_local_repo_context_impl = (
+        collect_local_repo_context_fn or collect_local_repo_context
+    )
     return _ask_board_message_impl(
         session=session,
         tenant=tenant,
@@ -146,9 +164,11 @@ def ask_board_message(
         answer_persona_id=answer_persona_id,
         prune_missing_issue_keys_from_ask_history_fn=ask_history_runtime.prune_missing_issue_keys_from_ask_history,
         recent_ask_history_fn=ask_history_runtime.recent_ask_history,
-        collect_ask_context_with_history_context_fn=lambda **kwargs: collect_ask_context_with_history_context(
-            **kwargs,
-            prune_history=False,
+        collect_ask_context_with_history_context_fn=lambda **kwargs: (
+            collect_ask_context_with_history_context(
+                **kwargs,
+                prune_history=False,
+            )
         ),
         get_settings_fn=get_settings_impl,
         build_codex_runtime_fn=build_codex_runtime,

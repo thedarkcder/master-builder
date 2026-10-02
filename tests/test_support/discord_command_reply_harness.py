@@ -108,17 +108,23 @@ class DiscordCommandReplyHarness(SqliteTemplateApiTestCase):
         reset_db_engine_cache()
 
     @staticmethod
-    def _set_project_allowed_users_for_database(*, database_url: str, project_id: str, user_ids: list[str]) -> None:
+    def _set_project_allowed_users_for_database(
+        *, database_url: str, project_id: str, user_ids: list[str]
+    ) -> None:
         session_factory = create_session_factory(database_url=database_url)
         with session_factory() as session:
             project = session.get(Project, project_id)
             assert project is not None
             discord_config = dict(project.discord_config or {})
-            discord_config["allowed_user_ids"] = [str(value).strip() for value in user_ids if str(value).strip()]
+            discord_config["allowed_user_ids"] = [
+                str(value).strip() for value in user_ids if str(value).strip()
+            ]
             project.discord_config = discord_config
             session.commit()
 
-    def _queue_run(self, *, run_id: str, issue_key: str, status: str, project_id: str | None = None) -> None:
+    def _queue_run(
+        self, *, run_id: str, issue_key: str, status: str, project_id: str | None = None
+    ) -> None:
         with self.session_factory() as session:
             now = datetime.now(timezone.utc)
             workflow_id = f"workflow-{run_id}"

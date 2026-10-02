@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.prompt_templates import render_prompt
@@ -65,13 +68,17 @@ def _validate_good_to_do_with_runtime(
         raise RuntimeError(f"Runtime GTD evaluation failed: {exc}") from exc
 
     valid = bool(payload.get("valid"))
-    missing_criteria = _required_string_tuple(payload.get("missing_criteria"), field="missing_criteria")
+    missing_criteria = _required_string_tuple(
+        payload.get("missing_criteria"), field="missing_criteria"
+    )
     clarification_questions = _required_string_tuple(
         payload.get("clarification_questions"),
         field="clarification_questions",
     )
     if not valid and not clarification_questions:
-        raise RuntimeError("Runtime GTD evaluation returned invalid result without clarification questions")
+        raise RuntimeError(
+            "Runtime GTD evaluation returned invalid result without clarification questions"
+        )
     return GoodToDoValidationResult(
         valid=valid,
         missing_criteria=missing_criteria,

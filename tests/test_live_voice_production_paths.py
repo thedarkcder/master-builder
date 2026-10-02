@@ -132,6 +132,7 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             channels=2,
             finalization_reason="test",
         )
+
         def _fake_execute(**_kwargs):  # noqa: ANN003
             return DiscordCommandResponse(
                 ok=True,
@@ -141,11 +142,19 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
             )
 
         with (
-            patch("orchestrator.core.discord.live_voice_service.resolve_codex_working_dir", return_value=self.temp_dir.name),
-            patch("orchestrator.core.discord.live_voice_service.transcribe_audio_bytes", return_value="What is the relink policy?"),
+            patch(
+                "orchestrator.core.discord.live_voice_service.resolve_codex_working_dir",
+                return_value=self.temp_dir.name,
+            ),
+            patch(
+                "orchestrator.core.discord.live_voice_service.transcribe_audio_bytes",
+                return_value="What is the relink policy?",
+            ),
             patch(
                 "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="ask", persona="pm", confidence=0.91, reason="policy"),
+                return_value=VoiceEntryRoute(
+                    lane="ask", persona="pm", confidence=0.91, reason="policy"
+                ),
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",
@@ -170,4 +179,6 @@ class LiveVoiceProductionPathTests(unittest.TestCase):
         )
         self.assertEqual(len(self.sidecar.play_audio_calls), 1)
         self.assertEqual(self.sidecar.play_audio_calls[0]["content_type"], "audio/wav")
-        self.assertEqual(self.sidecar.play_audio_calls[0]["metadata"]["persona_id"], "pm")
+        self.assertEqual(
+            self.sidecar.play_audio_calls[0]["metadata"]["persona_id"], "pm"
+        )

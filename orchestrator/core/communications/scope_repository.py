@@ -17,5 +17,6 @@ class ResolvedChannelScope:
 
 
 class ChannelScopeRepository(Protocol):
-    def resolve_project_scope(self, *, session: Session, tenant: Tenant, channel_id: str) -> ResolvedChannelScope | None:
-        ...
+    def resolve_project_scope(
+        self, *, session: Session, tenant: Tenant, channel_id: str
+    ) -> ResolvedChannelScope | None: ...

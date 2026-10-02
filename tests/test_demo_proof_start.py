@@ -11,11 +11,23 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.core.qa.demo_proof_handlers import DemoProofWorkflowAdvanceHandler
-from orchestrator.core.qa.demo_proof_start import advance_demo_proof_workflow_event, start_demo_proof_workflow
-from orchestrator.core.workflow.advance import WorkflowAdvanceRequest, WorkflowTrigger, execute_workflow_advance
+from orchestrator.core.qa.demo_proof_start import (
+    advance_demo_proof_workflow_event,
+    start_demo_proof_workflow,
+)
+from orchestrator.core.workflow.advance import (
+    WorkflowAdvanceRequest,
+    WorkflowTrigger,
+    execute_workflow_advance,
+)
 from orchestrator.core.workflow.advance import execute_workflow_operation_retry
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
-from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
+from orchestrator.core.workflow.handler_composition import (
+    build_installed_workflow_handler_registry,
+)
 from orchestrator.core.workflow.operation_service import fail_workflow_operation
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.core.workflow.work_units import workflow_work_unit_input_fingerprint
@@ -36,7 +48,9 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict[str, str]:
+def _recording_artifact_metadata(
+    capture_target: str, artifact_url: str
+) -> dict[str, str]:
     object_name = artifact_url.rsplit("/", 1)[-1]
     return {
         "recording_name": f"{capture_target} QA walkthrough",
@@ -51,11 +65,17 @@ def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict
     }
 
 
-def _failure_evidence_metadata(capture_target: str, artifact_url: str) -> dict[str, str]:
+def _failure_evidence_metadata(
+    capture_target: str, artifact_url: str
+) -> dict[str, str]:
     metadata = _recording_artifact_metadata(capture_target, artifact_url)
-    metadata["error_message"] = f"QA Demo Ready was not visible for {capture_target}; app did not load"
+    metadata["error_message"] = (
+        f"QA Demo Ready was not visible for {capture_target}; app did not load"
+    )
     metadata["failure_phase"] = "app_load"
-    metadata["observed_behavior"] = f"{capture_target} app did not load; QA Demo Ready marker was not visible"
+    metadata["observed_behavior"] = (
+        f"{capture_target} app did not load; QA Demo Ready marker was not visible"
+    )
     return metadata
 
 
@@ -274,7 +294,9 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
         return _service_verification_metadata()
     if event == "ServiceVerificationFailed":
         metadata = _service_verification_metadata()
-        metadata["error_message"] = "Website service returned HTTP 502 during verification"
+        metadata["error_message"] = (
+            "Website service returned HTTP 502 during verification"
+        )
         metadata["service_urls"] = [
             {
                 "service_kind": "website",
@@ -422,7 +444,9 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
     return None
 
 
-def _demo_proof_request_for_event(request: WorkflowAdvanceRequest, event: str) -> WorkflowAdvanceRequest:
+def _demo_proof_request_for_event(
+    request: WorkflowAdvanceRequest, event: str
+) -> WorkflowAdvanceRequest:
     payload = dict(request.payload)
     metadata = _demo_proof_event_metadata(event)
     if metadata is not None:
@@ -476,7 +500,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
     def tearDown(self) -> None:
         self._cleanup_test_database()
 
-    def test_demo_proof_handler_creates_workflow_waiting_for_preview_lease(self) -> None:
+    def test_demo_proof_handler_creates_workflow_waiting_for_preview_lease(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -506,10 +532,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "run_id": "run-1",
                         "pr_url": "https://github.com/acme/project-a/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
+                        "required_recording_counts": {
+                            "browser": 1,
+                            "ios": 1,
+                            "android": 1,
+                        },
                     },
                 ),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             assert result.handled is True
@@ -518,12 +550,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert workflow.workflow_id == "demo_proof:run-1-main-abcdef1"
             assert workflow.workflow_type_key == "demo_proof"
             assert workflow.status == "waiting_for_input"
-            operation = session.execute(
-                select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == workflow.workflow_id,
-                    WorkflowOperation.operation_type == "preview_lease",
+            operation = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id,
+                        WorkflowOperation.operation_type == "preview_lease",
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(operation) == 1
             operation = operation[0]
             assert operation.status == "waiting_for_input"
@@ -536,11 +572,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 )
             ).scalar_one()
             assert attempt.status == "waiting_for_input"
-            work_units = session.execute(
-                select(WorkflowOperationWorkUnit)
-                .where(WorkflowOperationWorkUnit.operation_id == operation.operation_id)
-                .order_by(WorkflowOperationWorkUnit.unit_key)
-            ).scalars().all()
+            work_units = (
+                session.execute(
+                    select(WorkflowOperationWorkUnit)
+                    .where(
+                        WorkflowOperationWorkUnit.operation_id == operation.operation_id
+                    )
+                    .order_by(WorkflowOperationWorkUnit.unit_key)
+                )
+                .scalars()
+                .all()
+            )
             expected_payload = {
                 "proof_scope_id": "run-1-main-abcdef1",
                 "commit_sha": "abcdef1",
@@ -557,9 +599,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "preview_lease.capacity_preflight",
                 "preview_lease.enforce_single_active",
             ]
-            assert [
-                work_unit.input_fingerprint for work_unit in work_units
-            ] == [
+            assert [work_unit.input_fingerprint for work_unit in work_units] == [
                 workflow_work_unit_input_fingerprint(
                     {
                         "workflow_id": workflow.workflow_id,
@@ -573,7 +613,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 for work_unit in work_units
             ]
 
-    def test_start_demo_proof_workflow_treats_trigger_event_as_start_metadata(self) -> None:
+    def test_start_demo_proof_workflow_treats_trigger_event_as_start_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
@@ -587,7 +629,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             with patch(
@@ -613,11 +657,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert result.status == "waiting_for_input"
             assert captured_requests[0].trigger.event is None
             assert captured_requests[0].payload["trigger_mode"] == "from_run"
-            assert captured_requests[0].execution.source.attributes["trigger_mode"] == "from_run"
-            assert captured_requests[0].payload["request_id"].startswith(
-                "demo-proof:tenant-a:project-a:run-1-main-abcdef1:run_success_before_ready_for_review:"
+            assert (
+                captured_requests[0].execution.source.attributes["trigger_mode"]
+                == "from_run"
             )
-            description = json.loads(session.execute(select(WorkflowExecution)).scalar_one().source_description or "{}")
+            assert (
+                captured_requests[0]
+                .payload["request_id"]
+                .startswith(
+                    "demo-proof:tenant-a:project-a:run-1-main-abcdef1:run_success_before_ready_for_review:"
+                )
+            )
+            description = json.loads(
+                session.execute(select(WorkflowExecution))
+                .scalar_one()
+                .source_description
+                or "{}"
+            )
             assert description["trigger_mode"] == "from_run"
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             operation = session.execute(
@@ -629,12 +685,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert operation.status == "waiting_for_input"
             assert operation.target_ref == "run-1-main-abcdef1"
 
-    def test_start_demo_proof_workflow_rejects_missing_pr_url_before_creating_workflow(self) -> None:
+    def test_start_demo_proof_workflow_rejects_missing_pr_url_before_creating_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -648,7 +708,11 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         run_id="run-1",
                         pr_url=None,
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except ValueError as exc:
                     assert "pr_url" in str(exc)
@@ -656,14 +720,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     raise AssertionError("expected demo proof start to require pr_url")
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_start_demo_proof_workflow_rejects_from_run_without_run_id_before_creating_workflow(self) -> None:
+    def test_start_demo_proof_workflow_rejects_from_run_without_run_id_before_creating_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -677,15 +747,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         run_id=None,
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except ValueError as exc:
                     assert "from_run requires run_id" in str(exc)
                 else:  # pragma: no cover
-                    raise AssertionError("expected from_run demo proof start to require run_id")
+                    raise AssertionError(
+                        "expected from_run demo proof start to require run_id"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_missing_required_capture_targets_before_creating_workflow(
         self,
@@ -694,7 +772,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -709,12 +789,19 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         pr_url="https://github.com/acme/project-a/pull/8",
                     )
                 except ValueError as exc:
-                    assert "required_capture_targets must be provided by PM demo requirements" in str(exc)
+                    assert (
+                        "required_capture_targets must be provided by PM demo requirements"
+                        in str(exc)
+                    )
                 else:  # pragma: no cover
-                    raise AssertionError("expected demo proof start to require explicit capture targets")
+                    raise AssertionError(
+                        "expected demo proof start to require explicit capture targets"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_missing_required_recording_counts_before_creating_workflow(
         self,
@@ -723,7 +810,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -739,12 +828,19 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         required_capture_targets=["browser", "ios", "android"],
                     )
                 except ValueError as exc:
-                    assert "required_recording_counts must be provided by PM demo requirements" in str(exc)
+                    assert (
+                        "required_recording_counts must be provided by PM demo requirements"
+                        in str(exc)
+                    )
                 else:  # pragma: no cover
-                    raise AssertionError("expected demo proof start to require explicit recording counts")
+                    raise AssertionError(
+                        "expected demo proof start to require explicit recording counts"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_incomplete_required_recording_counts_before_creating_workflow(
         self,
@@ -753,7 +849,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -770,12 +868,19 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         required_recording_counts={"browser": 3},
                     )
                 except ValueError as exc:
-                    assert "required_recording_counts is missing required target(s): ios, android" in str(exc)
+                    assert (
+                        "required_recording_counts is missing required target(s): ios, android"
+                        in str(exc)
+                    )
                 else:  # pragma: no cover
-                    raise AssertionError("expected demo proof start to require counts for every capture target")
+                    raise AssertionError(
+                        "expected demo proof start to require counts for every capture target"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_from_release_without_release_id_before_creating_workflow(
         self,
@@ -784,7 +889,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -797,15 +904,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         trigger_event="admin_workflow_start",
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except ValueError as exc:
                     assert "from_release requires release_id" in str(exc)
                 else:  # pragma: no cover
-                    raise AssertionError("expected from_release demo proof start to require release_id")
+                    raise AssertionError(
+                        "expected from_release demo proof start to require release_id"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_from_pr_with_run_id_before_creating_workflow(
         self,
@@ -814,7 +929,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -828,15 +945,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         run_id="run-1",
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except ValueError as exc:
                     assert "from_pr must not include run_id" in str(exc)
                 else:  # pragma: no cover
-                    raise AssertionError("expected from_pr demo proof start to reject run_id")
+                    raise AssertionError(
+                        "expected from_pr demo proof start to reject run_id"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_from_pr_with_release_id_before_creating_workflow(
         self,
@@ -845,7 +970,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -859,15 +986,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         release_id="release-preview-1",
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except ValueError as exc:
                     assert "from_pr must not include release_id" in str(exc)
                 else:  # pragma: no cover
-                    raise AssertionError("expected from_pr demo proof start to reject release_id")
+                    raise AssertionError(
+                        "expected from_pr demo proof start to reject release_id"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_start_demo_proof_workflow_rejects_cleanup_only_without_release_id_before_creating_workflow(
         self,
@@ -876,7 +1011,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
 
-            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+            ) as runtime_mock:
                 try:
                     start_demo_proof_workflow(
                         session=session,
@@ -889,17 +1026,27 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         trigger_event="admin_cleanup_recovery",
                         pr_url=None,
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except ValueError as exc:
                     assert "cleanup_only requires release_id" in str(exc)
                 else:  # pragma: no cover
-                    raise AssertionError("expected cleanup_only demo proof start to require release_id")
+                    raise AssertionError(
+                        "expected cleanup_only demo proof start to require release_id"
+                    )
 
             runtime_mock.assert_not_called()
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_start_demo_proof_workflow_rejects_retry_recording_without_existing_workflow(self) -> None:
+    def test_start_demo_proof_workflow_rejects_retry_recording_without_existing_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
@@ -911,7 +1058,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             with patch(
@@ -931,16 +1080,29 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         run_id="run-1",
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     )
                 except RuntimeError as exc:
-                    assert "retry_recording requires an existing demo proof workflow" in str(exc)
+                    assert (
+                        "retry_recording requires an existing demo proof workflow"
+                        in str(exc)
+                    )
                 else:  # pragma: no cover
-                    raise AssertionError("expected recording retry to require an existing workflow")
+                    raise AssertionError(
+                        "expected recording retry to require an existing workflow"
+                    )
 
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_start_demo_proof_workflow_retry_recording_reuses_existing_deferred_recording(self) -> None:
+    def test_start_demo_proof_workflow_retry_recording_reuses_existing_deferred_recording(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
@@ -953,7 +1115,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             execute_workflow_advance(
@@ -961,7 +1125,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             for event in (
                 "ProofLeaseAcquired",
@@ -976,7 +1142,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             execute_workflow_advance(
                 session=session,
@@ -993,7 +1161,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     },
                     trigger=WorkflowTrigger(event="RecordingDeferred"),
                 ),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             with patch(
@@ -1021,12 +1191,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert description["trigger_mode"] == "from_run"
             assert description["last_trigger_mode"] == "retry_recording"
             assert description["demo_proof_state"] == "recording"
-            preview_lease_operations = session.execute(
-                select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == workflow.workflow_id,
-                    WorkflowOperation.operation_type == "preview_lease",
+            preview_lease_operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id,
+                        WorkflowOperation.operation_type == "preview_lease",
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(preview_lease_operations) == 1
             recording_operation = session.execute(
                 select(WorkflowOperation).where(
@@ -1036,7 +1210,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert recording_operation.status == "waiting_for_input"
 
-    def test_start_demo_proof_cleanup_only_starts_cleanup_without_pr_or_preview_lease(self) -> None:
+    def test_start_demo_proof_cleanup_only_starts_cleanup_without_pr_or_preview_lease(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
@@ -1048,7 +1224,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             with patch(
@@ -1093,18 +1271,29 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert description["trigger_mode"] == "cleanup_only"
             assert description["demo_proof_state"] == "complete"
-            operations = session.execute(
-                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-            ).scalars().all()
-            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            status_by_type = {
+                operation.operation_type: operation.status for operation in operations
+            }
             assert status_by_type["preview_cleanup"] == "completed"
             assert status_by_type["preview_lease"] == "pending"
             preview_lease_operation = next(
-                operation for operation in operations if operation.operation_type == "preview_lease"
+                operation
+                for operation in operations
+                if operation.operation_type == "preview_lease"
             )
             preview_lease_attempt = session.execute(
                 select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == preview_lease_operation.operation_id
+                    WorkflowOperationAttempt.operation_id
+                    == preview_lease_operation.operation_id
                 )
             ).scalar_one_or_none()
             assert preview_lease_attempt is None
@@ -1121,7 +1310,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             wrong_release_metadata = _demo_proof_event_metadata("CleanupOnlyCompleted")
@@ -1176,15 +1367,25 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         release_id="release-preview-1",
                         pr_url=None,
                         required_capture_targets=["browser", "ios", "android"],
-                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        required_recording_counts={
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                         event_metadata=wrong_release_metadata,
                     )
                 except RuntimeError as exc:
-                    assert "cleanup_only requested release_id release-preview-1" in str(exc)
+                    assert "cleanup_only requested release_id release-preview-1" in str(
+                        exc
+                    )
                 else:  # pragma: no cover
-                    raise AssertionError("expected cleanup_only completion to match requested release")
+                    raise AssertionError(
+                        "expected cleanup_only completion to match requested release"
+                    )
 
-    def test_demo_proof_handler_rejects_missing_trigger_mode_before_creating_workflow(self) -> None:
+    def test_demo_proof_handler_rejects_missing_trigger_mode_before_creating_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1198,16 +1399,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "trigger_mode" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof to require trigger_mode")
 
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_demo_proof_handler_rejects_cleanup_only_without_release_id_before_creating_workflow(self) -> None:
+    def test_demo_proof_handler_rejects_cleanup_only_without_release_id_before_creating_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1226,16 +1433,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(request, payload=cleanup_payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "cleanup_only requires release_id" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected cleanup_only demo proof handler to require release_id")
+                raise AssertionError(
+                    "expected cleanup_only demo proof handler to require release_id"
+                )
 
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_demo_proof_handler_rejects_from_pr_with_run_id_before_creating_workflow(self) -> None:
+    def test_demo_proof_handler_rejects_from_pr_with_run_id_before_creating_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1265,16 +1480,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         ),
                         payload=from_pr_payload,
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "from_pr must not include run_id" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected from_pr demo proof handler to reject run_id")
+                raise AssertionError(
+                    "expected from_pr demo proof handler to reject run_id"
+                )
 
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_demo_proof_handler_rejects_from_pr_with_release_id_before_creating_workflow(self) -> None:
+    def test_demo_proof_handler_rejects_from_pr_with_release_id_before_creating_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1304,16 +1527,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         ),
                         payload=from_pr_payload,
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "from_pr must not include release_id" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected from_pr demo proof handler to reject release_id")
+                raise AssertionError(
+                    "expected from_pr demo proof handler to reject release_id"
+                )
 
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
-    def test_demo_proof_handler_rejects_trigger_mode_changes_for_existing_scope(self) -> None:
+    def test_demo_proof_handler_rejects_trigger_mode_changes_for_existing_scope(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1323,7 +1554,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             changed_payload = {**request.payload, "trigger_mode": "from_pr"}
 
@@ -1332,13 +1565,21 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=replace(request, payload=changed_payload, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=replace(
+                        request,
+                        payload=changed_payload,
+                        trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "trigger_mode cannot change" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof to reject trigger_mode mutation")
+                raise AssertionError(
+                    "expected demo proof to reject trigger_mode mutation"
+                )
 
     def test_demo_proof_handler_rejects_commit_changes_for_existing_scope(self) -> None:
         with self.session_factory() as session:
@@ -1350,7 +1591,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             changed_payload = {**request.payload, "commit_sha": "fedcba9"}
 
@@ -1364,14 +1607,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         payload=changed_payload,
                         trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "commit_sha cannot change" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof to reject commit mutation")
 
-    def test_demo_proof_handler_rejects_required_capture_target_changes_for_existing_scope(self) -> None:
+    def test_demo_proof_handler_rejects_required_capture_target_changes_for_existing_scope(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1381,7 +1628,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             changed_payload = {
                 **request.payload,
@@ -1399,12 +1648,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         payload=changed_payload,
                         trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "required_capture_targets cannot change" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof to reject required capture target mutation")
+                raise AssertionError(
+                    "expected demo proof to reject required capture target mutation"
+                )
 
     def test_demo_proof_handler_rejects_missing_required_capture_targets(self) -> None:
         with self.session_factory() as session:
@@ -1421,14 +1674,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "required_capture_targets must be provided by PM demo requirements" in str(exc)
+                assert (
+                    "required_capture_targets must be provided by PM demo requirements"
+                    in str(exc)
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof handler to require explicit capture targets")
+                raise AssertionError(
+                    "expected demo proof handler to require explicit capture targets"
+                )
 
-    def test_demo_proof_handler_rejects_unsupported_required_capture_targets(self) -> None:
+    def test_demo_proof_handler_rejects_unsupported_required_capture_targets(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1445,14 +1707,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "required_capture_targets contains unsupported target(s): tablet" in str(exc)
+                assert (
+                    "required_capture_targets contains unsupported target(s): tablet"
+                    in str(exc)
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof handler to reject unsupported capture targets")
+                raise AssertionError(
+                    "expected demo proof handler to reject unsupported capture targets"
+                )
 
-            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            assert (
+                session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+            )
 
     def test_demo_proof_handler_rejects_missing_required_recording_counts(self) -> None:
         with self.session_factory() as session:
@@ -1468,14 +1739,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "required_recording_counts must be provided by PM demo requirements" in str(exc)
+                assert (
+                    "required_recording_counts must be provided by PM demo requirements"
+                    in str(exc)
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof handler to require explicit recording counts")
+                raise AssertionError(
+                    "expected demo proof handler to require explicit recording counts"
+                )
 
-    def test_demo_proof_handler_rejects_incomplete_required_recording_counts(self) -> None:
+    def test_demo_proof_handler_rejects_incomplete_required_recording_counts(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1491,14 +1771,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "required_recording_counts is missing required target(s): ios, android" in str(exc)
+                assert (
+                    "required_recording_counts is missing required target(s): ios, android"
+                    in str(exc)
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof handler to require counts for every capture target")
+                raise AssertionError(
+                    "expected demo proof handler to require counts for every capture target"
+                )
 
-    def test_demo_proof_handler_rejects_required_recording_count_changes_for_existing_scope(self) -> None:
+    def test_demo_proof_handler_rejects_required_recording_count_changes_for_existing_scope(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1508,7 +1797,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             changed_payload = {
                 **request.payload,
@@ -1525,14 +1816,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         payload=changed_payload,
                         trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "required_recording_counts cannot change" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof to reject required recording count mutation")
+                raise AssertionError(
+                    "expected demo proof to reject required recording count mutation"
+                )
 
-    def test_demo_proof_handler_rejects_run_identity_changes_for_existing_scope(self) -> None:
+    def test_demo_proof_handler_rejects_run_identity_changes_for_existing_scope(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1542,7 +1839,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             changed_payload = {
                 **request.payload,
@@ -1560,14 +1859,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         payload=changed_payload,
                         trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "run_id cannot change" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof to reject run identity mutation")
+                raise AssertionError(
+                    "expected demo proof to reject run identity mutation"
+                )
 
-    def test_advance_demo_proof_workflow_event_uses_explicit_lifecycle_event(self) -> None:
+    def test_advance_demo_proof_workflow_event_uses_explicit_lifecycle_event(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             project = session.get(Project, "project-a")
@@ -1579,7 +1884,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             with patch(
@@ -1626,7 +1933,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert release_operation.status == "waiting_for_input"
 
-    def test_demo_proof_rejects_lease_acquired_without_scoped_lease_metadata(self) -> None:
+    def test_demo_proof_rejects_lease_acquired_without_scoped_lease_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1636,7 +1945,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             try:
@@ -1644,14 +1955,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=replace(
+                        request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "requires scoped lease metadata before release request" in str(exc)
+                assert "requires scoped lease metadata before release request" in str(
+                    exc
+                )
                 assert "ProofLeaseAcquired.demo_proof_lease.lease_id" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected lease acquisition to require scoped lease metadata")
+                raise AssertionError(
+                    "expected lease acquisition to require scoped lease metadata"
+                )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             release_operation = session.execute(
@@ -1673,7 +1992,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             metadata = dict(_demo_proof_event_metadata("ProofLeaseAcquired") or {})
@@ -1681,7 +2002,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             demo_proof_lease["state"] = "destroyed"
             metadata["demo_proof_lease"] = demo_proof_lease
 
-            with pytest.raises(RuntimeError, match="ProofLeaseAcquired.demo_proof_lease.state must be active"):
+            with pytest.raises(
+                RuntimeError,
+                match="ProofLeaseAcquired.demo_proof_lease.state must be active",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -1690,7 +2014,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         _demo_proof_request_for_event(request, "ProofLeaseAcquired"),
                         payload={**request.payload, "event_metadata": metadata},
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -1732,10 +2058,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=from_release_request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
-            event_request = _demo_proof_request_for_event(from_release_request, "ProofLeaseAcquired")
-            event_metadata = dict(_demo_proof_event_metadata("ProofLeaseAcquired") or {})
+            event_request = _demo_proof_request_for_event(
+                from_release_request, "ProofLeaseAcquired"
+            )
+            event_metadata = dict(
+                _demo_proof_event_metadata("ProofLeaseAcquired") or {}
+            )
             event_metadata["release_id"] = "release-preview-other"
             event_metadata["demo_proof_lease"] = {
                 **dict(event_metadata["demo_proof_lease"]),
@@ -1754,12 +2086,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             "event_metadata": event_metadata,
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "from_release requested release_id release-preview-1" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected from_release demo proof to reject a different release")
+                raise AssertionError(
+                    "expected from_release demo proof to reject a different release"
+                )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             release_operation = session.execute(
@@ -1771,7 +2107,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             if release_operation is not None:
                 assert release_operation.status != "waiting_for_input"
 
-    def test_demo_proof_lease_acquired_event_completes_lease_and_waits_for_release_once(self) -> None:
+    def test_demo_proof_lease_acquired_event_completes_lease_and_waits_for_release_once(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1782,7 +2120,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             first_event = execute_workflow_advance(
@@ -1790,14 +2130,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=event_request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             duplicate_event = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=event_request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             assert first_event.reason == "release_requested"
@@ -1818,11 +2162,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert preview_operation.status == "completed"
             assert release_operation.status == "waiting_for_input"
-            release_attempts = session.execute(
-                select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == release_operation.operation_id,
+            release_attempts = (
+                session.execute(
+                    select(WorkflowOperationAttempt).where(
+                        WorkflowOperationAttempt.operation_id
+                        == release_operation.operation_id,
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert len(release_attempts) == 1
             assert release_attempts[0].status == "waiting_for_input"
 
@@ -1837,14 +2186,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             duplicate_start = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             assert first_start.reason == "preview_lease_requested"
@@ -1856,11 +2209,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     WorkflowOperation.operation_type == "preview_lease",
                 )
             ).scalar_one()
-            preview_attempts = session.execute(
-                select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == preview_operation.operation_id,
+            preview_attempts = (
+                session.execute(
+                    select(WorkflowOperationAttempt).where(
+                        WorkflowOperationAttempt.operation_id
+                        == preview_operation.operation_id,
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             assert preview_operation.status == "waiting_for_input"
             assert len(preview_attempts) == 1
 
@@ -1874,7 +2232,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -1898,15 +2258,25 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             assert workflow.status == "completed"
-            operations = session.execute(
-                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-            ).scalars().all()
-            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            status_by_type = {
+                operation.operation_type: operation.status for operation in operations
+            }
             assert status_by_type == {
                 "preview_lease": "completed",
                 "release": "completed",
@@ -1918,7 +2288,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "complete"
 
-    def test_demo_proof_happy_path_allows_lease_acquired_before_release_identity_exists(self) -> None:
+    def test_demo_proof_happy_path_allows_lease_acquired_before_release_identity_exists(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1928,7 +2300,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -1960,7 +2334,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -1974,7 +2350,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert "release_id" not in metadata_by_event["ProofLeaseAcquired"]
             assert metadata_by_event["ReleaseLive"]["release_id"] == "release-preview-1"
 
-    def test_demo_proof_rejects_completion_without_auditable_lifecycle_metadata(self) -> None:
+    def test_demo_proof_rejects_completion_without_auditable_lifecycle_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -1984,7 +2362,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2014,7 +2394,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         )
                     )
                     artifact_urls = list(metadata["artifact_urls"])
-                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    artifact_urls.append(
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm"
+                    )
                     event_request = replace(
                         event_request,
                         payload={
@@ -2023,7 +2405,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                                 **metadata,
                                 "artifact_urls": artifact_urls,
                                 "recording_count": 4,
-                                "capture_targets": ["browser", "browser", "ios", "android"],
+                                "capture_targets": [
+                                    "browser",
+                                    "browser",
+                                    "ios",
+                                    "android",
+                                ],
                                 "recordings": recordings,
                             },
                         },
@@ -2032,7 +2419,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     artifact_urls = list(metadata["artifact_urls"])
-                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    artifact_urls.append(
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm"
+                    )
                     metadata["artifact_urls"] = artifact_urls
                     metadata["checked_artifact_urls"] = artifact_urls
                     payload["event_metadata"] = metadata
@@ -2042,7 +2431,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -2050,15 +2441,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=replace(request, trigger=WorkflowTrigger(event="PreviewCleanupCompleted")),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=replace(
+                        request,
+                        trigger=WorkflowTrigger(event="PreviewCleanupCompleted"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "requires auditable metadata" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require auditable metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require auditable metadata"
+                )
 
-    def test_demo_proof_rejects_evidence_upload_when_evidence_metadata_misses_required_capture_target(self) -> None:
+    def test_demo_proof_rejects_evidence_upload_when_evidence_metadata_misses_required_capture_target(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2068,7 +2468,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2087,10 +2489,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            with pytest.raises(RuntimeError, match="missing required capture target\\(s\\): android, ios"):
+            with pytest.raises(
+                RuntimeError,
+                match="missing required capture target\\(s\\): android, ios",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2114,10 +2521,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_recording_completion_with_unplanned_capture_target(self) -> None:
+    def test_demo_proof_rejects_recording_completion_with_unplanned_capture_target(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2127,7 +2538,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2144,12 +2557,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             metadata = _demo_proof_event_metadata("RecordingCompleted")
             assert metadata is not None
-            desktop_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/desktop.webm"
+            desktop_url = (
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/desktop.webm"
+            )
             try:
                 execute_workflow_advance(
                     session=session,
@@ -2161,25 +2578,42 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             **request.payload,
                             "event_metadata": {
                                 **metadata,
-                                "artifact_urls": [*list(metadata["artifact_urls"]), desktop_url],
-                                "capture_targets": ["browser", "ios", "android", "desktop"],
+                                "artifact_urls": [
+                                    *list(metadata["artifact_urls"]),
+                                    desktop_url,
+                                ],
+                                "capture_targets": [
+                                    "browser",
+                                    "ios",
+                                    "android",
+                                    "desktop",
+                                ],
                                 "recordings": [
                                     *list(metadata["recordings"]),
-                                    _recording_artifact_metadata("desktop", desktop_url),
+                                    _recording_artifact_metadata(
+                                        "desktop", desktop_url
+                                    ),
                                 ],
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "recording completion metadata contains capture target(s) outside the demo plan: desktop" in str(
-                    exc
+                assert (
+                    "recording completion metadata contains capture target(s) outside the demo plan: desktop"
+                    in str(exc)
                 )
             else:  # pragma: no cover
-                raise AssertionError("expected recording completion to reject unplanned capture target evidence")
+                raise AssertionError(
+                    "expected recording completion to reject unplanned capture target evidence"
+                )
 
-    def test_demo_proof_rejects_recording_completion_with_mismatched_release_context(self) -> None:
+    def test_demo_proof_rejects_recording_completion_with_mismatched_release_context(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2189,7 +2623,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2206,7 +2642,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "RecordingCompleted")
@@ -2217,16 +2655,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             metadata["recordings"] = recordings
             payload["event_metadata"] = metadata
 
-            with pytest.raises(RuntimeError, match="RecordingCompleted.recordings release context does not match"):
+            with pytest.raises(
+                RuntimeError,
+                match="RecordingCompleted.recordings release context does not match",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_browser_recording_completion_for_non_verified_release_url(self) -> None:
+    def test_demo_proof_rejects_browser_recording_completion_for_non_verified_release_url(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2236,7 +2681,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2253,7 +2700,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "RecordingCompleted")
@@ -2264,16 +2713,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             metadata["recordings"] = recordings
             payload["event_metadata"] = metadata
 
-            with pytest.raises(RuntimeError, match="browser recording capture_reference must match verified release URL"):
+            with pytest.raises(
+                RuntimeError,
+                match="browser recording capture_reference must match verified release URL",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_success_completion_when_artifact_urls_do_not_cover_required_targets(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_artifact_urls_do_not_cover_required_targets(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2283,7 +2739,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2302,13 +2760,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
             payload = dict(event_request.payload)
             payload["event_metadata"] = {
-                "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm"],
+                "artifact_urls": [
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm"
+                ],
                 "recording_count": 1,
                 "capture_targets": ["browser", "ios", "android"],
                 "recordings": [
@@ -2318,13 +2780,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     )
                 ],
             }
-            with pytest.raises(RuntimeError, match="requires at least 3 playable artifact URL"):
+            with pytest.raises(
+                RuntimeError, match="requires at least 3 playable artifact URL"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2336,7 +2802,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_evidence_upload_without_created_at_metadata(self) -> None:
+    def test_demo_proof_rejects_evidence_upload_without_created_at_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2346,7 +2814,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2365,7 +2835,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
@@ -2385,7 +2857,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2397,7 +2871,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_evidence_upload_before_pr_update_when_capture_targets_are_missing(self) -> None:
+    def test_demo_proof_rejects_evidence_upload_before_pr_update_when_capture_targets_are_missing(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2407,7 +2883,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2426,10 +2904,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            with pytest.raises(RuntimeError, match="evidence metadata is missing required capture target"):
+            with pytest.raises(
+                RuntimeError,
+                match="evidence metadata is missing required capture target",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2455,7 +2938,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2467,7 +2952,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_when_artifact_urls_are_duplicated(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_artifact_urls_are_duplicated(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2477,7 +2964,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2496,7 +2985,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
@@ -2524,13 +3015,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     ),
                 ],
             }
-            with pytest.raises(RuntimeError, match="requires at least 3 distinct playable artifact URL"):
+            with pytest.raises(
+                RuntimeError, match="requires at least 3 distinct playable artifact URL"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2542,7 +3037,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_without_per_target_artifact_url_mappings(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_per_target_artifact_url_mappings(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2552,7 +3049,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2571,11 +3070,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
-            with pytest.raises(RuntimeError, match="evidence metadata is missing uploaded artifact metadata"):
+            with pytest.raises(
+                RuntimeError,
+                match="evidence metadata is missing uploaded artifact metadata",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2595,7 +3099,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2607,7 +3113,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_without_uploaded_artifact_metadata(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_uploaded_artifact_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2617,7 +3125,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2636,11 +3146,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
-            with pytest.raises(RuntimeError, match="evidence metadata is missing uploaded artifact metadata"):
+            with pytest.raises(
+                RuntimeError,
+                match="evidence metadata is missing uploaded artifact metadata",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2680,7 +3195,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2692,7 +3209,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_when_artifact_urls_omit_required_walkthroughs(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_artifact_urls_omit_required_walkthroughs(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2710,14 +3229,19 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             artifact_urls = [
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-1.webm",
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-2.webm",
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-3.webm",
             ]
-            recording_metadata = [_recording_artifact_metadata("browser", artifact_url) for artifact_url in artifact_urls]
+            recording_metadata = [
+                _recording_artifact_metadata("browser", artifact_url)
+                for artifact_url in artifact_urls
+            ]
 
             for event in (
                 "ProofLeaseAcquired",
@@ -2745,7 +3269,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
@@ -2762,9 +3288,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
-            assert "EvidenceUploaded.artifact_urls is missing recording artifact URL(s)" in str(exc_info.value)
+            assert (
+                "EvidenceUploaded.artifact_urls is missing recording artifact URL(s)"
+                in str(exc_info.value)
+            )
             assert artifact_urls[1] in str(exc_info.value)
             assert artifact_urls[2] in str(exc_info.value)
 
@@ -2777,7 +3308,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_when_recording_release_commit_mismatches_release(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_recording_release_commit_mismatches_release(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2787,7 +3320,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2815,7 +3350,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
@@ -2831,9 +3368,13 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
-            assert "recording metadata release commit does not match" in str(exc_info.value)
+            assert "recording metadata release commit does not match" in str(
+                exc_info.value
+            )
             assert "ios" in str(exc_info.value)
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -2845,7 +3386,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2855,7 +3398,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2885,7 +3430,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         )
                     )
                     artifact_urls = list(metadata["artifact_urls"])
-                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    artifact_urls.append(
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm"
+                    )
                     event_request = replace(
                         event_request,
                         payload={
@@ -2894,7 +3441,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                                 **metadata,
                                 "artifact_urls": artifact_urls,
                                 "recording_count": 4,
-                                "capture_targets": ["browser", "browser", "ios", "android"],
+                                "capture_targets": [
+                                    "browser",
+                                    "browser",
+                                    "ios",
+                                    "android",
+                                ],
                                 "recordings": recordings,
                             },
                         },
@@ -2903,7 +3455,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     artifact_urls = list(metadata["artifact_urls"])
-                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    artifact_urls.append(
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm"
+                    )
                     metadata["artifact_urls"] = artifact_urls
                     metadata["checked_artifact_urls"] = artifact_urls
                     payload["event_metadata"] = metadata
@@ -2913,10 +3467,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             payload = dict(terminal_request.payload)
             payload["event_metadata"] = {
                 "release_id": "release-preview-1",
@@ -2929,14 +3487,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "PreviewCleanupCompleted.cleanup_status" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require cleanup status metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require cleanup status metadata"
+                )
 
-    def test_demo_proof_rejects_success_completion_without_cleanup_evidence_metadata(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_cleanup_evidence_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -2946,7 +3510,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -2969,10 +3535,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             payload = dict(terminal_request.payload)
             payload["event_metadata"] = {
                 "release_id": "release-preview-1",
@@ -2987,14 +3557,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "PreviewCleanupCompleted.cleanup_evidence" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require cleanup evidence metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require cleanup evidence metadata"
+                )
 
-    def test_demo_proof_rejects_cleanup_failure_without_cleanup_failure_evidence_metadata(self) -> None:
+    def test_demo_proof_rejects_cleanup_failure_without_cleanup_failure_evidence_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3004,7 +3580,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3027,10 +3605,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupFailed")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupFailed"
+            )
             payload = dict(terminal_request.payload)
             payload.pop("event_metadata", None)
             try:
@@ -3039,15 +3621,21 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "PreviewCleanupFailed.error_message" in str(exc)
                 assert "PreviewCleanupFailed.cleanup_evidence" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof cleanup failure to require cleanup failure evidence")
+                raise AssertionError(
+                    "expected demo proof cleanup failure to require cleanup failure evidence"
+                )
 
-    def test_demo_proof_records_cleanup_failure_with_cleanup_failure_evidence_metadata(self) -> None:
+    def test_demo_proof_records_cleanup_failure_with_cleanup_failure_evidence_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3057,7 +3645,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3080,7 +3670,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             result = execute_workflow_advance(
@@ -3088,7 +3680,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "PreviewCleanupFailed"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             assert result.failed is True
@@ -3102,7 +3696,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             }
             cleanup_metadata = metadata_by_event["PreviewCleanupFailed"]
             assert cleanup_metadata["cleanup_status"] == "failed"
-            assert cleanup_metadata["cleanup_evidence"]["lease_state"] == "cleanup_failed"
+            assert (
+                cleanup_metadata["cleanup_evidence"]["lease_state"] == "cleanup_failed"
+            )
             assert cleanup_metadata["cleanup_evidence"]["resource_refs"] == [
                 {
                     "resource_type": "release",
@@ -3116,7 +3712,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 },
             ]
 
-    def test_demo_proof_rejects_success_completion_without_service_verification_metadata(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_service_verification_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3126,7 +3724,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3154,24 +3754,34 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             try:
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=terminal_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "ServiceVerificationPassed.service_urls" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require service verification metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require service verification metadata"
+                )
 
-    def test_demo_proof_rejects_success_completion_without_lease_identity_metadata(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_lease_identity_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3181,7 +3791,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3213,25 +3825,35 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             try:
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=terminal_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "ReleaseLive.demo_proof_lease" in str(exc)
                 assert "lease_id" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require lease identity metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require lease identity metadata"
+                )
 
-    def test_demo_proof_rejects_success_completion_when_live_release_lease_is_not_active(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_live_release_lease_is_not_active(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3241,7 +3863,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3273,19 +3897,29 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            with pytest.raises(RuntimeError, match="ReleaseLive.demo_proof_lease.state must be active"):
+            with pytest.raises(
+                RuntimeError, match="ReleaseLive.demo_proof_lease.state must be active"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "PreviewCleanupCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_success_completion_when_acquired_lease_mismatches_live_release(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_acquired_lease_mismatches_live_release(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3295,7 +3929,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3318,7 +3954,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     demo_proof_lease = dict(metadata["demo_proof_lease"])
-                    demo_proof_lease["lease_id"] = "demo-proof-lease:run-2-main-abcdef1:" + "b" * 40
+                    demo_proof_lease["lease_id"] = (
+                        "demo-proof-lease:run-2-main-abcdef1:" + "b" * 40
+                    )
                     metadata["demo_proof_lease"] = demo_proof_lease
                     payload["event_metadata"] = metadata
                     event_request = replace(event_request, payload=payload)
@@ -3327,25 +3965,35 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             try:
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=terminal_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "ProofLeaseAcquired.demo_proof_lease.lease_id" in str(exc)
                 assert "ReleaseLive.demo_proof_lease.lease_id" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to reject mismatched acquired lease")
+                raise AssertionError(
+                    "expected demo proof completion to reject mismatched acquired lease"
+                )
 
-    def test_demo_proof_rejects_success_completion_without_cleanup_resource_refs(self) -> None:
+    def test_demo_proof_rejects_success_completion_without_cleanup_resource_refs(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3355,7 +4003,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3378,10 +4028,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             payload = dict(terminal_request.payload)
             metadata = dict(payload["event_metadata"])
             cleanup_evidence = dict(metadata["cleanup_evidence"])
@@ -3394,14 +4048,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "PreviewCleanupCompleted.cleanup_evidence.resource_refs" in str(exc)
+                assert "PreviewCleanupCompleted.cleanup_evidence.resource_refs" in str(
+                    exc
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require cleanup resource refs")
+                raise AssertionError(
+                    "expected demo proof completion to require cleanup resource refs"
+                )
 
-    def test_demo_proof_rejects_success_completion_when_cleanup_refs_only_name_service_url(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_cleanup_refs_only_name_service_url(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3411,7 +4073,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3434,10 +4098,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             payload = dict(terminal_request.payload)
             metadata = dict(payload["event_metadata"])
             cleanup_evidence = dict(metadata["cleanup_evidence"])
@@ -3461,15 +4129,21 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "managed preview resource" in str(exc)
                 assert "service_url" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to reject service-url-only cleanup refs")
+                raise AssertionError(
+                    "expected demo proof completion to reject service-url-only cleanup refs"
+                )
 
-    def test_demo_proof_rejects_success_completion_when_cleanup_release_mismatches_live_release(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_cleanup_release_mismatches_live_release(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3479,7 +4153,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3502,10 +4178,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             payload = dict(terminal_request.payload)
             metadata = dict(payload["event_metadata"])
             cleanup_evidence = dict(metadata["cleanup_evidence"])
@@ -3518,14 +4198,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "cleanup evidence must reference ReleaseLive.release_id release-preview-1" in str(exc)
+                assert (
+                    "cleanup evidence must reference ReleaseLive.release_id release-preview-1"
+                    in str(exc)
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require matching cleanup release metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require matching cleanup release metadata"
+                )
 
-    def test_demo_proof_rejects_success_completion_when_cleanup_lease_scope_mismatches_workflow(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_cleanup_lease_scope_mismatches_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3535,7 +4224,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3558,10 +4249,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            terminal_request = _demo_proof_request_for_event(
+                request, "PreviewCleanupCompleted"
+            )
             payload = dict(terminal_request.payload)
             metadata = dict(payload["event_metadata"])
             cleanup_evidence = dict(metadata["cleanup_evidence"])
@@ -3574,15 +4269,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(terminal_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "cleanup evidence must reference proof scope run-1-main-abcdef1" in str(exc)
+                assert (
+                    "cleanup evidence must reference proof scope run-1-main-abcdef1"
+                    in str(exc)
+                )
                 assert "run-2-main-abcdef1" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require matching cleanup lease scope metadata")
+                raise AssertionError(
+                    "expected demo proof completion to require matching cleanup lease scope metadata"
+                )
 
-    def test_demo_proof_rejects_success_completion_when_pr_evidence_lacks_uploaded_artifact_urls(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_pr_evidence_lacks_uploaded_artifact_urls(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3592,7 +4296,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3613,11 +4319,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
-            with pytest.raises(RuntimeError, match="PR evidence metadata is missing uploaded artifact URL"):
+            with pytest.raises(
+                RuntimeError,
+                match="PR evidence metadata is missing uploaded artifact URL",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -3632,7 +4343,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -3656,7 +4369,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3677,7 +4392,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
@@ -3692,9 +4409,13 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
-            assert "PREvidenceAttached.pr_url must match workflow pr_url" in str(exc_info.value)
+            assert "PREvidenceAttached.pr_url must match workflow pr_url" in str(
+                exc_info.value
+            )
             assert "pull/8" in str(exc_info.value)
             assert "pull/9" in str(exc_info.value)
 
@@ -3719,7 +4440,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3740,7 +4463,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
@@ -3758,7 +4483,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -3770,7 +4497,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert cleanup_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_when_pr_artifact_links_were_not_checked(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_pr_artifact_links_were_not_checked(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3780,7 +4509,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3801,7 +4532,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
@@ -3811,13 +4544,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             metadata.pop("checked_artifact_urls", None)
             payload["event_metadata"] = metadata
 
-            with pytest.raises(RuntimeError, match="PREvidenceAttached artifact URL checks must pass"):
+            with pytest.raises(
+                RuntimeError, match="PREvidenceAttached artifact URL checks must pass"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -3841,7 +4578,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3862,7 +4601,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
@@ -3872,13 +4613,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             metadata.pop("checked_artifact_urls", None)
             payload["event_metadata"] = metadata
 
-            with pytest.raises(RuntimeError, match="PREvidenceAttached artifact URL checks must pass"):
+            with pytest.raises(
+                RuntimeError, match="PREvidenceAttached artifact URL checks must pass"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -3890,7 +4635,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert cleanup_operation.status == "pending"
 
-    def test_demo_proof_rejects_success_completion_when_required_recording_count_is_missing(self) -> None:
+    def test_demo_proof_rejects_success_completion_when_required_recording_count_is_missing(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3907,7 +4654,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -3933,7 +4682,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         )
                     )
                     artifact_urls = list(metadata["artifact_urls"])
-                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    artifact_urls.append(
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm"
+                    )
                     event_request = replace(
                         event_request,
                         payload={
@@ -3942,7 +4693,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                                 **metadata,
                                 "artifact_urls": artifact_urls,
                                 "recording_count": 4,
-                                "capture_targets": ["browser", "browser", "ios", "android"],
+                                "capture_targets": [
+                                    "browser",
+                                    "browser",
+                                    "ios",
+                                    "android",
+                                ],
                                 "recordings": recordings,
                             },
                         },
@@ -3952,7 +4708,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             with pytest.raises(RuntimeError) as exc_info:
@@ -3961,9 +4719,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, "EvidenceUploaded"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
-            assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc_info.value)
+            assert (
+                "EvidenceUploaded.recordings must match RecordingCompleted.recordings"
+                in str(exc_info.value)
+            )
             assert "browser" in str(exc_info.value)
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -3975,7 +4738,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_recording_completed_when_required_recording_count_is_missing(self) -> None:
+    def test_demo_proof_rejects_recording_completed_when_required_recording_count_is_missing(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3992,7 +4757,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4009,7 +4776,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -4017,15 +4786,26 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "RecordingCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "RecordingCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "requires 2 recording artifact(s) for capture target browser, got 1" in str(exc)
+                assert (
+                    "requires 2 recording artifact(s) for capture target browser, got 1"
+                    in str(exc)
+                )
             else:  # pragma: no cover
-                raise AssertionError("expected recording completion to enforce required recording counts")
+                raise AssertionError(
+                    "expected recording completion to enforce required recording counts"
+                )
 
-    def test_demo_proof_rejects_failure_evidence_upload_when_required_failure_targets_are_missing(self) -> None:
+    def test_demo_proof_rejects_failure_evidence_upload_when_required_failure_targets_are_missing(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4035,7 +4815,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4054,17 +4836,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
-            with pytest.raises(RuntimeError, match="failure evidence metadata is missing required capture target"):
+            with pytest.raises(
+                RuntimeError,
+                match="failure evidence metadata is missing required capture target",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(
-                        _demo_proof_request_for_event(request, "FailureEvidenceUploaded"),
+                        _demo_proof_request_for_event(
+                            request, "FailureEvidenceUploaded"
+                        ),
                         payload={
                             **request.payload,
                             "event_metadata": {
@@ -4077,10 +4866,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_failure_evidence_capture_with_mismatched_release_context(self) -> None:
+    def test_demo_proof_rejects_failure_evidence_capture_with_mismatched_release_context(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4090,7 +4883,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4107,10 +4902,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            event_request = _demo_proof_request_for_event(request, "RecordingFailureEvidenceCaptured")
+            event_request = _demo_proof_request_for_event(
+                request, "RecordingFailureEvidenceCaptured"
+            )
             payload = dict(event_request.payload)
             metadata = dict(payload["event_metadata"])
             failure_evidence = [dict(item) for item in metadata["failure_evidence"]]
@@ -4127,10 +4926,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_browser_failure_evidence_capture_for_non_verified_release_url(self) -> None:
+    def test_demo_proof_rejects_browser_failure_evidence_capture_for_non_verified_release_url(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4140,7 +4943,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4157,14 +4962,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            event_request = _demo_proof_request_for_event(request, "RecordingFailureEvidenceCaptured")
+            event_request = _demo_proof_request_for_event(
+                request, "RecordingFailureEvidenceCaptured"
+            )
             payload = dict(event_request.payload)
             metadata = dict(payload["event_metadata"])
             failure_evidence = [dict(item) for item in metadata["failure_evidence"]]
-            failure_evidence[0]["capture_reference"] = "https://fake-proof.example/browser"
+            failure_evidence[0]["capture_reference"] = (
+                "https://fake-proof.example/browser"
+            )
             metadata["failure_evidence"] = failure_evidence
             payload["event_metadata"] = metadata
 
@@ -4177,10 +4988,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_rejects_failure_evidence_upload_with_unplanned_capture_target(self) -> None:
+    def test_demo_proof_rejects_failure_evidence_upload_with_unplanned_capture_target(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4190,7 +5005,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4209,7 +5026,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             metadata = _demo_proof_event_metadata("FailureEvidenceUploaded")
@@ -4221,13 +5040,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(
-                        _demo_proof_request_for_event(request, "FailureEvidenceUploaded"),
+                        _demo_proof_request_for_event(
+                            request, "FailureEvidenceUploaded"
+                        ),
                         payload={
                             **request.payload,
                             "event_metadata": {
                                 **metadata,
-                                "artifact_urls": [*list(metadata["artifact_urls"]), desktop_url],
-                                "capture_targets": ["browser", "ios", "android", "desktop"],
+                                "artifact_urls": [
+                                    *list(metadata["artifact_urls"]),
+                                    desktop_url,
+                                ],
+                                "capture_targets": [
+                                    "browser",
+                                    "ios",
+                                    "android",
+                                    "desktop",
+                                ],
                                 "failure_evidence": [
                                     *list(metadata["failure_evidence"]),
                                     _failure_evidence_metadata("desktop", desktop_url),
@@ -4235,16 +5064,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "failure evidence metadata contains capture target(s) outside the demo plan: desktop" in str(
-                    exc
+                assert (
+                    "failure evidence metadata contains capture target(s) outside the demo plan: desktop"
+                    in str(exc)
                 )
             else:  # pragma: no cover
-                raise AssertionError("expected failure evidence upload to reject unplanned capture target evidence")
+                raise AssertionError(
+                    "expected failure evidence upload to reject unplanned capture target evidence"
+                )
 
-    def test_demo_proof_rejects_failure_evidence_without_observed_problem_detail(self) -> None:
+    def test_demo_proof_rejects_failure_evidence_without_observed_problem_detail(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4262,7 +5098,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4298,7 +5136,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
@@ -4314,7 +5154,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(
-                        _demo_proof_request_for_event(request, "FailureEvidenceUploaded"),
+                        _demo_proof_request_for_event(
+                            request, "FailureEvidenceUploaded"
+                        ),
                         payload={
                             **request.payload,
                             "event_metadata": {
@@ -4325,7 +5167,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
     def test_demo_proof_rejects_failure_evidence_upload_before_pr_update_when_capture_targets_are_missing(
@@ -4340,7 +5184,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4359,17 +5205,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
-            with pytest.raises(RuntimeError, match="failure evidence metadata is missing required capture target"):
+            with pytest.raises(
+                RuntimeError,
+                match="failure evidence metadata is missing required capture target",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(
-                        _demo_proof_request_for_event(request, "FailureEvidenceUploaded"),
+                        _demo_proof_request_for_event(
+                            request, "FailureEvidenceUploaded"
+                        ),
                         payload={
                             **request.payload,
                             "event_metadata": {
@@ -4386,7 +5239,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -4398,7 +5253,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert pr_operation.status == "pending"
 
-    def test_demo_proof_rejects_failure_evidence_upload_without_failure_capture_target_metadata(self) -> None:
+    def test_demo_proof_rejects_failure_evidence_upload_without_failure_capture_target_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4408,7 +5265,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4427,16 +5286,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            with pytest.raises(RuntimeError, match="FailureEvidenceUploaded.capture_targets|missing required capture target"):
+            with pytest.raises(
+                RuntimeError,
+                match="FailureEvidenceUploaded.capture_targets|missing required capture target",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(
-                        _demo_proof_request_for_event(request, "FailureEvidenceUploaded"),
+                        _demo_proof_request_for_event(
+                            request, "FailureEvidenceUploaded"
+                        ),
                         payload={
                             **request.payload,
                             "event_metadata": {
@@ -4447,7 +5313,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
     def test_demo_proof_rejects_pr_failure_evidence_attach_before_cleanup_when_pr_targets_another_pr(
@@ -4462,7 +5330,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4483,10 +5353,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            event_request = _demo_proof_request_for_event(request, "PRFailureEvidenceAttached")
+            event_request = _demo_proof_request_for_event(
+                request, "PRFailureEvidenceAttached"
+            )
             payload = dict(event_request.payload)
             metadata = dict(payload["event_metadata"])
             metadata["pr_url"] = "https://github.com/acme/project-a/pull/9"
@@ -4498,9 +5372,13 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
-            assert "PRFailureEvidenceAttached.pr_url must match workflow pr_url" in str(exc_info.value)
+            assert "PRFailureEvidenceAttached.pr_url must match workflow pr_url" in str(
+                exc_info.value
+            )
             assert "pull/8" in str(exc_info.value)
             assert "pull/9" in str(exc_info.value)
 
@@ -4513,7 +5391,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert cleanup_operation.status == "pending"
 
-    def test_demo_proof_rejects_failure_completion_when_artifact_urls_omit_failure_evidence(self) -> None:
+    def test_demo_proof_rejects_failure_completion_when_artifact_urls_omit_failure_evidence(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4531,13 +5411,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             artifact_urls = [
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure-1.webm",
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure-2.txt",
             ]
-            failure_metadata = [_failure_evidence_metadata("browser", artifact_url) for artifact_url in artifact_urls]
+            failure_metadata = [
+                _failure_evidence_metadata("browser", artifact_url)
+                for artifact_url in artifact_urls
+            ]
 
             for event in (
                 "ProofLeaseAcquired",
@@ -4555,7 +5440,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "FailurePreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event in {"RecordingFailureEvidenceCaptured", "FailureEvidenceUploaded"}:
+                if event in {
+                    "RecordingFailureEvidenceCaptured",
+                    "FailureEvidenceUploaded",
+                }:
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     metadata["artifact_urls"] = [artifact_urls[0]]
@@ -4576,7 +5464,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -4584,14 +5474,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "FailurePreviewCleanupCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "FailureEvidenceUploaded.artifact_urls is missing failure_evidence artifact URL(s)" in str(exc)
+                assert (
+                    "FailureEvidenceUploaded.artifact_urls is missing failure_evidence artifact URL(s)"
+                    in str(exc)
+                )
                 assert artifact_urls[1] in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof failure completion to reject missing failure artifact URLs")
+                raise AssertionError(
+                    "expected demo proof failure completion to reject missing failure artifact URLs"
+                )
 
     def test_demo_proof_rejects_pr_failure_evidence_attach_before_cleanup_when_body_sha_is_not_a_digest(
         self,
@@ -4605,7 +5504,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4626,10 +5527,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            event_request = _demo_proof_request_for_event(request, "PRFailureEvidenceAttached")
+            event_request = _demo_proof_request_for_event(
+                request, "PRFailureEvidenceAttached"
+            )
             payload = dict(event_request.payload)
             metadata = dict(payload["event_metadata"])
             metadata["pr_body_sha256"] = "not-a-sha256"
@@ -4644,7 +5549,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -4668,7 +5575,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4689,10 +5598,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            event_request = _demo_proof_request_for_event(request, "PRFailureEvidenceAttached")
+            event_request = _demo_proof_request_for_event(
+                request, "PRFailureEvidenceAttached"
+            )
             payload = dict(event_request.payload)
             metadata = dict(payload["event_metadata"])
             metadata.pop("artifact_url_check_status", None)
@@ -4708,7 +5621,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -4720,7 +5635,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert cleanup_operation.status == "pending"
 
-    def test_demo_proof_rejects_failure_completion_without_diagnostic_evidence_metadata(self) -> None:
+    def test_demo_proof_rejects_failure_completion_without_diagnostic_evidence_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4738,7 +5655,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4778,7 +5697,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 if event == "PRFailureEvidenceAttached":
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
-                    artifact_urls = ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"]
+                    artifact_urls = [
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+                    ]
                     metadata["artifact_urls"] = artifact_urls
                     metadata["checked_artifact_urls"] = artifact_urls
                     payload["event_metadata"] = metadata
@@ -4788,7 +5709,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -4796,16 +5719,27 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "FailurePreviewCleanupCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "failure evidence metadata is missing uploaded diagnostic artifact metadata" in str(exc)
+                assert (
+                    "failure evidence metadata is missing uploaded diagnostic artifact metadata"
+                    in str(exc)
+                )
                 assert "browser" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof failure completion to require diagnostic evidence metadata")
+                raise AssertionError(
+                    "expected demo proof failure completion to require diagnostic evidence metadata"
+                )
 
-    def test_demo_proof_rejects_failure_completion_without_uploaded_failure_artifact_metadata(self) -> None:
+    def test_demo_proof_rejects_failure_completion_without_uploaded_failure_artifact_metadata(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4823,7 +5757,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4864,7 +5800,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 if event == "PRFailureEvidenceAttached":
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
-                    artifact_urls = ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"]
+                    artifact_urls = [
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+                    ]
                     metadata["artifact_urls"] = artifact_urls
                     metadata["checked_artifact_urls"] = artifact_urls
                     payload["event_metadata"] = metadata
@@ -4874,7 +5812,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -4882,14 +5822,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "FailurePreviewCleanupCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "failure evidence metadata is missing uploaded diagnostic artifact metadata" in str(exc)
+                assert (
+                    "failure evidence metadata is missing uploaded diagnostic artifact metadata"
+                    in str(exc)
+                )
                 assert "browser" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof failure completion to require failure artifact metadata")
+                raise AssertionError(
+                    "expected demo proof failure completion to require failure artifact metadata"
+                )
 
     def test_demo_proof_rejects_failure_completion_when_failure_evidence_release_commit_mismatches_release(
         self,
@@ -4911,7 +5860,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -4930,7 +5881,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "FailurePreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event in {"RecordingFailureEvidenceCaptured", "FailureEvidenceUploaded"}:
+                if event in {
+                    "RecordingFailureEvidenceCaptured",
+                    "FailureEvidenceUploaded",
+                }:
                     metadata = _demo_proof_event_metadata(event)
                     assert metadata is not None
                     artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
@@ -4965,7 +5919,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -4973,16 +5929,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "FailurePreviewCleanupCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "failure evidence metadata release commit does not match ReleaseLive.release_commit_sha" in str(
-                    exc
+                assert (
+                    "failure evidence metadata release commit does not match ReleaseLive.release_commit_sha"
+                    in str(exc)
                 )
                 assert "browser" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof failure completion to reject mismatched release commit")
+                raise AssertionError(
+                    "expected demo proof failure completion to reject mismatched release commit"
+                )
 
     def test_demo_proof_rejects_success_completion_when_uploaded_recordings_do_not_match_completed_recordings(
         self,
@@ -4996,7 +5959,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             mismatched_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-uploaded.webm"
 
@@ -5020,7 +5985,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     metadata = _demo_proof_event_metadata(event)
                     assert metadata is not None
                     recordings = list(metadata["recordings"])
-                    recordings[0] = _recording_artifact_metadata("browser", mismatched_url)
+                    recordings[0] = _recording_artifact_metadata(
+                        "browser", mismatched_url
+                    )
                     payload = dict(event_request.payload)
                     payload["event_metadata"] = {
                         **metadata,
@@ -5052,20 +6019,29 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             settings=SimpleNamespace(),
                             workflow_type=workflow_type,
                             request=event_request,
-                            resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                            resolve_advance_handler_fn=lambda _handler_key: (
+                                DemoProofWorkflowAdvanceHandler()
+                            ),
                         )
                     except RuntimeError as exc:
-                        assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc)
+                        assert (
+                            "EvidenceUploaded.recordings must match RecordingCompleted.recordings"
+                            in str(exc)
+                        )
                         assert "browser" in str(exc)
                     else:  # pragma: no cover
-                        raise AssertionError("expected demo proof upload to reject mismatched uploaded recordings")
+                        raise AssertionError(
+                            "expected demo proof upload to reject mismatched uploaded recordings"
+                        )
                     break
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
     def test_demo_proof_rejects_failure_completion_when_uploaded_failure_evidence_does_not_match_captured_evidence(
@@ -5080,7 +6056,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             mismatched_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure-uploaded.webm"
 
@@ -5104,7 +6082,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     metadata = _demo_proof_event_metadata(event)
                     assert metadata is not None
                     failure_evidence = list(metadata["failure_evidence"])
-                    failure_evidence[0] = _failure_evidence_metadata("browser", mismatched_url)
+                    failure_evidence[0] = _failure_evidence_metadata(
+                        "browser", mismatched_url
+                    )
                     payload = dict(event_request.payload)
                     payload["event_metadata"] = {
                         **metadata,
@@ -5136,7 +6116,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             settings=SimpleNamespace(),
                             workflow_type=workflow_type,
                             request=event_request,
-                            resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                            resolve_advance_handler_fn=lambda _handler_key: (
+                                DemoProofWorkflowAdvanceHandler()
+                            ),
                         )
                     except RuntimeError as exc:
                         assert (
@@ -5145,17 +6127,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         ) in str(exc)
                         assert "browser" in str(exc)
                     else:  # pragma: no cover
-                        raise AssertionError("expected demo proof failure upload to reject mismatched failure evidence")
+                        raise AssertionError(
+                            "expected demo proof failure upload to reject mismatched failure evidence"
+                        )
                     break
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_persists_lifecycle_event_metadata_for_auditable_chain(self) -> None:
+    def test_demo_proof_persists_lifecycle_event_metadata_for_auditable_chain(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5165,7 +6153,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             event_metadata = {
@@ -5197,8 +6187,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=replace(request, payload=payload, trigger=WorkflowTrigger(event=event)),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=replace(
+                        request, payload=payload, trigger=WorkflowTrigger(event=event)
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -5208,7 +6202,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 for item in description["demo_proof_event_metadata"]
             }
             assert metadata_by_event["ReleaseLive"] == event_metadata["ReleaseLive"]
-            assert metadata_by_event["EvidenceUploaded"] == event_metadata["EvidenceUploaded"]
+            assert (
+                metadata_by_event["EvidenceUploaded"]
+                == event_metadata["EvidenceUploaded"]
+            )
 
     def test_demo_proof_tracks_required_platform_recording_workflows(self) -> None:
         with self.session_factory() as session:
@@ -5220,7 +6217,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5236,7 +6235,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -5259,8 +6260,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="RecordingStarted")),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=replace(
+                    request, trigger=WorkflowTrigger(event="RecordingStarted")
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             description = json.loads(workflow.source_description or "{}")
             assert description["recording_workflows"] == [
@@ -5274,7 +6279,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "RecordingCompleted"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             description = json.loads(workflow.source_description or "{}")
             assert description["recording_workflows"] == [
@@ -5283,7 +6290,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 {"capture_target": "android", "state": "recorded"},
             ]
 
-    def test_demo_proof_failure_evidence_marks_only_evidenced_recording_workflow_targets(self) -> None:
+    def test_demo_proof_failure_evidence_marks_only_evidenced_recording_workflow_targets(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5293,7 +6302,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5310,7 +6321,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
@@ -5319,7 +6332,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=replace(
-                    _demo_proof_request_for_event(request, "RecordingFailureEvidenceCaptured"),
+                    _demo_proof_request_for_event(
+                        request, "RecordingFailureEvidenceCaptured"
+                    ),
                     payload={
                         **request.payload,
                         "event_metadata": {
@@ -5332,7 +6347,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         },
                     },
                 ),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -5343,7 +6360,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 {"capture_target": "android", "state": "recording"},
             ]
 
-    def test_demo_proof_tracks_deferred_recording_targets_until_next_worker(self) -> None:
+    def test_demo_proof_tracks_deferred_recording_targets_until_next_worker(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5353,7 +6372,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5369,7 +6390,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             execute_workflow_advance(
@@ -5387,7 +6410,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     },
                     trigger=WorkflowTrigger(event="RecordingDeferred"),
                 ),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -5402,14 +6427,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 item["event"]: item["metadata"]
                 for item in description["demo_proof_event_metadata"]
             }
-            assert metadata_by_event["RecordingDeferred"]["remaining_capture_targets"] == ["ios", "android"]
+            assert metadata_by_event["RecordingDeferred"][
+                "remaining_capture_targets"
+            ] == ["ios", "android"]
 
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="RecordingStarted")),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=replace(
+                    request, trigger=WorkflowTrigger(event="RecordingStarted")
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "recording"
@@ -5430,7 +6461,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5449,19 +6482,29 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-            with self.assertRaisesRegex(RuntimeError, "requires PR URL before PR evidence update"):
+            with self.assertRaisesRegex(
+                RuntimeError, "requires PR URL before PR evidence update"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=replace(request, trigger=WorkflowTrigger(event="EvidenceUploaded")),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=replace(
+                        request, trigger=WorkflowTrigger(event="EvidenceUploaded")
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_handler_rejects_service_verified_before_release_route_is_ready(self) -> None:
+    def test_demo_proof_handler_rejects_service_verified_before_release_route_is_ready(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5471,23 +6514,34 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "ProofLeaseAcquired"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "Cannot apply ServiceVerificationPassed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "Cannot apply ServiceVerificationPassed"
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=replace(request, trigger=WorkflowTrigger(event="ServiceVerificationPassed")),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=replace(
+                        request,
+                        trigger=WorkflowTrigger(event="ServiceVerificationPassed"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -5499,7 +6553,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert release_operation.status == "waiting_for_input"
 
-    def test_demo_proof_release_failed_event_waits_for_cleanup_before_blocking_workflow(self) -> None:
+    def test_demo_proof_release_failed_event_waits_for_cleanup_before_blocking_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5509,28 +6565,36 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "ProofLeaseAcquired"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "ReleaseRequested"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "ReleaseProvisioning"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             result = execute_workflow_advance(
@@ -5538,7 +6602,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "ReleaseFailed"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             assert result.reason == "release_failed_cleanup_requested"
@@ -5547,11 +6613,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=_demo_proof_request_for_event(request, "ReleaseFailedPreviewCleanupCompleted"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=_demo_proof_request_for_event(
+                    request, "ReleaseFailedPreviewCleanupCompleted"
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
-            assert cleanup_result.reason == "demo_proof_blocked_after_release_failure_cleanup"
+            assert (
+                cleanup_result.reason
+                == "demo_proof_blocked_after_release_failure_cleanup"
+            )
             assert cleanup_result.failed is True
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             release_operation = session.execute(
@@ -5568,7 +6641,8 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             release_attempt = session.execute(
                 select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == release_operation.operation_id,
+                    WorkflowOperationAttempt.operation_id
+                    == release_operation.operation_id,
                 )
             ).scalar_one()
             description = json.loads(workflow.source_description or "{}")
@@ -5577,12 +6651,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "Demo proof recorded release failure cleanup for proof scope run-1-main-abcdef1."
             )
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "ReleaseFailedPreviewCleanupCompleted"
+            assert (
+                description["demo_proof_events"][-1]
+                == "ReleaseFailedPreviewCleanupCompleted"
+            )
             assert release_operation.status == "completed"
             assert cleanup_operation.status == "completed"
             assert release_attempt.status == "completed"
 
-    def test_demo_proof_service_verification_failed_event_attaches_diagnostics_before_cleanup(self) -> None:
+    def test_demo_proof_service_verification_failed_event_attaches_diagnostics_before_cleanup(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5592,7 +6671,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             for event in (
                 "ProofLeaseAcquired",
@@ -5606,18 +6687,26 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             result = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=_demo_proof_request_for_event(request, "ServiceVerificationFailed"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=_demo_proof_request_for_event(
+                    request, "ServiceVerificationFailed"
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
-            assert result.reason == "service_verification_failed_evidence_upload_requested"
+            assert (
+                result.reason == "service_verification_failed_evidence_upload_requested"
+            )
             assert result.failed is False
             for event in (
                 "FailureEvidenceUploadStarted",
@@ -5632,7 +6721,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             assert cleanup_result.reason == "demo_proof_blocked_with_failure_evidence"
@@ -5656,11 +6747,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "Demo proof recorded failure evidence for proof scope run-1-main-abcdef1."
             )
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "FailurePreviewCleanupCompleted"
+            assert (
+                description["demo_proof_events"][-1] == "FailurePreviewCleanupCompleted"
+            )
             assert release_operation.status == "completed"
             assert cleanup_operation.status == "completed"
 
-    def test_demo_proof_pr_attach_failed_event_requests_cleanup_before_blocking_workflow(self) -> None:
+    def test_demo_proof_pr_attach_failed_event_requests_cleanup_before_blocking_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5670,7 +6765,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             for event in (
                 "ProofLeaseAcquired",
@@ -5690,15 +6787,21 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             result = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=_demo_proof_request_for_event(request, "PREvidenceAttachFailed"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=_demo_proof_request_for_event(
+                    request, "PREvidenceAttachFailed"
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             assert result.reason == "pr_evidence_attach_failed_cleanup_requested"
@@ -5707,11 +6810,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=_demo_proof_request_for_event(request, "PREvidenceAttachFailedPreviewCleanupCompleted"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=_demo_proof_request_for_event(
+                    request, "PREvidenceAttachFailedPreviewCleanupCompleted"
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
-            assert cleanup_result.reason == "demo_proof_blocked_after_pr_evidence_attach_failure_cleanup"
+            assert (
+                cleanup_result.reason
+                == "demo_proof_blocked_after_pr_evidence_attach_failure_cleanup"
+            )
             assert cleanup_result.failed is True
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             operation = session.execute(
@@ -5734,12 +6844,17 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert workflow.status == "failed"
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "PREvidenceAttachFailedPreviewCleanupCompleted"
+            assert (
+                description["demo_proof_events"][-1]
+                == "PREvidenceAttachFailedPreviewCleanupCompleted"
+            )
             assert operation.status == "completed"
             assert cleanup_operation.status == "completed"
             assert attempt.status == "completed"
 
-    def test_demo_proof_rejects_pr_attach_failure_completion_when_artifact_links_were_not_checked(self) -> None:
+    def test_demo_proof_rejects_pr_attach_failure_completion_when_artifact_links_were_not_checked(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5749,7 +6864,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5779,7 +6896,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -5787,16 +6906,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PREvidenceAttachFailedPreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    request=_demo_proof_request_for_event(
+                        request, "PREvidenceAttachFailedPreviewCleanupCompleted"
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
                 assert "PREvidenceAttachFailed.artifact_url_check_status" in str(exc)
                 assert "PREvidenceAttachFailed.checked_artifact_urls" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof PR attach failure completion to require checked links")
+                raise AssertionError(
+                    "expected demo proof PR attach failure completion to require checked links"
+                )
 
-    def test_demo_proof_full_lifecycle_events_complete_operations_in_order(self) -> None:
+    def test_demo_proof_full_lifecycle_events_complete_operations_in_order(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -5806,7 +6933,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5830,15 +6959,25 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             assert workflow.status == "completed"
-            operations = session.execute(
-                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-            ).scalars().all()
-            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            status_by_type = {
+                operation.operation_type: operation.status for operation in operations
+            }
             assert status_by_type == {
                 "preview_lease": "completed",
                 "release": "completed",
@@ -5858,7 +6997,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5882,30 +7023,46 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             rows = session.execute(
-                select(WorkflowOperation, WorkflowOperationWorkUnit, WorkflowOperationWorkUnitAttempt)
+                select(
+                    WorkflowOperation,
+                    WorkflowOperationWorkUnit,
+                    WorkflowOperationWorkUnitAttempt,
+                )
                 .join(
                     WorkflowOperationWorkUnit,
-                    WorkflowOperationWorkUnit.operation_id == WorkflowOperation.operation_id,
+                    WorkflowOperationWorkUnit.operation_id
+                    == WorkflowOperation.operation_id,
                 )
                 .join(
                     WorkflowOperationWorkUnitAttempt,
-                    WorkflowOperationWorkUnitAttempt.work_unit_id == WorkflowOperationWorkUnit.work_unit_id,
+                    WorkflowOperationWorkUnitAttempt.work_unit_id
+                    == WorkflowOperationWorkUnit.work_unit_id,
                 )
                 .where(WorkflowOperation.workflow_id == workflow.workflow_id)
-                .order_by(WorkflowOperation.operation_type, WorkflowOperationWorkUnit.unit_key)
+                .order_by(
+                    WorkflowOperation.operation_type, WorkflowOperationWorkUnit.unit_key
+                )
             ).all()
             unit_keys_by_operation: dict[str, list[str]] = {}
             unit_statuses_by_operation: dict[str, list[str]] = {}
             attempt_statuses_by_operation: dict[str, list[str]] = {}
             for operation, work_unit, work_unit_attempt in rows:
-                unit_keys_by_operation.setdefault(operation.operation_type, []).append(work_unit.unit_key)
-                unit_statuses_by_operation.setdefault(operation.operation_type, []).append(work_unit.status)
-                attempt_statuses_by_operation.setdefault(operation.operation_type, []).append(work_unit_attempt.status)
+                unit_keys_by_operation.setdefault(operation.operation_type, []).append(
+                    work_unit.unit_key
+                )
+                unit_statuses_by_operation.setdefault(
+                    operation.operation_type, []
+                ).append(work_unit.status)
+                attempt_statuses_by_operation.setdefault(
+                    operation.operation_type, []
+                ).append(work_unit_attempt.status)
 
             assert unit_keys_by_operation == {
                 "preview_lease": [
@@ -5914,7 +7071,11 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     "preview_lease.enforce_single_active",
                 ],
                 "release": ["release.create_or_reuse", "release.wait_for_live"],
-                "recording": ["recording.android", "recording.browser", "recording.ios"],
+                "recording": [
+                    "recording.android",
+                    "recording.browser",
+                    "recording.ios",
+                ],
                 "evidence_upload": ["evidence_upload.persist"],
                 "pr_evidence_update": ["pr_evidence_update.attach_links"],
                 "preview_cleanup": ["preview_cleanup.destroy_or_ttl"],
@@ -5952,7 +7113,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -5968,7 +7131,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -5980,14 +7145,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             recording_attempt = session.execute(
                 select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == recording_operation.operation_id,
+                    WorkflowOperationAttempt.operation_id
+                    == recording_operation.operation_id,
                 )
             ).scalar_one()
-            recording_work_units = session.execute(
-                select(WorkflowOperationWorkUnit)
-                .where(WorkflowOperationWorkUnit.operation_id == recording_operation.operation_id)
-                .order_by(WorkflowOperationWorkUnit.unit_key)
-            ).scalars().all()
+            recording_work_units = (
+                session.execute(
+                    select(WorkflowOperationWorkUnit)
+                    .where(
+                        WorkflowOperationWorkUnit.operation_id
+                        == recording_operation.operation_id
+                    )
+                    .order_by(WorkflowOperationWorkUnit.unit_key)
+                )
+                .scalars()
+                .all()
+            )
             service_metadata = _service_verification_metadata()
             expected_payload = {
                 "proof_scope_id": "run-1-main-abcdef1",
@@ -6028,7 +7201,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 for work_unit in recording_work_units
             ]
 
-    def test_demo_proof_failure_evidence_events_complete_operations_then_block_workflow(self) -> None:
+    def test_demo_proof_failure_evidence_events_complete_operations_then_block_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6038,7 +7213,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -6062,7 +7239,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -6073,11 +7252,21 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             )
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "FailurePreviewCleanupCompleted"
-            operations = session.execute(
-                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-            ).scalars().all()
-            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            assert (
+                description["demo_proof_events"][-1] == "FailurePreviewCleanupCompleted"
+            )
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            status_by_type = {
+                operation.operation_type: operation.status for operation in operations
+            }
             assert status_by_type == {
                 "preview_lease": "completed",
                 "release": "completed",
@@ -6087,7 +7276,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "preview_cleanup": "completed",
             }
 
-    def test_demo_proof_failure_pr_attach_failed_event_requests_cleanup_before_blocking_workflow(self) -> None:
+    def test_demo_proof_failure_pr_attach_failed_event_requests_cleanup_before_blocking_workflow(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6097,7 +7288,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             for event in (
                 "ProofLeaseAcquired",
@@ -6117,18 +7310,26 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             result = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=_demo_proof_request_for_event(request, "PRFailureEvidenceAttachFailed"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                request=_demo_proof_request_for_event(
+                    request, "PRFailureEvidenceAttachFailed"
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
-            assert result.reason == "pr_failure_evidence_attach_failed_cleanup_requested"
+            assert (
+                result.reason == "pr_failure_evidence_attach_failed_cleanup_requested"
+            )
             assert result.failed is False
             cleanup_result = execute_workflow_advance(
                 session=session,
@@ -6138,10 +7339,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     request,
                     "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
                 ),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
-            assert cleanup_result.reason == "demo_proof_blocked_after_pr_failure_evidence_attach_failure_cleanup"
+            assert (
+                cleanup_result.reason
+                == "demo_proof_blocked_after_pr_failure_evidence_attach_failure_cleanup"
+            )
             assert cleanup_result.failed is True
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             operation = session.execute(
@@ -6159,11 +7365,16 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert workflow.status == "failed"
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted"
+            assert (
+                description["demo_proof_events"][-1]
+                == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted"
+            )
             assert operation.status == "completed"
             assert cleanup_operation.status == "completed"
 
-    def test_demo_proof_rejects_failure_pr_attach_failure_completion_when_artifact_links_were_not_checked(self) -> None:
+    def test_demo_proof_rejects_failure_pr_attach_failure_completion_when_artifact_links_were_not_checked(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6173,7 +7384,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -6203,7 +7416,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=event_request,
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             try:
@@ -6215,17 +7430,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         request,
                         "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
                     ),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
             except RuntimeError as exc:
-                assert "PRFailureEvidenceAttachFailed.artifact_url_check_status" in str(exc)
+                assert "PRFailureEvidenceAttachFailed.artifact_url_check_status" in str(
+                    exc
+                )
                 assert "PRFailureEvidenceAttachFailed.checked_artifact_urls" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError(
                     "expected demo proof failure PR attach failure completion to require checked links"
                 )
 
-    def test_demo_proof_recording_failure_without_evidence_requires_unavailable_reason(self) -> None:
+    def test_demo_proof_recording_failure_without_evidence_requires_unavailable_reason(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6235,7 +7456,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -6252,7 +7475,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "RecordingFailed")
@@ -6261,16 +7486,23 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             event_metadata.pop("failure_evidence_unavailable_reason")
             event_payload["event_metadata"] = event_metadata
 
-            with pytest.raises(RuntimeError, match="RecordingFailed.failure_evidence_unavailable_reason"):
+            with pytest.raises(
+                RuntimeError,
+                match="RecordingFailed.failure_evidence_unavailable_reason",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=event_payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_recording_failure_without_evidence_requires_qa_problem_details(self) -> None:
+    def test_demo_proof_recording_failure_without_evidence_requires_qa_problem_details(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6280,7 +7512,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -6297,7 +7531,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "RecordingFailed")
@@ -6312,10 +7548,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=event_payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_recording_failure_without_evidence_requires_all_demo_targets(self) -> None:
+    def test_demo_proof_recording_failure_without_evidence_requires_all_demo_targets(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6325,7 +7565,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -6342,7 +7584,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             event_request = _demo_proof_request_for_event(request, "RecordingFailed")
@@ -6357,10 +7601,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=replace(event_request, payload=event_payload),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
-    def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking(self) -> None:
+    def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6370,7 +7618,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
 
             for event in (
@@ -6389,7 +7639,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
                     request=_demo_proof_request_for_event(request, event),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                    resolve_advance_handler_fn=lambda _handler_key: (
+                        DemoProofWorkflowAdvanceHandler()
+                    ),
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
@@ -6400,11 +7652,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             )
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "RecordingFailedPreviewCleanupCompleted"
-            operations = session.execute(
-                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-            ).scalars().all()
-            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            assert (
+                description["demo_proof_events"][-1]
+                == "RecordingFailedPreviewCleanupCompleted"
+            )
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            status_by_type = {
+                operation.operation_type: operation.status for operation in operations
+            }
             assert status_by_type == {
                 "preview_lease": "completed",
                 "release": "completed",
@@ -6414,7 +7677,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "preview_cleanup": "completed",
             }
 
-    def test_demo_proof_retry_reopens_failed_release_operation_waiting_for_event(self) -> None:
+    def test_demo_proof_retry_reopens_failed_release_operation_waiting_for_event(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -6424,14 +7689,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=request,
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
                 request=_demo_proof_request_for_event(request, "ProofLeaseAcquired"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                resolve_advance_handler_fn=lambda _handler_key: (
+                    DemoProofWorkflowAdvanceHandler()
+                ),
             )
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             release_operation = session.execute(
@@ -6442,7 +7711,8 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             release_attempt = session.execute(
                 select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == release_operation.operation_id,
+                    WorkflowOperationAttempt.operation_id
+                    == release_operation.operation_id,
                 )
             ).scalar_one()
             fail_workflow_operation(
@@ -6474,21 +7744,32 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             )
 
             session.refresh(release_operation)
-            attempts = session.execute(
-                select(WorkflowOperationAttempt)
-                .where(WorkflowOperationAttempt.operation_id == release_operation.operation_id)
-                .order_by(WorkflowOperationAttempt.attempt_number)
-            ).scalars().all()
+            attempts = (
+                session.execute(
+                    select(WorkflowOperationAttempt)
+                    .where(
+                        WorkflowOperationAttempt.operation_id
+                        == release_operation.operation_id
+                    )
+                    .order_by(WorkflowOperationAttempt.attempt_number)
+                )
+                .scalars()
+                .all()
+            )
             retried_work_unit_rows = session.execute(
                 select(WorkflowOperationWorkUnit, WorkflowOperationWorkUnitAttempt)
                 .join(
                     WorkflowOperationWorkUnitAttempt,
-                    WorkflowOperationWorkUnitAttempt.work_unit_id == WorkflowOperationWorkUnit.work_unit_id,
+                    WorkflowOperationWorkUnitAttempt.work_unit_id
+                    == WorkflowOperationWorkUnit.work_unit_id,
                 )
                 .where(
-                    WorkflowOperationWorkUnit.operation_id == release_operation.operation_id,
-                    WorkflowOperationWorkUnit.parent_attempt_id == attempts[-1].attempt_id,
-                    WorkflowOperationWorkUnitAttempt.operation_attempt_id == attempts[-1].attempt_id,
+                    WorkflowOperationWorkUnit.operation_id
+                    == release_operation.operation_id,
+                    WorkflowOperationWorkUnit.parent_attempt_id
+                    == attempts[-1].attempt_id,
+                    WorkflowOperationWorkUnitAttempt.operation_attempt_id
+                    == attempts[-1].attempt_id,
                 )
                 .order_by(WorkflowOperationWorkUnit.unit_key)
             ).all()
@@ -6496,13 +7777,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert handle.status == "waiting_for_input"
             assert workflow.status == "waiting_for_input"
             assert release_operation.status == "waiting_for_input"
-            assert [attempt.status for attempt in attempts] == ["failed", "waiting_for_input"]
-            assert [work_unit.unit_key for work_unit, _attempt in retried_work_unit_rows] == [
+            assert [attempt.status for attempt in attempts] == [
+                "failed",
+                "waiting_for_input",
+            ]
+            assert [
+                work_unit.unit_key for work_unit, _attempt in retried_work_unit_rows
+            ] == [
                 "release.create_or_reuse",
                 "release.wait_for_live",
             ]
-            assert {work_unit.status for work_unit, _attempt in retried_work_unit_rows} == {"running"}
-            assert {attempt.status for _work_unit, attempt in retried_work_unit_rows} == {"running"}
+            assert {
+                work_unit.status for work_unit, _attempt in retried_work_unit_rows
+            } == {"running"}
+            assert {
+                attempt.status for _work_unit, attempt in retried_work_unit_rows
+            } == {"running"}
             expected_payload = {
                 "proof_scope_id": "run-1-main-abcdef1",
                 "commit_sha": "abcdef1",
@@ -6517,7 +7807,8 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "summary": "Retry demo proof operation release for proof scope run-1-main-abcdef1.",
             }
             assert [
-                work_unit.input_fingerprint for work_unit, _attempt in retried_work_unit_rows
+                work_unit.input_fingerprint
+                for work_unit, _attempt in retried_work_unit_rows
             ] == [
                 workflow_work_unit_input_fingerprint(
                     {

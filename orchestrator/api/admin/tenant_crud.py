@@ -53,7 +53,9 @@ def create_tenant(
         policy_config=payload.policy.model_dump(),
         discord_config=with_preserved_discord_system_fields_fn(
             existing={},
-            proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
+            proposed=payload.discord.model_dump(exclude_unset=True)
+            if payload.discord
+            else None,
         ),
         experience_config=dict(payload.experience),
         setup_state=dict(payload.setup_state),
@@ -77,7 +79,9 @@ def create_tenant(
 def get_tenant_or_404(*, session, tenant_id: str) -> Tenant:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     return tenant
 
 
@@ -88,10 +92,14 @@ def _commit_tenant_update(*, session, tenant, tenant_to_schema_fn):  # noqa: ANN
     return tenant_to_schema_fn(tenant)
 
 
-def update_tenant_configuration(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
+def update_tenant_configuration(
+    *, session, tenant_id: str, payload, tenant_to_schema_fn
+):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.name = payload.name
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
 def update_tenant_jira(
@@ -109,34 +117,60 @@ def update_tenant_jira(
         proposed=payload.jira.model_dump(exclude_unset=True),
     )
     reconcile_tenant_projects_fn(session, tenant=tenant)
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
-def update_tenant_github(*, session, tenant_id: str, payload, with_managed_github_refs_fn, tenant_to_schema_fn):  # noqa: ANN001
+def update_tenant_github(
+    *,
+    session,
+    tenant_id: str,
+    payload,
+    with_managed_github_refs_fn,
+    tenant_to_schema_fn,
+):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.github_config = with_managed_github_refs_fn(payload.github.model_dump())
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
-def update_tenant_repos(*, session, tenant_id: str, payload, reconcile_tenant_projects_fn, tenant_to_schema_fn):  # noqa: ANN001
+def update_tenant_repos(
+    *,
+    session,
+    tenant_id: str,
+    payload,
+    reconcile_tenant_projects_fn,
+    tenant_to_schema_fn,
+):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.repos_config = payload.repos.model_dump()
     reconcile_tenant_projects_fn(session, tenant=tenant)
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
 def update_tenant_policy(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.policy_config = payload.policy.model_dump()
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
-def update_tenant_observability(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
+def update_tenant_observability(
+    *, session, tenant_id: str, payload, tenant_to_schema_fn
+):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     policy_config = dict(tenant.policy_config or {})
     policy_config["observability"] = payload.observability.model_dump()
     tenant.policy_config = policy_config
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
 def update_tenant_discord(
@@ -150,16 +184,22 @@ def update_tenant_discord(
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.discord_config = with_preserved_discord_system_fields_fn(
         existing=dict(tenant.discord_config or {}),
-        proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
+        proposed=payload.discord.model_dump(exclude_unset=True)
+        if payload.discord
+        else None,
     )
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
 def update_tenant_experience(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.experience_config = dict(payload.experience)
     tenant.setup_state = dict(payload.setup_state)
-    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+    return _commit_tenant_update(
+        session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn
+    )
 
 
 def _delete_tenant_owned_secrets(*, session, tenant_id: str) -> None:  # noqa: ANN001
@@ -176,7 +216,9 @@ def _delete_orphan_tenant_users(*, session, candidate_user_ids: list[str]) -> No
         return
     for user_id in sorted(set(candidate_user_ids)):
         has_remaining_membership = session.execute(
-            select(TenantMembership.membership_id).where(TenantMembership.user_id == user_id).limit(1)
+            select(TenantMembership.membership_id)
+            .where(TenantMembership.user_id == user_id)
+            .limit(1)
         ).scalar_one_or_none()
         if has_remaining_membership is None:
             credential = session.get(TenantUserCredential, user_id)
@@ -194,29 +236,43 @@ def _delete_tenant_and_owned_data(*, session, tenant_id: str) -> None:  # noqa: 
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     affected_user_ids = list(
         session.execute(
-            select(TenantMembership.user_id).where(TenantMembership.tenant_id == tenant_id)
+            select(TenantMembership.user_id).where(
+                TenantMembership.tenant_id == tenant_id
+            )
         ).scalars()
     )
     membership_ids = list(
         session.execute(
-            select(TenantMembership.membership_id).where(TenantMembership.tenant_id == tenant_id)
+            select(TenantMembership.membership_id).where(
+                TenantMembership.tenant_id == tenant_id
+            )
         ).scalars()
     )
     team_ids = list(
-        session.execute(select(TenantTeam.team_id).where(TenantTeam.tenant_id == tenant_id)).scalars()
+        session.execute(
+            select(TenantTeam.team_id).where(TenantTeam.tenant_id == tenant_id)
+        ).scalars()
     )
     session.execute(delete(Run).where(Run.tenant_id == tenant_id))
     session.execute(delete(TenantRunClaim).where(TenantRunClaim.tenant_id == tenant_id))
     session.execute(delete(TenantInvite).where(TenantInvite.tenant_id == tenant_id))
     if membership_ids:
         session.execute(
-            delete(TenantTeamMembership).where(TenantTeamMembership.membership_id.in_(membership_ids))
+            delete(TenantTeamMembership).where(
+                TenantTeamMembership.membership_id.in_(membership_ids)
+            )
         )
     if team_ids:
-        session.execute(delete(TenantTeamMembership).where(TenantTeamMembership.team_id.in_(team_ids)))
+        session.execute(
+            delete(TenantTeamMembership).where(
+                TenantTeamMembership.team_id.in_(team_ids)
+            )
+        )
     session.execute(delete(TenantTeam).where(TenantTeam.tenant_id == tenant_id))
     session.execute(delete(Project).where(Project.tenant_id == tenant_id))
-    session.execute(delete(TenantMembership).where(TenantMembership.tenant_id == tenant_id))
+    session.execute(
+        delete(TenantMembership).where(TenantMembership.tenant_id == tenant_id)
+    )
     _delete_tenant_owned_secrets(session=session, tenant_id=tenant_id)
     session.delete(tenant)
     session.flush()
@@ -245,7 +301,9 @@ def set_tenant_archive_state(
         tenant.purge_after_at = None
     else:
         tenant.archived_at = now
-        tenant.purge_after_at = now + timedelta(days=max(1, int(archive_retention_days)))
+        tenant.purge_after_at = now + timedelta(
+            days=max(1, int(archive_retention_days))
+        )
     tenant.updated_at = now
     session.commit()
     session.refresh(tenant)

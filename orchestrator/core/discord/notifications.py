@@ -45,7 +45,9 @@ def _event_enabled_for_project(*, project: Project | None, event: str | None) ->
     configured_events = discord_config.get("notify_events")
     if not isinstance(configured_events, list):
         return False
-    normalized_events = {str(value).strip() for value in configured_events if str(value).strip()}
+    normalized_events = {
+        str(value).strip() for value in configured_events if str(value).strip()
+    }
     return normalized in normalized_events
 
 
@@ -65,11 +67,17 @@ def send_tenant_discord_message(
     if not message.strip():
         return DiscordSendResult(sent=False, reason="empty_message")
     if not _event_enabled_for_project(project=project, event=event):
-        return DiscordSendResult(sent=False, reason=f"event_disabled:{event or 'unknown'}")
+        return DiscordSendResult(
+            sent=False, reason=f"event_disabled:{event or 'unknown'}"
+        )
 
     project_discord_config = project.discord_config or {} if project is not None else {}
     tenant_discord_config = tenant.discord_config or {}
-    channel_id = str(project_discord_config.get("channel_id") or tenant_discord_config.get("channel_id") or "").strip()
+    channel_id = str(
+        project_discord_config.get("channel_id")
+        or tenant_discord_config.get("channel_id")
+        or ""
+    ).strip()
     if not channel_id:
         return DiscordSendResult(sent=False, reason="channel_not_configured")
 
@@ -83,7 +91,9 @@ def send_tenant_discord_message(
         encryption_key=settings.secrets_encryption_key,
     )
     if not bot_token:
-        return DiscordSendResult(sent=False, reason=f"bot_token_missing:{token_ref}", channel_id=channel_id)
+        return DiscordSendResult(
+            sent=False, reason=f"bot_token_missing:{token_ref}", channel_id=channel_id
+        )
 
     try:
         client = DiscordApiClient(bot_token=bot_token)
@@ -92,8 +102,12 @@ def send_tenant_discord_message(
         thread_channel_id: str | None = None
         if open_thread:
             if not posted_message_id:
-                raise ValueError("Discord message post succeeded but response did not include message ID")
-            safe_thread_name = (thread_name or f"{tenant.tenant_id}-update-{posted_message_id[-6:]}").replace(" ", "-")[:100]
+                raise ValueError(
+                    "Discord message post succeeded but response did not include message ID"
+                )
+            safe_thread_name = (
+                thread_name or f"{tenant.tenant_id}-update-{posted_message_id[-6:]}"
+            ).replace(" ", "-")[:100]
             thread_channel_id = client.create_thread_from_message(
                 channel_id=channel_id,
                 message_id=posted_message_id,
@@ -104,7 +118,11 @@ def send_tenant_discord_message(
                 project_discord_config = dict(project.discord_config or {})
                 raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
                 thread_ids = (
-                    [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                    [
+                        str(value).strip()
+                        for value in raw_thread_ids
+                        if str(value).strip()
+                    ]
                     if isinstance(raw_thread_ids, list)
                     else []
                 )
@@ -147,7 +165,9 @@ def send_tenant_discord_message(
             channel_id,
             exc,
         )
-        return DiscordSendResult(sent=False, reason=f"send_failed:{exc}", channel_id=channel_id)
+        return DiscordSendResult(
+            sent=False, reason=f"send_failed:{exc}", channel_id=channel_id
+        )
 
     return DiscordSendResult(
         sent=True,

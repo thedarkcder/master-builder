@@ -63,8 +63,8 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
     def test_prepare_execution_builds_attachment_action(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
-            tenant = session.get(Tenant, "example")
+            project = session.get(Project, "example-workspace-default")
+            tenant = session.get(Tenant, "example-workspace")
             assert project is not None
             assert tenant is not None
             project.discord_config = {"channel_id": "999"}
@@ -102,7 +102,11 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
             with (
                 patch(
                     "orchestrator.core.projects.automation_execution_service.safe_build_project_automation_briefing",
-                    return_value=type("Briefing", (), {"transcript": "hello world", "summary": "brief summary"})(),
+                    return_value=type(
+                        "Briefing",
+                        (),
+                        {"transcript": "hello world", "summary": "brief summary"},
+                    )(),
                 ),
                 patch(
                     "orchestrator.core.projects.automation_execution_service.synthesize_reply_audio",
@@ -119,7 +123,10 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     request_id="req-1",
-                    payload_json={"execution_id": "exec-1", "automation_id": automation.automation_id},
+                    payload_json={
+                        "execution_id": "exec-1",
+                        "automation_id": automation.automation_id,
+                    },
                 )
         self.assertFalse(plan.already_succeeded)
         self.assertIsNotNone(plan.action)
@@ -131,8 +138,8 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
     def test_prepare_execution_requires_project_channel_id(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
-            tenant = session.get(Tenant, "example")
+            project = session.get(Project, "example-workspace-default")
+            tenant = session.get(Tenant, "example-workspace")
             assert project is not None
             assert tenant is not None
             project.discord_config = {}
@@ -174,7 +181,10 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     request_id="req-nc",
-                    payload_json={"execution_id": "exec-no-channel", "automation_id": automation.automation_id},
+                    payload_json={
+                        "execution_id": "exec-no-channel",
+                        "automation_id": automation.automation_id,
+                    },
                 )
 
     def test_mark_failure_is_safe_for_missing_execution(self) -> None:
@@ -185,11 +195,13 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                 error="boom",
             )
 
-    def test_prepare_execution_stitches_persona_segments_with_persona_voices(self) -> None:
+    def test_prepare_execution_stitches_persona_segments_with_persona_voices(
+        self,
+    ) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
-            tenant = session.get(Tenant, "example")
+            project = session.get(Project, "example-workspace-default")
+            tenant = session.get(Tenant, "example-workspace")
             assert project is not None
             assert tenant is not None
             project.discord_config = {
@@ -242,7 +254,9 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                 type("Segment", (), {"persona_id": "pm", "text": "PM update"})(),
                 type("Segment", (), {"persona_id": "engineer", "text": "Dev update"})(),
                 type("Segment", (), {"persona_id": "qa", "text": "QA update"})(),
-                type("Segment", (), {"persona_id": "reviewer", "text": "Review update"})(),
+                type(
+                    "Segment", (), {"persona_id": "reviewer", "text": "Review update"}
+                )(),
             )
             with (
                 patch(
@@ -250,16 +264,36 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                     return_value=type(
                         "Briefing",
                         (),
-                        {"transcript": "joined", "summary": "summary", "persona_segments": segments},
+                        {
+                            "transcript": "joined",
+                            "summary": "summary",
+                            "persona_segments": segments,
+                        },
                     )(),
                 ),
                 patch(
                     "orchestrator.core.projects.automation_execution_service.synthesize_reply_audio",
                     side_effect=[
-                        VoiceReplyAudio(audio_bytes=self._wav_bytes(b"\x01\x00"), filename="a.wav", content_type="audio/wav"),
-                        VoiceReplyAudio(audio_bytes=self._wav_bytes(b"\x02\x00"), filename="b.wav", content_type="audio/wav"),
-                        VoiceReplyAudio(audio_bytes=self._wav_bytes(b"\x03\x00"), filename="c.wav", content_type="audio/wav"),
-                        VoiceReplyAudio(audio_bytes=self._wav_bytes(b"\x04\x00"), filename="d.wav", content_type="audio/wav"),
+                        VoiceReplyAudio(
+                            audio_bytes=self._wav_bytes(b"\x01\x00"),
+                            filename="a.wav",
+                            content_type="audio/wav",
+                        ),
+                        VoiceReplyAudio(
+                            audio_bytes=self._wav_bytes(b"\x02\x00"),
+                            filename="b.wav",
+                            content_type="audio/wav",
+                        ),
+                        VoiceReplyAudio(
+                            audio_bytes=self._wav_bytes(b"\x03\x00"),
+                            filename="c.wav",
+                            content_type="audio/wav",
+                        ),
+                        VoiceReplyAudio(
+                            audio_bytes=self._wav_bytes(b"\x04\x00"),
+                            filename="d.wav",
+                            content_type="audio/wav",
+                        ),
                     ],
                 ) as synth_mock,
             ):
@@ -269,13 +303,19 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     request_id="req-stitch",
-                    payload_json={"execution_id": "exec-stitch-1", "automation_id": automation.automation_id},
+                    payload_json={
+                        "execution_id": "exec-stitch-1",
+                        "automation_id": automation.automation_id,
+                    },
                 )
 
         assert plan.action is not None
         self.assertEqual(plan.action.channel_id, "999")
         self.assertEqual(synth_mock.call_count, 4)
-        self.assertEqual([call.kwargs["persona_id"] for call in synth_mock.call_args_list], ["pm", "engineer", "qa", "reviewer"])
+        self.assertEqual(
+            [call.kwargs["persona_id"] for call in synth_mock.call_args_list],
+            ["pm", "engineer", "qa", "reviewer"],
+        )
         self.assertEqual(
             [call.kwargs["text"] for call in synth_mock.call_args_list],
             [
@@ -293,8 +333,8 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
     def test_mark_success_persists_discord_message_id(self) -> None:
         now = datetime(2026, 3, 28, 9, 0, tzinfo=UTC)
         with self.session_factory() as session:
-            project = session.get(Project, "example-default")
-            tenant = session.get(Tenant, "example")
+            project = session.get(Project, "example-workspace-default")
+            tenant = session.get(Tenant, "example-workspace")
             assert project is not None
             assert tenant is not None
             project.discord_config = {"channel_id": "999"}

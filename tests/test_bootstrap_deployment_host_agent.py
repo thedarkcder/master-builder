@@ -9,8 +9,14 @@ from unittest.mock import patch
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "bootstrap_deployment_host_agent.py"
-    spec = importlib.util.spec_from_file_location("bootstrap_deployment_host_agent", module_path)
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "bootstrap_deployment_host_agent.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "bootstrap_deployment_host_agent", module_path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("Failed to load bootstrap_deployment_host_agent module")
     module = importlib.util.module_from_spec(spec)
@@ -49,17 +55,23 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
                 def list_tenants(self) -> list[dict[str, object]]:
                     return [{"tenant_id": "tenant-a"}]
 
-                def get_tenant_deployment_plane(self, *, tenant_id: str) -> dict[str, object]:
+                def get_tenant_deployment_plane(
+                    self, *, tenant_id: str
+                ) -> dict[str, object]:
                     assert tenant_id == "tenant-a"
                     return {
                         "provider": "internal_coolify",
                         "api_base_url": "https://builder.example.com/api/v1",
                         "managed_host_id": None,
                         "state": "active",
-                        "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                        "secret_refs": {
+                            "coolify_api_token": "platform/COOLIFY_API_TOKEN"
+                        },
                     }
 
-                def update_tenant_deployment_plane(self, *, tenant_id: str, payload: dict[str, object]) -> dict[str, object]:
+                def update_tenant_deployment_plane(
+                    self, *, tenant_id: str, payload: dict[str, object]
+                ) -> dict[str, object]:
                     updates.append((tenant_id, payload))
                     return payload
 
@@ -86,7 +98,9 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
             self.assertEqual(updates[0][0], "tenant-a")
             self.assertEqual(updates[0][1]["managed_host_id"], "host-1")
 
-    def test_ensure_bootstrap_creates_host_writes_token_and_assigns_configured_tenants(self) -> None:
+    def test_ensure_bootstrap_creates_host_writes_token_and_assigns_configured_tenants(
+        self,
+    ) -> None:
         module = _load_module()
         with TemporaryDirectory() as tmp_dir:
             bootstrap_token_path = Path(tmp_dir) / "bootstrap-token"
@@ -140,14 +154,18 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
                 def list_tenants(self) -> list[dict[str, object]]:
                     return [{"tenant_id": "tenant-a"}, {"tenant_id": "tenant-b"}]
 
-                def get_tenant_deployment_plane(self, *, tenant_id: str) -> dict[str, object]:
+                def get_tenant_deployment_plane(
+                    self, *, tenant_id: str
+                ) -> dict[str, object]:
                     if tenant_id == "tenant-a":
                         return {
                             "provider": "internal_coolify",
                             "infrastructure_provider": "hetzner",
                             "region": "eu-west",
                             "api_base_url": "https://builder.example.com/api/v1",
-                            "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                            "secret_refs": {
+                                "coolify_api_token": "platform/COOLIFY_API_TOKEN"
+                            },
                             "state": "active",
                             "managed_host_id": None,
                         }
@@ -161,7 +179,9 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
                         "managed_host_id": None,
                     }
 
-                def update_tenant_deployment_plane(self, *, tenant_id: str, payload: dict[str, object]) -> dict[str, object]:
+                def update_tenant_deployment_plane(
+                    self, *, tenant_id: str, payload: dict[str, object]
+                ) -> dict[str, object]:
                     updates.append((tenant_id, payload))
                     return payload
 
@@ -184,13 +204,19 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
             self.assertEqual(summary["action"], "created")
             self.assertEqual(summary["host_id"], "host-1")
             self.assertEqual(summary["assigned_tenants"], ["tenant-a"])
-            self.assertEqual(bootstrap_token_path.read_text(encoding="utf-8"), "bootstrap-token-1")
-            self.assertEqual(access_token_path.read_text(encoding="utf-8"), "access-token-1")
+            self.assertEqual(
+                bootstrap_token_path.read_text(encoding="utf-8"), "bootstrap-token-1"
+            )
+            self.assertEqual(
+                access_token_path.read_text(encoding="utf-8"), "access-token-1"
+            )
             self.assertEqual(len(updates), 1)
             self.assertEqual(updates[0][0], "tenant-a")
             self.assertEqual(updates[0][1]["managed_host_id"], "host-1")
 
-    def test_ensure_bootstrap_recreates_host_when_stored_credentials_are_stale(self) -> None:
+    def test_ensure_bootstrap_recreates_host_when_stored_credentials_are_stale(
+        self,
+    ) -> None:
         module = _load_module()
         with TemporaryDirectory() as tmp_dir:
             bootstrap_token_path = Path(tmp_dir) / "bootstrap-token"
@@ -252,17 +278,23 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
                 def list_tenants(self) -> list[dict[str, object]]:
                     return [{"tenant_id": "tenant-a"}]
 
-                def get_tenant_deployment_plane(self, *, tenant_id: str) -> dict[str, object]:
+                def get_tenant_deployment_plane(
+                    self, *, tenant_id: str
+                ) -> dict[str, object]:
                     assert tenant_id == "tenant-a"
                     return {
                         "provider": "internal_coolify",
                         "api_base_url": "https://builder.example.com/api/v1",
                         "managed_host_id": None,
                         "state": "active",
-                        "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                        "secret_refs": {
+                            "coolify_api_token": "platform/COOLIFY_API_TOKEN"
+                        },
                     }
 
-                def update_tenant_deployment_plane(self, *, tenant_id: str, payload: dict[str, object]) -> dict[str, object]:
+                def update_tenant_deployment_plane(
+                    self, *, tenant_id: str, payload: dict[str, object]
+                ) -> dict[str, object]:
                     updates.append((tenant_id, payload))
                     return payload
 
@@ -284,8 +316,13 @@ class BootstrapDeploymentHostAgentTests(unittest.TestCase):
 
             self.assertEqual(summary["action"], "created")
             self.assertEqual(summary["host_id"], "host-2")
-            self.assertEqual(bootstrap_token_path.read_text(encoding="utf-8"), "fresh-bootstrap-token")
-            self.assertEqual(access_token_path.read_text(encoding="utf-8"), "fresh-access-token")
+            self.assertEqual(
+                bootstrap_token_path.read_text(encoding="utf-8"),
+                "fresh-bootstrap-token",
+            )
+            self.assertEqual(
+                access_token_path.read_text(encoding="utf-8"), "fresh-access-token"
+            )
             self.assertEqual(len(updates), 1)
             self.assertEqual(updates[0][1]["managed_host_id"], "host-2")
 

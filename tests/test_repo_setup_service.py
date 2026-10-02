@@ -11,7 +11,10 @@ from orchestrator.core.worker.repo_setup_service import (
     TerminalRepoSetupError,
     prepare_execution_repo_for_run,
 )
-from orchestrator.tools.project_repo_checkout import PreparedExecutionRepo, ProjectRepoCheckoutError
+from orchestrator.tools.project_repo_checkout import (
+    PreparedExecutionRepo,
+    ProjectRepoCheckoutError,
+)
 
 
 def _repo_setup_subject(*, checkout_base_dir: str) -> dict[str, object]:
@@ -29,7 +32,10 @@ def _repo_setup_subject(*, checkout_base_dir: str) -> dict[str, object]:
         issue_description="Prepare execution repo",
         attempt_number=1,
     )
-    settings = SimpleNamespace(project_repo_checkout_base_dir=checkout_base_dir, secrets_encryption_key="secret")
+    settings = SimpleNamespace(
+        project_repo_checkout_base_dir=checkout_base_dir,
+        secrets_encryption_key="secret",
+    )
     return {
         "session": object(),
         "settings": settings,
@@ -42,10 +48,19 @@ def _repo_setup_subject(*, checkout_base_dir: str) -> dict[str, object]:
     }
 
 
-def test_prepare_execution_repo_uses_deterministic_checkout_helpers(tmp_path: Path) -> None:
+def test_prepare_execution_repo_uses_deterministic_checkout_helpers(
+    tmp_path: Path,
+) -> None:
     subject = _repo_setup_subject(checkout_base_dir=str(tmp_path))
     prepared_repo = PreparedExecutionRepo(
-        repo_dir=tmp_path / "tenant-a" / "project-a" / "runs" / "run-1" / "workspaces" / "worker-a" / "repo",
+        repo_dir=tmp_path
+        / "tenant-a"
+        / "project-a"
+        / "runs"
+        / "run-1"
+        / "workspaces"
+        / "worker-a"
+        / "repo",
         execution_branch="run/tp-1/run-1",
         workspace_key="worker-a",
         start_point_ref="origin/main",
@@ -54,13 +69,21 @@ def test_prepare_execution_repo_uses_deterministic_checkout_helpers(tmp_path: Pa
     )
 
     with (
-        patch("orchestrator.core.worker.repo_setup_service._github_installation_token_for_project", return_value="token") as token_mock,
-        patch("orchestrator.core.worker.repo_setup_service.ensure_project_checkout") as ensure_project_checkout_mock,
+        patch(
+            "orchestrator.core.worker.repo_setup_service._github_installation_token_for_project",
+            return_value="token",
+        ) as token_mock,
+        patch(
+            "orchestrator.core.worker.repo_setup_service.ensure_project_checkout"
+        ) as ensure_project_checkout_mock,
         patch(
             "orchestrator.core.worker.repo_setup_service.ensure_run_worktree",
             return_value=(prepared_repo.repo_dir, prepared_repo.execution_branch),
         ) as ensure_run_worktree_mock,
-        patch("orchestrator.core.worker.repo_setup_service.validate_execution_repo", return_value=prepared_repo) as validate_mock,
+        patch(
+            "orchestrator.core.worker.repo_setup_service.validate_execution_repo",
+            return_value=prepared_repo,
+        ) as validate_mock,
     ):
         result = prepare_execution_repo_for_run(
             session=subject["session"],
@@ -85,18 +108,25 @@ def test_prepare_execution_repo_uses_deterministic_checkout_helpers(tmp_path: Pa
     validate_mock.assert_called_once()
 
 
-def test_prepare_execution_repo_treats_worktree_validation_failure_as_retryable(tmp_path: Path) -> None:
+def test_prepare_execution_repo_treats_worktree_validation_failure_as_retryable(
+    tmp_path: Path,
+) -> None:
     subject = _repo_setup_subject(checkout_base_dir=str(tmp_path))
 
     with (
-        patch("orchestrator.core.worker.repo_setup_service._github_installation_token_for_project", return_value="token"),
+        patch(
+            "orchestrator.core.worker.repo_setup_service._github_installation_token_for_project",
+            return_value="token",
+        ),
         patch("orchestrator.core.worker.repo_setup_service.ensure_project_checkout"),
         patch(
             "orchestrator.core.worker.repo_setup_service.ensure_run_worktree",
             side_effect=ProjectRepoCheckoutError("Execution repo metadata is missing"),
         ),
     ):
-        with pytest.raises(RetryableRepoSetupError, match="Execution repo metadata is missing"):
+        with pytest.raises(
+            RetryableRepoSetupError, match="Execution repo metadata is missing"
+        ):
             prepare_execution_repo_for_run(
                 session=subject["session"],
                 settings=subject["settings"],
@@ -109,14 +139,19 @@ def test_prepare_execution_repo_treats_worktree_validation_failure_as_retryable(
             )
 
 
-def test_prepare_execution_repo_treats_missing_credentials_as_terminal(tmp_path: Path) -> None:
+def test_prepare_execution_repo_treats_missing_credentials_as_terminal(
+    tmp_path: Path,
+) -> None:
     subject = _repo_setup_subject(checkout_base_dir=str(tmp_path))
 
     with patch(
         "orchestrator.core.worker.repo_setup_service._github_installation_token_for_project",
         side_effect=ValueError("missing private key"),
     ):
-        with pytest.raises(TerminalRepoSetupError, match="Repository checkout credentials are unavailable"):
+        with pytest.raises(
+            TerminalRepoSetupError,
+            match="Repository checkout credentials are unavailable",
+        ):
             prepare_execution_repo_for_run(
                 session=subject["session"],
                 settings=subject["settings"],

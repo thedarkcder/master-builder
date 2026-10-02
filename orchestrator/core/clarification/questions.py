@@ -28,7 +28,9 @@ class ClarificationQuestion:
         if not normalized_question:
             raise ValueError("Clarification question text is required")
         object.__setattr__(self, "question", normalized_question)
-        object.__setattr__(self, "why_it_matters", _compact_text(self.why_it_matters) or None)
+        object.__setattr__(
+            self, "why_it_matters", _compact_text(self.why_it_matters) or None
+        )
         object.__setattr__(self, "question_id", _compact_text(self.question_id) or None)
         object.__setattr__(self, "source_ref", _compact_text(self.source_ref) or None)
 
@@ -49,7 +51,12 @@ class ClarificationQuestion:
         if isinstance(value, Mapping):
             question = _first_text(
                 value,
-                ("question", "stakeholder_question", "question_text", "original_question"),
+                (
+                    "question",
+                    "stakeholder_question",
+                    "question_text",
+                    "original_question",
+                ),
             )
             if not question:
                 return None

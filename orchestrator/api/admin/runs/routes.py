@@ -13,9 +13,15 @@ from orchestrator.core.security import (
     require_authenticated_principal,
 )
 from orchestrator.api.admin.runs import use_cases
-from orchestrator.api.schemas import LoggingPaneEventRead, ProjectDeploymentReleaseRead, RunEventRead, RunRead
+from orchestrator.api.schemas import (
+    LoggingPaneEventRead,
+    ProjectDeploymentReleaseRead,
+    RunEventRead,
+    RunRead,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
 
 @router.get("/runs", response_model=list[RunRead])
 def list_runs(
@@ -45,6 +51,7 @@ def list_runs(
         offset=offset,
     )
 
+
 @router.get("/runs/{run_id}", response_model=RunRead)
 def get_run(
     run_id: str,
@@ -52,6 +59,7 @@ def get_run(
     session: Session = Depends(get_session),
 ) -> RunRead:
     return use_cases.get_run(session=session, principal=principal, run_id=run_id)
+
 
 @router.post("/runs/{run_id}/cancel", response_model=RunRead)
 def cancel_run(
@@ -61,6 +69,7 @@ def cancel_run(
 ) -> RunRead:
     return use_cases.cancel_run(session=session, run_id=run_id)
 
+
 @router.post("/runs/{run_id}/preview", response_model=ProjectDeploymentReleaseRead)
 def create_run_preview(
     run_id: str,
@@ -68,7 +77,10 @@ def create_run_preview(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentReleaseRead:
-    return use_cases.create_run_preview(session=session, principal=principal, run_id=run_id, force=force)
+    return use_cases.create_run_preview(
+        session=session, principal=principal, run_id=run_id, force=force
+    )
+
 
 @router.get("/runs/{run_id}/events", response_model=list[RunEventRead])
 def list_run_events(
@@ -83,6 +95,7 @@ def list_run_events(
         run_id=run_id,
         limit=limit,
     )
+
 
 @router.get("/runs/{run_id}/logs", response_model=list[LoggingPaneEventRead])
 def list_run_logs(
@@ -102,6 +115,7 @@ def list_run_logs(
         before_event_id=before_event_id,
     )
 
+
 @router.get("/runs/{run_id}/events/stream")
 def stream_run_events(
     run_id: str,
@@ -109,9 +123,12 @@ def stream_run_events(
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     return StreamingResponse(
-        use_cases.stream_run_events(session=session, principal=principal, run_id=run_id),
+        use_cases.stream_run_events(
+            session=session, principal=principal, run_id=run_id
+        ),
         media_type="application/x-ndjson",
     )
+
 
 @router.get("/runtime/logs", response_model=list[LoggingPaneEventRead])
 def list_runtime_logs(
@@ -133,6 +150,7 @@ def list_runtime_logs(
         command=command,
         limit=limit,
     )
+
 
 @router.get("/runtime/events/stream")
 def stream_runtime_events(

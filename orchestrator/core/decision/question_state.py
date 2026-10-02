@@ -25,7 +25,11 @@ def unresolved_question_ids_for_question_set(
     question_set: Iterable[Mapping[str, Any]],
     accepted_question_ids: Iterable[str] = (),
 ) -> list[str]:
-    accepted_ids = {str(question_id).strip() for question_id in accepted_question_ids if str(question_id).strip()}
+    accepted_ids = {
+        str(question_id).strip()
+        for question_id in accepted_question_ids
+        if str(question_id).strip()
+    }
     ids: list[str] = []
     for item in question_set:
         question_id = normalized_question_id(item)

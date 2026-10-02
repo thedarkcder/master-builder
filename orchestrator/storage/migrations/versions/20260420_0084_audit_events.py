@@ -45,19 +45,54 @@ def upgrade() -> None:
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("payload_json", sa.JSON(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["workflow_id"], ["workflow_executions.workflow_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["workflow_id"], ["workflow_executions.workflow_id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["operation_id"], ["workflow_operations.operation_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["operation_id"], ["workflow_operations.operation_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("event_id"),
     )
-    op.create_index("ix_audit_events_tenant_id_recorded_at", "audit_events", ["tenant_id", "recorded_at"], unique=False)
-    op.create_index("ix_audit_events_project_id_recorded_at", "audit_events", ["project_id", "recorded_at"], unique=False)
-    op.create_index("ix_audit_events_workflow_id_recorded_at", "audit_events", ["workflow_id", "recorded_at"], unique=False)
-    op.create_index("ix_audit_events_run_id_recorded_at", "audit_events", ["run_id", "recorded_at"], unique=False)
-    op.create_index("ix_audit_events_operation_id_recorded_at", "audit_events", ["operation_id", "recorded_at"], unique=False)
-    op.create_index("ix_audit_events_event_kind", "audit_events", ["event_kind"], unique=False)
+    op.create_index(
+        "ix_audit_events_tenant_id_recorded_at",
+        "audit_events",
+        ["tenant_id", "recorded_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_audit_events_project_id_recorded_at",
+        "audit_events",
+        ["project_id", "recorded_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_audit_events_workflow_id_recorded_at",
+        "audit_events",
+        ["workflow_id", "recorded_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_audit_events_run_id_recorded_at",
+        "audit_events",
+        ["run_id", "recorded_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_audit_events_operation_id_recorded_at",
+        "audit_events",
+        ["operation_id", "recorded_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_audit_events_event_kind", "audit_events", ["event_kind"], unique=False
+    )
     op.create_index("ix_audit_events_level", "audit_events", ["level"], unique=False)
 
 

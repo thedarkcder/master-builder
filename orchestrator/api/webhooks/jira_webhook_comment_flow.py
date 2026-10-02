@@ -6,9 +6,13 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
-from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_ask_history
+from orchestrator.api.discord.ask.context import (
+    remove_issue_key_from_tenant_ask_history,
+)
 from orchestrator.api.discord.shared.state import remove_issue_key_from_seed_followups
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
@@ -23,14 +27,19 @@ from orchestrator.api.webhooks.jira_parent_child_sync import (
     handle_pm_interview_reply,
     is_system_generated_comment,
 )
-from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.api.webhooks.jira_webhook_types import (
+    JiraWebhookContext,
+    jira_webhook_response,
+)
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
     build_decision_clarification_response_fields,
     load_cycle_question_feedback,
 )
 from orchestrator.core.runtime.runtime import CodexRuntimeError
-from orchestrator.core.decision.clarification_service import capture_decision_reply_and_recheck
+from orchestrator.core.decision.clarification_service import (
+    capture_decision_reply_and_recheck,
+)
 from orchestrator.core.decision.engine import DecisionEventInput
 from orchestrator.core.decision.reply_service import (
     active_case_and_cycle_for_issue,
@@ -59,10 +68,12 @@ def stage_handle_issue_deleted(
         tenant=context.tenant,
         issue_key=context.issue_key,
     )
-    removed_seed_contexts, removed_seed_issue_refs = remove_issue_key_from_seed_followups(
-        session=session,
-        tenant=context.tenant,
-        issue_key=context.issue_key,
+    removed_seed_contexts, removed_seed_issue_refs = (
+        remove_issue_key_from_seed_followups(
+            session=session,
+            tenant=context.tenant,
+            issue_key=context.issue_key,
+        )
     )
     if removed_seed_contexts > 0 or removed_seed_issue_refs > 0:
         session.commit()
@@ -134,7 +145,10 @@ def stage_handle_comment_without_command(
     context: JiraWebhookContext,
     removed_history_entries: int,
 ) -> dict | None:
-    if context.webhook_event not in JIRA_COMMENT_EVENTS or context.comment_command is not None:
+    if (
+        context.webhook_event not in JIRA_COMMENT_EVENTS
+        or context.comment_command is not None
+    ):
         return None
     logger.info(
         "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=comment_without_command webhook_event=%s",
@@ -158,7 +172,10 @@ def stage_handle_comment_decision_reply(
     session: Session,
     settings,  # noqa: ANN001
 ) -> dict | None:
-    if context.webhook_event not in JIRA_COMMENT_EVENTS or context.comment_command is not None:
+    if (
+        context.webhook_event not in JIRA_COMMENT_EVENTS
+        or context.comment_command is not None
+    ):
         return None
     comment_text = extract_jira_comment_text(context.payload)
     if (
@@ -263,7 +280,9 @@ def stage_handle_comment_ask_command(
             enqueued=False,
             reason="invalid_comment_command",
         )
-    author_account_id = extract_jira_comment_author_account_id(context.payload) or "jira-user"
+    author_account_id = (
+        extract_jira_comment_author_account_id(context.payload) or "jira-user"
+    )
     try:
         ask_response = execute_jira_comment_command(
             session=session,

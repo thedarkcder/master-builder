@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import (
+    record_agent_lifecycle_event,
+)
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
@@ -23,18 +25,27 @@ from orchestrator.core.workflow.step_runner import (
     start_workflow_step_attempt,
     wait_workflow_step_attempt,
 )
-from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION, get_workflow_type
+from orchestrator.core.workflow.type_catalog import (
+    ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+    get_workflow_type,
+)
 from orchestrator.core.workflow.work_units import run_work_unit
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
-from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
-from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
+from orchestrator.core.worker.jira_stage_service import (
+    send_stage_update_to_jira as _send_stage_update_to_jira,
+)
+from orchestrator.core.worker.jira_stage_service import (
+    transition_issue_status as _transition_issue_status,
+)
 from orchestrator.core.worker.process_service import (
     process_claimed_run as _process_claimed_run_impl,
     process_next_queued_run as _process_next_queued_run_impl,
 )
 from orchestrator.core.worker.queue_selector import claim_next_queued_run
 from orchestrator.core.worker.queue_selector import ClaimedRun
-from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
+from orchestrator.core.worker.run_execution_context import (
+    resolve_run_execution_policy_context,
+)
 from orchestrator.core.worker.run_health import (
     WorkerRunHeartbeatController,
     worker_service_instance_id_for_mode,
@@ -70,7 +81,13 @@ from orchestrator.core.worker.workflow_request_service import (
 )
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
-from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant, WorkflowExecution
+from orchestrator.storage.models import (
+    Project,
+    Run,
+    RunHumanInputRequest,
+    Tenant,
+    WorkflowExecution,
+)
 from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
 from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
 from orchestrator.tools.github_app import github_client_from_tenant_config
@@ -171,7 +188,9 @@ def _pending_request_id(*, session: Session, workflow_id: str) -> str | None:
     return str(request_id or "").strip() or None
 
 
-def _run_result_payload(*, session: Session, workflow: WorkflowExecution, run: Run, claim_id: str | None) -> dict[str, object]:
+def _run_result_payload(
+    *, session: Session, workflow: WorkflowExecution, run: Run, claim_id: str | None
+) -> dict[str, object]:
     normalized_status = str(run.status or "").strip().lower()
     return {
         "workflow_id": workflow.workflow_id,
@@ -233,8 +252,12 @@ def _process_claimed_run_impl_with_temporal_projection(
     expected_claim_id: str,
     send_discord_message_fn: TransportActionSender,
 ) -> Run:
-    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
-    lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+    workflow_type = get_workflow_type(
+        session, workflow_type_key=workflow.workflow_type_key
+    )
+    lifecycle = WorkflowExecutionProjection(
+        session=session, workflow=workflow, workflow_type=workflow_type
+    )
     step = start_workflow_step_attempt(
         lifecycle=lifecycle,
         run_id=claimed_run.run_id,
@@ -278,7 +301,9 @@ def _process_claimed_run_impl_with_temporal_projection(
             ),
         )
         if processed is None:
-            raise RuntimeError(f"Execution worker returned no run for workflow_id={workflow.workflow_id}")
+            raise RuntimeError(
+                f"Execution worker returned no run for workflow_id={workflow.workflow_id}"
+            )
         return _run_result_payload(
             session=session,
             workflow=workflow,
@@ -307,19 +332,33 @@ def _process_claimed_run_impl_with_temporal_projection(
         )
         processed_run = session.get(Run, str(result_payload["run_id"]))
         if processed_run is None:
-            raise RuntimeError(f"Execution worker result referenced missing run {result_payload['run_id']}")
+            raise RuntimeError(
+                f"Execution worker result referenced missing run {result_payload['run_id']}"
+            )
         from orchestrator.temporal.workflow_engine import notify_temporal_run_result
 
-        notify_temporal_run_result(
-            session=session,
-            settings=settings,
-            workflow=workflow,
-            run=processed_run,
-        )
+        try:
+            notify_temporal_run_result(
+                session=session,
+                settings=settings,
+                workflow=workflow,
+                run=processed_run,
+            )
+        except Exception:
+            logger.exception(
+                "execution_worker_temporal_notification_failed workflow_id=%s run_id=%s status=%s",
+                workflow.workflow_id,
+                processed_run.run_id,
+                processed_run.status,
+            )
         _finish_workflow_step_for_run(lifecycle=lifecycle, step=step, run=processed_run)
         return processed_run
     except Exception as exc:  # noqa: BLE001
-        logger.exception("execution_worker_temporal_run_failed workflow_id=%s run_id=%s", workflow.workflow_id, claimed_run.run_id)
+        logger.exception(
+            "execution_worker_temporal_run_failed workflow_id=%s run_id=%s",
+            workflow.workflow_id,
+            claimed_run.run_id,
+        )
         fail_workflow_step_attempt(
             lifecycle=lifecycle,
             step=step,
@@ -343,12 +382,18 @@ def process_claimed_run_with_dependencies(
         raise RuntimeError(f"Claimed run {run_id} no longer exists")
     expected_owner = worker_service_instance_id_for_mode(settings=settings, mode="runs")
     expected_claim_id = str(claim_id or "").strip()
-    if str(getattr(claimed_run, "status", "") or "").strip().lower() != RUN_STATUS_DISPATCHING:
+    if (
+        str(getattr(claimed_run, "status", "") or "").strip().lower()
+        != RUN_STATUS_DISPATCHING
+    ):
         raise RuntimeError(
             "Claimed run handoff failed: "
             f"run_id={claimed_run.run_id} status={claimed_run.status} expected_status={RUN_STATUS_DISPATCHING}"
         )
-    if str(getattr(claimed_run, "worker_service_instance_id", "") or "").strip() != str(expected_owner or "").strip():
+    if (
+        str(getattr(claimed_run, "worker_service_instance_id", "") or "").strip()
+        != str(expected_owner or "").strip()
+    ):
         raise RuntimeError(
             "Claimed run owner mismatch: "
             f"run_id={claimed_run.run_id} current_owner={claimed_run.worker_service_instance_id} "
@@ -386,7 +431,10 @@ def process_claimed_run_with_dependencies(
         tenant=tenant,
         run=claimed_run,
     )
-    if str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "legacy":
+    if (
+        str(getattr(workflow, "orchestration_backend", "") or "").strip().lower()
+        == "legacy"
+    ):
         return _process_claimed_run_impl(
             session=session,
             runner=runner,
@@ -492,12 +540,14 @@ def build_run_process_kwargs(
         fail_project_repository_checkout_fn=fail_project_repository_checkout,
         fail_project_repository_setup_fn=fail_project_repository_setup,
         cleanup_run_workspaces_fn=cleanup_run_workspaces,
-        build_run_heartbeat_controller_fn=lambda *, run_id, worker_service_instance_id, claim_id, heartbeat_interval_seconds: WorkerRunHeartbeatController(
-            database_url=settings.database_url,
-            run_id=run_id,
-            worker_service_instance_id=worker_service_instance_id,
-            claim_id=claim_id,
-            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        build_run_heartbeat_controller_fn=lambda *, run_id, worker_service_instance_id, claim_id, heartbeat_interval_seconds: (
+            WorkerRunHeartbeatController(
+                database_url=settings.database_url,
+                run_id=run_id,
+                worker_service_instance_id=worker_service_instance_id,
+                claim_id=claim_id,
+                heartbeat_interval_seconds=heartbeat_interval_seconds,
+            )
         ),
         promote_run_to_running_fn=promote_run_to_running,
         bind_run_project_fn=bind_run_project,
@@ -522,10 +572,12 @@ def build_run_process_kwargs(
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: settings.agent_id,
-        resolve_worker_service_instance_id_fn=lambda: str(worker_service_instance_id or "").strip()
-        or worker_service_instance_id_for_mode(
-            settings=settings,
-            mode="runs",
+        resolve_worker_service_instance_id_fn=lambda: (
+            str(worker_service_instance_id or "").strip()
+            or worker_service_instance_id_for_mode(
+                settings=settings,
+                mode="runs",
+            )
         ),
         run_status_running=RUN_STATUS_RUNNING,
         run_status_failed=RUN_STATUS_FAILED,

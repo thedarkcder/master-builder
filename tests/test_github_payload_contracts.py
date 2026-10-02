@@ -15,7 +15,9 @@ from orchestrator.api.webhooks.github_payload_contracts import (
 class GithubPayloadContractsTests(unittest.TestCase):
     def test_extract_installation_id(self) -> None:
         self.assertEqual(extract_installation_id({"installation": {"id": 123}}), "123")
-        self.assertEqual(extract_installation_id({"installation": {"id": " 456 "}}), "456")
+        self.assertEqual(
+            extract_installation_id({"installation": {"id": " 456 "}}), "456"
+        )
         self.assertEqual(extract_installation_id({"installation_id": 789}), "789")
         self.assertEqual(extract_installation_id({"installation_id": " 101 "}), "101")
         self.assertIsNone(extract_installation_id({"installation": {"id": ""}}))
@@ -38,7 +40,9 @@ class GithubPayloadContractsTests(unittest.TestCase):
             extract_repository_full_name({"repository": {"full_name": " org/repo "}}),
             "org/repo",
         )
-        self.assertIsNone(extract_repository_full_name({"repository": {"full_name": ""}}))
+        self.assertIsNone(
+            extract_repository_full_name({"repository": {"full_name": ""}})
+        )
         self.assertIsNone(extract_repository_full_name({"repository": {}}))
         self.assertIsNone(extract_repository_full_name({}))
 
@@ -65,14 +69,18 @@ class GithubPayloadContractsTests(unittest.TestCase):
         targets = extract_pull_request_targets(payload)
         self.assertEqual(targets, [(12, True), (13, True), (14, True)])
 
-        no_summary_targets = extract_pull_request_targets({"pull_request": {"number": 99, "body": "  "}})
+        no_summary_targets = extract_pull_request_targets(
+            {"pull_request": {"number": 99, "body": "  "}}
+        )
         self.assertEqual(no_summary_targets, [(99, False)])
 
         issue_comment_targets = extract_pull_request_targets(
             {
                 "issue": {
                     "number": 27,
-                    "pull_request": {"url": "https://api.github.com/repos/org/repo/pulls/27"},
+                    "pull_request": {
+                        "url": "https://api.github.com/repos/org/repo/pulls/27"
+                    },
                 }
             }
         )

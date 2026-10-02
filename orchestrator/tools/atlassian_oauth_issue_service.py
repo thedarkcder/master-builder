@@ -45,13 +45,19 @@ class JiraOAuthIssueService:
         projects: list[JiraProject] = []
         for index, item in enumerate(values):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Project search response item {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Project search response item {index} was not an object"
+                )
             key = item.get("key")
             name = item.get("name")
             if not isinstance(key, str) or not key:
-                raise AtlassianOAuthError(f"Project search response item {index} missing project key")
+                raise AtlassianOAuthError(
+                    f"Project search response item {index} missing project key"
+                )
             if not isinstance(name, str) or not name:
-                raise AtlassianOAuthError(f"Project search response item {index} missing project name")
+                raise AtlassianOAuthError(
+                    f"Project search response item {index} missing project name"
+                )
             projects.append(JiraProject(key=key, name=name))
         projects.sort(key=lambda project: project.key)
         return projects
@@ -66,7 +72,9 @@ class JiraOAuthIssueService:
         start_at: int = 0,
     ) -> list[JiraIssuePreview]:
         if int(start_at) != 0:
-            raise AtlassianOAuthError("Jira enhanced search uses nextPageToken pagination; start_at offsets are unsupported")
+            raise AtlassianOAuthError(
+                "Jira enhanced search uses nextPageToken pagination; start_at offsets are unsupported"
+            )
         return self.search_issues_by_jql_page(
             access_token=access_token,
             cloud_id=cloud_id,
@@ -106,31 +114,51 @@ class JiraOAuthIssueService:
         results: list[JiraIssuePreview] = []
         for index, item in enumerate(issues):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Issue search response item {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Issue search response item {index} was not an object"
+                )
             key = item.get("key")
             fields = item.get("fields")
             if not isinstance(fields, dict):
-                raise AtlassianOAuthError(f"Issue search response item {index} missing fields object")
+                raise AtlassianOAuthError(
+                    f"Issue search response item {index} missing fields object"
+                )
             summary = fields.get("summary")
             status_obj = fields.get("status")
-            status_name = status_obj.get("name") if isinstance(status_obj, dict) else None
+            status_name = (
+                status_obj.get("name") if isinstance(status_obj, dict) else None
+            )
 
             if not isinstance(key, str) or not key:
-                raise AtlassianOAuthError(f"Issue search response item {index} missing issue key")
+                raise AtlassianOAuthError(
+                    f"Issue search response item {index} missing issue key"
+                )
             if not isinstance(summary, str) or not summary:
-                raise AtlassianOAuthError(f"Issue search response item {index} missing issue summary")
+                raise AtlassianOAuthError(
+                    f"Issue search response item {index} missing issue summary"
+                )
             if not isinstance(status_name, str) or not status_name:
-                raise AtlassianOAuthError(f"Issue search response item {index} missing issue status")
+                raise AtlassianOAuthError(
+                    f"Issue search response item {index} missing issue status"
+                )
 
-            results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
-        raw_next_page_token = payload.get("nextPageToken") if isinstance(payload, dict) else None
+            results.append(
+                JiraIssuePreview(key=key, summary=summary, status=status_name)
+            )
+        raw_next_page_token = (
+            payload.get("nextPageToken") if isinstance(payload, dict) else None
+        )
         if raw_next_page_token is None:
             parsed_next_page_token = None
         elif isinstance(raw_next_page_token, str):
             parsed_next_page_token = raw_next_page_token.strip() or None
         else:
-            raise AtlassianOAuthError("Issue search response nextPageToken was not a string")
-        return JiraIssueSearchPage(issues=results, next_page_token=parsed_next_page_token)
+            raise AtlassianOAuthError(
+                "Issue search response nextPageToken was not a string"
+            )
+        return JiraIssueSearchPage(
+            issues=results, next_page_token=parsed_next_page_token
+        )
 
     def get_issue_detail(
         self,
@@ -143,7 +171,9 @@ class JiraOAuthIssueService:
         if not normalized_issue:
             raise AtlassianOAuthError("Missing issue id/key for issue detail fetch")
 
-        query = urlencode({"fields": "summary,status,description,labels,issuetype,parent"})
+        query = urlencode(
+            {"fields": "summary,status,description,labels,issuetype,parent"}
+        )
         payload = self._get_json(
             url=(
                 f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/"
@@ -159,7 +189,11 @@ class JiraOAuthIssueService:
             raise AtlassianOAuthError("Issue detail response missing issue key")
         key = key_raw.strip()
         issue_id_raw = payload.get("id")
-        issue_id = issue_id_raw.strip() if isinstance(issue_id_raw, str) and issue_id_raw.strip() else None
+        issue_id = (
+            issue_id_raw.strip()
+            if isinstance(issue_id_raw, str) and issue_id_raw.strip()
+            else None
+        )
 
         fields = payload.get("fields")
         if not isinstance(fields, dict):
@@ -210,8 +244,16 @@ class JiraOAuthIssueService:
         if isinstance(parent_obj, dict):
             raw_parent_key = parent_obj.get("key")
             raw_parent_id = parent_obj.get("id")
-            parent_key = raw_parent_key.strip() if isinstance(raw_parent_key, str) and raw_parent_key.strip() else None
-            parent_issue_id = raw_parent_id.strip() if isinstance(raw_parent_id, str) and raw_parent_id.strip() else None
+            parent_key = (
+                raw_parent_key.strip()
+                if isinstance(raw_parent_key, str) and raw_parent_key.strip()
+                else None
+            )
+            parent_issue_id = (
+                raw_parent_id.strip()
+                if isinstance(raw_parent_id, str) and raw_parent_id.strip()
+                else None
+            )
         return JiraIssueDetail(
             key=key,
             summary=summary,
@@ -251,15 +293,23 @@ class JiraOAuthIssueService:
             )
             values = payload.get("comments") if isinstance(payload, dict) else None
             if not isinstance(values, list):
-                raise AtlassianOAuthError("Issue comments response missing comments list")
+                raise AtlassianOAuthError(
+                    "Issue comments response missing comments list"
+                )
 
             for index, item in enumerate(values):
                 if not isinstance(item, dict):
-                    raise AtlassianOAuthError(f"Issue comments response item {index} was not an object")
+                    raise AtlassianOAuthError(
+                        f"Issue comments response item {index} was not an object"
+                    )
                 comment_id = str(item.get("id") or "").strip()
                 if not comment_id:
-                    raise AtlassianOAuthError(f"Issue comments response item {index} missing comment id")
-                author = item.get("author") if isinstance(item.get("author"), dict) else {}
+                    raise AtlassianOAuthError(
+                        f"Issue comments response item {index} missing comment id"
+                    )
+                author = (
+                    item.get("author") if isinstance(item.get("author"), dict) else {}
+                )
                 comments.append(
                     JiraIssueComment(
                         comment_id=comment_id,
@@ -276,7 +326,11 @@ class JiraOAuthIssueService:
             if not values:
                 break
             total = int(payload.get("total") or 0) if isinstance(payload, dict) else 0
-            batch_size = int(payload.get("maxResults") or len(values)) if isinstance(payload, dict) else len(values)
+            batch_size = (
+                int(payload.get("maxResults") or len(values))
+                if isinstance(payload, dict)
+                else len(values)
+            )
             start_at += max(1, batch_size)
             if total and start_at >= total:
                 break
@@ -294,7 +348,9 @@ class JiraOAuthIssueService:
     ) -> list[JiraIssueAttachment]:
         normalized_issue = issue_id_or_key.strip()
         if not normalized_issue:
-            raise AtlassianOAuthError("Missing issue id/key for issue attachments fetch")
+            raise AtlassianOAuthError(
+                "Missing issue id/key for issue attachments fetch"
+            )
 
         query = urlencode({"fields": "attachment"})
         payload = self._get_json(
@@ -309,22 +365,30 @@ class JiraOAuthIssueService:
 
         fields = payload.get("fields")
         if not isinstance(fields, dict):
-            raise AtlassianOAuthError("Issue attachments response missing fields object")
+            raise AtlassianOAuthError(
+                "Issue attachments response missing fields object"
+            )
         attachments_raw = fields.get("attachment")
         if attachments_raw is None:
             return []
         if not isinstance(attachments_raw, list):
-            raise AtlassianOAuthError("Issue attachments response missing attachment list")
+            raise AtlassianOAuthError(
+                "Issue attachments response missing attachment list"
+            )
 
         attachments: list[JiraIssueAttachment] = []
         for index, item in enumerate(attachments_raw):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Issue attachments response item {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Issue attachments response item {index} was not an object"
+                )
             attachment_id = str(item.get("id") or "").strip()
             filename = str(item.get("filename") or "").strip()
             content_url = str(item.get("content") or "").strip()
             if not attachment_id or not filename or not content_url:
-                raise AtlassianOAuthError(f"Issue attachments response item {index} missing required fields")
+                raise AtlassianOAuthError(
+                    f"Issue attachments response item {index} missing required fields"
+                )
             size_raw = item.get("size")
             attachments.append(
                 JiraIssueAttachment(
@@ -355,15 +419,23 @@ class JiraOAuthIssueService:
         for index, issue in enumerate(issues):
             summary = issue.summary.strip()
             if not summary:
-                raise AtlassianOAuthError(f"Jira bulk create issue {index} missing summary")
-            issue_updates.append({"fields": self._build_issue_fields_payload(
-                project_key=project_key,
-                issue=issue,
-                available_issue_types=available_issue_types,
-            )})
+                raise AtlassianOAuthError(
+                    f"Jira bulk create issue {index} missing summary"
+                )
+            issue_updates.append(
+                {
+                    "fields": self._build_issue_fields_payload(
+                        project_key=project_key,
+                        issue=issue,
+                        available_issue_types=available_issue_types,
+                    )
+                }
+            )
 
         if not issue_updates:
-            raise AtlassianOAuthError("No valid issue payloads were provided for Jira bulk create")
+            raise AtlassianOAuthError(
+                "No valid issue payloads were provided for Jira bulk create"
+            )
 
         payload = self._request_json(
             method="POST",
@@ -381,32 +453,53 @@ class JiraOAuthIssueService:
         created: list[JiraIssueCreateResult] = []
         for index, item in enumerate(created_raw):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Jira bulk create response issue {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Jira bulk create response issue {index} was not an object"
+                )
             key = item.get("key")
             issue_id = item.get("id")
-            if not isinstance(key, str) or not key or not isinstance(issue_id, str) or not issue_id:
-                raise AtlassianOAuthError(f"Jira bulk create response issue {index} missing issue key/id")
+            if (
+                not isinstance(key, str)
+                or not key
+                or not isinstance(issue_id, str)
+                or not issue_id
+            ):
+                raise AtlassianOAuthError(
+                    f"Jira bulk create response issue {index} missing issue key/id"
+                )
             created.append(JiraIssueCreateResult(key=key, issue_id=issue_id))
 
         errors: list[str] = []
         for index, item in enumerate(errors_raw):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Jira bulk create response error {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Jira bulk create response error {index} was not an object"
+                )
             failed_element = item.get("failedElementNumber")
-            element_errors = item.get("elementErrors") if isinstance(item.get("elementErrors"), dict) else {}
+            element_errors = (
+                item.get("elementErrors")
+                if isinstance(item.get("elementErrors"), dict)
+                else {}
+            )
             error_messages = element_errors.get("errorMessages")
             reason_parts: list[str] = []
             if isinstance(error_messages, list):
-                reason_parts.extend(str(part).strip() for part in error_messages if str(part).strip())
+                reason_parts.extend(
+                    str(part).strip() for part in error_messages if str(part).strip()
+                )
             field_errors = element_errors.get("errors")
             if isinstance(field_errors, dict):
                 for field_name, field_reason in field_errors.items():
                     normalized_field_name = str(field_name).strip()
                     normalized_field_reason = str(field_reason).strip()
                     if normalized_field_name and normalized_field_reason:
-                        reason_parts.append(f"{normalized_field_name}: {normalized_field_reason}")
+                        reason_parts.append(
+                            f"{normalized_field_name}: {normalized_field_reason}"
+                        )
             if not reason_parts:
-                raise AtlassianOAuthError(f"Jira bulk create response error {index} missing error reason")
+                raise AtlassianOAuthError(
+                    f"Jira bulk create response error {index} missing error reason"
+                )
             reason_text = "; ".join(reason_parts)
             errors.append(f"Item {failed_element}: {reason_text}")
 
@@ -442,7 +535,9 @@ class JiraOAuthIssueService:
         key = str(payload.get("key") or "").strip()
         issue_id = str(payload.get("id") or "").strip()
         if not key or not issue_id:
-            raise AtlassianOAuthError("Jira create issue response did not include issue key/id")
+            raise AtlassianOAuthError(
+                "Jira create issue response did not include issue key/id"
+            )
         return JiraIssueCreateResult(key=key, issue_id=issue_id)
 
     def update_issue_fields(
@@ -486,7 +581,9 @@ class JiraOAuthIssueService:
         normalized_issue = issue_id_or_key.strip()
         if not normalized_issue:
             raise AtlassianOAuthError("Missing issue id/key for issue label update")
-        normalized_labels = [str(label).strip() for label in labels if str(label).strip()]
+        normalized_labels = [
+            str(label).strip() for label in labels if str(label).strip()
+        ]
         if not normalized_labels:
             return
         self._request_json(
@@ -511,7 +608,9 @@ class JiraOAuthIssueService:
         normalized_issue = issue_id_or_key.strip()
         if not normalized_issue:
             raise AtlassianOAuthError("Missing issue id/key for issue label replace")
-        normalized_labels = [str(label).strip() for label in labels if str(label).strip()]
+        normalized_labels = [
+            str(label).strip() for label in labels if str(label).strip()
+        ]
         self._request_json(
             method="PUT",
             url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}",
@@ -639,9 +738,15 @@ class JiraOAuthIssueService:
             url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/{quote(normalized_issue, safe='')}/transitions",
             access_token=access_token,
         )
-        transitions = transitions_payload.get("transitions") if isinstance(transitions_payload, dict) else None
+        transitions = (
+            transitions_payload.get("transitions")
+            if isinstance(transitions_payload, dict)
+            else None
+        )
         if not isinstance(transitions, list):
-            raise AtlassianOAuthError("Jira transitions response did not include transitions list")
+            raise AtlassianOAuthError(
+                "Jira transitions response did not include transitions list"
+            )
 
         desired = normalized_target.casefold()
         selected_transition_id: str | None = None
@@ -654,22 +759,39 @@ class JiraOAuthIssueService:
                 continue
             transition_id = transition.get("id")
             transition_name = transition.get("name")
-            to_obj = transition.get("to") if isinstance(transition.get("to"), dict) else {}
+            to_obj = (
+                transition.get("to") if isinstance(transition.get("to"), dict) else {}
+            )
             to_name = to_obj.get("name") if isinstance(to_obj, dict) else None
             if isinstance(to_name, str) and to_name.strip():
                 available_statuses.append(to_name.strip())
             if not isinstance(transition_id, str) or not transition_id.strip():
                 continue
-            normalized_name = transition_name.strip().casefold() if isinstance(transition_name, str) else ""
-            normalized_to = to_name.strip().casefold() if isinstance(to_name, str) else ""
+            normalized_name = (
+                transition_name.strip().casefold()
+                if isinstance(transition_name, str)
+                else ""
+            )
+            normalized_to = (
+                to_name.strip().casefold() if isinstance(to_name, str) else ""
+            )
             if desired in {normalized_name, normalized_to}:
                 selected_transition_id = transition_id.strip()
-                selected_transition_name = transition_name.strip() if isinstance(transition_name, str) else None
-                selected_to_status = to_name.strip() if isinstance(to_name, str) else None
+                selected_transition_name = (
+                    transition_name.strip()
+                    if isinstance(transition_name, str)
+                    else None
+                )
+                selected_to_status = (
+                    to_name.strip() if isinstance(to_name, str) else None
+                )
                 break
 
         if not selected_transition_id:
-            available = ", ".join(sorted({item for item in available_statuses if item})) or "none"
+            available = (
+                ", ".join(sorted({item for item in available_statuses if item}))
+                or "none"
+            )
             raise AtlassianOAuthError(
                 f"Transition '{normalized_target}' not available for {normalized_issue}; available statuses: {available}"
             )
@@ -749,15 +871,21 @@ class JiraOAuthIssueService:
     ) -> list[str]:
         normalized_project_key = project_key.strip().upper()
         if not normalized_project_key:
-            raise AtlassianOAuthError("Missing project key for Jira issue type discovery")
+            raise AtlassianOAuthError(
+                "Missing project key for Jira issue type discovery"
+            )
 
         endpoint = (
             f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/issue/createmeta/"
             f"{quote(normalized_project_key, safe='')}/issuetypes"
         )
-        parsed = _parse_issue_type_names_from_payload(self._get_json(url=endpoint, access_token=access_token))
+        parsed = _parse_issue_type_names_from_payload(
+            self._get_json(url=endpoint, access_token=access_token)
+        )
         if not parsed:
-            raise AtlassianOAuthError(f"Jira issue type discovery returned no issue types for project {normalized_project_key}")
+            raise AtlassianOAuthError(
+                f"Jira issue type discovery returned no issue types for project {normalized_project_key}"
+            )
         return parsed
 
     def _build_issue_fields_payload(
@@ -790,12 +918,17 @@ class JiraOAuthIssueService:
             "labels": [label for label in issue.labels if label],
         }
         if parent_issue_key:
-            if requested_issue_type in {"sub-task", "subtask"} and issue_type.lower() not in {"sub-task", "subtask"}:
+            if requested_issue_type in {
+                "sub-task",
+                "subtask",
+            } and issue_type.lower() not in {"sub-task", "subtask"}:
                 raise AtlassianOAuthError(
                     f"Subtask issue type is not available for project {project_key}"
                 )
             if issue_type.lower() == "epic":
-                raise AtlassianOAuthError("Epic issue type cannot be created as a child issue")
+                raise AtlassianOAuthError(
+                    "Epic issue type cannot be created as a child issue"
+                )
             fields["parent"] = {"key": parent_issue_key}
         return fields
 
@@ -813,16 +946,23 @@ def _to_adf_description(text: str | dict[str, Any]) -> dict[str, Any]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         lines = ["No description provided"]
-    paragraphs = [{"type": "paragraph", "content": [{"type": "text", "text": line}]} for line in lines]
-    return _truncate_adf_document_to_limit({
-        "type": "doc",
-        "version": 1,
-        "content": paragraphs,
-    })
+    paragraphs = [
+        {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+        for line in lines
+    ]
+    return _truncate_adf_document_to_limit(
+        {
+            "type": "doc",
+            "version": 1,
+            "content": paragraphs,
+        }
+    )
 
 
 def _adf_document_size_bytes(document: dict[str, Any]) -> int:
-    return len(json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    return len(
+        json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
 
 
 def _truncation_paragraph() -> dict[str, Any]:
@@ -871,7 +1011,10 @@ def _truncate_adf_document_to_limit(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(content, list):
         return {"type": "doc", "version": 1, "content": [_truncation_paragraph()]}
 
-    while _adf_document_size_bytes(candidate) > MAX_JIRA_ADF_DOCUMENT_BYTES and len(content) > 1:
+    while (
+        _adf_document_size_bytes(candidate) > MAX_JIRA_ADF_DOCUMENT_BYTES
+        and len(content) > 1
+    ):
         content.pop(-2)
 
     if _adf_document_size_bytes(candidate) <= MAX_JIRA_ADF_DOCUMENT_BYTES:
@@ -880,7 +1023,9 @@ def _truncate_adf_document_to_limit(document: dict[str, Any]) -> dict[str, Any]:
     text_nodes = _collect_text_nodes(content[:-1])
     for node in reversed(text_nodes):
         text = str(node.get("text") or "")
-        while text and _adf_document_size_bytes(candidate) > MAX_JIRA_ADF_DOCUMENT_BYTES:
+        while (
+            text and _adf_document_size_bytes(candidate) > MAX_JIRA_ADF_DOCUMENT_BYTES
+        ):
             overflow = _adf_document_size_bytes(candidate) - MAX_JIRA_ADF_DOCUMENT_BYTES
             shrink_by = max(64, overflow + 8)
             next_len = max(0, len(text) - shrink_by)
@@ -898,7 +1043,9 @@ def _adf_to_plain_text(node: object) -> str:
         return node
     if not isinstance(node, dict):
         if isinstance(node, list):
-            return "\n".join(part for part in (_adf_to_plain_text(item) for item in node) if part).strip()
+            return "\n".join(
+                part for part in (_adf_to_plain_text(item) for item in node) if part
+            ).strip()
         return ""
 
     node_type = str(node.get("type") or "").strip().lower()
@@ -935,7 +1082,9 @@ def _parse_jira_datetime(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _parse_issue_type_names_from_payload(payload: dict[str, Any] | list[Any]) -> list[str]:
+def _parse_issue_type_names_from_payload(
+    payload: dict[str, Any] | list[Any],
+) -> list[str]:
     candidates: list[object] = []
     if isinstance(payload, list):
         candidates.extend(payload)
@@ -960,13 +1109,17 @@ def _parse_issue_type_names_from_payload(payload: dict[str, Any] | list[Any]) ->
                 if not isinstance(nested, dict):
                     continue
                 raw_nested_name = nested.get("name")
-                nested_name = str(raw_nested_name).strip() if raw_nested_name is not None else ""
+                nested_name = (
+                    str(raw_nested_name).strip() if raw_nested_name is not None else ""
+                )
                 if nested_name and nested_name not in names:
                     names.append(nested_name)
     return names
 
 
-def _select_issue_type_name(*, requested_issue_type: str | None, available_issue_types: list[str]) -> str:
+def _select_issue_type_name(
+    *, requested_issue_type: str | None, available_issue_types: list[str]
+) -> str:
     requested = str(requested_issue_type or "").strip()
     if not available_issue_types:
         raise AtlassianOAuthError("Jira issue type discovery returned no issue types")
@@ -978,4 +1131,6 @@ def _select_issue_type_name(*, requested_issue_type: str | None, available_issue
     if direct:
         return direct
     available = ", ".join(available_issue_types)
-    raise AtlassianOAuthError(f"Jira issue type '{requested}' is not available; available issue types: {available}")
+    raise AtlassianOAuthError(
+        f"Jira issue type '{requested}' is not available; available issue types: {available}"
+    )

@@ -8,8 +8,12 @@ from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
-from orchestrator.core.development.executable_work_item_projection import sync_executable_work_items_for_project
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
+from orchestrator.core.development.executable_work_item_projection import (
+    sync_executable_work_items_for_project,
+)
 from orchestrator.core.jira_project_reconciliation.models import (
     ClassifiedJiraIssue,
     ENGINEERING_CHILD_LABEL,
@@ -47,8 +51,17 @@ from orchestrator.core.workflow.operation_service import (
     WorkflowOperationHandle,
 )
 from orchestrator.core.workflow.type_catalog import get_workflow_type
-from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationWorkUnit
+from orchestrator.core.workflow.work_units import (
+    run_work_unit,
+    workflow_work_unit_input_fingerprint,
+)
+from orchestrator.storage.models import (
+    Project,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationWorkUnit,
+)
 from orchestrator.tools.atlassian_oauth_models import (
     AtlassianOAuthAuthRequiredError,
     AtlassianOAuthError,
@@ -66,14 +79,11 @@ class JiraProjectReconciliationGateway(Protocol):
         project_key: str,
         next_page_token: str | None,
         max_results: int,
-    ) -> JiraIssueSearchPage:
-        ...
+    ) -> JiraIssueSearchPage: ...
 
-    def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
-        ...
+    def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail: ...
 
-    def replace_issue_labels(self, *, issue_key: str, labels: list[str]) -> None:
-        ...
+    def replace_issue_labels(self, *, issue_key: str, labels: list[str]) -> None: ...
 
 
 DEACTIVATABLE_PARENT_PLANNING_STATUSES = frozenset(
@@ -118,7 +128,9 @@ class _AtlassianJiraProjectReconciliationGateway:
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
         normalized_issue_key = _normalized_key(issue_key)
         if not normalized_issue_key:
-            raise ValueError("Jira project reconciliation requires an issue key for detail fetch")
+            raise ValueError(
+                "Jira project reconciliation requires an issue key for detail fetch"
+            )
         return self._client.get_issue_detail(
             access_token=self._access_token,
             cloud_id=self._cloud_id,
@@ -186,7 +198,9 @@ def _without_owned_labels(labels: tuple[str, ...] | list[str]) -> list[str]:
     return retained
 
 
-def _labels_equal(left: tuple[str, ...] | list[str], right: tuple[str, ...] | list[str]) -> bool:
+def _labels_equal(
+    left: tuple[str, ...] | list[str], right: tuple[str, ...] | list[str]
+) -> bool:
     return {_normalized_label(label) for label in left if _normalized(label)} == {
         _normalized_label(label) for label in right if _normalized(label)
     }
@@ -204,19 +218,31 @@ def _classify_issue(issue: JiraReconciliationIssue) -> str:
     if parent_key:
         return ISSUE_CLASS_ENGINEERING_CHILD
     if issue.issue_type_is_subtask is True:
-        raise ValueError(f"Jira issue {issue.key} is a subtask but is missing parent metadata")
+        raise ValueError(
+            f"Jira issue {issue.key} is a subtask but is missing parent metadata"
+        )
     if issue.issue_type_hierarchy_level == -1:
-        raise ValueError(f"Jira issue {issue.key} has subtask hierarchy without parent metadata")
+        raise ValueError(
+            f"Jira issue {issue.key} has subtask hierarchy without parent metadata"
+        )
     if _normalized(issue.issue_type):
         return ISSUE_CLASS_PARENT
-    raise ValueError(f"Jira issue {issue.key} is missing hierarchy metadata required for classification")
+    raise ValueError(
+        f"Jira issue {issue.key} is missing hierarchy metadata required for classification"
+    )
 
 
 def _mb_work_state_for_jira_detail(detail: JiraIssueDetail) -> str:
     status_name = _normalized(detail.status).casefold()
-    status_category = _normalized(getattr(detail, "status_category_key", None)).casefold()
+    status_category = _normalized(
+        getattr(detail, "status_category_key", None)
+    ).casefold()
     if status_category:
-        return MB_WORK_STATE_PLANNING_CANDIDATE if status_category == "new" else MB_WORK_STATE_NOT_PLANNING
+        return (
+            MB_WORK_STATE_PLANNING_CANDIDATE
+            if status_category == "new"
+            else MB_WORK_STATE_NOT_PLANNING
+        )
     if status_name in {"backlog", "to do", "todo", "open"}:
         return MB_WORK_STATE_PLANNING_CANDIDATE
     return MB_WORK_STATE_NOT_PLANNING
@@ -226,25 +252,43 @@ def _parent_workflow_status_for_issue(issue: JiraReconciliationIssue) -> str | N
     if issue.mb_work_state == MB_WORK_STATE_PLANNING_CANDIDATE:
         return "queued"
     status_name = _normalized(issue.status).casefold()
-    if status_name in {"done", "closed", "released", "ready to release", "release ready"}:
+    if status_name in {
+        "done",
+        "closed",
+        "released",
+        "ready to release",
+        "release ready",
+    }:
         return None
     return "running"
 
 
-def _desired_labels(issue: JiraReconciliationIssue, *, classification: str) -> tuple[str, ...]:
+def _desired_labels(
+    issue: JiraReconciliationIssue, *, classification: str
+) -> tuple[str, ...]:
     retained = _without_owned_labels(issue.labels)
     if classification == ISSUE_CLASS_PARENT:
         return tuple([*retained, PM_PARENT_LABEL])
     if classification == ISSUE_CLASS_ENGINEERING_CHILD:
-        return tuple([*retained, ENGINEERING_CHILD_LABEL, _parent_label(str(issue.parent_key or ""))])
-    raise ValueError(f"Unsupported Jira reconciliation classification: {classification}")
+        return tuple(
+            [
+                *retained,
+                ENGINEERING_CHILD_LABEL,
+                _parent_label(str(issue.parent_key or "")),
+            ]
+        )
+    raise ValueError(
+        f"Unsupported Jira reconciliation classification: {classification}"
+    )
 
 
 def _issue_from_detail(detail: JiraIssueDetail) -> JiraReconciliationIssue:
     issue_id = _normalized(detail.issue_id)
     issue_key = _normalized_key(detail.key)
     if not issue_id:
-        raise ValueError(f"Jira issue {issue_key or '<missing>'} is missing stable issue id")
+        raise ValueError(
+            f"Jira issue {issue_key or '<missing>'} is missing stable issue id"
+        )
     if not issue_key:
         raise ValueError("Jira issue detail is missing issue key")
     return JiraReconciliationIssue(
@@ -255,7 +299,11 @@ def _issue_from_detail(detail: JiraIssueDetail) -> JiraReconciliationIssue:
         status=_normalized(detail.status),
         mb_work_state=_mb_work_state_for_jira_detail(detail),
         issue_type=_normalized(detail.issue_type) or None,
-        labels=tuple(_normalized(label) for label in list(detail.labels or []) if _normalized(label)),
+        labels=tuple(
+            _normalized(label)
+            for label in list(detail.labels or [])
+            if _normalized(label)
+        ),
         parent_key=_normalized_key(detail.parent_key) or None,
         parent_issue_id=_normalized(detail.parent_issue_id) or None,
         issue_type_hierarchy_level=getattr(detail, "issue_type_hierarchy_level", None),
@@ -316,22 +364,22 @@ def _parent_workflow_by_key_or_external_id(
     existing = session.get(WorkflowExecution, workflow_id)
     if existing is not None:
         return existing
-    return (
-        session.execute(
-            select(WorkflowExecution)
-            .where(
-                WorkflowExecution.tenant_id == tenant_id,
-                WorkflowExecution.source_system == "jira",
-                WorkflowExecution.source_external_id == source_external_id,
-                WorkflowExecution.dedupe_scope == dedupe_scope,
-            )
-            .order_by(WorkflowExecution.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-    )
+    return session.execute(
+        select(WorkflowExecution)
+        .where(
+            WorkflowExecution.tenant_id == tenant_id,
+            WorkflowExecution.source_system == "jira",
+            WorkflowExecution.source_external_id == source_external_id,
+            WorkflowExecution.dedupe_scope == dedupe_scope,
+        )
+        .order_by(WorkflowExecution.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
 
 
-def _operation_by_type(*, session: Session, workflow_id: str, operation_type: str) -> WorkflowOperation:
+def _operation_by_type(
+    *, session: Session, workflow_id: str, operation_type: str
+) -> WorkflowOperation:
     operation = session.execute(
         select(WorkflowOperation).where(
             WorkflowOperation.workflow_id == workflow_id,
@@ -339,7 +387,9 @@ def _operation_by_type(*, session: Session, workflow_id: str, operation_type: st
         )
     ).scalar_one_or_none()
     if operation is None:
-        raise RuntimeError(f"Workflow {workflow_id} is missing operation {operation_type}")
+        raise RuntimeError(
+            f"Workflow {workflow_id} is missing operation {operation_type}"
+        )
     return operation
 
 
@@ -356,12 +406,20 @@ def _completed_unit_outputs(
         WorkflowOperationWorkUnit.status == "completed",
     )
     if idempotency_key_prefix is not None:
-        query = query.where(WorkflowOperationWorkUnit.idempotency_key.like(f"{idempotency_key_prefix}%"))
-    rows = session.execute(query.order_by(WorkflowOperationWorkUnit.created_at.asc())).scalars().all()
+        query = query.where(
+            WorkflowOperationWorkUnit.idempotency_key.like(f"{idempotency_key_prefix}%")
+        )
+    rows = (
+        session.execute(query.order_by(WorkflowOperationWorkUnit.created_at.asc()))
+        .scalars()
+        .all()
+    )
     payloads: list[dict[str, object]] = []
     for row in rows:
         if not isinstance(row.output_json, dict):
-            raise RuntimeError(f"Completed work unit {row.unit_key} is missing persisted output")
+            raise RuntimeError(
+                f"Completed work unit {row.unit_key} is missing persisted output"
+            )
         payloads.append(dict(row.output_json))
     return payloads
 
@@ -380,7 +438,9 @@ def _single_completed_unit_output(
         idempotency_key_prefix=idempotency_key_prefix,
     )
     if len(outputs) != 1:
-        raise RuntimeError(f"Workflow operation {operation_id} expected one completed output for {unit_key}, found {len(outputs)}")
+        raise RuntimeError(
+            f"Workflow operation {operation_id} expected one completed output for {unit_key}, found {len(outputs)}"
+        )
     return outputs[0]
 
 
@@ -393,7 +453,10 @@ def latest_reconciliation_request_id_for_workflow(
     prefix = f"{project_id}:reconciliation:"
     rows = session.execute(
         select(WorkflowOperationWorkUnit.idempotency_key)
-        .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationWorkUnit.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.operation_id == WorkflowOperationWorkUnit.operation_id,
+        )
         .where(
             WorkflowOperation.workflow_id == workflow_id,
             WorkflowOperationWorkUnit.idempotency_key.like(f"{prefix}%"),
@@ -401,13 +464,22 @@ def latest_reconciliation_request_id_for_workflow(
         .order_by(desc(WorkflowOperationWorkUnit.created_at))
     ).scalars()
     for idempotency_key in rows:
-        remainder = str(idempotency_key or "")[len(prefix):]
-        for marker in (":page:", ":issue:", ":classification:", ":labels:", ":parent:", ":summary:"):
+        remainder = str(idempotency_key or "")[len(prefix) :]
+        for marker in (
+            ":page:",
+            ":issue:",
+            ":classification:",
+            ":labels:",
+            ":parent:",
+            ":summary:",
+        ):
             if marker in remainder:
                 request_id = remainder.split(marker, 1)[0].strip()
                 if request_id:
                     return request_id
-    raise RuntimeError(f"Workflow {workflow_id} has no persisted Jira reconciliation request scope")
+    raise RuntimeError(
+        f"Workflow {workflow_id} has no persisted Jira reconciliation request scope"
+    )
 
 
 class JiraProjectReconciliationStepFailed(RuntimeError):
@@ -444,9 +516,13 @@ class JiraProjectReconciliationWorkflowService:
         self._request_id = _normalized(request_id)
         if not self._request_id:
             raise ValueError("Jira project reconciliation requires request_id")
-        self._idempotency_scope = f"{self._project.project_id}:reconciliation:{self._request_id}"
+        self._idempotency_scope = (
+            f"{self._project.project_id}:reconciliation:{self._request_id}"
+        )
 
-    def run(self, *, start_from: str | None = None) -> JiraProjectReconciliationRunResult:
+    def run(
+        self, *, start_from: str | None = None
+    ) -> JiraProjectReconciliationRunResult:
         step_order = [
             JIRA_PROJECT_RECONCILIATION_STEP_SCAN,
             JIRA_PROJECT_RECONCILIATION_STEP_CLASSIFICATION,
@@ -485,7 +561,9 @@ class JiraProjectReconciliationWorkflowService:
 
     @property
     def workflow(self) -> WorkflowExecution:
-        workflow_id = f"{self._workflow_type.workflow_type_key}:{self._project.project_id}"
+        workflow_id = (
+            f"{self._workflow_type.workflow_type_key}:{self._project.project_id}"
+        )
         workflow = self._session.get(WorkflowExecution, workflow_id)
         if workflow is None:
             raise RuntimeError(f"Workflow {workflow_id} was not created")
@@ -508,7 +586,9 @@ class JiraProjectReconciliationWorkflowService:
 
     def _execute_step(self, operation_type: str, executor) -> None:  # noqa: ANN001
         try:
-            operation, attempt = self._lifecycle.start_operation_attempt(operation_type=operation_type)
+            operation, attempt = self._lifecycle.start_operation_attempt(
+                operation_type=operation_type
+            )
         except WorkflowOperationAttemptAlreadyRunningError as exc:
             raise JiraProjectReconciliationStepFailed(str(exc)) from exc
         try:
@@ -549,10 +629,10 @@ class JiraProjectReconciliationWorkflowService:
                     "max_results": page_size,
                 },
                 execute=lambda _context: self._gateway.search_project_issues_page(
-                        project_key=self._project.jira_project_key,
-                        next_page_token=next_page_token,
-                        max_results=page_size,
-                    ),
+                    project_key=self._project.jira_project_key,
+                    next_page_token=next_page_token,
+                    max_results=page_size,
+                ),
                 serialize=lambda result: {
                     "items": [
                         {
@@ -584,7 +664,9 @@ class JiraProjectReconciliationWorkflowService:
             previews = page.issues
             if not previews:
                 break
-            page_issue_keys = tuple(_normalized_key(preview.key) for preview in previews)
+            page_issue_keys = tuple(
+                _normalized_key(preview.key) for preview in previews
+            )
             if len(previews) == page_size:
                 if page_issue_keys in full_page_signatures:
                     raise ValueError(
@@ -601,15 +683,26 @@ class JiraProjectReconciliationWorkflowService:
                     operation_attempt=attempt,
                     unit_key=JIRA_PROJECT_RECONCILIATION_WU_ISSUE_DETAIL_FETCH,
                     idempotency_key=f"{self._idempotency_scope}:issue:{issue_key}",
-                    input_payload={"request_id": self._request_id, "issue_key": issue_key},
-                    execute=lambda _context, requested_issue_key=issue_key: _issue_from_detail(
-                        self._gateway.get_issue_detail(issue_key=requested_issue_key)
+                    input_payload={
+                        "request_id": self._request_id,
+                        "issue_key": issue_key,
+                    },
+                    execute=lambda _context, requested_issue_key=issue_key: (
+                        _issue_from_detail(
+                            self._gateway.get_issue_detail(
+                                issue_key=requested_issue_key
+                            )
+                        )
                     ),
                     serialize=lambda result: result.to_payload(),
-                    deserialize=lambda payload: JiraReconciliationIssue.from_payload(payload),
+                    deserialize=lambda payload: JiraReconciliationIssue.from_payload(
+                        payload
+                    ),
                 )
                 if issue.key != issue_key:
-                    raise ValueError(f"Jira detail key mismatch: expected {issue_key}, got {issue.key}")
+                    raise ValueError(
+                        f"Jira detail key mismatch: expected {issue_key}, got {issue.key}"
+                    )
                 loaded += 1
                 if loaded >= self._max_items:
                     break
@@ -619,7 +712,9 @@ class JiraProjectReconciliationWorkflowService:
             if not next_page_token:
                 break
             if next_page_token in seen_page_tokens:
-                raise ValueError("Jira search pagination repeated nextPageToken; refusing to continue scan")
+                raise ValueError(
+                    "Jira search pagination repeated nextPageToken; refusing to continue scan"
+                )
             seen_page_tokens.add(next_page_token)
             page_number += 1
         return f"Scanned {loaded} Jira issues for project {self._project.jira_project_key}."
@@ -632,13 +727,21 @@ class JiraProjectReconciliationWorkflowService:
             operation_attempt=attempt,
             unit_key=JIRA_PROJECT_RECONCILIATION_WU_CLASSIFICATION_COMPUTE,
             idempotency_key=f"{self._idempotency_scope}:classification:{workflow_work_unit_input_fingerprint([issue.to_payload() for issue in issues])}",
-            input_payload={"request_id": self._request_id, "issues": [issue.to_payload() for issue in issues]},
+            input_payload={
+                "request_id": self._request_id,
+                "issues": [issue.to_payload() for issue in issues],
+            },
             execute=lambda _context: [
                 ClassifiedJiraIssue(
                     issue=issue,
                     classification=_classify_issue(issue),
-                    desired_labels=_desired_labels(issue, classification=_classify_issue(issue)),
-                    labels_changed=not _labels_equal(issue.labels, _desired_labels(issue, classification=_classify_issue(issue))),
+                    desired_labels=_desired_labels(
+                        issue, classification=_classify_issue(issue)
+                    ),
+                    labels_changed=not _labels_equal(
+                        issue.labels,
+                        _desired_labels(issue, classification=_classify_issue(issue)),
+                    ),
                 )
                 for issue in issues
             ],
@@ -649,8 +752,14 @@ class JiraProjectReconciliationWorkflowService:
                 if isinstance(item, dict)
             ],
         )
-        parent_count = sum(1 for item in classified if item.classification == ISSUE_CLASS_PARENT)
-        child_count = sum(1 for item in classified if item.classification == ISSUE_CLASS_ENGINEERING_CHILD)
+        parent_count = sum(
+            1 for item in classified if item.classification == ISSUE_CLASS_PARENT
+        )
+        child_count = sum(
+            1
+            for item in classified
+            if item.classification == ISSUE_CLASS_ENGINEERING_CHILD
+        )
         return f"Classified {parent_count} parent issues and {child_count} engineering child issues."
 
     def _run_label_reconciliation_step(self, *, operation, attempt) -> str:  # noqa: ANN001
@@ -665,12 +774,18 @@ class JiraProjectReconciliationWorkflowService:
                 operation_attempt=attempt,
                 unit_key=JIRA_PROJECT_RECONCILIATION_WU_LABEL_REPLACE,
                 idempotency_key=f"{self._idempotency_scope}:labels:{item.issue.issue_id}:{workflow_work_unit_input_fingerprint(list(item.desired_labels))}",
-                input_payload={"request_id": self._request_id, "issue_key": item.issue.key, "labels": list(item.desired_labels)},
-                execute=lambda _context, issue_key=item.issue.key, labels=list(item.desired_labels): self._gateway.replace_issue_labels(
-                    issue_key=issue_key,
-                    labels=labels,
-                )
-                or {"issue_key": issue_key, "labels": labels},
+                input_payload={
+                    "request_id": self._request_id,
+                    "issue_key": item.issue.key,
+                    "labels": list(item.desired_labels),
+                },
+                execute=lambda _context, issue_key=item.issue.key, labels=list(item.desired_labels): (
+                    self._gateway.replace_issue_labels(
+                        issue_key=issue_key,
+                        labels=labels,
+                    )
+                    or {"issue_key": issue_key, "labels": labels}
+                ),
                 serialize=lambda result: dict(result),
                 deserialize=lambda payload: dict(payload),
             )
@@ -678,8 +793,14 @@ class JiraProjectReconciliationWorkflowService:
         return f"Reconciled {labels_updated} Jira label updates."
 
     def _run_parent_reconciliation_step(self, *, operation, attempt) -> str:  # noqa: ANN001
-        workflow_type = get_workflow_type(self._session, workflow_type_key="parent_planning")
-        classified = [item for item in self._classified_issues() if item.classification == ISSUE_CLASS_PARENT]
+        workflow_type = get_workflow_type(
+            self._session, workflow_type_key="parent_planning"
+        )
+        classified = [
+            item
+            for item in self._classified_issues()
+            if item.classification == ISSUE_CLASS_PARENT
+        ]
         created = 0
         existing = 0
         deactivated = 0
@@ -690,13 +811,20 @@ class JiraProjectReconciliationWorkflowService:
                 operation_attempt=attempt,
                 unit_key=JIRA_PROJECT_RECONCILIATION_WU_PARENT_UPSERT,
                 idempotency_key=f"{self._idempotency_scope}:parent:{item.issue.issue_id}:{item.issue.mb_work_state}",
-                input_payload={"request_id": self._request_id, "classified_issue": item.to_payload()},
-                execute=lambda _context, classified_issue=item: self._reconcile_parent_workflow(
-                    workflow_type=workflow_type,
-                    classified_issue=classified_issue,
+                input_payload={
+                    "request_id": self._request_id,
+                    "classified_issue": item.to_payload(),
+                },
+                execute=lambda _context, classified_issue=item: (
+                    self._reconcile_parent_workflow(
+                        workflow_type=workflow_type,
+                        classified_issue=classified_issue,
+                    )
                 ),
                 serialize=lambda result: result.to_payload(),
-                deserialize=lambda payload: ParentWorkflowReconciliationResult.from_payload(payload),
+                deserialize=lambda payload: (
+                    ParentWorkflowReconciliationResult.from_payload(payload)
+                ),
             )
             if result.created:
                 created += 1
@@ -723,11 +851,16 @@ class JiraProjectReconciliationWorkflowService:
             input_payload={
                 "request_id": self._request_id,
                 "classified": [item.to_payload() for item in self._classified_issues()],
-                "parent_results": [result.to_payload() for result in self._parent_reconciliation_results()],
+                "parent_results": [
+                    result.to_payload()
+                    for result in self._parent_reconciliation_results()
+                ],
             },
             execute=lambda _context: self._build_summary(),
             serialize=lambda result: result.to_payload(),
-            deserialize=lambda payload: JiraProjectReconciliationSummary.from_payload(payload),
+            deserialize=lambda payload: JiraProjectReconciliationSummary.from_payload(
+                payload
+            ),
         )
         return (
             f"Scanned {summary.scanned} Jira issues. "
@@ -747,7 +880,9 @@ class JiraProjectReconciliationWorkflowService:
                 workflow_type=workflow_type,
                 classified_issue=classified_issue,
             )
-        return self._upsert_parent_workflow(workflow_type=workflow_type, classified_issue=classified_issue)
+        return self._upsert_parent_workflow(
+            workflow_type=workflow_type, classified_issue=classified_issue
+        )
 
     def _upsert_parent_workflow(
         self,
@@ -780,7 +915,9 @@ class JiraProjectReconciliationWorkflowService:
                     external_id=issue.issue_id,
                     display_name=issue.summary,
                     description=issue.description,
-                    attributes={"jira_issue_labels": list(classified_issue.desired_labels)},
+                    attributes={
+                        "jira_issue_labels": list(classified_issue.desired_labels)
+                    },
                 ),
             ),
             display_name=issue.summary,
@@ -824,9 +961,14 @@ class JiraProjectReconciliationWorkflowService:
                 mb_work_state=issue.mb_work_state,
                 deactivated=False,
             )
-        if str(existing.status or "").strip().lower() in DEACTIVATABLE_PARENT_PLANNING_STATUSES:
+        if (
+            str(existing.status or "").strip().lower()
+            in DEACTIVATABLE_PARENT_PLANNING_STATUSES
+        ):
             existing.status = "cancelled"
-            existing.last_error = "Source item is no longer eligible for MB parent planning."
+            existing.last_error = (
+                "Source item is no longer eligible for MB parent planning."
+            )
             existing.finished_at = _now()
             existing.updated_at = _now()
             return ParentWorkflowReconciliationResult(
@@ -896,7 +1038,9 @@ class JiraProjectReconciliationWorkflowService:
             return True
         return page_outputs[-1].get("next_page_token") is None
 
-    def _parent_reconciliation_results(self) -> list[ParentWorkflowReconciliationResult]:
+    def _parent_reconciliation_results(
+        self,
+    ) -> list[ParentWorkflowReconciliationResult]:
         operation = _operation_by_type(
             session=self._session,
             workflow_id=self.workflow.workflow_id,
@@ -917,13 +1061,23 @@ class JiraProjectReconciliationWorkflowService:
         parent_results = self._parent_reconciliation_results()
         return JiraProjectReconciliationSummary(
             scanned=len(classified),
-            parent_workflows_created=sum(1 for result in parent_results if result.created),
-            parent_workflows_existing=sum(1 for result in parent_results if not result.created and not result.deactivated),
+            parent_workflows_created=sum(
+                1 for result in parent_results if result.created
+            ),
+            parent_workflows_existing=sum(
+                1
+                for result in parent_results
+                if not result.created and not result.deactivated
+            ),
             labels_updated=sum(1 for item in classified if item.labels_changed),
             parent_issue_keys=tuple(
-                item.issue.key for item in classified if item.classification == ISSUE_CLASS_PARENT
+                item.issue.key
+                for item in classified
+                if item.classification == ISSUE_CLASS_PARENT
             ),
             engineering_issue_keys=tuple(
-                item.issue.key for item in classified if item.classification == ISSUE_CLASS_ENGINEERING_CHILD
+                item.issue.key
+                for item in classified
+                if item.classification == ISSUE_CLASS_ENGINEERING_CHILD
             ),
         )

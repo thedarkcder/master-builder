@@ -11,14 +11,18 @@ def build_cycle_comment(*, session, case: DecisionCase, cycle: DecisionCycle) ->
         for question_id in cycle.unresolved_question_ids_json
         if str(question_id).strip()
     }
-    answers = session.execute(
-        select(DecisionAnswer)
-        .where(
-            DecisionAnswer.cycle_id == cycle.cycle_id,
-            DecisionAnswer.status.in_(("answered", "accepted")),
+    answers = (
+        session.execute(
+            select(DecisionAnswer)
+            .where(
+                DecisionAnswer.cycle_id == cycle.cycle_id,
+                DecisionAnswer.status.in_(("answered", "accepted")),
+            )
+            .order_by(DecisionAnswer.created_at.asc())
         )
-        .order_by(DecisionAnswer.created_at.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     lines = [
         f"<!-- decision-cycle:{cycle.cycle_id} -->",
         f"Decision state: `{case.state}`",

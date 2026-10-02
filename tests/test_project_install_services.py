@@ -21,7 +21,9 @@ from orchestrator.core.platform.install_request_service import (
     reject_install_request,
     ProjectInstallRequestWrite,
 )
-from orchestrator.core.runs.human_input_service import resume_run_from_human_input_answer
+from orchestrator.core.runs.human_input_service import (
+    resume_run_from_human_input_answer,
+)
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.platform.trusted_install_executor import run_install
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -35,15 +37,23 @@ from orchestrator.storage.models import (
     WorkflowCheckpoint,
     WorkflowExecution,
 )
-from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, make_run
+from tests.workflow_test_support import (
+    add_human_input_request,
+    add_run_with_workflow,
+    make_run,
+)
 
 
 class TestProjectInstallServices:
     def setup_method(self) -> None:
         self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/project_install_services.db"
+        self.database_url = (
+            f"sqlite:///{self.temp_dir.name}/project_install_services.db"
+        )
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
@@ -100,7 +110,9 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 request = create_install_request(
                     session=session,
                     settings=settings,
@@ -112,7 +124,11 @@ class TestProjectInstallServices:
                         kind="fastlane_lane",
                         label="iOS Beta Lane",
                         reason="Ticket requires Fastlane",
-                        suggested_config={"working_dir": ".", "platform": "ios", "lane": "beta"},
+                        suggested_config={
+                            "working_dir": ".",
+                            "platform": "ios",
+                            "lane": "beta",
+                        },
                         required_bindings=("MATCH_PASSWORD",),
                     ),
                 )
@@ -173,7 +189,9 @@ class TestProjectInstallServices:
             settings = get_settings()
             settings.admin_ui_base_url = "http://localhost:4100"
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 request = create_install_request(
                     session=session,
                     settings=settings,
@@ -192,9 +210,15 @@ class TestProjectInstallServices:
                             "operator_decision": (
                                 "Can Master Builder add the HubSpot dependency work needed for AP-248?"
                             ),
-                            "source_project_changes": ["Add HubSpot billing provider code to the project."],
-                            "master_builder_changes": ["Configure Master Builder project support for HubSpot."],
-                            "package_changes": ["Add HubSpot client libraries if the implementation needs them."],
+                            "source_project_changes": [
+                                "Add HubSpot billing provider code to the project."
+                            ],
+                            "master_builder_changes": [
+                                "Configure Master Builder project support for HubSpot."
+                            ],
+                            "package_changes": [
+                                "Add HubSpot client libraries if the implementation needs them."
+                            ],
                             "secrets_or_bindings_needed": ["HUBSPOT_ACCESS_TOKEN"],
                             "resume_when": "The operator replies yes or no.",
                         },
@@ -206,15 +230,30 @@ class TestProjectInstallServices:
 
         assert request.request_kind == INSTALL_REQUEST_KIND_PROJECT_MISSING
         assert "needs approval before the run can continue" in human_request.prompt
-        assert "Can Master Builder add the HubSpot dependency work needed for AP-248?" in human_request.prompt
+        assert (
+            "Can Master Builder add the HubSpot dependency work needed for AP-248?"
+            in human_request.prompt
+        )
         assert "Source project changes:" in human_request.prompt
         assert "Master Builder changes:" in human_request.prompt
         assert "Package or dependency changes:" in human_request.prompt
-        assert "Secrets or bindings the operator may need to configure:" in human_request.prompt
-        assert "http://localhost:4100/tenant-a/projects/project-a/installs" in human_request.prompt
-        assert human_request.expected_reply_format == "Reply `yes` to approve, or `no` to stop and replan."
+        assert (
+            "Secrets or bindings the operator may need to configure:"
+            in human_request.prompt
+        )
+        assert (
+            "http://localhost:4100/tenant-a/projects/project-a/installs"
+            in human_request.prompt
+        )
+        assert (
+            human_request.expected_reply_format
+            == "Reply `yes` to approve, or `no` to stop and replan."
+        )
         context = human_request.request_context_json
-        assert context["admin_url"] == "http://localhost:4100/tenant-a/projects/project-a/installs"
+        assert (
+            context["admin_url"]
+            == "http://localhost:4100/tenant-a/projects/project-a/installs"
+        )
         assert context["questions"] == [
             {
                 "id": "approve_install_dependency_work",
@@ -223,7 +262,9 @@ class TestProjectInstallServices:
             }
         ]
 
-    def test_approve_install_request_creates_secret_placeholders_and_resumes_workflow(self) -> None:
+    def test_approve_install_request_creates_secret_placeholders_and_resumes_workflow(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -267,7 +308,9 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 request = create_install_request(
                     session=session,
                     settings=settings,
@@ -285,7 +328,10 @@ class TestProjectInstallServices:
                 )
 
             fake_runtime = SimpleNamespace(resume_input=lambda workflow, request: run)
-            with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=fake_runtime):
+            with patch(
+                "orchestrator.core.runs.human_input_service.build_workflow_runtime",
+                return_value=fake_runtime,
+            ):
                 updated = approve_install_request(
                     session=session,
                     settings=settings,
@@ -311,7 +357,9 @@ class TestProjectInstallServices:
         assert install.enabled is True
         assert install.binding_names_json == ["HUBSPOT_ACCESS_TOKEN", "EXISTING_TOKEN"]
 
-    def test_create_install_request_returns_existing_approved_request_without_reopening_input(self) -> None:
+    def test_create_install_request_returns_existing_approved_request_without_reopening_input(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -365,7 +413,9 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 request = create_install_request(
                     session=session,
                     settings=settings,
@@ -382,8 +432,13 @@ class TestProjectInstallServices:
                     ),
                 )
 
-            fake_runtime = SimpleNamespace(resume_input=lambda workflow, request: first_run)
-            with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=fake_runtime):
+            fake_runtime = SimpleNamespace(
+                resume_input=lambda workflow, request: first_run
+            )
+            with patch(
+                "orchestrator.core.runs.human_input_service.build_workflow_runtime",
+                return_value=fake_runtime,
+            ):
                 approve_install_request(
                     session=session,
                     settings=settings,
@@ -407,7 +462,9 @@ class TestProjectInstallServices:
                     required_bindings=(),
                 ),
             )
-            human_requests = session.execute(select(RunHumanInputRequest)).scalars().all()
+            human_requests = (
+                session.execute(select(RunHumanInputRequest)).scalars().all()
+            )
             installs = session.execute(select(ProjectInstall)).scalars().all()
 
         assert reopened.request_id == request.request_id
@@ -418,7 +475,9 @@ class TestProjectInstallServices:
         assert installs[0].kind == "integration"
         assert installs[0].label == "hubspot"
 
-    def test_approve_duplicate_provider_request_resumes_active_pending_gate(self) -> None:
+    def test_approve_duplicate_provider_request_resumes_active_pending_gate(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -462,7 +521,9 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 active_request = create_install_request(
                     session=session,
                     settings=settings,
@@ -499,7 +560,10 @@ class TestProjectInstallServices:
             session.commit()
 
             fake_runtime = SimpleNamespace(resume_input=lambda workflow, request: run)
-            with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=fake_runtime):
+            with patch(
+                "orchestrator.core.runs.human_input_service.build_workflow_runtime",
+                return_value=fake_runtime,
+            ):
                 approve_install_request(
                     session=session,
                     settings=settings,
@@ -508,8 +572,12 @@ class TestProjectInstallServices:
                     source_ref="test",
                 )
 
-            active_request = session.get(ProjectInstallRequest, active_request.request_id)
-            duplicate_request = session.get(ProjectInstallRequest, duplicate_request.request_id)
+            active_request = session.get(
+                ProjectInstallRequest, active_request.request_id
+            )
+            duplicate_request = session.get(
+                ProjectInstallRequest, duplicate_request.request_id
+            )
             human_request = session.execute(select(RunHumanInputRequest)).scalar_one()
 
         assert active_request is not None
@@ -520,7 +588,9 @@ class TestProjectInstallServices:
         assert duplicate_request.label == "hubspot"
         assert human_request.status == "answered"
 
-    def test_reapproving_equivalent_approved_request_resumes_stale_pending_gate(self) -> None:
+    def test_reapproving_equivalent_approved_request_resumes_stale_pending_gate(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -564,7 +634,9 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 context_request = create_install_request(
                     session=session,
                     settings=settings,
@@ -654,7 +726,10 @@ class TestProjectInstallServices:
                 return run
 
             fake_runtime = SimpleNamespace(resume_input=resume_input)
-            with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=fake_runtime):
+            with patch(
+                "orchestrator.core.runs.human_input_service.build_workflow_runtime",
+                return_value=fake_runtime,
+            ):
                 approve_install_request(
                     session=session,
                     settings=settings,
@@ -669,7 +744,9 @@ class TestProjectInstallServices:
         assert human_request.status == "answered"
         assert human_request.answer_source_ref == "test"
 
-    def test_reject_install_request_resumes_without_creating_secret_placeholders(self) -> None:
+    def test_reject_install_request_resumes_without_creating_secret_placeholders(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -713,7 +790,9 @@ class TestProjectInstallServices:
             session.commit()
             settings = get_settings()
 
-            with patch("orchestrator.core.runs.human_input_service._dispatch_human_input_request"):
+            with patch(
+                "orchestrator.core.runs.human_input_service._dispatch_human_input_request"
+            ):
                 request = create_install_request(
                     session=session,
                     settings=settings,
@@ -731,7 +810,10 @@ class TestProjectInstallServices:
                 )
 
             fake_runtime = SimpleNamespace(resume_input=lambda workflow, request: run)
-            with patch("orchestrator.core.runs.human_input_service.build_workflow_runtime", return_value=fake_runtime):
+            with patch(
+                "orchestrator.core.runs.human_input_service.build_workflow_runtime",
+                return_value=fake_runtime,
+            ):
                 updated = reject_install_request(
                     session=session,
                     settings=settings,
@@ -748,7 +830,9 @@ class TestProjectInstallServices:
         assert human_request.status == "answered"
         assert human_request.answer_source_ref == "test"
 
-    def test_consumed_human_input_with_failed_resume_run_can_create_new_resume_attempt(self) -> None:
+    def test_consumed_human_input_with_failed_resume_run_can_create_new_resume_attempt(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -806,7 +890,9 @@ class TestProjectInstallServices:
                 finished_at=now,
             )
             checkpoint_snapshot = ExecutionSnapshot.empty()
-            checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+            checkpoint_snapshot.context.execution_context["pre_check_outcome"] = (
+                "ready_for_agent"
+            )
             checkpoint = WorkflowCheckpoint(
                 checkpoint_id="checkpoint-retry",
                 workflow_id=source_run.workflow_id,
@@ -875,7 +961,10 @@ class TestProjectInstallServices:
             environment={"SUPABASE_URL": "https://example.supabase.co"},
             secret_refs={"SUPABASE_ANON_KEY": "tenant/tenant-a/SUPABASE_ANON_KEY"},
         )
-        with patch("orchestrator.core.platform.binding_resolution_service.resolve_scoped_secret_ref", return_value=None):
+        with patch(
+            "orchestrator.core.platform.binding_resolution_service.resolve_scoped_secret_ref",
+            return_value=None,
+        ):
             statuses = check_project_bindings(
                 session=object(),  # type: ignore[arg-type]
                 project=project,  # type: ignore[arg-type]
@@ -899,7 +988,12 @@ class TestProjectInstallServices:
                 enabled=True,
                 kind="fastlane_lane",
                 label="iOS Beta Lane",
-                config_json={"working_dir": ".", "platform": "ios", "lane": "beta", "use_bundle_exec": True},
+                config_json={
+                    "working_dir": ".",
+                    "platform": "ios",
+                    "lane": "beta",
+                    "use_bundle_exec": True,
+                },
                 binding_names_json=["MATCH_PASSWORD"],
             )
             project = SimpleNamespace(project_id="project-a", tenant_id="tenant-a")

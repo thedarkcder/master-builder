@@ -24,7 +24,9 @@ def normalize_tenant_observability_policy(
         if isinstance(raw_observability, Mapping):
             observability = raw_observability
 
-    raw_retention_days = observability.get("audit_retention_days") if observability else None
+    raw_retention_days = (
+        observability.get("audit_retention_days") if observability else None
+    )
     try:
         audit_retention_days = int(raw_retention_days or DEFAULT_AUDIT_RETENTION_DAYS)
     except (TypeError, ValueError):

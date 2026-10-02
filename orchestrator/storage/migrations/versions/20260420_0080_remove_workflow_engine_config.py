@@ -38,10 +38,14 @@ def _normalize_retry_policy(raw_value) -> dict[str, object]:  # noqa: ANN001
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-    workflow_type_columns = {column["name"] for column in inspector.get_columns("workflow_types")}
+    workflow_type_columns = {
+        column["name"] for column in inspector.get_columns("workflow_types")
+    }
     if "retry_policy_config_json" in workflow_type_columns:
         rows = bind.execute(
-            sa.text("SELECT workflow_type_key, retry_policy_config_json FROM workflow_types ORDER BY workflow_type_key")
+            sa.text(
+                "SELECT workflow_type_key, retry_policy_config_json FROM workflow_types ORDER BY workflow_type_key"
+            )
         ).mappings()
         workflow_types = sa.table(
             "workflow_types",
@@ -52,7 +56,11 @@ def upgrade() -> None:
             bind.execute(
                 workflow_types.update()
                 .where(workflow_types.c.workflow_type_key == row["workflow_type_key"])
-                .values(retry_policy_config_json=_normalize_retry_policy(row["retry_policy_config_json"]))
+                .values(
+                    retry_policy_config_json=_normalize_retry_policy(
+                        row["retry_policy_config_json"]
+                    )
+                )
             )
     if "engine_config_json" in workflow_type_columns:
         if bind.dialect.name == "sqlite":
@@ -65,12 +73,26 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-    workflow_type_columns = {column["name"] for column in inspector.get_columns("workflow_types")}
+    workflow_type_columns = {
+        column["name"] for column in inspector.get_columns("workflow_types")
+    }
     if "engine_config_json" not in workflow_type_columns:
         if bind.dialect.name == "sqlite":
             with op.batch_alter_table("workflow_types") as batch_op:
-                batch_op.add_column(sa.Column("engine_config_json", sa.JSON(), nullable=False, server_default="{}"))
+                batch_op.add_column(
+                    sa.Column(
+                        "engine_config_json",
+                        sa.JSON(),
+                        nullable=False,
+                        server_default="{}",
+                    )
+                )
         else:
-            op.add_column("workflow_types", sa.Column("engine_config_json", sa.JSON(), nullable=False, server_default="{}"))
+            op.add_column(
+                "workflow_types",
+                sa.Column(
+                    "engine_config_json", sa.JSON(), nullable=False, server_default="{}"
+                ),
+            )
         if bind.dialect.name != "sqlite":
             op.alter_column("workflow_types", "engine_config_json", server_default=None)

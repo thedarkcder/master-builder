@@ -6,7 +6,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.planning.specialist.constants import SPECIALIST_STAGE_CONTRACT_ATTEMPTS
+from orchestrator.core.planning.specialist.constants import (
+    SPECIALIST_STAGE_CONTRACT_ATTEMPTS,
+)
 from orchestrator.core.planning.specialist.contract_parser import StageContractParser
 from orchestrator.core.planning.specialist.models import (
     PlanningStageDefinition,
@@ -18,7 +20,10 @@ from orchestrator.core.prompt_domain_models import prompt_domain_model_for_templ
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.runtime.stage_session import RuntimeStageSession
-from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
+from orchestrator.core.workflow.work_units import (
+    run_work_unit,
+    workflow_work_unit_input_fingerprint,
+)
 from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAttempt
 
 
@@ -90,7 +95,9 @@ class SpecialistPlanningStageRunner:
         if callable(runtime_for_selector):
             selected_runtime = runtime_for_selector(stage.selector)
             if selected_runtime is None:
-                raise RuntimeError(f"Runtime selector returned no runtime for {stage.selector}")
+                raise RuntimeError(
+                    f"Runtime selector returned no runtime for {stage.selector}"
+                )
         invocation_context = AgentInvocationContext(
             channel="system",
             tenant_id=request.tenant_id,
@@ -116,8 +123,12 @@ class SpecialistPlanningStageRunner:
         )
         domain_model = prompt_domain_model_for_template(stage.system_prompt_template)
         if domain_model is None:
-            raise RuntimeError(f"No domain model registered for {stage.system_prompt_template}")
-        system_prompt = render_prompt(stage.system_prompt_template, domain_model=domain_model)
+            raise RuntimeError(
+                f"No domain model registered for {stage.system_prompt_template}"
+            )
+        system_prompt = render_prompt(
+            stage.system_prompt_template, domain_model=domain_model
+        )
         user_prompt = render_prompt(
             stage.user_prompt_template,
             **_planning_stage_user_context(
@@ -127,6 +138,7 @@ class SpecialistPlanningStageRunner:
                 domain_model=domain_model,
             ),
         )
+
         def _invoke() -> SpecialistPlanningStageResult:
             return self._invoke_until_contract_valid(
                 stage_session=stage_session,
@@ -138,16 +150,26 @@ class SpecialistPlanningStageRunner:
 
         if request.operation_id or request.attempt_id:
             if session is None:
-                raise RuntimeError("Specialist planning workflow attempts require a database session")
+                raise RuntimeError(
+                    "Specialist planning workflow attempts require a database session"
+                )
             if not request.operation_id or not request.attempt_id:
-                raise RuntimeError("Specialist planning workflow attempts require operation_id and attempt_id")
+                raise RuntimeError(
+                    "Specialist planning workflow attempts require operation_id and attempt_id"
+                )
             operation = session.get(WorkflowOperation, request.operation_id)
             attempt = session.get(WorkflowOperationAttempt, request.attempt_id)
             if operation is None:
-                raise RuntimeError(f"Workflow operation {request.operation_id} is missing for specialist planning")
+                raise RuntimeError(
+                    f"Workflow operation {request.operation_id} is missing for specialist planning"
+                )
             if attempt is None:
-                raise RuntimeError(f"Workflow operation attempt {request.attempt_id} is missing for specialist planning")
-            unit_key = str(request.work_unit_keys_by_stage.get(stage.planning_state) or "").strip()
+                raise RuntimeError(
+                    f"Workflow operation attempt {request.attempt_id} is missing for specialist planning"
+                )
+            unit_key = str(
+                request.work_unit_keys_by_stage.get(stage.planning_state) or ""
+            ).strip()
             if not unit_key:
                 raise RuntimeError(
                     f"No specialist planning work unit is declared for operation "
@@ -176,7 +198,9 @@ class SpecialistPlanningStageRunner:
                 input_payload=input_payload,
                 execute=lambda _context: _invoke(),
                 serialize=lambda result: result.to_payload(),
-                deserialize=lambda payload: self._parser.parse(stage=stage, payload=payload),
+                deserialize=lambda payload: self._parser.parse(
+                    stage=stage, payload=payload
+                ),
             )
 
         return _invoke()
@@ -212,7 +236,9 @@ class SpecialistPlanningStageRunner:
             except RuntimeError as exc:
                 contract_error = str(exc)
                 if attempt_number >= SPECIALIST_STAGE_CONTRACT_ATTEMPTS:
-                    raise RetryableSpecialistPlanningContractError(contract_error) from exc
+                    raise RetryableSpecialistPlanningContractError(
+                        contract_error
+                    ) from exc
         raise RetryableSpecialistPlanningContractError(
             f"{stage.planning_state} payload contract retry exhausted without a parse result"
         )

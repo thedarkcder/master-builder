@@ -21,18 +21,36 @@ def test_evaluate_pr_review_findings_parses_payload() -> None:
         ],
     }
     with (
-        patch("orchestrator.core.review.pr_review_findings.get_settings", return_value=object()),
-        patch("orchestrator.core.review.pr_review_findings.build_codex_runtime", return_value=object()),
-        patch("orchestrator.core.review.pr_review_findings.invoke_runtime_json", return_value=payload),
-        patch("orchestrator.core.review.pr_review_findings.render_prompt", return_value="prompt"),
+        patch(
+            "orchestrator.core.review.pr_review_findings.get_settings",
+            return_value=object(),
+        ),
+        patch(
+            "orchestrator.core.review.pr_review_findings.build_codex_runtime",
+            return_value=object(),
+        ),
+        patch(
+            "orchestrator.core.review.pr_review_findings.invoke_runtime_json",
+            return_value=payload,
+        ),
+        patch(
+            "orchestrator.core.review.pr_review_findings.render_prompt",
+            return_value="prompt",
+        ),
     ):
         result = evaluate_pr_review_findings(
             repo_full_name="org/repo",
             pr_number=10,
             pr_title="MAB-1",
             pr_body="desc",
-            workflow_checks=[WorkflowCheckSuite(name="CI", status="completed", conclusion="success")],
-            changed_files=[PullRequestFileChange(filename="orchestrator/core/x.py", patch="+ bad()")],
+            workflow_checks=[
+                WorkflowCheckSuite(name="CI", status="completed", conclusion="success")
+            ],
+            changed_files=[
+                PullRequestFileChange(
+                    filename="orchestrator/core/x.py", patch="+ bad()"
+                )
+            ],
             tenant_id="t1",
             project_id="p1",
         )
@@ -50,10 +68,22 @@ def test_evaluate_pr_review_findings_treats_empty_findings_as_ready() -> None:
         "findings": [],
     }
     with (
-        patch("orchestrator.core.review.pr_review_findings.get_settings", return_value=object()),
-        patch("orchestrator.core.review.pr_review_findings.build_codex_runtime", return_value=object()),
-        patch("orchestrator.core.review.pr_review_findings.invoke_runtime_json", return_value=payload),
-        patch("orchestrator.core.review.pr_review_findings.render_prompt", return_value="prompt"),
+        patch(
+            "orchestrator.core.review.pr_review_findings.get_settings",
+            return_value=object(),
+        ),
+        patch(
+            "orchestrator.core.review.pr_review_findings.build_codex_runtime",
+            return_value=object(),
+        ),
+        patch(
+            "orchestrator.core.review.pr_review_findings.invoke_runtime_json",
+            return_value=payload,
+        ),
+        patch(
+            "orchestrator.core.review.pr_review_findings.render_prompt",
+            return_value="prompt",
+        ),
     ):
         result = evaluate_pr_review_findings(
             repo_full_name="org/repo",
@@ -61,7 +91,11 @@ def test_evaluate_pr_review_findings_treats_empty_findings_as_ready() -> None:
             pr_title="MAB-1",
             pr_body="desc",
             workflow_checks=[],
-            changed_files=[PullRequestFileChange(filename="orchestrator/core/x.py", patch="+ good()")],
+            changed_files=[
+                PullRequestFileChange(
+                    filename="orchestrator/core/x.py", patch="+ good()"
+                )
+            ],
             tenant_id="t1",
             project_id="p1",
         )

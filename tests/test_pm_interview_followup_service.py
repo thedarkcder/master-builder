@@ -9,7 +9,9 @@ import pytest
 from sqlalchemy import select
 
 from orchestrator.storage.models import PMInterviewCase
-from orchestrator.core.pm.interview_followup_service import continue_pm_interview_from_followup
+from orchestrator.core.pm.interview_followup_service import (
+    continue_pm_interview_from_followup,
+)
 from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
@@ -50,12 +52,14 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
         self.temp_dir.cleanup()
         clear_runtime_environment()
 
-    def test_continue_pm_interview_from_followup_is_idempotent_for_same_source_ref(self) -> None:
+    def test_continue_pm_interview_from_followup_is_idempotent_for_same_source_ref(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-followup-1",
                 source_kind="jira_parent",
                 channel_id="jira-parent-sync",
@@ -108,8 +112,8 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
             first = continue_pm_interview_from_followup(
                 session=session,
                 runtime=SimpleNamespace(),
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-followup-1",
                 reply_text="Use a 12 month retention window.",
                 source_transport="jira_comment",
@@ -117,8 +121,8 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
                 actor_ref="jira-user-1",
                 invocation_context=AgentInvocationContext(
                     channel="jira",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     command="pm",
                     stage="interview",
                     working_dir=".",
@@ -132,8 +136,8 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
             second = continue_pm_interview_from_followup(
                 session=session,
                 runtime=SimpleNamespace(),
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-followup-1",
                 reply_text="Use a 12 month retention window.",
                 source_transport="jira_comment",
@@ -141,8 +145,8 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
                 actor_ref="jira-user-1",
                 invocation_context=AgentInvocationContext(
                     channel="jira",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     command="pm",
                     stage="interview",
                     working_dir=".",
@@ -153,21 +157,31 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
             )
 
             self.assertEqual(plan_mock.call_count, 1)
-            self.assertEqual(first.assessment.brief.constraints, ("12 month retention window",))
-            self.assertEqual(second.assessment.brief.constraints, ("12 month retention window",))
-            self.assertEqual(second.clarification_questions, first.clarification_questions)
+            self.assertEqual(
+                first.assessment.brief.constraints, ("12 month retention window",)
+            )
+            self.assertEqual(
+                second.assessment.brief.constraints, ("12 month retention window",)
+            )
+            self.assertEqual(
+                second.clarification_questions, first.clarification_questions
+            )
             self.assertEqual(
                 len(list(getattr(second.interview_case, "evidence_json", None) or [])),
                 1,
             )
-            self.assertEqual(second.interview_case.evidence_json[0]["source_ref"], "comment-1")
+            self.assertEqual(
+                second.interview_case.evidence_json[0]["source_ref"], "comment-1"
+            )
 
-    def test_continue_pm_interview_from_followup_completes_and_clears_stale_question(self) -> None:
+    def test_continue_pm_interview_from_followup_completes_and_clears_stale_question(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-followup-2",
                 source_kind="jira_parent",
                 channel_id="jira-parent-sync",
@@ -226,8 +240,8 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
             result = continue_pm_interview_from_followup(
                 session=session,
                 runtime=SimpleNamespace(),
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-followup-2",
                 reply_text="Use a 12 month retention window.",
                 source_transport="jira_comment",
@@ -235,8 +249,8 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
                 actor_ref="jira-user-1",
                 invocation_context=AgentInvocationContext(
                     channel="jira",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     command="pm",
                     stage="interview",
                     working_dir=".",
@@ -247,9 +261,15 @@ class PMInterviewFollowupServiceTests(unittest.TestCase):
             )
             session.commit()
 
-            case = session.execute(
-                select(PMInterviewCase).where(PMInterviewCase.request_id == "pm-req-followup-2")
-            ).scalars().one()
+            case = (
+                session.execute(
+                    select(PMInterviewCase).where(
+                        PMInterviewCase.request_id == "pm-req-followup-2"
+                    )
+                )
+                .scalars()
+                .one()
+            )
 
             self.assertTrue(result.assessment.ready_to_write)
             self.assertEqual(result.clarification_questions, ())

@@ -41,7 +41,9 @@ def upgrade() -> None:
         if _is_canonical_snapshot(payload):
             continue
         bind.execute(
-            runs.update().where(runs.c.run_id == run_id).values(plan=_to_snapshot_v1(payload))
+            runs.update()
+            .where(runs.c.run_id == run_id)
+            .values(plan=_to_snapshot_v1(payload))
         )
 
     checkpoint_rows = bind.execute(
@@ -77,7 +79,12 @@ def _is_canonical_snapshot(payload: dict[str, Any]) -> bool:
     workflow = payload.get("workflow")
     events = payload.get("events")
     stages = payload.get("stages")
-    return isinstance(context, dict) and isinstance(workflow, dict) and isinstance(events, dict) and isinstance(stages, dict)
+    return (
+        isinstance(context, dict)
+        and isinstance(workflow, dict)
+        and isinstance(events, dict)
+        and isinstance(stages, dict)
+    )
 
 
 def _to_snapshot_v1(payload: dict[str, Any]) -> dict[str, Any]:
@@ -120,7 +127,13 @@ def _derive_outcome(payload: dict[str, Any]) -> str | None:
     explicit_outcome = payload.get("outcome")
     if isinstance(explicit_outcome, str):
         normalized = explicit_outcome.strip().lower()
-        if normalized in {"success", "requeue", "waiting_for_input", "blocked", "failed"}:
+        if normalized in {
+            "success",
+            "requeue",
+            "waiting_for_input",
+            "blocked",
+            "failed",
+        }:
             return normalized
     succeeded = payload.get("succeeded")
     if succeeded is True:

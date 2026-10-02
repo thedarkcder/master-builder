@@ -17,8 +17,8 @@ test("shows workflow definitions and retries a failed execution operation", asyn
   const workflow = makeWorkflow({
     execution_id: "wfexec-mab-215",
     workflow_id: "parent_planning:MAB-215",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-215",
     display_name: "Identity and authorization v1 contract",
@@ -453,22 +453,22 @@ test("shows workflow definitions and retries a failed execution operation", asyn
     },
   });
 
-  await page.goto("/example/workflows", { waitUntil: "domcontentloaded" });
+  await page.goto("/example-workspace/workflows", { waitUntil: "domcontentloaded" });
 
   const parentPlanningLink = page.getByRole("link", { name: "Parent Planning" });
   await expect(parentPlanningLink).toBeVisible();
-  await expect(parentPlanningLink).toHaveAttribute("href", "/example/workflows/parent_planning");
-  await page.goto("/example/workflows/parent_planning", { waitUntil: "domcontentloaded" });
-  await expect(page).toHaveURL(/\/example\/workflows\/parent_planning$/);
+  await expect(parentPlanningLink).toHaveAttribute("href", "/example-workspace/workflows/parent_planning");
+  await page.goto("/example-workspace/workflows/parent_planning", { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(/\/example-workspace\/workflows\/parent_planning$/);
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
   await page.getByRole("button", { name: "Recent executions" }).click();
   await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
   const executionLink = page.getByRole("link", { name: "Identity and authorization v1 contract" });
   await expect(executionLink).toBeVisible();
-  await expect(executionLink).toHaveAttribute("href", "/example/executions/wfexec-mab-215");
-  await page.goto("/example/executions/wfexec-mab-215", { waitUntil: "domcontentloaded" });
-  await expect(page).toHaveURL(/\/example\/executions\/wfexec-mab-215$/);
+  await expect(executionLink).toHaveAttribute("href", "/example-workspace/executions/wfexec-mab-215");
+  await page.goto("/example-workspace/executions/wfexec-mab-215", { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(/\/example-workspace\/executions\/wfexec-mab-215$/);
   await expect(page.getByText("Workflow type")).toBeVisible();
   await expect(page.getByText("Parent Planning")).toBeVisible();
   await expect(page.getByRole("button", { name: "Resume execution" })).toBeEnabled();
@@ -574,8 +574,8 @@ test("starts engineering work from the standalone signed Jira action page", asyn
       handler: (route, url) => {
         previewToken = url.searchParams.get("action_token");
         return fulfillJson(route, {
-          tenant_id: "example",
-          project_id: "example-default",
+          tenant_id: "example-workspace",
+          project_id: "example-workspace-default",
           execution_id: "wfexec-mab-243",
           issue_key: "MAB-243",
           display_name: "Identity redesign",
@@ -595,8 +595,8 @@ test("starts engineering work from the standalone signed Jira action page", asyn
           workflow: makeWorkflow({
             execution_id: "wfexec-mab-243",
             workflow_id: "parent_planning:MAB-243",
-            tenant_id: "example",
-            project_id: "example-default",
+            tenant_id: "example-workspace",
+            project_id: "example-workspace-default",
             source_ref: "MAB-243",
             display_name: "Identity redesign",
             status: "completed",
@@ -613,7 +613,7 @@ test("starts engineering work from the standalone signed Jira action page", asyn
     },
   ]);
 
-  await page.goto("/example/start/wfexec-mab-243?startDevelopmentToken=signed-token-from-jira");
+  await page.goto("/example-workspace/start/wfexec-mab-243?startDevelopmentToken=signed-token-from-jira");
 
   await expect(page.getByRole("heading", { name: "Start engineering work" })).toBeVisible();
   await expect(page.getByText("MAB-243")).toBeVisible();
@@ -677,8 +677,8 @@ test("shows the new live retry attempt when retry submission returns before star
   const workflow = makeWorkflow({
     execution_id: "wfexec-retry-accepted",
     workflow_id: "workflow-retry-accepted",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     status: "failed",
     current_state: "failed",
     failure_reason: "Previous attempt failed.",
@@ -729,7 +729,7 @@ test("shows the new live retry attempt when retry submission returns before star
     },
   });
 
-  await page.goto("/example/executions/wfexec-retry-accepted");
+  await page.goto("/example-workspace/executions/wfexec-retry-accepted");
   await page.getByRole("button", { name: "Step details" }).click();
   await page.getByRole("button", { name: "Retry step" }).click();
 
@@ -743,8 +743,8 @@ test("groups supporting workflow steps under their declared owning operation", a
   const workflow = makeWorkflow({
     execution_id: "wfexec-mab-supporting",
     workflow_id: "parent_planning:MAB-233",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-233",
     display_name: "Parent planning support grouping",
@@ -837,7 +837,7 @@ test("groups supporting workflow steps under their declared owning operation", a
 
   await mockTenantWorkflowApis(page, { workflows: [workflow] });
 
-  await page.goto("/example/executions/wfexec-mab-supporting");
+  await page.goto("/example-workspace/executions/wfexec-mab-supporting");
   await page.getByRole("button", { name: "Execution path" }).click();
 
   const backlogGroup = page.locator('[data-workflow-flow-group="backlog_planning"]');
@@ -856,8 +856,8 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
   const workflow = makeWorkflow({
     execution_id: "wfexec-mab-clarification",
     workflow_id: "parent_planning:MAB-215",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-215",
     display_name: "Identity and authorization v1 contract",
@@ -1018,7 +1018,7 @@ test("keeps retry available for missing-input workflow failures", async ({ page 
     },
   });
 
-  await page.goto("/example/executions/wfexec-mab-clarification");
+  await page.goto("/example-workspace/executions/wfexec-mab-clarification");
   await page.getByRole("button", { name: "Step details" }).click();
 
   const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();

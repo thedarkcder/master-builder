@@ -9,7 +9,9 @@ from temporalio.client import WorkflowUpdateFailedError
 from temporalio.exceptions import ApplicationError
 
 from orchestrator.api.admin.route_helpers import reconcile_tenant_projects
-from orchestrator.core.jira_project_reconciliation.scheduler import run_scheduled_jira_project_reconciliation_pass
+from orchestrator.core.jira_project_reconciliation.scheduler import (
+    run_scheduled_jira_project_reconciliation_pass,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
 from tests.test_support.admin_api_harness import AdminApiTestHarness
@@ -23,9 +25,15 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
     def _first_project_id(self, tenant_id: str = "tenant-a") -> str:
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            project = session.execute(
-                select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at.asc())
-            ).scalars().first()
+            project = (
+                session.execute(
+                    select(Project)
+                    .where(Project.tenant_id == tenant_id)
+                    .order_by(Project.created_at.asc())
+                )
+                .scalars()
+                .first()
+            )
             self.assertIsNotNone(project)
             assert project is not None
             return project.project_id
@@ -76,9 +84,15 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
 
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["execution_id"], "wfexec-jira-reconcile-1")
-        self.assertEqual(response.json()["workflow_id"], f"jira_project_reconciliation:{project_id}")
-        self.assertEqual(response.json()["workflow_type_key"], "jira_project_reconciliation")
-        self.assertEqual(response.json()["started_attempt_id"], "attempt-jira-reconcile-1")
+        self.assertEqual(
+            response.json()["workflow_id"], f"jira_project_reconciliation:{project_id}"
+        )
+        self.assertEqual(
+            response.json()["workflow_type_key"], "jira_project_reconciliation"
+        )
+        self.assertEqual(
+            response.json()["started_attempt_id"], "attempt-jira-reconcile-1"
+        )
         start_mock.assert_called_once()
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["tenant"].tenant_id, "tenant-a")
@@ -118,7 +132,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "trigger_mode": "from_pr",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -126,10 +144,14 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
 
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["execution_id"], "wfexec-demo-proof-1")
-        self.assertEqual(response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1")
+        self.assertEqual(
+            response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1"
+        )
         self.assertEqual(response.json()["workflow_type_key"], "demo_proof")
         self.assertEqual(response.json()["status"], "waiting_for_input")
-        self.assertEqual(response.json()["started_attempt_id"], "attempt-preview-lease-1")
+        self.assertEqual(
+            response.json()["started_attempt_id"], "attempt-preview-lease-1"
+        )
         start_mock.assert_called_once()
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["tenant"].tenant_id, "tenant-a")
@@ -139,11 +161,18 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(start_kwargs["trigger_mode"], "from_pr")
         self.assertIsNone(start_kwargs["run_id"])
         self.assertEqual(start_kwargs["pr_url"], "https://github.com/acme/repo/pull/8")
-        self.assertEqual(start_kwargs["required_capture_targets"], ["browser", "ios", "android"])
-        self.assertEqual(start_kwargs["required_recording_counts"], {"browser": 3, "ios": 3, "android": 3})
+        self.assertEqual(
+            start_kwargs["required_capture_targets"], ["browser", "ios", "android"]
+        )
+        self.assertEqual(
+            start_kwargs["required_recording_counts"],
+            {"browser": 3, "ios": 3, "android": 3},
+        )
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
-    def test_generic_workflow_start_route_rejects_from_pr_demo_proof_with_run_id(self) -> None:
+    def test_generic_workflow_start_route_rejects_from_pr_demo_proof_with_run_id(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -153,7 +182,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow") as start_mock:
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow"
+        ) as start_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -167,7 +198,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "run_id": "run-1",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -177,7 +212,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("from_pr must not include run_id", response.json()["detail"])
         start_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_rejects_from_pr_demo_proof_with_release_id(self) -> None:
+    def test_generic_workflow_start_route_rejects_from_pr_demo_proof_with_release_id(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -187,7 +224,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow") as start_mock:
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow"
+        ) as start_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -201,7 +240,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "release_id": "release-preview-1",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -211,7 +254,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("from_pr must not include release_id", response.json()["detail"])
         start_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_starts_from_release_demo_proof_with_release_id(self) -> None:
+    def test_generic_workflow_start_route_starts_from_release_demo_proof_with_release_id(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -244,7 +289,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "release_id": "release-preview-1",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -256,10 +305,15 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["trigger_mode"], "from_release")
         self.assertEqual(start_kwargs["release_id"], "release-preview-1")
-        self.assertEqual(start_kwargs["required_recording_counts"], {"browser": 3, "ios": 3, "android": 3})
+        self.assertEqual(
+            start_kwargs["required_recording_counts"],
+            {"browser": 3, "ios": 3, "android": 3},
+        )
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
-    def test_generic_workflow_start_route_starts_retry_recording_demo_proof(self) -> None:
+    def test_generic_workflow_start_route_starts_retry_recording_demo_proof(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -292,21 +346,32 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "run_id": "run-1",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
             )
 
         self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1")
+        self.assertEqual(
+            response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1"
+        )
         start_mock.assert_called_once()
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["trigger_mode"], "retry_recording")
-        self.assertEqual(start_kwargs["required_recording_counts"], {"browser": 3, "ios": 3, "android": 3})
+        self.assertEqual(
+            start_kwargs["required_recording_counts"],
+            {"browser": 3, "ios": 3, "android": 3},
+        )
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
-    def test_generic_workflow_start_route_rejects_demo_proof_without_pr_url(self) -> None:
+    def test_generic_workflow_start_route_rejects_demo_proof_without_pr_url(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -316,7 +381,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+        with patch(
+            "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+        ) as runtime_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -328,7 +395,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "commit_sha": "abcdef1",
                         "trigger_mode": "from_pr",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -338,7 +409,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("pr_url", response.json()["detail"])
         runtime_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_starts_cleanup_only_demo_proof_with_release_id_without_pr_url(self) -> None:
+    def test_generic_workflow_start_route_starts_cleanup_only_demo_proof_with_release_id_without_pr_url(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -370,24 +443,35 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "trigger_mode": "cleanup_only",
                         "release_id": "release-preview-1",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
             )
 
         self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1")
+        self.assertEqual(
+            response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1"
+        )
         self.assertEqual(response.json()["status"], "waiting_for_input")
         start_mock.assert_called_once()
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["trigger_mode"], "cleanup_only")
         self.assertEqual(start_kwargs["release_id"], "release-preview-1")
         self.assertIsNone(start_kwargs["pr_url"])
-        self.assertEqual(start_kwargs["required_recording_counts"], {"browser": 3, "ios": 3, "android": 3})
+        self.assertEqual(
+            start_kwargs["required_recording_counts"],
+            {"browser": 3, "ios": 3, "android": 3},
+        )
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
-    def test_generic_workflow_start_route_rejects_cleanup_only_demo_proof_without_release_id(self) -> None:
+    def test_generic_workflow_start_route_rejects_cleanup_only_demo_proof_without_release_id(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -397,7 +481,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+        with patch(
+            "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+        ) as runtime_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -409,7 +495,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "commit_sha": "abcdef1",
                         "trigger_mode": "cleanup_only",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -419,7 +509,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("cleanup_only requires release_id", response.json()["detail"])
         runtime_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_rejects_demo_proof_without_required_recording_counts(self) -> None:
+    def test_generic_workflow_start_route_rejects_demo_proof_without_required_recording_counts(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -429,7 +521,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+        with patch(
+            "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+        ) as runtime_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -448,10 +542,15 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             )
 
         self.assertEqual(response.status_code, 422, response.text)
-        self.assertIn("required_recording_counts must be provided by PM demo requirements", response.json()["detail"])
+        self.assertIn(
+            "required_recording_counts must be provided by PM demo requirements",
+            response.json()["detail"],
+        )
         runtime_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_rejects_from_run_demo_proof_without_run_id(self) -> None:
+    def test_generic_workflow_start_route_rejects_from_run_demo_proof_without_run_id(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -461,7 +560,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+        with patch(
+            "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+        ) as runtime_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -474,7 +575,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "trigger_mode": "from_run",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -484,7 +589,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("from_run requires run_id", response.json()["detail"])
         runtime_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_rejects_demo_proof_without_trigger_mode(self) -> None:
+    def test_generic_workflow_start_route_rejects_demo_proof_without_trigger_mode(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -494,7 +601,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(create_response.status_code, 201)
         project_id = self._first_project_id()
 
-        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+        with patch(
+            "orchestrator.core.qa.demo_proof_start.build_workflow_runtime"
+        ) as runtime_mock:
             response = self.client.post(
                 "/api/admin/workflows",
                 json={
@@ -507,7 +616,11 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "run_id": "run-1",
                         "pr_url": "https://github.com/acme/repo/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
-                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                        "required_recording_counts": {
+                            "browser": 3,
+                            "ios": 3,
+                            "android": 3,
+                        },
                     },
                 },
                 auth=("admin", "secret"),
@@ -517,7 +630,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("trigger_mode", response.json()["detail"])
         runtime_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_returns_reauth_required_when_jira_token_is_invalid(self) -> None:
+    def test_generic_workflow_start_route_returns_reauth_required_when_jira_token_is_invalid(
+        self,
+    ) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_response = self.client.post(
@@ -530,7 +645,7 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
 
         temporal_error = WorkflowUpdateFailedError(
             ApplicationError(
-                'terminal_workflow_advance_error: Atlassian request failed (403): '
+                "terminal_workflow_advance_error: Atlassian request failed (403): "
                 '{"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
             )
         )
@@ -550,13 +665,17 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             )
 
         self.assertEqual(response.status_code, 409, response.text)
-        self.assertEqual(response.json()["detail"], "Atlassian connection requires reauthentication.")
+        self.assertEqual(
+            response.json()["detail"], "Atlassian connection requires reauthentication."
+        )
 
         notifications_response = self.client.get(
             "/api/admin/tenants/tenant-a/notifications",
             auth=("admin", "secret"),
         )
-        self.assertEqual(notifications_response.status_code, 200, notifications_response.text)
+        self.assertEqual(
+            notifications_response.status_code, 200, notifications_response.text
+        )
         notifications = notifications_response.json()["notifications"]
         self.assertEqual(len(notifications), 1)
         self.assertEqual(notifications[0]["kind"], "reauth_required")
@@ -568,8 +687,8 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         with session_factory() as session:
             now = _now()
             tenant = Tenant(
-                tenant_id="example",
-                name="Route 25",
+                tenant_id="example-workspace",
+                name="Example Workspace",
                 is_enabled=True,
                 archived_at=None,
                 purge_after_at=None,
@@ -584,9 +703,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                 updated_at=now,
             )
             project = Project(
-                project_id="example-default",
-                tenant_id="example",
-                name="Route 25",
+                project_id="example-workspace-default",
+                tenant_id="example-workspace",
+                name="Example Workspace",
                 github_repository="org/repo",
                 jira_project_key="MAB",
                 policy_overrides={},
@@ -600,14 +719,22 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             )
             session.add_all([tenant, project])
             session.commit()
-            persisted_tenant = session.get(Tenant, "example")
+            persisted_tenant = session.get(Tenant, "example-workspace")
             self.assertIsNotNone(persisted_tenant)
 
             with (
-                patch("orchestrator.api.admin.route_helpers.ensure_default_project_for_tenant") as ensure_default_project_mock,
-                patch("orchestrator.api.admin.route_helpers.sync_tenant_jira_project_keys") as sync_jira_keys_mock,
-                patch("orchestrator.api.admin.route_helpers._sync_tenant_project_discord_channels_impl") as sync_discord_mock,
-                patch("orchestrator.api.admin.route_helpers.start_jira_project_reconciliation") as start_reconciliation_mock,
+                patch(
+                    "orchestrator.api.admin.route_helpers.ensure_default_project_for_tenant"
+                ) as ensure_default_project_mock,
+                patch(
+                    "orchestrator.api.admin.route_helpers.sync_tenant_jira_project_keys"
+                ) as sync_jira_keys_mock,
+                patch(
+                    "orchestrator.api.admin.route_helpers._sync_tenant_project_discord_channels_impl"
+                ) as sync_discord_mock,
+                patch(
+                    "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation"
+                ) as start_reconciliation_mock,
             ):
                 reconcile_tenant_projects(session, tenant=persisted_tenant)
 
@@ -616,8 +743,10 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         sync_discord_mock.assert_called_once()
         start_reconciliation_mock.assert_called_once()
         start_kwargs = start_reconciliation_mock.call_args.kwargs
-        self.assertEqual(start_kwargs["tenant"].tenant_id, "example")
-        self.assertEqual(start_kwargs["project"].project_id, "example-default")
+        self.assertEqual(start_kwargs["tenant"].tenant_id, "example-workspace")
+        self.assertEqual(
+            start_kwargs["project"].project_id, "example-workspace-default"
+        )
         self.assertEqual(start_kwargs["trigger_event"], "tenant_setup_reconciliation")
 
     def test_scheduled_reconciliation_uses_shared_workflow_start_path(self) -> None:
@@ -625,8 +754,8 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         with session_factory() as session:
             now = _now()
             tenant = Tenant(
-                tenant_id="example",
-                name="Route 25",
+                tenant_id="example-workspace",
+                name="Example Workspace",
                 is_enabled=True,
                 archived_at=None,
                 purge_after_at=None,
@@ -641,9 +770,9 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                 updated_at=now,
             )
             project = Project(
-                project_id="example-default",
-                tenant_id="example",
-                name="Route 25",
+                project_id="example-workspace-default",
+                tenant_id="example-workspace",
+                name="Example Workspace",
                 github_repository="org/repo",
                 jira_project_key="MAB",
                 policy_overrides={},
@@ -662,13 +791,16 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             run_scheduled_jira_project_reconciliation_pass(
                 session=session,
                 settings=SimpleNamespace(),
-                start_reconciliation_fn=lambda **kwargs: started.append(dict(kwargs)) or SimpleNamespace(
-                    workflow_id="jira_project_reconciliation:example-default",
-                    execution_id="wfexec-scheduled-jira-reconcile-1",
+                start_reconciliation_fn=lambda **kwargs: (
+                    started.append(dict(kwargs))
+                    or SimpleNamespace(
+                        workflow_id="jira_project_reconciliation:example-workspace-default",
+                        execution_id="wfexec-scheduled-jira-reconcile-1",
+                    )
                 ),
             )
 
         self.assertEqual(len(started), 1)
-        self.assertEqual(started[0]["tenant"].tenant_id, "example")
-        self.assertEqual(started[0]["project"].project_id, "example-default")
+        self.assertEqual(started[0]["tenant"].tenant_id, "example-workspace")
+        self.assertEqual(started[0]["project"].project_id, "example-workspace-default")
         self.assertEqual(started[0]["trigger_event"], "scheduled_reconciliation")

@@ -247,7 +247,9 @@ def list_project_automation_definitions(
     tenant_id: str,
     project_id: str,
 ) -> tuple[ProjectAutomation, ...]:
-    return list_project_automations(session=session, tenant_id=tenant_id, project_id=project_id)
+    return list_project_automations(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
 
 
 def enqueue_due_project_automation_runs(
@@ -275,8 +277,10 @@ def enqueue_due_project_automation_runs(
             execution_id=uuid4().hex,
             automation_id=automation.automation_id,
             scheduled_for=scheduled_for,
-            window_start_at=automation.last_successful_window_end_at or (
-                scheduled_for - timedelta(hours=max(1, int(automation.fallback_lookback_hours or 24)))
+            window_start_at=automation.last_successful_window_end_at
+            or (
+                scheduled_for
+                - timedelta(hours=max(1, int(automation.fallback_lookback_hours or 24)))
             ),
             window_end_at=scheduled_for,
             status=PROJECT_AUTOMATION_EXECUTION_STATUS_QUEUED,
@@ -366,14 +370,19 @@ def enqueue_project_automation_run_now(
     dedupe_key = f"{automation.automation_id}:manual:{scheduled_for.isoformat()}"
     existing = get_execution_by_dedupe_key(session=session, dedupe_key=dedupe_key)
     if existing is not None:
-        raise ValueError("Project automation run already queued for this request timestamp")
+        raise ValueError(
+            "Project automation run already queued for this request timestamp"
+        )
 
     execution = ProjectAutomationExecution(
         execution_id=uuid4().hex,
         automation_id=automation.automation_id,
         scheduled_for=scheduled_for,
         window_start_at=automation.last_successful_window_end_at
-        or (scheduled_for - timedelta(hours=max(1, int(automation.fallback_lookback_hours or 24)))),
+        or (
+            scheduled_for
+            - timedelta(hours=max(1, int(automation.fallback_lookback_hours or 24)))
+        ),
         window_end_at=scheduled_for,
         status=PROJECT_AUTOMATION_EXECUTION_STATUS_QUEUED,
         dedupe_key=dedupe_key,
@@ -433,10 +442,15 @@ def mark_execution_running(
     execution_id: str,
     now: datetime | None = None,
 ) -> ProjectAutomationExecution | None:
-    execution = get_project_automation_execution(session=session, execution_id=execution_id)
+    execution = get_project_automation_execution(
+        session=session, execution_id=execution_id
+    )
     if execution is None:
         return None
-    if execution.status not in {PROJECT_AUTOMATION_EXECUTION_STATUS_QUEUED, PROJECT_AUTOMATION_EXECUTION_STATUS_RUNNING}:
+    if execution.status not in {
+        PROJECT_AUTOMATION_EXECUTION_STATUS_QUEUED,
+        PROJECT_AUTOMATION_EXECUTION_STATUS_RUNNING,
+    }:
         return execution
     timestamp = now or _utc_now()
     execution.status = PROJECT_AUTOMATION_EXECUTION_STATUS_RUNNING
@@ -456,7 +470,9 @@ def mark_execution_success(
     discord_message_id: str | None = None,
     now: datetime | None = None,
 ) -> ProjectAutomationExecution | None:
-    execution = get_project_automation_execution(session=session, execution_id=execution_id)
+    execution = get_project_automation_execution(
+        session=session, execution_id=execution_id
+    )
     if execution is None:
         return None
     timestamp = now or _utc_now()
@@ -466,7 +482,9 @@ def mark_execution_success(
     execution.last_error = None
     execution.window_end_at = window_end_at
     execution.updated_at = timestamp
-    automation = get_project_automation(session=session, automation_id=execution.automation_id)
+    automation = get_project_automation(
+        session=session, automation_id=execution.automation_id
+    )
     if automation is not None:
         automation.last_successful_window_end_at = window_end_at
         automation.updated_at = timestamp
@@ -483,7 +501,9 @@ def mark_execution_failed(
     error: str,
     now: datetime | None = None,
 ) -> ProjectAutomationExecution | None:
-    execution = get_project_automation_execution(session=session, execution_id=execution_id)
+    execution = get_project_automation_execution(
+        session=session, execution_id=execution_id
+    )
     if execution is None:
         return None
     timestamp = now or _utc_now()
@@ -503,4 +523,6 @@ def list_execution_history(
     automation_id: str,
     limit: int = 20,
 ) -> tuple[ProjectAutomationExecution, ...]:
-    return list_project_automation_executions(session=session, automation_id=automation_id, limit=limit)
+    return list_project_automation_executions(
+        session=session, automation_id=automation_id, limit=limit
+    )

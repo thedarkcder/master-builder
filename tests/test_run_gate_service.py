@@ -5,7 +5,11 @@ from types import SimpleNamespace
 from orchestrator.core.decision.state_machine import resolve_run_gate_block
 from orchestrator.core.decision.engine import DecisionEngineResult
 from orchestrator.core.decision.gate import DecisionGateResult
-from orchestrator.core.decision.types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision.types import (
+    ExecutionGateReason,
+    ExecutionGateResolution,
+    ExecutionGateState,
+)
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 
@@ -38,11 +42,23 @@ def _decision_result(*, outcome: str) -> DecisionEngineResult:
                 ),
                 gtd=GoodToDoValidationResult(
                     valid=outcome not in {"gtd_required", "execution_blocked"},
-                    missing_criteria=("how_to_test",) if outcome in {"gtd_required", "execution_blocked"} else (),
-                    clarification_questions=("How do we test this?",) if outcome in {"gtd_required", "execution_blocked"} else (),
+                    missing_criteria=("how_to_test",)
+                    if outcome in {"gtd_required", "execution_blocked"}
+                    else (),
+                    clarification_questions=("How do we test this?",)
+                    if outcome in {"gtd_required", "execution_blocked"}
+                    else (),
                 ),
             ),
-            block_reason=outcome if outcome in {"decision_gate_required", "gtd_required", "execution_blocked", "missing_ready_label"} else None,
+            block_reason=outcome
+            if outcome
+            in {
+                "decision_gate_required",
+                "gtd_required",
+                "execution_blocked",
+                "missing_ready_label",
+            }
+            else None,
             guidance=None,
             policy_error=None,
         ),
@@ -60,15 +76,21 @@ def _decision_result(*, outcome: str) -> DecisionEngineResult:
             reason=ExecutionGateReason(
                 reason_code=outcome,
                 guidance="Guidance",
-                detail="Need a decision" if outcome == "decision_gate_required" else None,
+                detail="Need a decision"
+                if outcome == "decision_gate_required"
+                else None,
                 ready_label="agent:ready" if outcome == "missing_ready_label" else None,
-            ) if gate_state != ExecutionGateState.ALLOW_EXECUTION else None,
+            )
+            if gate_state != ExecutionGateState.ALLOW_EXECUTION
+            else None,
         ),
     )
 
 
 def test_resolve_run_gate_block_returns_decision_gate_details() -> None:
-    block = resolve_run_gate_block(decision_result=_decision_result(outcome="decision_gate_required"))
+    block = resolve_run_gate_block(
+        decision_result=_decision_result(outcome="decision_gate_required")
+    )
 
     assert block is not None
     assert block.reason == "decision_gate_required"
@@ -76,7 +98,9 @@ def test_resolve_run_gate_block_returns_decision_gate_details() -> None:
 
 
 def test_resolve_run_gate_block_returns_gtd_details() -> None:
-    block = resolve_run_gate_block(decision_result=_decision_result(outcome="gtd_required"))
+    block = resolve_run_gate_block(
+        decision_result=_decision_result(outcome="gtd_required")
+    )
 
     assert block is not None
     assert block.reason == "gtd_required"
@@ -84,7 +108,9 @@ def test_resolve_run_gate_block_returns_gtd_details() -> None:
 
 
 def test_resolve_run_gate_block_returns_execution_blocked_details() -> None:
-    block = resolve_run_gate_block(decision_result=_decision_result(outcome="execution_blocked"))
+    block = resolve_run_gate_block(
+        decision_result=_decision_result(outcome="execution_blocked")
+    )
 
     assert block is not None
     assert block.reason == "execution_blocked"
@@ -92,6 +118,8 @@ def test_resolve_run_gate_block_returns_execution_blocked_details() -> None:
 
 
 def test_resolve_run_gate_block_returns_none_when_precheck_is_clear() -> None:
-    block = resolve_run_gate_block(decision_result=_decision_result(outcome="ready_for_agent"))
+    block = resolve_run_gate_block(
+        decision_result=_decision_result(outcome="ready_for_agent")
+    )
 
     assert block is None

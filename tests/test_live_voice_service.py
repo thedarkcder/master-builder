@@ -33,7 +33,9 @@ class _FakeSidecarClient:
         self._event_handler = handler
 
     def sync_session(self, *, session_id: str, bot_token: str, rooms) -> None:  # noqa: ANN001
-        self.calls.append(("sync_session", (session_id, bot_token), {"rooms": list(rooms)}))
+        self.calls.append(
+            ("sync_session", (session_id, bot_token), {"rooms": list(rooms)})
+        )
 
     def close_session(self, *, session_id: str | None = None, reason: str = "") -> None:
         self.calls.append(("close_session", (session_id, reason), {}))
@@ -53,13 +55,17 @@ class _FakeSidecarClient:
 
 class LiveVoiceServiceTests(unittest.TestCase):
     def test_encode_pcm_wav_wraps_pcm_payload(self) -> None:
-        wav_bytes = _encode_pcm_wav(pcm_bytes=b"\x00\x01\x02\x03", sample_rate_hz=48_000, channels=2)
+        wav_bytes = _encode_pcm_wav(
+            pcm_bytes=b"\x00\x01\x02\x03", sample_rate_hz=48_000, channels=2
+        )
 
         self.assertTrue(wav_bytes.startswith(b"RIFF"))
         self.assertIn(b"WAVE", wav_bytes)
 
     def test_sync_rooms_opens_new_sessions_and_closes_removed_sessions(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
         service._transport_client = _FakeSidecarClient()
         service._bot_token = "bot-token"
         room = ConfiguredLiveVoiceRoom(
@@ -72,7 +78,11 @@ class LiveVoiceServiceTests(unittest.TestCase):
         service._rooms_by_key = {room.room_key: room}
 
         service._sync_rooms_with_sidecar()
-        sync_call = next(call for call in service._transport_client.calls if call[0] == "sync_session")
+        sync_call = next(
+            call
+            for call in service._transport_client.calls
+            if call[0] == "sync_session"
+        )
         self.assertEqual(sync_call[1], ("discord-live-voice", "bot-token"))
         self.assertEqual(len(sync_call[2]["rooms"]), 1)
         self.assertIn(room.room_key, service._synced_room_keys)
@@ -85,7 +95,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
         )
 
     def test_opus_frame_event_runs_through_python_turn_processing(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
         service._transport_client = _FakeSidecarClient()
         service._bot_token = "bot-token"
         room = ConfiguredLiveVoiceRoom(
@@ -96,7 +108,13 @@ class LiveVoiceServiceTests(unittest.TestCase):
             project_id="project-a",
         )
         service._rooms_by_key = {room.room_key: room}
-        service._handle_transport_event({"type": "transport_ready", "session_id": "discord-live-voice", "backend": "go"})
+        service._handle_transport_event(
+            {
+                "type": "transport_ready",
+                "session_id": "discord-live-voice",
+                "backend": "go",
+            }
+        )
         service._handle_transport_event(
             {
                 "type": "room_state",
@@ -121,7 +139,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
             finalization_reason="test",
         )
 
-        def _decode(_room_key: str, _user_id: str, _packets: list[bytes]) -> tuple[bytes, int, int]:
+        def _decode(
+            _room_key: str, _user_id: str, _packets: list[bytes]
+        ) -> tuple[bytes, int, int]:
             return b"pcm-audio", 48_000, 2
 
         def _process_turn(*, turn, turn_version) -> None:  # noqa: ANN001
@@ -149,7 +169,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
         self.assertEqual(processed_turns, [b"pcm-audio"])
 
     def test_opus_frame_event_ignores_unknown_user_frames(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
         room = ConfiguredLiveVoiceRoom(
             tenant_id="tenant-a",
             guild_id="123",
@@ -161,7 +183,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
 
         decoded_packets: list[bytes] = []
 
-        def _decode(_room_key: str, _user_id: str, packets: list[bytes]) -> tuple[bytes, int, int]:
+        def _decode(
+            _room_key: str, _user_id: str, packets: list[bytes]
+        ) -> tuple[bytes, int, int]:
             decoded_packets.extend(packets)
             return b"", 48_000, 2
 
@@ -181,7 +205,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
         self.assertEqual(decoded_packets, [])
 
     def test_decode_member_speech_resets_decoder_after_corrupt_stream(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
 
         class _BrokenDecoder:
             def decode(self, _packet: bytes) -> bytes:
@@ -194,8 +220,12 @@ class LiveVoiceServiceTests(unittest.TestCase):
 
         self.assertNotIn("room-a:user-a", service._decoder_by_key)
 
-    def test_start_turn_processing_keeps_only_latest_pending_turn_for_room(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+    def test_start_turn_processing_keeps_only_latest_pending_turn_for_room(
+        self,
+    ) -> None:
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
         processed: list[int] = []
         first_turn_started = threading.Event()
         worker_release = threading.Event()
@@ -330,7 +360,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
         scheduled_results: list[tuple[ConfiguredLiveVoiceRoom, object, int]] = []
         notices: list[tuple[str, str]] = []
         service._schedule_persona_reply = (  # type: ignore[method-assign]
-            lambda *, room, result, turn_version: scheduled_results.append((room, result, turn_version))
+            lambda *, room, result, turn_version: scheduled_results.append(
+                (room, result, turn_version)
+            )
         )
         service._post_text_notice = (  # type: ignore[method-assign]
             lambda *, channel_id, content: notices.append((channel_id, content))
@@ -361,7 +393,10 @@ class LiveVoiceServiceTests(unittest.TestCase):
             return "What should we do next?"
 
         with (
-            patch("orchestrator.core.discord.live_voice_service._encode_pcm_wav", return_value=b"wav"),
+            patch(
+                "orchestrator.core.discord.live_voice_service._encode_pcm_wav",
+                return_value=b"wav",
+            ),
             patch(
                 "orchestrator.core.discord.live_voice_service.transcribe_audio_bytes",
                 side_effect=_transcribe_audio_bytes,
@@ -372,7 +407,9 @@ class LiveVoiceServiceTests(unittest.TestCase):
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.route_discord_voice_entry",
-                return_value=VoiceEntryRoute(lane="ask", persona="pm", confidence=0.9, reason="product"),
+                return_value=VoiceEntryRoute(
+                    lane="ask", persona="pm", confidence=0.9, reason="product"
+                ),
             ),
             patch(
                 "orchestrator.core.discord.live_voice_service.execute_tenant_command_ingress",
@@ -427,8 +464,12 @@ class LiveVoiceServiceTests(unittest.TestCase):
         self.assertEqual(scheduled_results[0][1].message, "Short answer.")
         self.assertEqual(notices, [])
 
-    def test_opus_frame_interrupts_active_playback_before_ingesting_user_audio(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+    def test_opus_frame_interrupts_active_playback_before_ingesting_user_audio(
+        self,
+    ) -> None:
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
         service._transport_client = _FakeSidecarClient()
         room = ConfiguredLiveVoiceRoom(
             tenant_id="tenant-a",
@@ -464,13 +505,21 @@ class LiveVoiceServiceTests(unittest.TestCase):
         )
 
         self.assertIn(("stop_audio", ("123:456",), {}), service._transport_client.calls)
-        self.assertFalse(service._runtime.get_session(binding=room.binding).bot_speaking)
+        self.assertFalse(
+            service._runtime.get_session(binding=room.binding).bot_speaking
+        )
 
     def test_retryable_transport_failure_keeps_transport_ready(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
 
         service._handle_transport_event(
-            {"type": "transport_ready", "session_id": "discord-live-voice", "backend": "go"}
+            {
+                "type": "transport_ready",
+                "session_id": "discord-live-voice",
+                "backend": "go",
+            }
         )
         service._handle_transport_event(
             {
@@ -486,8 +535,12 @@ class LiveVoiceServiceTests(unittest.TestCase):
 
 
 class LiveVoiceServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
-    async def test_play_persona_reply_keeps_speaking_until_playback_finished(self) -> None:
-        service = DiscordLiveVoiceService(settings=SimpleNamespace(), session_factory=lambda: None)
+    async def test_play_persona_reply_keeps_speaking_until_playback_finished(
+        self,
+    ) -> None:
+        service = DiscordLiveVoiceService(
+            settings=SimpleNamespace(), session_factory=lambda: None
+        )
         service._transport_client = _FakeSidecarClient()
         service._bot_token = "bot-token"
         room = ConfiguredLiveVoiceRoom(
@@ -498,7 +551,13 @@ class LiveVoiceServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
             project_id="project-a",
         )
         service._rooms_by_key = {room.room_key: room}
-        service._handle_transport_event({"type": "transport_ready", "session_id": "discord-live-voice", "backend": "go"})
+        service._handle_transport_event(
+            {
+                "type": "transport_ready",
+                "session_id": "discord-live-voice",
+                "backend": "go",
+            }
+        )
         service._handle_transport_event(
             {
                 "type": "room_state",
@@ -533,11 +592,20 @@ class LiveVoiceServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
             (
                 "play_audio",
                 ("123:456", b"wav-bytes", "audio/wav"),
-                {"metadata": {"persona_id": "persona-1", "persona_name": "Persona One", "room_key": "123:456"}},
+                {
+                    "metadata": {
+                        "persona_id": "persona-1",
+                        "persona_name": "Persona One",
+                        "room_key": "123:456",
+                    }
+                },
             ),
             service._transport_client.calls,
         )
-        self.assertEqual(synth_mock.call_args.kwargs["text"], "Persona One from Engineering. Hello there")
+        self.assertEqual(
+            synth_mock.call_args.kwargs["text"],
+            "Persona One from Engineering. Hello there",
+        )
         self.assertEqual(
             tts_contexts,
             [
@@ -560,7 +628,9 @@ class LiveVoiceServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
                 "playback_frames": 2,
             }
         )
-        self.assertFalse(service._runtime.get_session(binding=room.binding).bot_speaking)
+        self.assertFalse(
+            service._runtime.get_session(binding=room.binding).bot_speaking
+        )
 
 
 if __name__ == "__main__":

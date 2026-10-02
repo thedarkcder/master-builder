@@ -5,7 +5,10 @@ import signal
 import threading
 
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.discord.live_voice_service import DiscordLiveVoiceDependencyFailure, DiscordLiveVoiceService
+from orchestrator.core.discord.live_voice_service import (
+    DiscordLiveVoiceDependencyFailure,
+    DiscordLiveVoiceService,
+)
 from orchestrator.core.observability.logging import configure_logging
 from orchestrator.core.observability.otel_telemetry import initialize_telemetry
 from orchestrator.storage.run_queue_events import (
@@ -70,7 +73,11 @@ def _run_live_voice_leader_loop(*, settings: Settings) -> None:
     signal.signal(signal.SIGINT, lambda _sig, _frame: _request_stop())
     signal.signal(signal.SIGTERM, lambda _sig, _frame: _request_stop())
 
-    logger.info("discord_live_voice_runtime_started lock_key=%s poll_seconds=%s", lock_key, poll_seconds)
+    logger.info(
+        "discord_live_voice_runtime_started lock_key=%s poll_seconds=%s",
+        lock_key,
+        poll_seconds,
+    )
     while not runtime_stop_event.is_set():
         try:
             with psycopg.connect(dsn, autocommit=True) as conn:
@@ -93,13 +100,17 @@ def _run_live_voice_leader_loop(*, settings: Settings) -> None:
                     daemon=True,
                 )
                 try:
-                    service = DiscordLiveVoiceService(settings=settings, stop_event=attempt_stop_event)
+                    service = DiscordLiveVoiceService(
+                        settings=settings, stop_event=attempt_stop_event
+                    )
                     health_thread.start()
                     service.run()
                 finally:
                     attempt_stop_event.set()
                     health_thread.join(timeout=max(1, poll_seconds + 1))
-                    logger.info("discord_live_voice_leader_released lock_key=%s", lock_key)
+                    logger.info(
+                        "discord_live_voice_leader_released lock_key=%s", lock_key
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.exception("discord_live_voice_runtime_loop_failed error=%s", exc)
             runtime_stop_event.wait(timeout=poll_seconds)

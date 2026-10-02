@@ -36,7 +36,9 @@ device-1	device
     assert preferred_adb_device(output) == "emulator-5554"
 
 
-def test_resolve_android_build_tool_uses_latest_sdk_build_tools(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_android_build_tool_uses_latest_sdk_build_tools(
+    monkeypatch, tmp_path: Path
+) -> None:
     sdk = tmp_path / "sdk"
     old_tool = sdk / "build-tools" / "34.0.0" / "aapt"
     new_tool = sdk / "build-tools" / "35.0.0" / "aapt"
@@ -47,20 +49,32 @@ def test_resolve_android_build_tool_uses_latest_sdk_build_tools(monkeypatch, tmp
     monkeypatch.setenv("ANDROID_HOME", str(sdk))
     monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
     monkeypatch.delenv("QA_DEMO_ANDROID_AAPT", raising=False)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.shutil.which", lambda _tool: None)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.shutil.which", lambda _tool: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.Path.home", lambda: tmp_path / "home"
+    )
 
-    assert resolve_android_build_tool(tool_name="aapt", env_var="QA_DEMO_ANDROID_AAPT") == str(new_tool)
+    assert resolve_android_build_tool(
+        tool_name="aapt", env_var="QA_DEMO_ANDROID_AAPT"
+    ) == str(new_tool)
 
 
-def test_resolve_android_emulator_uses_sdk_emulator(monkeypatch, tmp_path: Path) -> None:
+def test_resolve_android_emulator_uses_sdk_emulator(
+    monkeypatch, tmp_path: Path
+) -> None:
     emulator = tmp_path / "sdk" / "emulator" / "emulator"
     emulator.parent.mkdir(parents=True)
     emulator.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("ANDROID_HOME", str(tmp_path / "sdk"))
     monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.shutil.which", lambda _tool: None)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.Path.home", lambda: tmp_path / "home")
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.shutil.which", lambda _tool: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.Path.home", lambda: tmp_path / "home"
+    )
 
     assert resolve_android_emulator() == str(emulator)
 
@@ -71,7 +85,9 @@ def test_preferred_android_avd_uses_configured_avd(monkeypatch) -> None:
     assert preferred_android_avd("Pixel_10\nmb_qa_api33\n") == "mb_qa_api33"
 
 
-def test_ensure_preferred_android_device_waits_for_boot_without_python_sleep(monkeypatch) -> None:
+def test_ensure_preferred_android_device_waits_for_boot_without_python_sleep(
+    monkeypatch,
+) -> None:
     calls: list[list[str]] = []
 
     class _EmulatorProcess:
@@ -98,19 +114,27 @@ def test_ensure_preferred_android_device_waits_for_boot_without_python_sleep(mon
 
     monkeypatch.delenv("QA_DEMO_ANDROID_DEVICE_ID", raising=False)
     monkeypatch.delenv("QA_DEMO_ANDROID_AVD", raising=False)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.resolve_android_emulator", lambda: "/sdk/emulator")
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.subprocess.Popen", _EmulatorProcess)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.resolve_android_emulator",
+        lambda: "/sdk/emulator",
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.subprocess.Popen", _EmulatorProcess
+    )
     monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
     monkeypatch.setattr(
         time,
         "sleep",
-        lambda _seconds: (_ for _ in ()).throw(AssertionError("time.sleep must not synchronize emulator boot")),
+        lambda _seconds: (_ for _ in ()).throw(
+            AssertionError("time.sleep must not synchronize emulator boot")
+        ),
     )
 
     assert ensure_preferred_android_device(timeout_seconds=30) == "emulator-5554"
     assert ["adb", "wait-for-device"] in calls
     assert any(
-        call[:4] == ["adb", "-s", "emulator-5554", "shell"] and "sys.boot_completed" in " ".join(call)
+        call[:4] == ["adb", "-s", "emulator-5554", "shell"]
+        and "sys.boot_completed" in " ".join(call)
         for call in calls
     )
 
@@ -129,7 +153,9 @@ def test_find_element_matches_text_and_short_resource_id(monkeypatch) -> None:
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
         class _Result:
-            stdout = xml_payload if args[:4] == ["adb", "-s", "device-1", "exec-out"] else ""
+            stdout = (
+                xml_payload if args[:4] == ["adb", "-s", "device-1", "exec-out"] else ""
+            )
 
         return _Result()
 
@@ -142,10 +168,15 @@ def test_find_element_matches_text_and_short_resource_id(monkeypatch) -> None:
     assert by_text.center == (60, 70)
     assert by_id.center == (60, 70)
     assert by_description.center == (60, 70)
-    assert dump_ui_elements(device_id="device-1")[0].resource_id == "com.example:id/start_button"
+    assert (
+        dump_ui_elements(device_id="device-1")[0].resource_id
+        == "com.example:id/start_button"
+    )
 
 
-def test_execute_scenario_relaunches_android_app_with_existing_state(monkeypatch) -> None:
+def test_execute_scenario_relaunches_android_app_with_existing_state(
+    monkeypatch,
+) -> None:
     calls: list[list[str]] = []
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
@@ -185,7 +216,9 @@ def test_execute_scenario_relaunches_android_app_with_existing_state(monkeypatch
     ]
 
 
-def test_execute_scenario_relaunches_android_app_with_release_context_extras(monkeypatch) -> None:
+def test_execute_scenario_relaunches_android_app_with_release_context_extras(
+    monkeypatch,
+) -> None:
     calls: list[list[str]] = []
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
@@ -241,9 +274,9 @@ def test_resolve_launch_activity_uses_package_manager_brief_output(monkeypatch) 
 
     monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
 
-    assert resolve_launch_activity(device_id="device-1", package_name="com.example.app") == (
-        "com.example.app/.MainActivity"
-    )
+    assert resolve_launch_activity(
+        device_id="device-1", package_name="com.example.app"
+    ) == ("com.example.app/.MainActivity")
 
 
 def test_launch_app_uses_resolved_activity(monkeypatch) -> None:
@@ -330,7 +363,10 @@ def test_qa_demo_launch_extras_maps_release_context() -> None:
     )
 
     assert launch_extras["MB_QA_DEMO_RELEASE_COMMIT_SHA"] == "b" * 40
-    assert launch_extras["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
+    assert (
+        launch_extras["MB_QA_DEMO_RELEASE_API_BASE_URL"]
+        == "https://api.preview.example"
+    )
     assert launch_extras["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
     assert launch_extras["QA_DEMO_BROWSER_URL"] == "https://web.preview.example"
     assert (
@@ -339,13 +375,21 @@ def test_qa_demo_launch_extras_maps_release_context() -> None:
     )
 
 
-def test_build_debug_apk_discovers_android_app_in_monorepo_subdirectory(monkeypatch, tmp_path) -> None:
+def test_build_debug_apk_discovers_android_app_in_monorepo_subdirectory(
+    monkeypatch, tmp_path
+) -> None:
     android_dir = tmp_path / "apps" / "android"
     android_dir.mkdir(parents=True)
     (android_dir / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
-    (android_dir / "settings.gradle").write_text("pluginManagement {}\n", encoding="utf-8")
-    (android_dir / "build.gradle").write_text("plugins { id 'com.android.application' }\n", encoding="utf-8")
-    built_apk = android_dir / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    (android_dir / "settings.gradle").write_text(
+        "pluginManagement {}\n", encoding="utf-8"
+    )
+    (android_dir / "build.gradle").write_text(
+        "plugins { id 'com.android.application' }\n", encoding="utf-8"
+    )
+    built_apk = (
+        android_dir / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    )
     calls: list[tuple[list[str], Path | None]] = []
 
     def _fake_run(args, *, cwd=None, **_kwargs):  # noqa: ANN001
@@ -364,7 +408,9 @@ def test_build_debug_apk_discovers_android_app_in_monorepo_subdirectory(monkeypa
     assert calls == [([str(android_dir / "gradlew"), "assembleDebug"], android_dir)]
 
 
-def test_discover_android_project_dir_honors_relative_override(monkeypatch, tmp_path) -> None:
+def test_discover_android_project_dir_honors_relative_override(
+    monkeypatch, tmp_path
+) -> None:
     android_dir = tmp_path / "mobile" / "android-app"
     android_dir.mkdir(parents=True)
     monkeypatch.setenv("QA_DEMO_ANDROID_PROJECT_DIR", "mobile/android-app")
@@ -375,17 +421,28 @@ def test_discover_android_project_dir_honors_relative_override(monkeypatch, tmp_
 def test_discover_android_project_dir_prefers_payload_source_paths(tmp_path) -> None:
     android_dir = tmp_path / "clients" / "android"
     android_dir.mkdir(parents=True)
-    (android_dir / "build.gradle").write_text("plugins { id 'com.android.application' }\n", encoding="utf-8")
+    (android_dir / "build.gradle").write_text(
+        "plugins { id 'com.android.application' }\n", encoding="utf-8"
+    )
     other_dir = tmp_path / "samples" / "android"
     other_dir.mkdir(parents=True)
-    (other_dir / "build.gradle").write_text("plugins { id 'com.android.application' }\n", encoding="utf-8")
+    (other_dir / "build.gradle").write_text(
+        "plugins { id 'com.android.application' }\n", encoding="utf-8"
+    )
 
-    assert discover_android_project_dir(repo_dir=tmp_path, target_source_paths=["clients/android"]) == android_dir.resolve()
+    assert (
+        discover_android_project_dir(
+            repo_dir=tmp_path, target_source_paths=["clients/android"]
+        )
+        == android_dir.resolve()
+    )
 
 
 def test_run_bounds_adb_commands_with_actionable_timeout(monkeypatch) -> None:
     def _fake_run(*_args, **_kwargs):  # noqa: ANN001
-        raise subprocess.TimeoutExpired(cmd=["adb", "shell", "uiautomator"], timeout=60, output="", stderr="")
+        raise subprocess.TimeoutExpired(
+            cmd=["adb", "shell", "uiautomator"], timeout=60, output="", stderr=""
+        )
 
     monkeypatch.setattr("scripts.qa_demo_android_recorder.subprocess.run", _fake_run)
 
@@ -398,7 +455,9 @@ def test_run_bounds_adb_commands_with_actionable_timeout(monkeypatch) -> None:
         raise AssertionError("expected timeout")
 
 
-def test_record_live_screen_demo_uses_android_screenrecord_around_scenario(monkeypatch, tmp_path) -> None:
+def test_record_live_screen_demo_uses_android_screenrecord_around_scenario(
+    monkeypatch, tmp_path
+) -> None:
     calls: list[list[str]] = []
     recorder_running = False
 
@@ -439,7 +498,9 @@ def test_record_live_screen_demo_uses_android_screenrecord_around_scenario(monke
 
     monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
     monkeypatch.setattr("scripts.qa_demo_android_recorder.subprocess.Popen", _Recorder)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.execute_scenario", _fake_execute_scenario)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.execute_scenario", _fake_execute_scenario
+    )
 
     output_path = tmp_path / "demo.mp4"
     record_live_screen_demo(
@@ -459,12 +520,20 @@ def test_record_live_screen_demo_uses_android_screenrecord_around_scenario(monke
     assert calls[1][:5] == ["adb", "-s", "device-1", "shell", "screenrecord"]
     assert calls[2] == ["execute_scenario"]
     assert calls[3][0] == "send_signal"
-    assert calls[5][:5] == ["adb", "-s", "device-1", "pull", "/sdcard/Download/master-builder-qa-demo-live-android-walkthrough.mp4"]
+    assert calls[5][:5] == [
+        "adb",
+        "-s",
+        "device-1",
+        "pull",
+        "/sdcard/Download/master-builder-qa-demo-live-android-walkthrough.mp4",
+    ]
     assert not any("screencap" in " ".join(call) for call in calls)
     assert output_path.exists()
 
 
-def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeypatch, tmp_path) -> None:
+def test_android_recorder_writes_failure_evidence_when_app_does_not_load(
+    monkeypatch, tmp_path
+) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     apk_path = tmp_path / "app-debug.apk"
@@ -484,7 +553,9 @@ def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeyp
                         "objective": "Prove the app opens",
                         "capture_target": "android",
                         "expected_outcomes": ["Ready screen appears"],
-                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                        "steps": [
+                            {"action": "assert_visible", "selector": "text=Ready"}
+                        ],
                     }
                 ],
             }
@@ -493,7 +564,9 @@ def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeyp
     )
 
     def _record_failure(**kwargs):  # noqa: ANN001
-        Path(kwargs["output_path"]).write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"0" * 2048) + b"moov")
+        Path(kwargs["output_path"]).write_bytes(
+            b"\x00\x00\x00\x18ftypmp42" + (b"0" * 2048) + b"moov"
+        )
         raise RuntimeError("Missing Android element: text=Ready")
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
@@ -506,17 +579,33 @@ def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeyp
 
         return _Result()
 
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.ensure_preferred_android_device", lambda **_kwargs: "device-1")
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.build_debug_apk", lambda **_kwargs: apk_path)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.resolve_package_name", lambda **_kwargs: "com.example.app")
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.install_apk", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.ensure_preferred_android_device",
+        lambda **_kwargs: "device-1",
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.build_debug_apk", lambda **_kwargs: apk_path
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.resolve_package_name",
+        lambda **_kwargs: "com.example.app",
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.install_apk", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         "scripts.qa_demo_android_recorder.resolve_launch_activity",
         lambda **_kwargs: "com.example.app/.MainActivity",
     )
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.reset_app_state", lambda **_kwargs: None)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.launch_app", lambda **_kwargs: None)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.record_live_screen_demo", _record_failure)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.reset_app_state", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.launch_app", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.record_live_screen_demo", _record_failure
+    )
     monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
 
     result = main(["qa_demo_android_recorder.py", str(input_path), str(output_path)])
@@ -526,15 +615,23 @@ def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeyp
     assert output["recordings"] == []
     assert output["failure_evidence"][0]["name"] == "App load"
     assert output["failure_evidence"][0]["capture_target"] == "android"
-    assert output["failure_evidence"][0]["capture_reference"] == "android-emulator://configured"
-    assert "Missing Android element: text=Ready" in output["failure_evidence"][0]["error_message"]
+    assert (
+        output["failure_evidence"][0]["capture_reference"]
+        == "android-emulator://configured"
+    )
+    assert (
+        "Missing Android element: text=Ready"
+        in output["failure_evidence"][0]["error_message"]
+    )
     assert "Android diagnostics:" in output["failure_evidence"][0]["error_message"]
     assert "FATAL EXCEPTION: main" in output["failure_evidence"][0]["error_message"]
     assert "API base URL missing" in output["failure_evidence"][0]["error_message"]
     assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
-def test_android_recorder_writes_text_diagnostics_when_failure_video_is_missing(monkeypatch, tmp_path) -> None:
+def test_android_recorder_writes_text_diagnostics_when_failure_video_is_missing(
+    monkeypatch, tmp_path
+) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     apk_path = tmp_path / "app-debug.apk"
@@ -554,7 +651,9 @@ def test_android_recorder_writes_text_diagnostics_when_failure_video_is_missing(
                         "objective": "Prove the app opens",
                         "capture_target": "android",
                         "expected_outcomes": ["Ready screen appears"],
-                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                        "steps": [
+                            {"action": "assert_visible", "selector": "text=Ready"}
+                        ],
                     }
                 ],
             }
@@ -575,17 +674,33 @@ def test_android_recorder_writes_text_diagnostics_when_failure_video_is_missing(
 
         return _Result()
 
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.ensure_preferred_android_device", lambda **_kwargs: "device-1")
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.build_debug_apk", lambda **_kwargs: apk_path)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.resolve_package_name", lambda **_kwargs: "com.example.app")
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.install_apk", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.ensure_preferred_android_device",
+        lambda **_kwargs: "device-1",
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.build_debug_apk", lambda **_kwargs: apk_path
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.resolve_package_name",
+        lambda **_kwargs: "com.example.app",
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.install_apk", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         "scripts.qa_demo_android_recorder.resolve_launch_activity",
         lambda **_kwargs: "com.example.app/.MainActivity",
     )
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.reset_app_state", lambda **_kwargs: None)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.launch_app", lambda **_kwargs: None)
-    monkeypatch.setattr("scripts.qa_demo_android_recorder.record_live_screen_demo", _record_failure)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.reset_app_state", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.launch_app", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.record_live_screen_demo", _record_failure
+    )
     monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
 
     result = main(["qa_demo_android_recorder.py", str(input_path), str(output_path)])
@@ -595,7 +710,10 @@ def test_android_recorder_writes_text_diagnostics_when_failure_video_is_missing(
     assert result == 1
     assert failure_path.suffix == ".txt"
     assert failure_path.is_file()
-    assert "Missing Android element: text=Ready" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "Missing Android element: text=Ready"
+        in output["failure_evidence"][0]["error_message"]
+    )
     assert "FATAL EXCEPTION: main" in output["failure_evidence"][0]["error_message"]
     assert "screen-recording-error:" in failure_path.read_text(encoding="utf-8")
 

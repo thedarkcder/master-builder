@@ -4,9 +4,14 @@ import re
 
 from sqlalchemy import select
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.runtime.agents import plan_pm_parent_issues_with_runtime, plan_seed_issues_with_runtime
+from orchestrator.core.runtime.agents import (
+    plan_pm_parent_issues_with_runtime,
+    plan_seed_issues_with_runtime,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision.types import tenant_jira_project_keys
@@ -28,7 +33,9 @@ def tenant_project_keys(*, session, tenant: Tenant) -> list[str]:  # noqa: ANN00
         key
         for key in session.execute(
             select(Project.jira_project_key)
-            .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
+            .where(
+                Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False)
+            )
             .order_by(Project.created_at)
         ).scalars()
         if str(key or "").strip()
@@ -146,7 +153,9 @@ def seed_parent_issues_with_runtime(
     )
 
 
-def validate_seed_followup_context(*, session, tenant, context: dict) -> tuple[bool, str | None]:  # noqa: ANN001
+def validate_seed_followup_context(
+    *, session, tenant, context: dict
+) -> tuple[bool, str | None]:  # noqa: ANN001
     return _validate_seed_followup_context(
         session=session,
         tenant=tenant,

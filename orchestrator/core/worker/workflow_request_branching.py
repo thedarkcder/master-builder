@@ -99,7 +99,9 @@ def resolve_branch_from_open_pull_requests(
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
-        pull_requests = github_client.list_open_pull_requests(repo_full_name=repo_full_name, limit=100)
+        pull_requests = github_client.list_open_pull_requests(
+            repo_full_name=repo_full_name, limit=100
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "workflow_branch_lookup_failed tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",

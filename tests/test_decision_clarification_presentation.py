@@ -27,7 +27,9 @@ def _decision_result(
     auto_resolved_slots: tuple[str, ...] = (),
 ) -> object:
     pre_check = SimpleNamespace(
-        decision_gate=SimpleNamespace(reason=decision_gate_reason, questions=decision_gate_questions),
+        decision_gate=SimpleNamespace(
+            reason=decision_gate_reason, questions=decision_gate_questions
+        ),
         gtd_missing_criteria=gtd_missing_criteria,
         gtd_clarification_questions=gtd_questions,
     )
@@ -39,7 +41,9 @@ def _decision_result(
     )
 
 
-def test_build_decision_clarification_presentation_prefers_feedback_questions_for_decision_gate() -> None:
+def test_build_decision_clarification_presentation_prefers_feedback_questions_for_decision_gate() -> (
+    None
+):
     presentation = build_decision_clarification_presentation(
         decision_result=_decision_result(
             classification="decision_gate",
@@ -58,11 +62,15 @@ def test_build_decision_clarification_presentation_prefers_feedback_questions_fo
     assert presentation.recheck_required is True
     assert presentation.mode is DecisionClassification.DECISION_GATE
     assert presentation.classification == "decision_gate"
-    assert tuple(question.question for question in presentation.questions) == ("What is the owner?",)
+    assert tuple(question.question for question in presentation.questions) == (
+        "What is the owner?",
+    )
     assert presentation.questions[0].why_it_matters == "Missing ownership detail"
 
 
-def test_build_decision_clarification_presentation_excludes_accepted_feedback_questions() -> None:
+def test_build_decision_clarification_presentation_excludes_accepted_feedback_questions() -> (
+    None
+):
     presentation = build_decision_clarification_presentation(
         decision_result=_decision_result(
             classification="decision_gate",
@@ -85,11 +93,15 @@ def test_build_decision_clarification_presentation_excludes_accepted_feedback_qu
         ),
     )
 
-    assert tuple(question.question for question in presentation.questions) == ("Who owns approval?",)
+    assert tuple(question.question for question in presentation.questions) == (
+        "Who owns approval?",
+    )
     assert [item["question_id"] for item in presentation.question_feedback] == ["owner"]
 
 
-def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_feedback() -> None:
+def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_feedback() -> (
+    None
+):
     presentation = build_decision_clarification_presentation(
         decision_result=_decision_result(
             classification="gtd",
@@ -149,8 +161,14 @@ def test_render_decision_gate_feedback_message_humanizes_partial_answers() -> No
     )
 
     assert "I still need a bit more before I can run `AP-248`." in message
-    assert "Owner: I have `stake holder`, but that is not a specific accountable person." in message
-    assert "HubSpot subscription rules: Annual invoice is confirmed as billing source" in message
+    assert (
+        "Owner: I have `stake holder`, but that is not a specific accountable person."
+        in message
+    )
+    assert (
+        "HubSpot subscription rules: Annual invoice is confirmed as billing source"
+        in message
+    )
     assert "Reply in plain English" not in message
     assert "Please reply with:" not in message
     assert "Missing detail:" not in message
@@ -169,7 +187,9 @@ def test_render_decision_gate_remaining_questions_message_lists_questions() -> N
     assert "- How do we test?" in message
 
 
-def test_build_decision_clarification_response_fields_serializes_typed_presentation() -> None:
+def test_build_decision_clarification_response_fields_serializes_typed_presentation() -> (
+    None
+):
     presentation = build_decision_clarification_presentation(
         decision_result=_decision_result(
             classification="gtd",
@@ -226,11 +246,17 @@ def test_present_discord_decision_clarification_prefers_feedback_rendering() -> 
     assert result.response_fields["questions"] == ["Who owns rollout?"]
 
 
-def test_build_runtime_precheck_message_raises_when_runtime_payload_is_invalid() -> None:
+def test_build_runtime_precheck_message_raises_when_runtime_payload_is_invalid() -> (
+    None
+):
     runtime = SimpleNamespace()
     with patch(
         "orchestrator.core.communications.decision_clarification_presentation.invoke_runtime_json",
-        return_value={"message": "Need clarification", "questions": [], "classification": "invalid"},
+        return_value={
+            "message": "Need clarification",
+            "questions": [],
+            "classification": "invalid",
+        },
     ):
         try:
             build_runtime_precheck_message(
@@ -258,7 +284,9 @@ def test_build_runtime_precheck_message_raises_when_runtime_payload_is_invalid()
             raise AssertionError("invalid runtime payload should raise")
 
 
-def test_build_runtime_precheck_message_raises_runtime_errors_without_local_fallback() -> None:
+def test_build_runtime_precheck_message_raises_runtime_errors_without_local_fallback() -> (
+    None
+):
     runtime = SimpleNamespace()
     with patch(
         "orchestrator.core.communications.decision_clarification_presentation.invoke_runtime_json",

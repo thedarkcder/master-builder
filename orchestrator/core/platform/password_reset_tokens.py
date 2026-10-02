@@ -43,7 +43,9 @@ def issue_password_reset_token(
         "password_updated_at": normalize_password_reset_timestamp(password_updated_at),
         "expires_at": expires_at.isoformat(),
     }
-    payload_token = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    payload_token = _urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    )
     signature = _sign(secret=secret, payload_token=payload_token)
     return f"{payload_token}.{signature}"
 
@@ -77,7 +79,9 @@ def parse_password_reset_token(*, token: str, secret: str) -> PasswordResetToken
 
 
 def _sign(*, secret: str, payload_token: str) -> str:
-    return hmac.new(secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256).hexdigest()
+    return hmac.new(
+        secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256
+    ).hexdigest()
 
 
 def _urlsafe_b64encode(value: bytes) -> str:

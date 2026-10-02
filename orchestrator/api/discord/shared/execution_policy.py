@@ -26,7 +26,9 @@ def ensure_issue_is_executable(
             for status_name in (str(value) for value in extra_executable_statuses)
             if status_name.strip()
         )
-    normalized_executable_statuses = {normalize_status_name_fn(value) for value in executable_statuses}
+    normalized_executable_statuses = {
+        normalize_status_name_fn(value) for value in executable_statuses
+    }
     if normalize_status_name_fn(issue_status) not in normalized_executable_statuses:
         display_statuses = ", ".join(sorted(set(executable_statuses)))
         raise HTTPException(

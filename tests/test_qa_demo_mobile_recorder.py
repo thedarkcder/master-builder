@@ -55,8 +55,12 @@ def test_reboot_simulator_shuts_down_then_boots() -> None:
         return None
 
     with (
-        patch("scripts.qa_demo_mobile_recorder.subprocess.run", side_effect=_record_run),
-        patch("scripts.qa_demo_mobile_recorder._ensure_simulator_booted") as ensure_mock,
+        patch(
+            "scripts.qa_demo_mobile_recorder.subprocess.run", side_effect=_record_run
+        ),
+        patch(
+            "scripts.qa_demo_mobile_recorder._ensure_simulator_booted"
+        ) as ensure_mock,
     ):
         _reboot_simulator("SIM-123")
 
@@ -64,20 +68,26 @@ def test_reboot_simulator_shuts_down_then_boots() -> None:
     ensure_mock.assert_called_once_with("SIM-123")
 
 
-def test_ios_command_timeout_defaults_to_bounded_value(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ios_command_timeout_defaults_to_bounded_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", raising=False)
 
     assert _ios_command_timeout_seconds() == 600
 
 
-def test_ios_command_timeout_rejects_invalid_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ios_command_timeout_rejects_invalid_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", "0")
 
     with pytest.raises(RuntimeError, match="greater than zero"):
         _ios_command_timeout_seconds()
 
 
-def test_run_passes_bounded_timeout_to_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_passes_bounded_timeout_to_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", "123")
     captured: dict[str, object] = {}
 
@@ -183,7 +193,10 @@ def test_qa_demo_launch_environment_maps_release_context() -> None:
     )
 
     assert launch_environment["MB_QA_DEMO_RELEASE_COMMIT_SHA"] == "b" * 40
-    assert launch_environment["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
+    assert (
+        launch_environment["MB_QA_DEMO_RELEASE_API_BASE_URL"]
+        == "https://api.preview.example"
+    )
     assert launch_environment["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
     assert launch_environment["QA_DEMO_BROWSER_URL"] == "https://web.preview.example"
     assert (
@@ -194,7 +207,7 @@ def test_qa_demo_launch_environment_maps_release_context() -> None:
 
 def test_render_xcuitest_source_injects_release_context_launch_environment() -> None:
     source = render_xcuitest_source(
-        test_class_name="exampleUITests",
+        test_class_name="ExampleAppUITests",
         scenarios=[
             QaScenario(
                 name="API-backed flow",
@@ -206,14 +219,19 @@ def test_render_xcuitest_source_injects_release_context_launch_environment() -> 
         launch_environment={"QA_DEMO_API_BASE_URL": "https://api.preview.example"},
     )
 
-    assert 'private let qaDemoLaunchEnvironment: [String: String] = ["QA_DEMO_API_BASE_URL": "https://api.preview.example"]' in source
+    assert (
+        'private let qaDemoLaunchEnvironment: [String: String] = ["QA_DEMO_API_BASE_URL": "https://api.preview.example"]'
+        in source
+    )
     assert "app.launchEnvironment = qaDemoLaunchEnvironment" in source
 
 
-def test_discover_ios_project_files_prefers_payload_source_paths(tmp_path: Path) -> None:
+def test_discover_ios_project_files_prefers_payload_source_paths(
+    tmp_path: Path,
+) -> None:
     ios_dir = tmp_path / "clients" / "ios"
-    (ios_dir / "example.xcodeproj").mkdir(parents=True)
-    ui_test_file = ios_dir / "exampleUITests" / "exampleUITests.swift"
+    (ios_dir / "ExampleApp.xcodeproj").mkdir(parents=True)
+    ui_test_file = ios_dir / "ExampleAppUITests" / "ExampleAppUITests.swift"
     ui_test_file.parent.mkdir(parents=True)
     ui_test_file.write_text("import XCTest\n", encoding="utf-8")
     other_dir = tmp_path / "samples" / "ios"
@@ -227,11 +245,13 @@ def test_discover_ios_project_files_prefers_payload_source_paths(tmp_path: Path)
         target_source_paths=["clients/ios"],
     )
 
-    assert project_path == ios_dir / "example.xcodeproj"
+    assert project_path == ios_dir / "ExampleApp.xcodeproj"
     assert discovered_test_file == ui_test_file
 
 
-def test_discover_ios_project_files_honors_relative_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_discover_ios_project_files_honors_relative_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     ios_dir = tmp_path / "mobile" / "ios-app"
     (ios_dir / "Demo.xcodeproj").mkdir(parents=True)
     ui_test_file = ios_dir / "DemoUITests" / "DemoUITests.swift"
@@ -245,11 +265,13 @@ def test_discover_ios_project_files_honors_relative_override(monkeypatch: pytest
     assert discovered_test_file == ui_test_file
 
 
-def test_discover_ios_project_files_prefers_workspace_when_present(tmp_path: Path) -> None:
+def test_discover_ios_project_files_prefers_workspace_when_present(
+    tmp_path: Path,
+) -> None:
     ios_dir = tmp_path / "clients" / "ios"
-    (ios_dir / "example.xcodeproj").mkdir(parents=True)
-    (ios_dir / "example.xcworkspace").mkdir()
-    ui_test_file = ios_dir / "exampleUITests" / "exampleUITests.swift"
+    (ios_dir / "ExampleApp.xcodeproj").mkdir(parents=True)
+    (ios_dir / "ExampleApp.xcworkspace").mkdir()
+    ui_test_file = ios_dir / "ExampleAppUITests" / "ExampleAppUITests.swift"
     ui_test_file.parent.mkdir(parents=True)
     ui_test_file.write_text("import XCTest\n", encoding="utf-8")
 
@@ -258,7 +280,7 @@ def test_discover_ios_project_files_prefers_workspace_when_present(tmp_path: Pat
         target_source_paths=["clients/ios"],
     )
 
-    assert project_path == ios_dir / "example.xcworkspace"
+    assert project_path == ios_dir / "ExampleApp.xcworkspace"
     assert discovered_test_file == ui_test_file
 
 
@@ -268,12 +290,12 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
 ) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    project_path = repo_dir / "example.xcodeproj"
+    project_path = repo_dir / "ExampleApp.xcodeproj"
     project_path.mkdir()
-    ui_test_file = repo_dir / "exampleUITests" / "exampleUITests.swift"
+    ui_test_file = repo_dir / "ExampleAppUITests" / "ExampleAppUITests.swift"
     ui_test_file.parent.mkdir()
     ui_test_file.write_text("import XCTest\n", encoding="utf-8")
-    xctestrun_path = tmp_path / "example.xctestrun"
+    xctestrun_path = tmp_path / "ExampleApp.xctestrun"
     xctestrun_path.write_text("", encoding="utf-8")
     input_path = tmp_path / "input.json"
     output_path = tmp_path / "output.json"
@@ -290,7 +312,9 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
                         "objective": "Prove the app opens",
                         "capture_target": "ios",
                         "expected_outcomes": ["Ready screen appears"],
-                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                        "steps": [
+                            {"action": "assert_visible", "selector": "text=Ready"}
+                        ],
                     }
                 ],
             }
@@ -302,7 +326,9 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
         returncode = None
 
         def __init__(self, args, **_kwargs):  # noqa: ANN001
-            Path(args[-1]).write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"0" * 2048) + b"moov")
+            Path(args[-1]).write_bytes(
+                b"\x00\x00\x00\x18ftypmp42" + (b"0" * 2048) + b"moov"
+            )
 
         def poll(self):  # noqa: ANN201
             return self.returncode
@@ -345,11 +371,23 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
 
     monkeypatch.setenv("QA_DEMO_IOS_BUNDLE_ID", "com.example.app")
     monkeypatch.setenv("QA_DEMO_IOS_SIMULATOR_UDID", "SIM-123")
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder.discover_ios_project_files", lambda **_kwargs: (project_path, ui_test_file))
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._reboot_simulator", lambda _udid: None)
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._build_for_testing", lambda **_kwargs: None)
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._discover_xctestrun_path", lambda _derived_data_dir: xctestrun_path)
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._reset_app_state", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder.discover_ios_project_files",
+        lambda **_kwargs: (project_path, ui_test_file),
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._reboot_simulator", lambda _udid: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._build_for_testing", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._discover_xctestrun_path",
+        lambda _derived_data_dir: xctestrun_path,
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._reset_app_state", lambda **_kwargs: None
+    )
     monkeypatch.setattr("scripts.qa_demo_mobile_recorder._run", _fake_run)
     monkeypatch.setattr("scripts.qa_demo_mobile_recorder.subprocess.Popen", _Recorder)
 
@@ -360,10 +398,16 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
     assert output["recordings"] == []
     assert output["failure_evidence"][0]["name"] == "App load"
     assert output["failure_evidence"][0]["capture_target"] == "ios"
-    assert output["failure_evidence"][0]["capture_reference"] == "ios-simulator://configured"
+    assert (
+        output["failure_evidence"][0]["capture_reference"]
+        == "ios-simulator://configured"
+    )
     assert "Ready was not visible" in output["failure_evidence"][0]["error_message"]
     assert "iOS diagnostics:" in output["failure_evidence"][0]["error_message"]
-    assert "App crashed before Ready screen" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "App crashed before Ready screen"
+        in output["failure_evidence"][0]["error_message"]
+    )
     assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
@@ -373,12 +417,12 @@ def test_ios_recorder_writes_text_diagnostics_when_failure_video_is_missing(
 ) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    project_path = repo_dir / "example.xcodeproj"
+    project_path = repo_dir / "ExampleApp.xcodeproj"
     project_path.mkdir()
-    ui_test_file = repo_dir / "exampleUITests" / "exampleUITests.swift"
+    ui_test_file = repo_dir / "ExampleAppUITests" / "ExampleAppUITests.swift"
     ui_test_file.parent.mkdir()
     ui_test_file.write_text("import XCTest\n", encoding="utf-8")
-    xctestrun_path = tmp_path / "example.xctestrun"
+    xctestrun_path = tmp_path / "ExampleApp.xctestrun"
     xctestrun_path.write_text("", encoding="utf-8")
     input_path = tmp_path / "input.json"
     output_path = tmp_path / "output.json"
@@ -395,7 +439,9 @@ def test_ios_recorder_writes_text_diagnostics_when_failure_video_is_missing(
                         "objective": "Prove the app opens",
                         "capture_target": "ios",
                         "expected_outcomes": ["Ready screen appears"],
-                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                        "steps": [
+                            {"action": "assert_visible", "selector": "text=Ready"}
+                        ],
                     }
                 ],
             }
@@ -450,11 +496,23 @@ def test_ios_recorder_writes_text_diagnostics_when_failure_video_is_missing(
 
     monkeypatch.setenv("QA_DEMO_IOS_BUNDLE_ID", "com.example.app")
     monkeypatch.setenv("QA_DEMO_IOS_SIMULATOR_UDID", "SIM-123")
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder.discover_ios_project_files", lambda **_kwargs: (project_path, ui_test_file))
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._reboot_simulator", lambda _udid: None)
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._build_for_testing", lambda **_kwargs: None)
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._discover_xctestrun_path", lambda _derived_data_dir: xctestrun_path)
-    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._reset_app_state", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder.discover_ios_project_files",
+        lambda **_kwargs: (project_path, ui_test_file),
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._reboot_simulator", lambda _udid: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._build_for_testing", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._discover_xctestrun_path",
+        lambda _derived_data_dir: xctestrun_path,
+    )
+    monkeypatch.setattr(
+        "scripts.qa_demo_mobile_recorder._reset_app_state", lambda **_kwargs: None
+    )
     monkeypatch.setattr("scripts.qa_demo_mobile_recorder._run", _fake_run)
     monkeypatch.setattr("scripts.qa_demo_mobile_recorder.subprocess.Popen", _Recorder)
 
@@ -466,13 +524,18 @@ def test_ios_recorder_writes_text_diagnostics_when_failure_video_is_missing(
     assert failure_path.suffix == ".txt"
     assert failure_path.is_file()
     assert "Ready was not visible" in output["failure_evidence"][0]["error_message"]
-    assert "App crashed before Ready screen" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "App crashed before Ready screen"
+        in output["failure_evidence"][0]["error_message"]
+    )
     assert "screen-recording-error:" in failure_path.read_text(encoding="utf-8")
 
 
-def test_build_for_testing_uses_workspace_flag_for_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_for_testing_uses_workspace_flag_for_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
-    workspace_path = tmp_path / "example.xcworkspace"
+    workspace_path = tmp_path / "ExampleApp.xcworkspace"
     workspace_path.mkdir()
 
     def _fake_run(args, *, cwd=None, **_kwargs):  # noqa: ANN001
@@ -488,7 +551,7 @@ def test_build_for_testing_uses_workspace_flag_for_workspace(monkeypatch: pytest
 
     _build_for_testing(
         project_path=workspace_path,
-        scheme="example",
+        scheme="ExampleApp",
         simulator_udid="SIM-123",
         derived_data_dir=tmp_path / "DerivedData",
     )

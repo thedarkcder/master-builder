@@ -29,7 +29,9 @@ from orchestrator.storage.models import Tenant
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-@router.post("/tenants/{tenant_id}/discord/install/start", response_model=DiscordInstallStart)
+@router.post(
+    "/tenants/{tenant_id}/discord/install/start", response_model=DiscordInstallStart
+)
 def start_discord_install(
     tenant_id: str,
     return_to: str = Query(default="edit", pattern="^(edit|wizard)$"),
@@ -39,16 +41,25 @@ def start_discord_install(
     settings = get_settings()
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     if principal.is_platform_super_admin:
         require_admin(principal=principal)
     else:
-        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+        require_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_key=PERMISSION_WORKSPACE_MANAGE,
+        )
 
     oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     client_id = oauth_config.client_id
     if not client_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord application client id is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Discord application client id is not configured",
+        )
 
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
     state_token = create_discord_install_state_token(
@@ -58,7 +69,9 @@ def start_discord_install(
         return_to=return_to,
         installer_user_id=principal.user_id,
     )
-    redirect_uri = f"{settings.public_api_base_url.rstrip('/')}/api/admin/discord/install/callback"
+    redirect_uri = (
+        f"{settings.public_api_base_url.rstrip('/')}/api/admin/discord/install/callback"
+    )
     existing_guild_id = str((tenant.discord_config or {}).get("guild_id") or "").strip()
     query: dict[str, str] = {
         "client_id": client_id,
@@ -87,18 +100,26 @@ def discord_install_callback(
 ) -> RedirectResponse:
     settings = get_settings()
     try:
-        state = parse_discord_install_state_token(token=state_token, secret=settings.discord_install_state_secret)
+        state = parse_discord_install_state_token(
+            token=state_token, secret=settings.discord_install_state_secret
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     tenant = session.get(Tenant, state.tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     normalized_guild_id = str(guild_id or "").strip()
     normalized_error = str(error or "").strip()
     if normalized_error or not normalized_guild_id:
-        install_status = "cancelled" if normalized_error == "access_denied" else "failed"
+        install_status = (
+            "cancelled" if normalized_error == "access_denied" else "failed"
+        )
         query_params: dict[str, str] = {"discord_install": install_status}
         if normalized_error:
             query_params["discord_error"] = normalized_error

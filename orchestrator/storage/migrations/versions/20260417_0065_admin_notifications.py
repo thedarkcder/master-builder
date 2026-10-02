@@ -26,7 +26,9 @@ def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -55,10 +57,15 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("notification_id"),
-            sa.UniqueConstraint("fingerprint", name="uq_admin_notifications_fingerprint"),
+            sa.UniqueConstraint(
+                "fingerprint", name="uq_admin_notifications_fingerprint"
+            ),
         )
     for index_name, columns in (
-        ("ix_admin_notifications_status_last_emitted_at", ["status", "last_emitted_at"]),
+        (
+            "ix_admin_notifications_status_last_emitted_at",
+            ["status", "last_emitted_at"],
+        ),
         ("ix_admin_notifications_scope_type_scope_id", ["scope_type", "scope_id"]),
         ("ix_admin_notifications_tenant_id_status", ["tenant_id", "status"]),
         ("ix_admin_notifications_kind_status", ["kind", "status"]),
@@ -68,8 +75,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_admin_notifications_kind_status", table_name="admin_notifications")
-    op.drop_index("ix_admin_notifications_tenant_id_status", table_name="admin_notifications")
-    op.drop_index("ix_admin_notifications_scope_type_scope_id", table_name="admin_notifications")
-    op.drop_index("ix_admin_notifications_status_last_emitted_at", table_name="admin_notifications")
+    op.drop_index(
+        "ix_admin_notifications_kind_status", table_name="admin_notifications"
+    )
+    op.drop_index(
+        "ix_admin_notifications_tenant_id_status", table_name="admin_notifications"
+    )
+    op.drop_index(
+        "ix_admin_notifications_scope_type_scope_id", table_name="admin_notifications"
+    )
+    op.drop_index(
+        "ix_admin_notifications_status_last_emitted_at",
+        table_name="admin_notifications",
+    )
     op.drop_table("admin_notifications")

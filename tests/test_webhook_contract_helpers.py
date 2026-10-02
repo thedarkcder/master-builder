@@ -10,7 +10,9 @@ from starlette.requests import ClientDisconnect
 from orchestrator.api.webhooks import contracts, jira_payload_contracts, payload_utils
 
 
-def _build_request(*, body: bytes = b"{}", headers: dict[str, str] | None = None) -> Request:
+def _build_request(
+    *, body: bytes = b"{}", headers: dict[str, str] | None = None
+) -> Request:
     encoded_headers = [
         (key.lower().encode("latin-1"), value.encode("latin-1"))
         for key, value in (headers or {}).items()
@@ -29,27 +31,46 @@ def _build_request(*, body: bytes = b"{}", headers: dict[str, str] | None = None
 
 
 class PayloadUtilsTests(unittest.TestCase):
-    def test_max_webhook_body_bytes_invalid_env_uses_default(self) -> None:
-        with patch.dict(os.environ, {"ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES": "invalid"}, clear=False):
-            self.assertEqual(payload_utils.max_webhook_body_bytes(), payload_utils.DEFAULT_WEBHOOK_MAX_BODY_BYTES)
+    def test_max_webhook_body_bytes_invalid_env_fails_configuration(self) -> None:
+        with patch.dict(
+            os.environ, {"ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES": "invalid"}, clear=False
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES"
+            ):
+                payload_utils.max_webhook_body_bytes()
 
     def test_read_json_payload_rejects_too_large_payload(self) -> None:
-        with patch.dict(os.environ, {"ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES": "4"}, clear=False):
+        with patch.dict(
+            os.environ, {"ORCHESTRATOR_WEBHOOK_MAX_BODY_BYTES": "4"}, clear=False
+        ):
             request = _build_request(body=b'{"abc":1}')
             with self.assertRaises(HTTPException) as ctx:
-                asyncio.run(payload_utils.read_json_payload(request, request_id="req-1", source="jira"))
+                asyncio.run(
+                    payload_utils.read_json_payload(
+                        request, request_id="req-1", source="jira"
+                    )
+                )
         self.assertEqual(ctx.exception.status_code, payload_utils.HTTP_413_TOO_LARGE)
 
     def test_read_json_payload_rejects_invalid_json(self) -> None:
         request = _build_request(body=b"{bad")
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(payload_utils.read_json_payload(request, request_id="req-1", source="jira"))
+            asyncio.run(
+                payload_utils.read_json_payload(
+                    request, request_id="req-1", source="jira"
+                )
+            )
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_read_json_payload_rejects_non_object(self) -> None:
         request = _build_request(body=b'["x"]')
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(payload_utils.read_json_payload(request, request_id="req-1", source="jira"))
+            asyncio.run(
+                payload_utils.read_json_payload(
+                    request, request_id="req-1", source="jira"
+                )
+            )
         self.assertEqual(ctx.exception.status_code, 400)
 
     def test_read_json_payload_handles_client_disconnect(self) -> None:
@@ -65,7 +86,11 @@ class PayloadUtilsTests(unittest.TestCase):
 
         request = Request(scope, receive)
         with self.assertRaises(HTTPException) as ctx:
-            asyncio.run(payload_utils.read_json_payload(request, request_id="req-1", source="jira"))
+            asyncio.run(
+                payload_utils.read_json_payload(
+                    request, request_id="req-1", source="jira"
+                )
+            )
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("Client disconnected", str(ctx.exception.detail))
 
@@ -78,7 +103,12 @@ class PayloadUtilsTests(unittest.TestCase):
 
 class JiraPayloadContractsTests(unittest.TestCase):
     def test_normalize_jira_webhook_event_handles_prefix(self) -> None:
-        self.assertEqual(jira_payload_contracts.normalize_jira_webhook_event(" Jira:Comment_Created "), "comment_created")
+        self.assertEqual(
+            jira_payload_contracts.normalize_jira_webhook_event(
+                " Jira:Comment_Created "
+            ),
+            "comment_created",
+        )
         self.assertIsNone(jira_payload_contracts.normalize_jira_webhook_event(123))
 
     def test_extract_issue_payload_rejects_missing_issue(self) -> None:
@@ -88,19 +118,29 @@ class JiraPayloadContractsTests(unittest.TestCase):
 
     def test_parse_jira_comment_command_covers_invalid_and_valid_paths(self) -> None:
         invalid_payload = {"comment": {"body": " /mb run now "}}
-        command, arg, error = jira_payload_contracts.parse_jira_comment_command(invalid_payload)
+        command, arg, error = jira_payload_contracts.parse_jira_comment_command(
+            invalid_payload
+        )
         self.assertIsNone(command)
         self.assertIsNone(arg)
         self.assertEqual(error, "invalid_comment_command")
 
         ask_payload = {"comment": {"body": "/mb ask why failing?\ncheck logs"}}
-        command, arg, error = jira_payload_contracts.parse_jira_comment_command(ask_payload)
+        command, arg, error = jira_payload_contracts.parse_jira_comment_command(
+            ask_payload
+        )
         self.assertEqual(command, "ask")
         self.assertIn("why failing?", str(arg))
         self.assertIsNone(error)
 
-        clarify_payload = {"comment": {"body": "/mb clarify Which customer-facing fallback should win?"}}
-        command, arg, error = jira_payload_contracts.parse_jira_comment_command(clarify_payload)
+        clarify_payload = {
+            "comment": {
+                "body": "/mb clarify Which customer-facing fallback should win?"
+            }
+        }
+        command, arg, error = jira_payload_contracts.parse_jira_comment_command(
+            clarify_payload
+        )
         self.assertEqual(command, "clarify")
         self.assertIn("fallback", str(arg))
         self.assertIsNone(error)
@@ -110,11 +150,18 @@ class JiraPayloadContractsTests(unittest.TestCase):
             "changelog": {
                 "items": [
                     {"field": "summary", "fromString": "a", "toString": "b"},
-                    {"field": "status", "fromString": "To Do", "toString": "In Progress"},
+                    {
+                        "field": "status",
+                        "fromString": "To Do",
+                        "toString": "In Progress",
+                    },
                 ]
             }
         }
-        self.assertEqual(jira_payload_contracts.extract_status_transition(payload), ("To Do", "In Progress"))
+        self.assertEqual(
+            jira_payload_contracts.extract_status_transition(payload),
+            ("To Do", "In Progress"),
+        )
 
     def test_extract_changed_fields_normalizes_and_dedupes(self) -> None:
         payload = {
@@ -126,7 +173,10 @@ class JiraPayloadContractsTests(unittest.TestCase):
                 ]
             }
         }
-        self.assertEqual(jira_payload_contracts.extract_changed_fields(payload), ["summary", "description"])
+        self.assertEqual(
+            jira_payload_contracts.extract_changed_fields(payload),
+            ["summary", "description"],
+        )
 
 
 class WebhookContractsTests(unittest.TestCase):
@@ -161,25 +211,26 @@ class WebhookContractsTests(unittest.TestCase):
             tenant_id="tenant-a",
         )
 
-    def test_resolve_tenant_github_webhook_secret_raises_when_ref_missing_value(self) -> None:
-        tenant = SimpleNamespace(tenant_id="tenant-a", github_config={"webhook_secret_ref": "tenant/a/GITHUB_WEBHOOK_SECRET"})
+    def test_resolve_platform_github_webhook_secret_requires_value(self) -> None:
         settings = SimpleNamespace(secrets_encryption_key="key")
-        with patch("orchestrator.api.webhooks.contracts.resolve_scoped_secret_ref", return_value=None):
+        with patch(
+            "orchestrator.api.webhooks.contracts.resolve_platform_secret_ref",
+            return_value=None,
+        ):
             with self.assertRaises(HTTPException) as ctx:
-                contracts.resolve_tenant_github_webhook_secret(
-                    tenant=tenant,
-                    request_id="req-1",
-                    session=MagicMock(),
-                    settings=settings,
+                contracts.resolve_global_github_webhook_secret(
+                    request_id="req-1", session=MagicMock(), settings=settings
                 )
         self.assertEqual(ctx.exception.status_code, 500)
 
-    def test_validate_webhook_auth_skips_when_secret_ref_missing(self) -> None:
+    def test_validate_webhook_auth_rejects_missing_secret_reference(self) -> None:
         tenant = SimpleNamespace(tenant_id="tenant-a", jira_config={})
-        contracts.validate_webhook_auth(
-            tenant=tenant,
-            request=_build_request(),
-            request_id="req-1",
-            session=MagicMock(),
-            settings=SimpleNamespace(secrets_encryption_key="key"),
-        )
+        with self.assertRaises(HTTPException) as ctx:
+            contracts.validate_webhook_auth(
+                tenant=tenant,
+                request=_build_request(),
+                request_id="req-1",
+                session=MagicMock(),
+                settings=SimpleNamespace(secrets_encryption_key="key"),
+            )
+        self.assertEqual(ctx.exception.status_code, 500)

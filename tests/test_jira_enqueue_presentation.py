@@ -9,7 +9,10 @@ from orchestrator.core.communications.jira_enqueue_presentation import (
     format_jira_enqueue_skipped_message,
     normalize_backlog_pre_run_check_text,
 )
-from orchestrator.core.decision.state_machine import build_execution_admission_block, ExecutionAdmissionReason
+from orchestrator.core.decision.state_machine import (
+    build_execution_admission_block,
+    ExecutionAdmissionReason,
+)
 from orchestrator.core.decision.types import PrecheckOutcome
 
 
@@ -27,17 +30,21 @@ def test_format_jira_enqueue_skipped_message_includes_reason_and_guidance() -> N
     assert "cycle_id=abc" in message
 
 
-def test_format_jira_enqueue_skipped_message_links_jira_issue_when_url_is_available() -> None:
+def test_format_jira_enqueue_skipped_message_links_jira_issue_when_url_is_available() -> (
+    None
+):
     message = format_jira_enqueue_skipped_message(
         issue_key="AP-322",
-        issue_url="https://example.atlassian.net/browse/AP-322",
+        issue_url="https://example-tenant.atlassian.net/browse/AP-322",
         issue_status="To Do",
         admission=build_execution_admission_block(
             reason=ExecutionAdmissionReason.GTD_REQUIRED,
         ),
     )
 
-    assert "for [AP-322](https://example.atlassian.net/browse/AP-322)." in message
+    assert (
+        "for [AP-322](https://example-tenant.atlassian.net/browse/AP-322)." in message
+    )
     assert "for `AP-322`." not in message
 
 

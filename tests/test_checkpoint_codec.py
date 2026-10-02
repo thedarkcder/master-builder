@@ -33,7 +33,10 @@ class CheckpointCodecTests(unittest.TestCase):
                     "title": "Show login",
                     "acceptance_criterion": "User can sign in",
                     "capture_target": "browser",
-                    "variants": ["Wrong password shows validation", "Repeat sign-in remains safe"],
+                    "variants": [
+                        "Wrong password shows validation",
+                        "Repeat sign-in remains safe",
+                    ],
                 }
             ],
             "outcome": "continue",
@@ -90,7 +93,9 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
-    def test_decode_pm_plan_payload_rejects_demo_requirements_without_capture_target(self) -> None:
+    def test_decode_pm_plan_payload_rejects_demo_requirements_without_capture_target(
+        self,
+    ) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -108,7 +113,9 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
-    def test_decode_pm_plan_payload_accepts_ios_demo_requirements_without_forcing_execution_worker(self) -> None:
+    def test_decode_pm_plan_payload_accepts_ios_demo_requirements_without_forcing_execution_worker(
+        self,
+    ) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -118,7 +125,10 @@ class CheckpointCodecTests(unittest.TestCase):
                     "title": "Record iOS proof",
                     "acceptance_criterion": "Native flow works",
                     "capture_target": "ios",
-                    "variants": ["Invalid input is rejected", "Repeat action remains safe"],
+                    "variants": [
+                        "Invalid input is rejected",
+                        "Repeat action remains safe",
+                    ],
                 }
             ],
             "outcome": "continue",
@@ -135,7 +145,9 @@ class CheckpointCodecTests(unittest.TestCase):
         self.assertEqual(plan.execution_worker_capability, "linux")
         self.assertEqual(plan.demo_requirements[0].capture_target, "ios")
 
-    def test_decode_pm_plan_payload_rejects_demo_requirements_without_variants(self) -> None:
+    def test_decode_pm_plan_payload_rejects_demo_requirements_without_variants(
+        self,
+    ) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -155,7 +167,9 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
-    def test_decode_pm_plan_payload_rejects_demo_requirements_with_one_variant(self) -> None:
+    def test_decode_pm_plan_payload_rejects_demo_requirements_with_one_variant(
+        self,
+    ) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -187,7 +201,9 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
-    def test_decode_pm_plan_payload_rejects_blocked_without_blocker_message(self) -> None:
+    def test_decode_pm_plan_payload_rejects_blocked_without_blocker_message(
+        self,
+    ) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -204,7 +220,11 @@ class CheckpointCodecTests(unittest.TestCase):
             plan_steps=["step-1"],
             acceptance_criteria=["ac-1"],
             risks=[],
-            demo_requirements=[DemoRequirement(title="Login flow", acceptance_criterion="User signs in")],
+            demo_requirements=[
+                DemoRequirement(
+                    title="Login flow", acceptance_criterion="User signs in"
+                )
+            ],
             outcome="requeue",
             next_stage="dev",
             execution_worker_capability="linux",
@@ -215,7 +235,9 @@ class CheckpointCodecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_pm_plan(plan)
 
-    def test_decode_pm_plan_payload_rejects_requeue_fields_for_non_requeue_outcome(self) -> None:
+    def test_decode_pm_plan_payload_rejects_requeue_fields_for_non_requeue_outcome(
+        self,
+    ) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -242,7 +264,9 @@ class CheckpointCodecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_pm_plan(plan)
 
-    def test_encode_pm_plan_accepts_ios_demo_requirements_without_forcing_execution_worker(self) -> None:
+    def test_encode_pm_plan_accepts_ios_demo_requirements_without_forcing_execution_worker(
+        self,
+    ) -> None:
         plan = PmPlan(
             plan_steps=["step-1"],
             acceptance_criteria=["ac-1"],
@@ -252,7 +276,10 @@ class CheckpointCodecTests(unittest.TestCase):
                     title="Record iOS proof",
                     acceptance_criterion="Native flow works",
                     capture_target="ios",
-                    variants=["Invalid input is rejected", "Repeat action remains safe"],
+                    variants=[
+                        "Invalid input is rejected",
+                        "Repeat action remains safe",
+                    ],
                 )
             ],
             outcome="continue",
@@ -265,7 +292,9 @@ class CheckpointCodecTests(unittest.TestCase):
         self.assertEqual(payload["execution_worker_capability"], "linux")
         self.assertEqual(payload["demo_requirements"][0]["capture_target"], "ios")
 
-    def test_decode_stage_result_payloads_reject_blocked_without_blocker_message(self) -> None:
+    def test_decode_stage_result_payloads_reject_blocked_without_blocker_message(
+        self,
+    ) -> None:
         self.assertIsNone(
             decode_dev_result_payload(
                 {
@@ -295,7 +324,9 @@ class CheckpointCodecTests(unittest.TestCase):
             )
         )
 
-    def test_encode_stage_checkpoint_artifact_serializes_stage_specific_payloads(self) -> None:
+    def test_encode_stage_checkpoint_artifact_serializes_stage_specific_payloads(
+        self,
+    ) -> None:
         pm_artifact = encode_stage_checkpoint_artifact(
             WorkflowStageCheckpoint(
                 stage="pm",
@@ -311,7 +342,10 @@ class CheckpointCodecTests(unittest.TestCase):
                             title="Demo",
                             acceptance_criterion="Show feature",
                             capture_target="browser",
-                            variants=["Invalid input is rejected", "Repeat action remains safe"],
+                            variants=[
+                                "Invalid input is rejected",
+                                "Repeat action remains safe",
+                            ],
                         )
                     ],
                 ),
@@ -323,7 +357,9 @@ class CheckpointCodecTests(unittest.TestCase):
                 attempt=1,
                 status="completed",
                 summary="dev",
-                dev_result=DevResult(change_summary=["c1"], pr_url="https://example/p/1"),
+                dev_result=DevResult(
+                    change_summary=["c1"], pr_url="https://example/p/1"
+                ),
             )
         )
         test_artifact = encode_stage_checkpoint_artifact(
@@ -332,7 +368,11 @@ class CheckpointCodecTests(unittest.TestCase):
                 attempt=1,
                 status="completed",
                 summary="test",
-                test_result=TestResult(guidance=["pytest -q"], validation_scope="targeted_only", feedback=None),
+                test_result=TestResult(
+                    guidance=["pytest -q"],
+                    validation_scope="targeted_only",
+                    feedback=None,
+                ),
             )
         )
         review_artifact = encode_stage_checkpoint_artifact(
@@ -341,7 +381,9 @@ class CheckpointCodecTests(unittest.TestCase):
                 attempt=1,
                 status="completed",
                 summary="review",
-                review_result=ReviewResult(summary=["ok"], feedback=None, pr_url="https://example/p/1"),
+                review_result=ReviewResult(
+                    summary=["ok"], feedback=None, pr_url="https://example/p/1"
+                ),
             )
         )
         qa_artifact = encode_stage_checkpoint_artifact(
@@ -360,7 +402,9 @@ class CheckpointCodecTests(unittest.TestCase):
                             expected_outcomes=["Feature is visible"],
                             steps=[
                                 QaStep(action="goto", value="/"),
-                                QaStep(action="assert_visible", selector="text=Feature"),
+                                QaStep(
+                                    action="assert_visible", selector="text=Feature"
+                                ),
                             ],
                         )
                     ],
@@ -387,9 +431,13 @@ class CheckpointCodecTests(unittest.TestCase):
         self.assertEqual(review_artifact["summary"], ["ok"])
         self.assertEqual(qa_artifact["recordings"][0]["object_key"], "demo/happy.webm")
         self.assertEqual(qa_artifact["recordings"][0]["release_commit_sha"], "b" * 40)
-        self.assertEqual(qa_artifact["recordings"][0]["release_context_sha256"], f"{2:064x}")
+        self.assertEqual(
+            qa_artifact["recordings"][0]["release_context_sha256"], f"{2:064x}"
+        )
 
-    def test_encode_stage_checkpoint_artifact_allows_blocked_qa_without_scenarios(self) -> None:
+    def test_encode_stage_checkpoint_artifact_allows_blocked_qa_without_scenarios(
+        self,
+    ) -> None:
         qa_artifact = encode_stage_checkpoint_artifact(
             WorkflowStageCheckpoint(
                 stage="qa",
@@ -446,8 +494,14 @@ class CheckpointCodecTests(unittest.TestCase):
         assert decoded is not None
         self.assertEqual(decoded.outcome, "blocked")
         self.assertEqual(decoded.recordings, [])
-        self.assertEqual(decoded.failure_evidence[0].object_key, "tenant/project/run/qa-failure-1.webm")
-        self.assertEqual(decoded.failure_evidence[0].error_message, "pageerror: process is not defined")
+        self.assertEqual(
+            decoded.failure_evidence[0].object_key,
+            "tenant/project/run/qa-failure-1.webm",
+        )
+        self.assertEqual(
+            decoded.failure_evidence[0].error_message,
+            "pageerror: process is not defined",
+        )
 
 
 if __name__ == "__main__":

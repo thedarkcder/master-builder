@@ -8,7 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.models import Run, WorkflowCheckpoint, WorkflowExecutionArtifact
+from orchestrator.storage.models import (
+    Run,
+    WorkflowCheckpoint,
+    WorkflowExecutionArtifact,
+)
 
 EXECUTION_BRANCH_ARTIFACT_KIND = "execution_branch"
 EXECUTION_ARTIFACT_STATUS_PUSHED = "pushed"
@@ -41,7 +45,9 @@ def record_pushed_execution_artifact(
     normalized_branch = str(branch or "").strip()
     normalized_commit_sha = str(commit_sha or "").strip()
     if not normalized_repo_url or not normalized_branch or not normalized_commit_sha:
-        raise ValueError("repo_url, branch, and commit_sha are required for a durable execution artifact")
+        raise ValueError(
+            "repo_url, branch, and commit_sha are required for a durable execution artifact"
+        )
     now = pushed_at or datetime.now(timezone.utc)
     artifact = session.execute(
         select(WorkflowExecutionArtifact).where(
@@ -83,7 +89,9 @@ def record_pushed_execution_artifact(
     return artifact
 
 
-def latest_pushed_execution_artifact_for_run(*, session: Session, run_id: str | None) -> WorkflowExecutionArtifact | None:
+def latest_pushed_execution_artifact_for_run(
+    *, session: Session, run_id: str | None
+) -> WorkflowExecutionArtifact | None:
     normalized_run_id = str(run_id or "").strip()
     if not normalized_run_id:
         return None
@@ -96,8 +104,13 @@ def latest_pushed_execution_artifact_for_run(*, session: Session, run_id: str | 
     ).scalar_one_or_none()
 
 
-def checkpoint_requires_durable_execution_artifact(*, checkpoint: WorkflowCheckpoint) -> bool:
-    if str(getattr(checkpoint, "checkpoint_kind", "") or "").strip().lower() != "execution":
+def checkpoint_requires_durable_execution_artifact(
+    *, checkpoint: WorkflowCheckpoint
+) -> bool:
+    if (
+        str(getattr(checkpoint, "checkpoint_kind", "") or "").strip().lower()
+        != "execution"
+    ):
         return False
     return snapshot_requires_durable_execution_artifact(checkpoint.payload_json)
 
@@ -125,7 +138,9 @@ def require_durable_execution_artifact_for_checkpoint(
 ) -> ExecutionArtifactRef | None:
     if not checkpoint_requires_durable_execution_artifact(checkpoint=checkpoint):
         return None
-    artifact = latest_pushed_execution_artifact_for_run(session=session, run_id=checkpoint.run_id)
+    artifact = latest_pushed_execution_artifact_for_run(
+        session=session, run_id=checkpoint.run_id
+    )
     if artifact is None:
         raise MissingDurableExecutionArtifactError(
             "Selected execution checkpoint is not resumable because its code artifact was not pushed."

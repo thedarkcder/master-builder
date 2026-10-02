@@ -90,7 +90,11 @@ class CoolifyHttpClient:
         query: dict[str, Any] | None = None,
         expected_status: set[int] | None = None,
     ) -> dict[str, Any] | list[Any]:
-        query_string = f"?{urlencode({key: str(value) for key, value in (query or {}).items() if value is not None})}" if query else ""
+        query_string = (
+            f"?{urlencode({key: str(value) for key, value in (query or {}).items() if value is not None})}"
+            if query
+            else ""
+        )
         url = f"{self._base_url}{path}{query_string}"
         body = None
         headers = {
@@ -112,7 +116,9 @@ class CoolifyHttpClient:
                 f"{method} {path} failed with HTTP {exc.code}: {error_body}"
             ) from exc
         except URLError as exc:
-            raise CoolifyVerificationError(f"{method} {path} failed: {exc.reason}") from exc
+            raise CoolifyVerificationError(
+                f"{method} {path} failed: {exc.reason}"
+            ) from exc
 
         if expected_status is not None and status_code not in expected_status:
             raise CoolifyVerificationError(
@@ -123,7 +129,9 @@ class CoolifyHttpClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise CoolifyVerificationError(f"{method} {path} returned invalid JSON: {raw[:200]}") from exc
+            raise CoolifyVerificationError(
+                f"{method} {path} returned invalid JSON: {raw[:200]}"
+            ) from exc
 
     def get_project(self, project_uuid: str) -> dict[str, Any]:
         data = self.request_json(method="GET", path=f"/projects/{project_uuid}")
@@ -131,10 +139,16 @@ class CoolifyHttpClient:
             raise CoolifyVerificationError("Coolify project response was not an object")
         return data
 
-    def get_environment(self, project_uuid: str, environment_name: str) -> dict[str, Any]:
-        data = self.request_json(method="GET", path=f"/projects/{project_uuid}/{environment_name}")
+    def get_environment(
+        self, project_uuid: str, environment_name: str
+    ) -> dict[str, Any]:
+        data = self.request_json(
+            method="GET", path=f"/projects/{project_uuid}/{environment_name}"
+        )
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify environment response was not an object")
+            raise CoolifyVerificationError(
+                "Coolify environment response was not an object"
+            )
         return data
 
     def get_server(self, server_uuid: str) -> dict[str, Any]:
@@ -151,19 +165,29 @@ class CoolifyHttpClient:
             expected_status={200, 201},
         )
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify create application response was not an object")
-        application_uuid = str(data.get("uuid") or data.get("application_uuid") or "").strip()
+            raise CoolifyVerificationError(
+                "Coolify create application response was not an object"
+            )
+        application_uuid = str(
+            data.get("uuid") or data.get("application_uuid") or ""
+        ).strip()
         if not application_uuid:
-            raise CoolifyVerificationError("Coolify create application response did not include uuid")
+            raise CoolifyVerificationError(
+                "Coolify create application response did not include uuid"
+            )
         return application_uuid
 
     def get_application(self, application_uuid: str) -> dict[str, Any]:
         data = self.request_json(method="GET", path=f"/applications/{application_uuid}")
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify application response was not an object")
+            raise CoolifyVerificationError(
+                "Coolify application response was not an object"
+            )
         return data
 
-    def update_application(self, *, application_uuid: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_application(
+        self, *, application_uuid: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         data = self.request_json(
             method="PATCH",
             path=f"/applications/{application_uuid}",
@@ -171,10 +195,14 @@ class CoolifyHttpClient:
             expected_status={200, 201},
         )
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify update application response was not an object")
+            raise CoolifyVerificationError(
+                "Coolify update application response was not an object"
+            )
         return data
 
-    def bulk_update_application_envs(self, *, application_uuid: str, envs: list[dict[str, Any]]) -> dict[str, Any]:
+    def bulk_update_application_envs(
+        self, *, application_uuid: str, envs: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         data = self.request_json(
             method="PATCH",
             path=f"/applications/{application_uuid}/envs/bulk",
@@ -182,39 +210,58 @@ class CoolifyHttpClient:
             expected_status={200, 201},
         )
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify bulk env response was not an object")
+            raise CoolifyVerificationError(
+                "Coolify bulk env response was not an object"
+            )
         return data
 
     def list_application_envs(self, application_uuid: str) -> list[dict[str, Any]]:
-        data = self.request_json(method="GET", path=f"/applications/{application_uuid}/envs")
+        data = self.request_json(
+            method="GET", path=f"/applications/{application_uuid}/envs"
+        )
         if not isinstance(data, list):
             raise CoolifyVerificationError("Coolify env list response was not a list")
         return [item for item in data if isinstance(item, dict)]
 
-    def start_application(self, application_uuid: str, *, force: bool, instant_deploy: bool) -> str:
+    def start_application(
+        self, application_uuid: str, *, force: bool, instant_deploy: bool
+    ) -> str:
         response = self.request_json(
             method="GET",
             path=f"/applications/{application_uuid}/start",
-            query={"force": str(force).lower(), "instant_deploy": str(instant_deploy).lower()},
+            query={
+                "force": str(force).lower(),
+                "instant_deploy": str(instant_deploy).lower(),
+            },
             expected_status={200},
         )
         if not isinstance(response, dict):
             raise CoolifyVerificationError("Coolify start response was not an object")
         deployment_uuid = str(response.get("deployment_uuid") or "").strip()
         if not deployment_uuid:
-            raise CoolifyVerificationError("Coolify start response did not include deployment_uuid")
+            raise CoolifyVerificationError(
+                "Coolify start response did not include deployment_uuid"
+            )
         return deployment_uuid
 
     def get_deployment(self, deployment_uuid: str) -> dict[str, Any]:
         data = self.request_json(method="GET", path=f"/deployments/{deployment_uuid}")
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify deployment response was not an object")
+            raise CoolifyVerificationError(
+                "Coolify deployment response was not an object"
+            )
         return data
 
-    def list_application_deployments(self, application_uuid: str) -> list[dict[str, Any]]:
-        data = self.request_json(method="GET", path=f"/deployments/applications/{application_uuid}")
+    def list_application_deployments(
+        self, application_uuid: str
+    ) -> list[dict[str, Any]]:
+        data = self.request_json(
+            method="GET", path=f"/deployments/applications/{application_uuid}"
+        )
         if not isinstance(data, list):
-            raise CoolifyVerificationError("Coolify deployment list response was not a list")
+            raise CoolifyVerificationError(
+                "Coolify deployment list response was not a list"
+            )
         return [item for item in data if isinstance(item, dict)]
 
     def delete_application(self, application_uuid: str) -> dict[str, Any]:
@@ -230,7 +277,9 @@ class CoolifyHttpClient:
             expected_status={200, 204},
         )
         if not isinstance(data, dict):
-            raise CoolifyVerificationError("Coolify delete application response was not an object")
+            raise CoolifyVerificationError(
+                "Coolify delete application response was not an object"
+            )
         return data
 
 
@@ -263,7 +312,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def load_config_from_env(*, args: argparse.Namespace, environ: dict[str, str] | None = None) -> CoolifyVerifyConfig:
+def load_config_from_env(
+    *, args: argparse.Namespace, environ: dict[str, str] | None = None
+) -> CoolifyVerifyConfig:
     env = os.environ if environ is None else environ
     missing = [name for name in REQUIRED_ENV_VARS if not str(env.get(name, "")).strip()]
     if missing:
@@ -282,9 +333,13 @@ def load_config_from_env(*, args: argparse.Namespace, environ: dict[str, str] | 
         field_name="COOLIFY_VERIFY_POLL_INTERVAL_SECONDS",
     )
     if timeout_seconds < 1:
-        raise CoolifyVerificationError("COOLIFY_VERIFY_TIMEOUT_SECONDS must be at least 1")
+        raise CoolifyVerificationError(
+            "COOLIFY_VERIFY_TIMEOUT_SECONDS must be at least 1"
+        )
     if poll_interval_seconds < 1:
-        raise CoolifyVerificationError("COOLIFY_VERIFY_POLL_INTERVAL_SECONDS must be at least 1")
+        raise CoolifyVerificationError(
+            "COOLIFY_VERIFY_POLL_INTERVAL_SECONDS must be at least 1"
+        )
 
     application_name = str(env.get("COOLIFY_VERIFY_APP_NAME", "")).strip()
     if not application_name:
@@ -297,16 +352,22 @@ def load_config_from_env(*, args: argparse.Namespace, environ: dict[str, str] | 
         server_uuid=str(env["COOLIFY_VERIFY_SERVER_UUID"]).strip(),
         destination_uuid=str(env["COOLIFY_VERIFY_DESTINATION_UUID"]).strip(),
         repository=str(env["COOLIFY_VERIFY_REPOSITORY"]).strip(),
-        branch=str(env.get("COOLIFY_VERIFY_BRANCH", DEFAULT_BRANCH)).strip() or DEFAULT_BRANCH,
-        environment_name=str(env.get("COOLIFY_VERIFY_ENVIRONMENT_NAME", DEFAULT_ENVIRONMENT_NAME)).strip()
+        branch=str(env.get("COOLIFY_VERIFY_BRANCH", DEFAULT_BRANCH)).strip()
+        or DEFAULT_BRANCH,
+        environment_name=str(
+            env.get("COOLIFY_VERIFY_ENVIRONMENT_NAME", DEFAULT_ENVIRONMENT_NAME)
+        ).strip()
         or DEFAULT_ENVIRONMENT_NAME,
-        build_pack=str(env.get("COOLIFY_VERIFY_BUILD_PACK", DEFAULT_BUILD_PACK)).strip() or DEFAULT_BUILD_PACK,
+        build_pack=str(env.get("COOLIFY_VERIFY_BUILD_PACK", DEFAULT_BUILD_PACK)).strip()
+        or DEFAULT_BUILD_PACK,
         application_name=application_name,
         timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval_seconds,
         keep_application=bool(args.keep_application),
-        force_deploy=str(env.get("COOLIFY_VERIFY_FORCE_DEPLOY", "")).strip().lower() in {"1", "true", "yes"},
-        instant_deploy=str(env.get("COOLIFY_VERIFY_INSTANT_DEPLOY", "")).strip().lower() in {"1", "true", "yes"},
+        force_deploy=str(env.get("COOLIFY_VERIFY_FORCE_DEPLOY", "")).strip().lower()
+        in {"1", "true", "yes"},
+        instant_deploy=str(env.get("COOLIFY_VERIFY_INSTANT_DEPLOY", "")).strip().lower()
+        in {"1", "true", "yes"},
     )
 
 
@@ -432,7 +493,9 @@ def verify_contract(
             )
         )
 
-        environment_payload = client.get_environment(config.project_uuid, config.environment_name)
+        environment_payload = client.get_environment(
+            config.project_uuid, config.environment_name
+        )
         checks.append(
             CheckResult(
                 name="environment lookup",
@@ -464,7 +527,8 @@ def verify_contract(
         checks.append(
             CheckResult(
                 name="application read",
-                ok=_normalize_value(created_application.get("uuid")) == application_uuid,
+                ok=_normalize_value(created_application.get("uuid"))
+                == application_uuid,
                 detail=f"round-tripped application uuid {created_application.get('uuid')}",
             )
         )
@@ -474,24 +538,31 @@ def verify_contract(
             **application_payload,
             "description": updated_description,
         }
-        client.update_application(application_uuid=application_uuid, payload=update_payload)
+        client.update_application(
+            application_uuid=application_uuid, payload=update_payload
+        )
         updated_application = client.get_application(application_uuid)
         checks.append(
             CheckResult(
                 name="application update",
-                ok=_normalize_value(updated_application.get("description")) == updated_description,
+                ok=_normalize_value(updated_application.get("description"))
+                == updated_description,
                 detail="application description updated and persisted",
             )
         )
 
         env_payload = _build_env_payload(run_id)
-        client.bulk_update_application_envs(application_uuid=application_uuid, envs=env_payload)
+        client.bulk_update_application_envs(
+            application_uuid=application_uuid, envs=env_payload
+        )
         env_rows = client.list_application_envs(application_uuid)
         env_keys = {str(item.get("key") or "").strip() for item in env_rows}
         checks.append(
             CheckResult(
                 name="environment bulk update",
-                ok={"MB_CONTRACT_RUN_ID", "MB_CONTRACT_VERIFICATION"}.issubset(env_keys),
+                ok={"MB_CONTRACT_RUN_ID", "MB_CONTRACT_VERIFICATION"}.issubset(
+                    env_keys
+                ),
                 detail=f"env keys present: {', '.join(sorted(env_keys)) or 'none'}",
             )
         )
@@ -526,7 +597,9 @@ def verify_contract(
         )
 
         listed_deployments = client.list_application_deployments(application_uuid)
-        deployment_ids = {str(item.get("uuid") or "").strip() for item in listed_deployments}
+        deployment_ids = {
+            str(item.get("uuid") or "").strip() for item in listed_deployments
+        }
         checks.append(
             CheckResult(
                 name="deployment history",

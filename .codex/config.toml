@@ -1,0 +1,4 @@
+# Optional public Atlassian connector; configure and authenticate it locally.
+[mcp_servers.atlassian]
+url = "https://mcp.atlassian.com/v1/mcp"
+enabled = false

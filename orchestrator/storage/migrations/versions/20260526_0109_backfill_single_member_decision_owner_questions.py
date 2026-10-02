@@ -19,7 +19,9 @@ branch_labels = None
 depends_on = None
 
 DECISION_OWNER_QUESTION_ID = "decision_owner"
-IMPLICIT_OWNER_DETAIL = "Single-member account; the accountable decision owner is implicit."
+IMPLICIT_OWNER_DETAIL = (
+    "Single-member account; the accountable decision owner is implicit."
+)
 
 
 def _parse_json_list(value: object) -> list[object]:
@@ -32,13 +34,19 @@ def _parse_json_list(value: object) -> list[object]:
 
 
 def _json_expr(bind: sa.engine.Connection, parameter_name: str) -> str:
-    return f"CAST(:{parameter_name} AS JSON)" if bind.dialect.name == "postgresql" else f":{parameter_name}"
+    return (
+        f"CAST(:{parameter_name} AS JSON)"
+        if bind.dialect.name == "postgresql"
+        else f":{parameter_name}"
+    )
 
 
 def _single_member_tenant_ids(bind: sa.engine.Connection) -> set[str]:
     tenant_ids = {
         str(row["tenant_id"] or "").strip()
-        for row in bind.execute(sa.text("SELECT DISTINCT tenant_id FROM decision_cycles")).mappings()
+        for row in bind.execute(
+            sa.text("SELECT DISTINCT tenant_id FROM decision_cycles")
+        ).mappings()
         if str(row["tenant_id"] or "").strip()
     }
     active_members: dict[str, set[str]] = {tenant_id: set() for tenant_id in tenant_ids}
@@ -58,7 +66,11 @@ def _single_member_tenant_ids(bind: sa.engine.Connection) -> set[str]:
         user_id = str(row["user_id"] or "").strip()
         if tenant_id in active_members and user_id:
             active_members[tenant_id].add(user_id)
-    return {tenant_id for tenant_id, user_ids in active_members.items() if len(user_ids) <= 1}
+    return {
+        tenant_id
+        for tenant_id, user_ids in active_members.items()
+        if len(user_ids) <= 1
+    }
 
 
 def _apply_single_member_owner_policy(
@@ -69,7 +81,10 @@ def _apply_single_member_owner_policy(
     changed = False
     updated_question_set: list[object] = []
     for item in question_set:
-        if not isinstance(item, dict) or str(item.get("id") or "").strip() != DECISION_OWNER_QUESTION_ID:
+        if (
+            not isinstance(item, dict)
+            or str(item.get("id") or "").strip() != DECISION_OWNER_QUESTION_ID
+        ):
             updated_question_set.append(item)
             continue
         updated_item = dict(item)
@@ -89,7 +104,9 @@ def _apply_single_member_owner_policy(
         for item in unresolved_question_ids
         if str(item).strip() and str(item).strip() != DECISION_OWNER_QUESTION_ID
     ]
-    if updated_unresolved != [str(item).strip() for item in unresolved_question_ids if str(item).strip()]:
+    if updated_unresolved != [
+        str(item).strip() for item in unresolved_question_ids if str(item).strip()
+    ]:
         changed = True
 
     return updated_question_set, updated_unresolved, changed
@@ -133,7 +150,9 @@ def upgrade() -> None:
             continue
         question_set, unresolved_ids, changed = _apply_single_member_owner_policy(
             question_set=_parse_json_list(row["question_set_json"]),
-            unresolved_question_ids=_parse_json_list(row["unresolved_question_ids_json"]),
+            unresolved_question_ids=_parse_json_list(
+                row["unresolved_question_ids_json"]
+            ),
         )
         if not changed:
             continue
@@ -142,10 +161,14 @@ def upgrade() -> None:
             {
                 "cycle_id": row["cycle_id"],
                 "question_set_json": json.dumps(question_set, sort_keys=True),
-                "unresolved_question_ids_json": json.dumps(unresolved_ids, sort_keys=True),
+                "unresolved_question_ids_json": json.dumps(
+                    unresolved_ids, sort_keys=True
+                ),
             },
         )
 
 
 def downgrade() -> None:
-    raise RuntimeError("Single-member Decision Gate owner question backfill cannot be downgraded")
+    raise RuntimeError(
+        "Single-member Decision Gate owner question backfill cannot be downgraded"
+    )

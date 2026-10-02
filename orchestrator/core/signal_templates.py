@@ -6,7 +6,9 @@ import re
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
 
 
-def _normalize_lines(values: Iterable[str], *, max_items: int, max_line_chars: int) -> list[str]:
+def _normalize_lines(
+    values: Iterable[str], *, max_items: int, max_line_chars: int
+) -> list[str]:
     normalized: list[str] = []
     for value in values:
         line = " ".join(str(value).strip().split())
@@ -20,7 +22,9 @@ def _normalize_lines(values: Iterable[str], *, max_items: int, max_line_chars: i
     return normalized
 
 
-def _clip_message_lines(lines: list[str], *, max_lines: int = 40, max_chars: int = 1800) -> str:
+def _clip_message_lines(
+    lines: list[str], *, max_lines: int = 40, max_chars: int = 1800
+) -> str:
     clipped = lines[:max_lines]
     rendered = "\n".join(clipped).strip()
     if len(rendered) <= max_chars:
@@ -34,7 +38,9 @@ def _format_issue_reference(issue_key: str, jira_url: str | None) -> str:
     return issue_key
 
 
-def format_discord_ready_gate_guidance(*, issue_key: str, issue_status: str, ready_statuses: Iterable[str]) -> str:
+def format_discord_ready_gate_guidance(
+    *, issue_key: str, issue_status: str, ready_statuses: Iterable[str]
+) -> str:
     statuses = _normalize_lines(ready_statuses, max_items=6, max_line_chars=80)
     formatted_statuses = ", ".join(statuses) if statuses else "Ready for Agent"
     lines = [
@@ -124,7 +130,9 @@ def format_discord_pr_ready_message(
     changed = _normalize_lines(what_changed, max_items=3, max_line_chars=140)
     risks = _normalize_lines(risk_impact, max_items=2, max_line_chars=140)
     test_steps = _normalize_lines(how_to_test, max_items=3, max_line_chars=140)
-    unresolved_questions = _normalize_lines(questions or (), max_items=2, max_line_chars=140)
+    unresolved_questions = _normalize_lines(
+        questions or (), max_items=2, max_line_chars=140
+    )
 
     lines = [f"✅ PR Ready: [Open PR]({pr_url})"]
     if jira_url or run_id:
@@ -166,7 +174,9 @@ def format_jira_final_comment(
     jira_base_url: str | None = None,
 ) -> str:
     summary_lines = _normalize_lines(summary, max_items=4, max_line_chars=200)
-    criteria_lines = _normalize_lines(acceptance_criteria, max_items=8, max_line_chars=200)
+    criteria_lines = _normalize_lines(
+        acceptance_criteria, max_items=8, max_line_chars=200
+    )
     command_lines = _normalize_lines(command_steps, max_items=6, max_line_chars=200)
     manual_lines = _normalize_lines(manual_steps, max_items=6, max_line_chars=200)
     note_lines = _normalize_lines(notes, max_items=5, max_line_chars=200)
@@ -187,7 +197,9 @@ def format_jira_final_comment(
         lines.extend(f"  - `{item}`" for item in command_lines)
     if manual_lines:
         lines.append("- Steps:")
-        lines.extend(f"  {idx}) {item}" for idx, item in enumerate(manual_lines, start=1))
+        lines.extend(
+            f"  {idx}) {item}" for idx, item in enumerate(manual_lines, start=1)
+        )
 
     if note_lines:
         lines.append("")
@@ -209,7 +221,9 @@ def format_jira_final_comment(
             issue_match = ISSUE_KEY_PATTERN.search(item)
             if issue_match and jira_base_url:
                 issue_key = issue_match.group(0)
-                lines.append(f"- {item} ({jira_base_url.rstrip('/')}/browse/{issue_key})")
+                lines.append(
+                    f"- {item} ({jira_base_url.rstrip('/')}/browse/{issue_key})"
+                )
             else:
                 lines.append(f"- {item}")
 

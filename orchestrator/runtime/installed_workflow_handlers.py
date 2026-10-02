@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.webhooks.contracts import (
     create_jira_comment,
     extract_changed_fields,
@@ -9,7 +11,9 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.issue_fanout.service import list_child_issue_previews_for_parent
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow.handler_composition import (
+    build_installed_workflow_handler_registry,
+)
 from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry
 from orchestrator.core.integrations.workflow.provider import (
     JiraWorkflowConnectionProvider,

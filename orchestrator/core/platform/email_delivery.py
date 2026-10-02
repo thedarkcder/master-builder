@@ -70,7 +70,9 @@ class SmtpEmailDeliveryProvider(EmailDeliveryProvider):
                     client.send_message(message)
                 return
 
-            with smtplib.SMTP(host=self._settings.smtp_host, port=self._settings.smtp_port, timeout=30) as client:
+            with smtplib.SMTP(
+                host=self._settings.smtp_host, port=self._settings.smtp_port, timeout=30
+            ) as client:
                 client.ehlo()
                 if self._settings.smtp_use_tls:
                     client.starttls(context=ssl.create_default_context())
@@ -124,7 +126,9 @@ class ResendEmailDeliveryProvider(EmailDeliveryProvider):
 
         resend_id = _parse_resend_success_id(raw)
         if resend_id:
-            logger.info("resend_email_accepted id=%s to=%s", resend_id, payload.to_email)
+            logger.info(
+                "resend_email_accepted id=%s to=%s", resend_id, payload.to_email
+            )
         else:
             logger.info("resend_email_sent to=%s", payload.to_email)
 
@@ -159,7 +163,9 @@ def _parse_resend_success_id(raw: str) -> str | None:
     return str(rid) if rid else None
 
 
-def build_email_delivery_provider(*, settings: Settings | None = None) -> EmailDeliveryProvider:
+def build_email_delivery_provider(
+    *, settings: Settings | None = None
+) -> EmailDeliveryProvider:
     resolved_settings = settings or get_settings()
     provider = str(resolved_settings.email_delivery_provider or "smtp").strip().lower()
     if provider == "resend":
@@ -167,7 +173,9 @@ def build_email_delivery_provider(*, settings: Settings | None = None) -> EmailD
     return SmtpEmailDeliveryProvider(settings=resolved_settings)
 
 
-def deliver_email(payload: EmailMessagePayload, *, settings: Settings | None = None) -> None:
+def deliver_email(
+    payload: EmailMessagePayload, *, settings: Settings | None = None
+) -> None:
     try:
         build_email_delivery_provider(settings=settings).send(payload)
     except EmailDeliveryError:

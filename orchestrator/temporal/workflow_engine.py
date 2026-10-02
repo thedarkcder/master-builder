@@ -9,14 +9,30 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
-from orchestrator.core.workflow.advance import InvalidWorkflowOperationRetryError, WorkflowAdvanceOutcome
+from orchestrator.core.workflow.advance import (
+    InvalidWorkflowOperationRetryError,
+    WorkflowAdvanceOutcome,
+)
 from orchestrator.core.workflow.engine import WorkflowEngineState
 from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
 from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry
-from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow.execution_projection import ensure_workflow_execution, workflow_execution_id
-from orchestrator.core.workflow.type_catalog import get_workflow_type, normalize_workflow_retry_policy_config
-from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
+from orchestrator.core.workflow.operation_retry_use_case import (
+    retry_workflow_operation_with_registered_handler,
+)
+from orchestrator.core.workflow.execution_projection import (
+    ensure_workflow_execution,
+    workflow_execution_id,
+)
+from orchestrator.core.workflow.type_catalog import (
+    get_workflow_type,
+    normalize_workflow_retry_policy_config,
+)
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    WorkflowExecution,
+    WorkflowOperation,
+)
 from orchestrator.temporal.client import connect_temporal_client
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
@@ -34,7 +50,9 @@ try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio.client import WithStartWorkflowOperation
     from temporalio.common import WorkflowIDConflictPolicy
     from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
-except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
+except (
+    ImportError
+) as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
 
 
@@ -102,7 +120,9 @@ def notify_temporal_run_result(
 ) -> None:
     async def _notify() -> None:
         client = await connect_temporal_client(settings)
-        config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+        config = _temporal_config_for_workflow(
+            session=session, workflow=workflow, settings=settings
+        )
         if config.execution_mode != "run":
             return
         handle = client.get_workflow_handle_for(
@@ -119,7 +139,9 @@ def notify_temporal_run_result(
                 issue_key=str(run.issue_key),
                 claim_id=str(getattr(run, "claim_id", "") or "").strip() or None,
                 pending_request_id=(
-                    _pending_request_id(session=session, workflow_id=workflow.workflow_id)
+                    _pending_request_id(
+                        session=session, workflow_id=workflow.workflow_id
+                    )
                     if normalized_status == "waiting_for_input"
                     else None
                 ),
@@ -130,7 +152,9 @@ def notify_temporal_run_result(
     _run_sync(_notify())
 
 
-def _require_positive_temporal_timeout(*, workflow_type_key: str, temporal: dict, field_name: str) -> int:
+def _require_positive_temporal_timeout(
+    *, workflow_type_key: str, temporal: dict, field_name: str
+) -> int:
     try:
         value = int(temporal.get(field_name) or 0)
     except (TypeError, ValueError) as exc:
@@ -151,14 +175,20 @@ def _temporal_config_for_workflow(
     settings: Settings,
 ) -> TemporalWorkflowConfig:
     del settings
-    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    workflow_type = get_workflow_type(
+        session, workflow_type_key=workflow.workflow_type_key
+    )
     backend = str(workflow_type.orchestration_backend or "").strip().lower()
     if backend != "temporal":
         raise RuntimeError(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
-    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
-    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy.to_payload())
+    binding = resolve_temporal_binding_for_handler(
+        handler_key=workflow_type.handler_key
+    )
+    retry_policy = normalize_workflow_retry_policy_config(
+        workflow_type.retry_policy.to_payload()
+    )
     temporal = {
         "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
         "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,
@@ -190,9 +220,15 @@ def _temporal_config_for_workflow(
             field_name="human_input_resume_timeout_seconds",
         ),
         retry_max_attempts=max(1, int(retry_policy.get("max_attempts") or 1)),
-        retry_initial_interval_seconds=max(0, int(retry_policy.get("initial_interval_seconds") or 0)),
-        retry_max_interval_seconds=max(0, int(retry_policy.get("max_interval_seconds") or 0)),
-        retry_backoff_coefficient=max(1.0, float(retry_policy.get("backoff_coefficient") or 1.0)),
+        retry_initial_interval_seconds=max(
+            0, int(retry_policy.get("initial_interval_seconds") or 0)
+        ),
+        retry_max_interval_seconds=max(
+            0, int(retry_policy.get("max_interval_seconds") or 0)
+        ),
+        retry_backoff_coefficient=max(
+            1.0, float(retry_policy.get("backoff_coefficient") or 1.0)
+        ),
     )
 
 
@@ -208,8 +244,12 @@ def _temporal_config_for_workflow_type(
         raise RuntimeError(
             f"Workflow type {workflow_type.workflow_type_key} is not configured for the temporal engine"
         )
-    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
-    retry_policy = normalize_workflow_retry_policy_config(workflow_type.retry_policy.to_payload())
+    binding = resolve_temporal_binding_for_handler(
+        handler_key=workflow_type.handler_key
+    )
+    retry_policy = normalize_workflow_retry_policy_config(
+        workflow_type.retry_policy.to_payload()
+    )
     temporal = {
         "workflow_execution_timeout_seconds": binding.workflow_execution_timeout_seconds,
         "workflow_run_timeout_seconds": binding.workflow_run_timeout_seconds,
@@ -241,17 +281,27 @@ def _temporal_config_for_workflow_type(
             field_name="human_input_resume_timeout_seconds",
         ),
         retry_max_attempts=max(1, int(retry_policy.get("max_attempts") or 1)),
-        retry_initial_interval_seconds=max(0, int(retry_policy.get("initial_interval_seconds") or 0)),
-        retry_max_interval_seconds=max(0, int(retry_policy.get("max_interval_seconds") or 0)),
-        retry_backoff_coefficient=max(1.0, float(retry_policy.get("backoff_coefficient") or 1.0)),
+        retry_initial_interval_seconds=max(
+            0, int(retry_policy.get("initial_interval_seconds") or 0)
+        ),
+        retry_max_interval_seconds=max(
+            0, int(retry_policy.get("max_interval_seconds") or 0)
+        ),
+        retry_backoff_coefficient=max(
+            1.0, float(retry_policy.get("backoff_coefficient") or 1.0)
+        ),
     )
 
 
 def _handler_backed_workflow_id(*, workflow_type_key: str, execution_key: str) -> str:
-    return workflow_execution_id(workflow_type_key=workflow_type_key, execution_key=execution_key)
+    return workflow_execution_id(
+        workflow_type_key=workflow_type_key, execution_key=execution_key
+    )
 
 
-def _handler_advance_input_from_request(*, workflow_id: str, request, config: TemporalWorkflowConfig) -> HandlerWorkflowAdvanceInput:
+def _handler_advance_input_from_request(
+    *, workflow_id: str, request, config: TemporalWorkflowConfig
+) -> HandlerWorkflowAdvanceInput:
     return HandlerWorkflowAdvanceInput(
         workflow_id=workflow_id,
         workflow_handler_key=request.workflow_handler_key,
@@ -274,7 +324,9 @@ def _handler_advance_input_from_request(*, workflow_id: str, request, config: Te
     )
 
 
-def _workflow_advance_outcome_from_temporal(result: HandlerWorkflowAdvanceResult) -> WorkflowAdvanceOutcome:
+def _workflow_advance_outcome_from_temporal(
+    result: HandlerWorkflowAdvanceResult,
+) -> WorkflowAdvanceOutcome:
     return WorkflowAdvanceOutcome(
         handled=bool(result.handled),
         reason=str(result.reason or "").strip() or None,
@@ -299,7 +351,9 @@ async def _ensure_handler_workflow_handle(
             run_payload,
             id=_temporal_workflow_handle_id(workflow_id=workflow_id),
             task_queue=config.task_queue,
-            execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
+            execution_timeout=timedelta(
+                seconds=config.workflow_execution_timeout_seconds
+            ),
             run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
         )
     except WorkflowAlreadyStartedError:
@@ -312,11 +366,20 @@ async def _ensure_handler_workflow_handle(
 class TemporalWorkflowEngine:
     backend = "temporal"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry=None):
+    def __init__(
+        self,
+        *,
+        process_claimed_run_fn,
+        build_runner_fn,
+        runtime_kwargs_fn,
+        workflow_handler_registry=None,
+    ):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
-        self._workflow_handler_registry: WorkflowHandlerRegistry | None = workflow_handler_registry
+        self._workflow_handler_registry: WorkflowHandlerRegistry | None = (
+            workflow_handler_registry
+        )
 
     def advance_workflow(
         self,
@@ -361,13 +424,20 @@ class TemporalWorkflowEngine:
                             workflow_id=workflow_id,
                             tenant_id=request.tenant_id,
                             project_id=str(request.project_id or "").strip(),
-                            requested_by_user_id=str(request.payload.get("requested_by_user_id") or "").strip() or None,
+                            requested_by_user_id=str(
+                                request.payload.get("requested_by_user_id") or ""
+                            ).strip()
+                            or None,
                             activity_start_to_close_timeout_seconds=config.activity_start_to_close_timeout_seconds,
                         ),
                         id=_temporal_workflow_handle_id(workflow_id=workflow_id),
                         task_queue=config.task_queue,
-                        execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
-                        run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
+                        execution_timeout=timedelta(
+                            seconds=config.workflow_execution_timeout_seconds
+                        ),
+                        run_timeout=timedelta(
+                            seconds=config.workflow_run_timeout_seconds
+                        ),
                     )
                 except WorkflowAlreadyStartedError:
                     return
@@ -405,7 +475,9 @@ class TemporalWorkflowEngine:
                 ),
                 id=_temporal_workflow_handle_id(workflow_id=workflow_id),
                 task_queue=config.task_queue,
-                execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
+                execution_timeout=timedelta(
+                    seconds=config.workflow_execution_timeout_seconds
+                ),
                 run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
                 id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
             )
@@ -431,7 +503,9 @@ class TemporalWorkflowEngine:
 
         async def _start() -> None:
             client = await connect_temporal_client(settings)
-            config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+            config = _temporal_config_for_workflow(
+                session=session, workflow=workflow, settings=settings
+            )
             if config.execution_mode != "run":
                 raise RuntimeError(
                     f"Temporal start_workflow is not available for workflow type {workflow.workflow_type_key}"
@@ -454,7 +528,9 @@ class TemporalWorkflowEngine:
                     payload,
                     id=_temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
                     task_queue=config.task_queue,
-                    execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
+                    execution_timeout=timedelta(
+                        seconds=config.workflow_execution_timeout_seconds
+                    ),
                     run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
                 )
             except WorkflowAlreadyStartedError:
@@ -476,7 +552,9 @@ class TemporalWorkflowEngine:
 
         async def _resume() -> str | None:
             client = await connect_temporal_client(settings)
-            config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+            config = _temporal_config_for_workflow(
+                session=session, workflow=workflow, settings=settings
+            )
             handle = client.get_workflow_handle_for(
                 config.workflow_defn,
                 _temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
@@ -493,11 +571,16 @@ class TemporalWorkflowEngine:
                 if resumed_run is not None:
                     return resumed_run
             request_row = resumed_session.get(RunHumanInputRequest, request.request_id)
-            if request_row is not None and str(request_row.consumed_by_run_id or "").strip():
+            if (
+                request_row is not None
+                and str(request_row.consumed_by_run_id or "").strip()
+            ):
                 resumed_run = resumed_session.get(Run, request_row.consumed_by_run_id)
                 if resumed_run is not None:
                     return resumed_run
-        raise RuntimeError(f"Temporal workflow {workflow.workflow_id} resumed without creating a run projection")
+        raise RuntimeError(
+            f"Temporal workflow {workflow.workflow_id} resumed without creating a run projection"
+        )
 
     def query_workflow(
         self,
@@ -520,11 +603,16 @@ class TemporalWorkflowEngine:
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
     ) -> WorkflowOperationHandle:
-        config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+        config = _temporal_config_for_workflow(
+            session=session, workflow=workflow, settings=settings
+        )
         if config.execution_mode == "handler":
+
             async def _retry() -> WorkflowOperationHandle:
                 client = await connect_temporal_client(settings)
-                workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+                workflow_type = get_workflow_type(
+                    session, workflow_type_key=workflow.workflow_type_key
+                )
                 handle = await _ensure_handler_workflow_handle(
                     client=client,
                     config=config,
@@ -556,7 +644,9 @@ class TemporalWorkflowEngine:
                     raise InvalidWorkflowOperationRetryError(exc.message) from exc
                 raise
         if self._workflow_handler_registry is None:
-            raise RuntimeError("Workflow operation retry handler registry is not configured")
+            raise RuntimeError(
+                "Workflow operation retry handler registry is not configured"
+            )
         return retry_workflow_operation_with_registered_handler(
             session=session,
             settings=settings,

@@ -41,9 +41,13 @@ def create_atlassian_oauth_state_token(
         "return_to": return_to,
         "tenant_id": tenant_id,
     }
-    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
+        "utf-8"
+    )
     payload_token = _b64url_encode(payload_bytes)
-    signature = hmac.new(secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256).digest()
+    signature = hmac.new(
+        secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256
+    ).digest()
     signature_token = _b64url_encode(signature)
     return f"{payload_token}.{signature_token}"
 

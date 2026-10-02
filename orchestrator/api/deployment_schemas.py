@@ -5,7 +5,15 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 _DEPLOYMENT_VOLUME_KINDS = {"file", "persistent", "persistent_volume", "volume"}
 
@@ -83,7 +91,11 @@ _RAW_SECRET_CONFIG_KEY_PARTS = {
 
 def _is_raw_secret_config_key(key: object) -> bool:
     normalized = str(key or "").strip().lower()
-    if not normalized or normalized.endswith("_secret_ref") or normalized.endswith("_secret_refs"):
+    if (
+        not normalized
+        or normalized.endswith("_secret_ref")
+        or normalized.endswith("_secret_refs")
+    ):
         return False
     if normalized == "secret_refs":
         return False
@@ -97,7 +109,9 @@ def _assert_no_raw_secret_config(value: object, *, path: str = "config") -> None
     if isinstance(value, dict):
         for key, child in value.items():
             if _is_raw_secret_config_key(key):
-                raise ValueError(f"{path}.{key} must be stored as a *_secret_ref, not raw secret material")
+                raise ValueError(
+                    f"{path}.{key} must be stored as a *_secret_ref, not raw secret material"
+                )
             _assert_no_raw_secret_config(child, path=f"{path}.{key}")
         return
     if isinstance(value, list):
@@ -112,7 +126,9 @@ def _redact_secret_config(value: object) -> object:
             if _is_raw_secret_config_key(key):
                 continue
             normalized_key = str(key or "").strip().lower()
-            if normalized_key == "secret_refs" or normalized_key.endswith("_secret_refs"):
+            if normalized_key == "secret_refs" or normalized_key.endswith(
+                "_secret_refs"
+            ):
                 redacted[str(key)] = child
                 continue
             redacted[str(key)] = _redact_secret_config(child)
@@ -137,8 +153,6 @@ def _normalize_app_slug(value: object) -> str:
     return normalized
 
 
-
-
 class ProjectAppCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -155,7 +169,9 @@ class ProjectAppCreate(BaseModel):
     start_command: str | None = None
     env_schema_json: dict[str, object] = Field(default_factory=dict)
     secret_schema_json: dict[str, object] = Field(default_factory=dict)
-    deployment_config: ProjectDeploymentConfigWrite = Field(default_factory=lambda: ProjectDeploymentConfigWrite())
+    deployment_config: ProjectDeploymentConfigWrite = Field(
+        default_factory=lambda: ProjectDeploymentConfigWrite()
+    )
 
     @field_validator("slug")
     @classmethod
@@ -167,7 +183,14 @@ class ProjectAppCreate(BaseModel):
     def normalize_source_path(cls, value: object) -> str:
         return _normalize_repo_relative_path(value)
 
-    @field_validator("detected_runtime", "detected_language", "analysis_source", "build_strategy", "healthcheck", "start_command")
+    @field_validator(
+        "detected_runtime",
+        "detected_language",
+        "analysis_source",
+        "build_strategy",
+        "healthcheck",
+        "start_command",
+    )
     @classmethod
     def normalize_optional_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
@@ -205,7 +228,14 @@ class ProjectAppUpdate(BaseModel):
             return None
         return _normalize_repo_relative_path(value)
 
-    @field_validator("detected_runtime", "detected_language", "analysis_source", "build_strategy", "healthcheck", "start_command")
+    @field_validator(
+        "detected_runtime",
+        "detected_language",
+        "analysis_source",
+        "build_strategy",
+        "healthcheck",
+        "start_command",
+    )
     @classmethod
     def normalize_optional_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
@@ -228,7 +258,9 @@ class ProjectAppRead(BaseModel):
     start_command: str | None = None
     env_schema_json: dict[str, object] = Field(default_factory=dict)
     secret_schema_json: dict[str, object] = Field(default_factory=dict)
-    deployment_config: ProjectDeploymentConfigRead = Field(default_factory=lambda: ProjectDeploymentConfigRead())
+    deployment_config: ProjectDeploymentConfigRead = Field(
+        default_factory=lambda: ProjectDeploymentConfigRead()
+    )
     status: Literal["draft", "needs_pr_merge", "ready", "deploying", "live", "failed"]
     latest_release_id: str | None = None
     latest_release_status: str | None = None
@@ -311,8 +343,12 @@ class TenantDeploymentsOverviewAppRead(BaseModel):
 
 
 class TenantDeploymentsOverviewRead(BaseModel):
-    summary: TenantDeploymentsOverviewSummaryRead = Field(default_factory=TenantDeploymentsOverviewSummaryRead)
-    latest_failures: list[TenantDeploymentsOverviewFailureRead] = Field(default_factory=list)
+    summary: TenantDeploymentsOverviewSummaryRead = Field(
+        default_factory=TenantDeploymentsOverviewSummaryRead
+    )
+    latest_failures: list[TenantDeploymentsOverviewFailureRead] = Field(
+        default_factory=list
+    )
     apps: list[TenantDeploymentsOverviewAppRead] = Field(default_factory=list)
     generated_at: datetime | None = None
 
@@ -333,7 +369,9 @@ class TenantDeploymentPlaneWrite(BaseModel):
     coolify_github_app_uuid: str | None = None
     managed_host_id: str | None = None
     secret_refs: dict[str, str] = Field(default_factory=dict)
-    state: Literal["unconfigured", "provisioning", "active", "degraded", "paused", "failed"] = "unconfigured"
+    state: Literal[
+        "unconfigured", "provisioning", "active", "degraded", "paused", "failed"
+    ] = "unconfigured"
     last_error: str | None = None
 
     @field_validator(
@@ -425,7 +463,9 @@ class DeploymentHostRegistrationRequest(BaseModel):
 
     @field_validator("bootstrap_token", "agent_version")
     @classmethod
-    def normalize_required_registration_strings(cls, value: object, info: ValidationInfo) -> str | None:
+    def normalize_required_registration_strings(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
         normalized = _normalize_optional_string(value)
         if info.field_name == "bootstrap_token":
             if normalized is None:
@@ -471,7 +511,9 @@ class DeploymentHostCommandRead(BaseModel):
     restore_run_id: str | None = None
     release_id: str | None = None
     kind: str
-    status: Literal["queued", "claimed", "running", "succeeded", "failed", "expired", "canceled"]
+    status: Literal[
+        "queued", "claimed", "running", "succeeded", "failed", "expired", "canceled"
+    ]
     claim_id: str | None = None
     payload: dict[str, object] = Field(default_factory=dict)
     result: dict[str, object] = Field(default_factory=dict)
@@ -509,7 +551,9 @@ class DeploymentHostCommandResultWrite(BaseModel):
 
     @field_validator("claim_id", "last_error")
     @classmethod
-    def normalize_command_result_strings(cls, value: object, info: ValidationInfo) -> str | None:
+    def normalize_command_result_strings(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
         normalized = _normalize_optional_string(value)
         if info.field_name == "claim_id":
             if normalized is None:
@@ -588,9 +632,13 @@ class ProjectDeploymentResourceWrite(BaseModel):
     def normalize_kind(cls, value: object) -> str:
         normalized = _normalize_lower_string(value)
         if normalized == "service":
-            raise ValueError("Deployable services must be declared in services, not resources")
+            raise ValueError(
+                "Deployable services must be declared in services, not resources"
+            )
         if normalized in _DEPLOYMENT_VOLUME_KINDS:
-            raise ValueError("Persistent volumes must be declared in volumes, not resources")
+            raise ValueError(
+                "Persistent volumes must be declared in volumes, not resources"
+            )
         return normalized
 
     @field_validator("name")
@@ -771,7 +819,9 @@ class ProjectDeploymentConfigWrite(BaseModel):
     services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
     resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
     volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
-    backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(default_factory=list)
+    backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(
+        default_factory=list
+    )
     generated_compose_raw: str | None = Field(default=None, exclude=True)
     deployment_plan: dict[str, object] = Field(default_factory=dict, exclude=True)
 
@@ -788,10 +838,18 @@ class ProjectDeploymentConfigWrite(BaseModel):
             return None
         lowered = normalized.lower()
         if lowered not in {"dockerfile", "docker_compose", "nixpacks"}:
-            raise ValueError("source_strategy must be dockerfile, docker_compose, or nixpacks")
+            raise ValueError(
+                "source_strategy must be dockerfile, docker_compose, or nixpacks"
+            )
         return lowered
 
-    @field_validator("source_branch", "deployment_branch", "deployment_compose_path", "install_command", "build_command")
+    @field_validator(
+        "source_branch",
+        "deployment_branch",
+        "deployment_compose_path",
+        "install_command",
+        "build_command",
+    )
     @classmethod
     def normalize_optional_deployment_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
@@ -803,7 +861,9 @@ class ProjectDeploymentConfigWrite(BaseModel):
         if normalized is None:
             return None
         if not re.fullmatch(r"[0-9a-fA-F]{7,64}", normalized):
-            raise ValueError("commit sha must be a 7-64 character hexadecimal git commit")
+            raise ValueError(
+                "commit sha must be a 7-64 character hexadecimal git commit"
+            )
         return normalized
 
     @field_validator("environment")
@@ -822,11 +882,17 @@ class ProjectDeploymentConfigWrite(BaseModel):
     def validate_relationships(self) -> "ProjectDeploymentConfigWrite":
         if self.source_strategy == "docker_compose":
             if not self.deployment_branch:
-                raise ValueError("docker_compose deployment config requires deployment_branch")
+                raise ValueError(
+                    "docker_compose deployment config requires deployment_branch"
+                )
             if not self.deployment_commit_sha:
-                raise ValueError("docker_compose deployment config requires deployment_commit_sha")
+                raise ValueError(
+                    "docker_compose deployment config requires deployment_commit_sha"
+                )
             if not self.deployment_compose_path:
-                raise ValueError("docker_compose deployment config requires deployment_compose_path")
+                raise ValueError(
+                    "docker_compose deployment config requires deployment_compose_path"
+                )
 
         domain_keys: set[str] = set()
         hosts: set[str] = set()
@@ -850,7 +916,9 @@ class ProjectDeploymentConfigWrite(BaseModel):
             if service.key in service_keys:
                 raise ValueError(f"Duplicate deployment service key: {service.key}")
             if service.key in resource_keys:
-                raise ValueError(f"Deployment service key duplicates resource key: {service.key}")
+                raise ValueError(
+                    f"Deployment service key duplicates resource key: {service.key}"
+                )
             service_keys.add(service.key)
 
         volume_keys: set[str] = set()
@@ -858,15 +926,21 @@ class ProjectDeploymentConfigWrite(BaseModel):
             if volume.key in volume_keys:
                 raise ValueError(f"Duplicate deployment volume key: {volume.key}")
             if volume.key in resource_keys:
-                raise ValueError(f"Deployment volume key duplicates resource key: {volume.key}")
+                raise ValueError(
+                    f"Deployment volume key duplicates resource key: {volume.key}"
+                )
             if volume.key in service_keys:
-                raise ValueError(f"Deployment volume key duplicates service key: {volume.key}")
+                raise ValueError(
+                    f"Deployment volume key duplicates service key: {volume.key}"
+                )
             volume_keys.add(volume.key)
 
         backup_keys: set[str] = set()
         for backup_policy in self.backup_policies:
             if backup_policy.key in backup_keys:
-                raise ValueError(f"Duplicate deployment backup policy key: {backup_policy.key}")
+                raise ValueError(
+                    f"Duplicate deployment backup policy key: {backup_policy.key}"
+                )
             backup_keys.add(backup_policy.key)
             if backup_policy.resource_key not in resource_keys:
                 raise ValueError(
@@ -881,7 +955,7 @@ def _normalize_production_branch(value: object) -> str | None:
         return None
     for prefix in ("refs/heads/", "origin/"):
         if normalized.startswith(prefix):
-            normalized = normalized[len(prefix):].strip()
+            normalized = normalized[len(prefix) :].strip()
             break
     if not normalized:
         raise ValueError("production_branch is required")
@@ -896,8 +970,12 @@ class ProjectDeploymentPolicyWrite(BaseModel):
     preview_prs_enabled: bool = False
     provider: Literal["internal_coolify"] = "internal_coolify"
     deployment_host_id: str | None = None
-    generated_domain_policy: Literal["disabled", "production", "production_and_preview"] = "production"
-    branch_settings: dict[str, "ProjectDeploymentBranchSettings"] = Field(default_factory=dict)
+    generated_domain_policy: Literal[
+        "disabled", "production", "production_and_preview"
+    ] = "production"
+    branch_settings: dict[str, "ProjectDeploymentBranchSettings"] = Field(
+        default_factory=dict
+    )
     services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
     resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
     volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
@@ -914,7 +992,9 @@ class ProjectDeploymentPolicyWrite(BaseModel):
 
     @field_validator("branch_settings")
     @classmethod
-    def normalize_branch_settings(cls, value: object) -> dict[str, "ProjectDeploymentBranchSettings"]:
+    def normalize_branch_settings(
+        cls, value: object
+    ) -> dict[str, "ProjectDeploymentBranchSettings"]:
         if value is None:
             return {}
         if not isinstance(value, dict):
@@ -926,13 +1006,17 @@ class ProjectDeploymentPolicyWrite(BaseModel):
                 raise ValueError("branch_settings keys must be branch names")
             if branch in normalized:
                 raise ValueError(f"Duplicate deployment branch settings for {branch}")
-            normalized[branch] = ProjectDeploymentBranchSettings.model_validate(raw_settings)
+            normalized[branch] = ProjectDeploymentBranchSettings.model_validate(
+                raw_settings
+            )
         return normalized
 
     @model_validator(mode="after")
     def validate_policy(self) -> "ProjectDeploymentPolicyWrite":
         if self.enabled and not self.production_branch:
-            raise ValueError("production_branch is required when deployments are enabled")
+            raise ValueError(
+                "production_branch is required when deployments are enabled"
+            )
         resource_keys: set[str] = set()
         for resource in self.resources:
             if resource.key in resource_keys:
@@ -943,16 +1027,22 @@ class ProjectDeploymentPolicyWrite(BaseModel):
             if service.key in service_keys:
                 raise ValueError(f"Duplicate deployment service key: {service.key}")
             if service.key in resource_keys:
-                raise ValueError(f"Deployment service key duplicates resource key: {service.key}")
+                raise ValueError(
+                    f"Deployment service key duplicates resource key: {service.key}"
+                )
             service_keys.add(service.key)
         volume_keys: set[str] = set()
         for volume in self.volumes:
             if volume.key in volume_keys:
                 raise ValueError(f"Duplicate deployment volume key: {volume.key}")
             if volume.key in resource_keys:
-                raise ValueError(f"Deployment volume key duplicates resource key: {volume.key}")
+                raise ValueError(
+                    f"Deployment volume key duplicates resource key: {volume.key}"
+                )
             if volume.key in service_keys:
-                raise ValueError(f"Deployment volume key duplicates service key: {volume.key}")
+                raise ValueError(
+                    f"Deployment volume key duplicates service key: {volume.key}"
+                )
             volume_keys.add(volume.key)
         return self
 
@@ -965,8 +1055,12 @@ class ProjectDeploymentPolicyRead(BaseModel):
     preview_prs_enabled: bool = False
     provider: Literal["internal_coolify"] = "internal_coolify"
     deployment_host_id: str | None = None
-    generated_domain_policy: Literal["disabled", "production", "production_and_preview"] = "production"
-    branch_settings: dict[str, "ProjectDeploymentBranchSettings"] = Field(default_factory=dict)
+    generated_domain_policy: Literal[
+        "disabled", "production", "production_and_preview"
+    ] = "production"
+    branch_settings: dict[str, "ProjectDeploymentBranchSettings"] = Field(
+        default_factory=dict
+    )
     services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
     resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
     volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
@@ -983,7 +1077,9 @@ class ProjectDeploymentPolicyRead(BaseModel):
 
     @field_validator("branch_settings")
     @classmethod
-    def normalize_branch_settings(cls, value: object) -> dict[str, "ProjectDeploymentBranchSettings"]:
+    def normalize_branch_settings(
+        cls, value: object
+    ) -> dict[str, "ProjectDeploymentBranchSettings"]:
         if value is None:
             return {}
         if not isinstance(value, dict):
@@ -995,13 +1091,17 @@ class ProjectDeploymentPolicyRead(BaseModel):
                 raise ValueError("branch_settings keys must be branch names")
             if branch in normalized:
                 raise ValueError(f"Duplicate deployment branch settings for {branch}")
-            normalized[branch] = ProjectDeploymentBranchSettings.model_validate(raw_settings)
+            normalized[branch] = ProjectDeploymentBranchSettings.model_validate(
+                raw_settings
+            )
         return normalized
 
     @model_validator(mode="after")
     def validate_policy(self) -> "ProjectDeploymentPolicyRead":
         if self.enabled and not self.production_branch:
-            raise ValueError("production_branch is required when deployments are enabled")
+            raise ValueError(
+                "production_branch is required when deployments are enabled"
+            )
         resource_keys: set[str] = set()
         for resource in self.resources:
             if resource.key in resource_keys:
@@ -1012,16 +1112,22 @@ class ProjectDeploymentPolicyRead(BaseModel):
             if service.key in service_keys:
                 raise ValueError(f"Duplicate deployment service key: {service.key}")
             if service.key in resource_keys:
-                raise ValueError(f"Deployment service key duplicates resource key: {service.key}")
+                raise ValueError(
+                    f"Deployment service key duplicates resource key: {service.key}"
+                )
             service_keys.add(service.key)
         volume_keys: set[str] = set()
         for volume in self.volumes:
             if volume.key in volume_keys:
                 raise ValueError(f"Duplicate deployment volume key: {volume.key}")
             if volume.key in resource_keys:
-                raise ValueError(f"Deployment volume key duplicates resource key: {volume.key}")
+                raise ValueError(
+                    f"Deployment volume key duplicates resource key: {volume.key}"
+                )
             if volume.key in service_keys:
-                raise ValueError(f"Deployment volume key duplicates service key: {volume.key}")
+                raise ValueError(
+                    f"Deployment volume key duplicates service key: {volume.key}"
+                )
             volume_keys.add(volume.key)
         return self
 
@@ -1063,7 +1169,9 @@ class ProjectDeploymentConfigRead(BaseModel):
     services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
     resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
     volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
-    backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(default_factory=list)
+    backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(
+        default_factory=list
+    )
     generated_compose_raw: str | None = Field(default=None, exclude=True)
     deployment_plan: dict[str, object] = Field(default_factory=dict, exclude=True)
 
@@ -1095,7 +1203,9 @@ class ProjectDeploymentReleaseCreate(BaseModel):
     @classmethod
     def normalize_required_git_source(cls, value: object, info: ValidationInfo) -> str:
         normalized = _normalize_required_string(value)
-        if info.field_name == "commit_sha" and not re.fullmatch(r"[0-9a-fA-F]{7,64}", normalized):
+        if info.field_name == "commit_sha" and not re.fullmatch(
+            r"[0-9a-fA-F]{7,64}", normalized
+        ):
             raise ValueError("commit_sha must be a Git commit SHA")
         return normalized
 
@@ -1121,9 +1231,19 @@ class ProjectDeploymentServiceUrlRead(BaseModel):
     domain_key: str | None = None
     release_id: str | None = None
 
-    @field_validator("service_key", "service_name", "url", "internal_url", "host", "domain_key", "release_id")
+    @field_validator(
+        "service_key",
+        "service_name",
+        "url",
+        "internal_url",
+        "host",
+        "domain_key",
+        "release_id",
+    )
     @classmethod
-    def normalize_optional_strings(cls, value: object, info: ValidationInfo) -> str | None:
+    def normalize_optional_strings(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
         normalized = _normalize_optional_string(value)
         if info.field_name in {"service_key", "service_name", "url"}:
             if normalized is None:
@@ -1178,7 +1298,16 @@ class ProjectDeploymentReleaseLogsRead(BaseModel):
 class ProjectDeploymentReleaseStatusUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["queued", "provisioning", "deploying", "route_activating", "live", "failed", "rolled_back", "destroyed"]
+    status: Literal[
+        "queued",
+        "provisioning",
+        "deploying",
+        "route_activating",
+        "live",
+        "failed",
+        "rolled_back",
+        "destroyed",
+    ]
     last_error: str | None = None
     deployment_uuid: str | None = None
 
@@ -1252,7 +1381,13 @@ class ProjectDeploymentBackupRestoreRequest(BaseModel):
     confirmation_value: str
     backup_uuid: str | None = None
 
-    @field_validator("backup_key", "resource_key", "execution_uuid", "confirmation_value", "backup_uuid")
+    @field_validator(
+        "backup_key",
+        "resource_key",
+        "execution_uuid",
+        "confirmation_value",
+        "backup_uuid",
+    )
     @classmethod
     def normalize_optional_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)

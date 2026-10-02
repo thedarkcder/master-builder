@@ -15,7 +15,10 @@ from orchestrator.core.runtime.agents import (
     answer_voice_room_persona_with_runtime,
     route_voice_entry_with_runtime,
 )
-from orchestrator.core.runtime.invocation import AgentInvocationContext, RuntimeJsonContractError
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    RuntimeJsonContractError,
+)
 from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -138,8 +141,20 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
+            plan = agents.pm(
+                request,
+                1,
+                None,
+                [],
+                None,
+                None,
+                None,
+                self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+            )
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
             review = agents.review(request, plan, dev, test_result, 1)
@@ -181,7 +196,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             plan = agents.pm(
                 self._request(),
                 1,
@@ -195,10 +213,16 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         self.assertEqual(plan.outcome, "blocked")
         self.assertEqual(plan.blocker_message, "Apple developer access still pending")
-        self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
-        self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
+        self.assertEqual(
+            plan.resolved_prerequisites, ["Supabase redirect URI approved"]
+        )
+        self.assertEqual(
+            plan.unresolved_prerequisites, ["Provision staging Service ID"]
+        )
 
-    def test_pm_accepts_mixed_platform_demo_requirements_without_forcing_execution_worker(self) -> None:
+    def test_pm_accepts_mixed_platform_demo_requirements_without_forcing_execution_worker(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -217,8 +241,20 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
+            plan = agents.pm(
+                self._request(),
+                1,
+                None,
+                [],
+                None,
+                None,
+                None,
+                self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+            )
 
         self.assertEqual(plan.execution_worker_capability, "linux")
         self.assertEqual(
@@ -226,7 +262,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ["browser", "ios", "android"],
         )
 
-    def test_pm_rejects_executable_plan_missing_explicit_ticket_demo_targets(self) -> None:
+    def test_pm_rejects_executable_plan_missing_explicit_ticket_demo_targets(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -249,12 +287,24 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ),
         )
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(
                 CodexRuntimeError,
                 "missing required demo capture target\\(s\\): android, ios",
             ):
-                agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+                agents.pm(
+                    request,
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
     def test_pm_rejects_executable_plan_missing_project_demo_targets(self) -> None:
         runtime = CodexRuntime(
@@ -272,14 +322,28 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ),
         )
         agents = CodexWorkflowAgents(runtime=runtime)
-        request = replace(self._request(), project_demo_capture_targets=("ios", "android"))
+        request = replace(
+            self._request(), project_demo_capture_targets=("ios", "android")
+        )
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(
                 CodexRuntimeError,
                 "missing required demo capture target\\(s\\): android, ios",
             ):
-                agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+                agents.pm(
+                    request,
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
     def test_pm_rejects_unavailable_desktop_demo_requirements(self) -> None:
         runtime = CodexRuntime(
@@ -298,11 +362,27 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with self.assertRaisesRegex(CodexRuntimeError, "selected unavailable capture target 'desktop'"):
-                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
+            with self.assertRaisesRegex(
+                CodexRuntimeError, "selected unavailable capture target 'desktop'"
+            ):
+                agents.pm(
+                    self._request(),
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
-    def test_pm_accepts_desktop_demo_requirements_without_forcing_execution_worker(self) -> None:
+    def test_pm_accepts_desktop_demo_requirements_without_forcing_execution_worker(
+        self,
+    ) -> None:
         constraints = (
             '[{"capture_target":"desktop","provider_available":true,"required_worker_platform":"macos",'
             '"availability_reason":"Desktop capture uses the configured desktop recorder command."}]'
@@ -323,8 +403,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(self._request(), 1, None, [], None, None, None, constraints)
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
+            plan = agents.pm(
+                self._request(), 1, None, [], None, None, None, constraints
+            )
 
         self.assertEqual(plan.execution_worker_capability, "linux")
         self.assertEqual(plan.demo_requirements[0].capture_target, "desktop")
@@ -344,7 +429,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = WorkflowRequest(
             tenant_id="tenant-1",
             project_id="project-1",
-            project_name="example App",
+            project_name="Example Workspace App",
             github_repository="https://github.com/example/repo",
             jira_project_key="GP",
             run_id="run-1",
@@ -368,27 +453,52 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
-            agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt
+        ):
+            agents.pm(
+                request,
+                1,
+                None,
+                [],
+                None,
+                None,
+                None,
+                self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+            )
 
         self.assertEqual(captured["project_id"], "project-1")
-        self.assertEqual(captured["project_name"], "example App")
-        self.assertEqual(captured["github_repository"], "https://github.com/example/repo")
+        self.assertEqual(captured["project_name"], "Example Workspace App")
+        self.assertEqual(
+            captured["github_repository"], "https://github.com/example/repo"
+        )
         self.assertEqual(captured["jira_project_key"], "GP")
         self.assertEqual(captured["execution_repo_dir"], "/tmp/test-repo")
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
         self.assertEqual(captured["project_demo_capture_targets_json"], '["browser"]')
-        self.assertEqual(captured["project_demo_capture_target_sources_json"], '{"browser": ["web"]}')
-        self.assertEqual(captured["qa_capture_target_constraints_json"], self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+        self.assertEqual(
+            captured["project_demo_capture_target_sources_json"], '{"browser": ["web"]}'
+        )
+        self.assertEqual(
+            captured["qa_capture_target_constraints_json"],
+            self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+        )
         governed_tools = json.loads(str(captured["governed_tools_json"]))
         native_tools = json.loads(str(captured["native_tools_json"]))
-        decision_tool = next(item for item in governed_tools if item["tool_name"] == "decision.read_state")
+        decision_tool = next(
+            item
+            for item in governed_tools
+            if item["tool_name"] == "decision.read_state"
+        )
         self.assertEqual(decision_tool["category"], "decision")
         self.assertIn("Decision Gate", decision_tool["description"])
         self.assertNotIn("web.search", {item["tool_name"] for item in governed_tools})
-        self.assertEqual({item["tool_name"] for item in native_tools}, {"web.search", "web.fetch", "browser.open", "browser.snapshot"})
+        self.assertEqual(
+            {item["tool_name"] for item in native_tools},
+            {"web.search", "web.fetch", "browser.open", "browser.snapshot"},
+        )
         self.assertNotIn("agent_tool_command", captured)
 
     def test_pm_requires_demo_requirements(self) -> None:
@@ -404,9 +514,21 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(CodexRuntimeError, "demo_requirements"):
-                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+                agents.pm(
+                    self._request(),
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
     def test_pm_requires_explicit_demo_capture_target(self) -> None:
         runtime = CodexRuntime(
@@ -421,9 +543,21 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(CodexRuntimeError, "demo_requirements"):
-                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+                agents.pm(
+                    self._request(),
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
     def test_pm_requires_demo_requirement_variants(self) -> None:
         runtime = CodexRuntime(
@@ -438,9 +572,21 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(CodexRuntimeError, "variants"):
-                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+                agents.pm(
+                    self._request(),
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
     def test_pm_requires_at_least_two_demo_requirement_variants(self) -> None:
         runtime = CodexRuntime(
@@ -455,9 +601,21 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(CodexRuntimeError, "at least two variants"):
-                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+                agents.pm(
+                    self._request(),
+                    1,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+                )
 
     def test_native_selector_catalog_extracts_ids_and_text_anchors(self) -> None:
         repo_dir = Path(self.temp_dir.name) / "repo"
@@ -495,7 +653,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertIn("Enter", catalog["text_anchors"])
         self.assertIn("Your number", catalog["text_anchors"])
 
-    def test_qa_prompt_includes_native_selector_catalog_and_rejects_invented_mobile_selector(self) -> None:
+    def test_qa_prompt_includes_native_selector_catalog_and_rejects_invented_mobile_selector(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -527,8 +687,12 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
-            with self.assertRaisesRegex(CodexRuntimeError, "invented native accessibility identifier"):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt
+        ):
+            with self.assertRaisesRegex(
+                CodexRuntimeError, "invented native accessibility identifier"
+            ):
                 agents.qa(
                     request,
                     PmPlan(
@@ -544,8 +708,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                             )
                         ],
                     ),
-                    DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
-                    TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                    DevResult(
+                        change_summary=["implemented"], pr_url="https://example/pull/1"
+                    ),
+                    TestResult(
+                        outcome="continue",
+                        guidance=["run tests"],
+                        feedback=None,
+                        blocker_message=None,
+                    ),
                     ReviewResult(
                         summary=["looks good"],
                         outcome="continue",
@@ -602,8 +773,12 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
-            with self.assertRaisesRegex(CodexRuntimeError, "invented native accessibility identifier"):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt
+        ):
+            with self.assertRaisesRegex(
+                CodexRuntimeError, "invented native accessibility identifier"
+            ):
                 agents.qa(
                     request,
                     PmPlan(
@@ -619,8 +794,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                             )
                         ],
                     ),
-                    DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
-                    TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                    DevResult(
+                        change_summary=["implemented"], pr_url="https://example/pull/1"
+                    ),
+                    TestResult(
+                        outcome="continue",
+                        guidance=["run tests"],
+                        feedback=None,
+                        blocker_message=None,
+                    ),
                     ReviewResult(
                         summary=["looks good"],
                         outcome="continue",
@@ -639,7 +821,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertIn("android_ready", catalog["accessibility_ids"])
         self.assertNotIn("ios_only_button", catalog["accessibility_ids"])
 
-    def test_qa_allows_shared_react_native_selector_for_scoped_native_target(self) -> None:
+    def test_qa_allows_shared_react_native_selector_for_scoped_native_target(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -681,7 +865,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             project_demo_capture_target_sources={"android": ("apps/android",)},
         )
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             result = agents.qa(
                 request,
                 PmPlan(
@@ -697,8 +884,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                         )
                     ],
                 ),
-                DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
-                TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                DevResult(
+                    change_summary=["implemented"], pr_url="https://example/pull/1"
+                ),
+                TestResult(
+                    outcome="continue",
+                    guidance=["run tests"],
+                    feedback=None,
+                    blocker_message=None,
+                ),
                 ReviewResult(
                     summary=["looks good"],
                     outcome="continue",
@@ -736,7 +930,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
         agents = CodexWorkflowAgents(runtime=runtime)
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaisesRegex(CodexRuntimeError, "required scenario fields"):
                 agents.qa(
                     self._request(),
@@ -753,8 +950,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                             )
                         ],
                     ),
-                    DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
-                    TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                    DevResult(
+                        change_summary=["implemented"], pr_url="https://example/pull/1"
+                    ),
+                    TestResult(
+                        outcome="continue",
+                        guidance=["run tests"],
+                        feedback=None,
+                        blocker_message=None,
+                    ),
                     ReviewResult(
                         summary=["looks good"],
                         outcome="continue",
@@ -767,7 +971,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                     1,
                 )
 
-    def test_test_prompt_receives_structured_tool_catalog_with_descriptions(self) -> None:
+    def test_test_prompt_receives_structured_tool_catalog_with_descriptions(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -789,18 +995,29 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt
+        ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             agents.test(request, plan, dev, 1)
 
         governed_tools = json.loads(str(captured["governed_tools_json"]))
         native_tools = json.loads(str(captured["native_tools_json"]))
-        runtime_tool = next(item for item in governed_tools if item["tool_name"] == "project.check_runtime_bindings")
+        runtime_tool = next(
+            item
+            for item in governed_tools
+            if item["tool_name"] == "project.check_runtime_bindings"
+        )
         self.assertEqual(runtime_tool["category"], "project")
         self.assertIn("explicitly named project bindings", runtime_tool["description"])
-        self.assertIn("never returns the underlying values", runtime_tool["description"])
-        self.assertEqual({item["tool_name"] for item in native_tools}, {"web.search", "web.fetch", "browser.open", "browser.snapshot"})
+        self.assertIn(
+            "never returns the underlying values", runtime_tool["description"]
+        )
+        self.assertEqual(
+            {item["tool_name"] for item in native_tools},
+            {"web.search", "web.fetch", "browser.open", "browser.snapshot"},
+        )
 
     def test_test_prompt_receives_current_head_acceptance_context(self) -> None:
         runtime = CodexRuntime(
@@ -816,7 +1033,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ),
         )
         agents = CodexWorkflowAgents(runtime=runtime)
-        request = replace(self._request(), base_branch="main", execution_repo_dir="/tmp/test-repo")
+        request = replace(
+            self._request(), base_branch="main", execution_repo_dir="/tmp/test-repo"
+        )
         captured: dict[str, object] = {}
 
         def _render_prompt(template_name: str, **kwargs) -> str:
@@ -825,26 +1044,49 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=_render_prompt,
+            ),
             patch(
                 "orchestrator.core.runtime.agents._current_head_diff_paths",
-                return_value=["GirlPower/App/OnboardingSlide.swift", "GirlPowerUITests/GirlPowerUITests.swift"],
+                return_value=[
+                    "GirlPower/App/OnboardingSlide.swift",
+                    "GirlPowerUITests/GirlPowerUITests.swift",
+                ],
             ),
         ):
-            plan = agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+            plan = agents.pm(
+                request,
+                1,
+                None,
+                [],
+                None,
+                None,
+                None,
+                self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+            )
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
 
         self.assertEqual(test_result.validation_scope, "current_head_acceptance")
         self.assertEqual(json.loads(str(captured["acceptance_criteria_json"])), ["ac1"])
-        self.assertEqual(json.loads(str(captured["demo_requirements_json"]))[0]["capture_target"], "ios")
+        self.assertEqual(
+            json.loads(str(captured["demo_requirements_json"]))[0]["capture_target"],
+            "ios",
+        )
         self.assertEqual(
             json.loads(str(captured["current_head_diff_paths_json"])),
-            ["GirlPower/App/OnboardingSlide.swift", "GirlPowerUITests/GirlPowerUITests.swift"],
+            [
+                "GirlPower/App/OnboardingSlide.swift",
+                "GirlPowerUITests/GirlPowerUITests.swift",
+            ],
         )
         self.assertEqual(captured["requires_current_head_acceptance_evidence"], "true")
 
-    def test_dev_prompt_receives_current_pr_head_context_for_resumed_remediation(self) -> None:
+    def test_dev_prompt_receives_current_pr_head_context_for_resumed_remediation(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -888,7 +1130,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=_render_prompt,
+            ),
             patch(
                 "orchestrator.core.runtime.agents._current_head_diff_paths",
                 return_value=[
@@ -914,7 +1159,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ],
         )
 
-    def test_test_rejects_targeted_only_scope_when_current_head_acceptance_is_required(self) -> None:
+    def test_test_rejects_targeted_only_scope_when_current_head_acceptance_is_required(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -928,16 +1175,30 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ),
         )
         agents = CodexWorkflowAgents(runtime=runtime)
-        request = replace(self._request(), base_branch="main", execution_repo_dir="/tmp/test-repo")
+        request = replace(
+            self._request(), base_branch="main", execution_repo_dir="/tmp/test-repo"
+        )
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=lambda template_name, **_: template_name,
+            ),
             patch(
                 "orchestrator.core.runtime.agents._current_head_diff_paths",
                 return_value=["GirlPower/App/OnboardingSlide.swift"],
             ),
         ):
-            plan = agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+            plan = agents.pm(
+                request,
+                1,
+                None,
+                [],
+                None,
+                None,
+                None,
+                self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+            )
             dev = agents.dev(request, plan, 1, None)
             with self.assertRaisesRegex(
                 CodexRuntimeError,
@@ -961,7 +1222,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = WorkflowRequest(
             tenant_id="tenant-1",
             project_id="project-1",
-            project_name="example App",
+            project_name="Example Workspace App",
             github_repository="https://github.com/example/repo",
             jira_project_key="GP",
             run_id="run-1",
@@ -992,11 +1253,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt
+        ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
 
-        self.assertEqual(json.loads(str(captured["human_inputs_json"]))[0]["value"], "123456")
+        self.assertEqual(
+            json.loads(str(captured["human_inputs_json"]))[0]["value"], "123456"
+        )
         self.assertEqual(captured["allow_pr_creation"], "true")
         self.assertIn("value", json.loads(str(captured["human_inputs_json"]))[0])
         self.assertNotIn("agent_tool_command", captured)
@@ -1019,7 +1284,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = WorkflowRequest(
             tenant_id="tenant-1",
             project_id="project-1",
-            project_name="example App",
+            project_name="Example Workspace App",
             github_repository="https://github.com/example/repo",
             jira_project_key="GP",
             run_id="run-1",
@@ -1042,7 +1307,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured.update(kwargs)
             return template_name
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt
+        ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -1095,17 +1362,30 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                             "title": "Demo step1",
                             "acceptance_criterion": "ac1",
                             "capture_target": "browser",
-                            "variants": ["Invalid input is rejected", "Repeat action remains safe"],
+                            "variants": [
+                                "Invalid input is rejected",
+                                "Repeat action remains safe",
+                            ],
                         }
                     ],
                     "next_stage": "dev",
                     "execution_worker_capability": "linux",
                 }
-            return {"outcome": "continue", "change_summary": ["implemented"], "pr_url": None}
+            return {
+                "outcome": "continue",
+                "change_summary": ["implemented"],
+                "pr_url": None,
+            }
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=lambda template_name, **_: template_name,
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             agents.dev(request, plan, 1, None)
@@ -1173,8 +1453,19 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None}),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=_render_prompt,
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
+                return_value={
+                    "outcome": "continue",
+                    "summary": ["ok"],
+                    "feedback": None,
+                    "pr_url": None,
+                },
+            ),
         ):
             agents.review(
                 request,
@@ -1184,11 +1475,18 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 1,
             )
 
-        self.assertEqual(captured["previous_review_summary_json"], "[\"Needs nonce verification\"]")
-        self.assertEqual(captured["previous_review_feedback"], "Verify the nonce flow with the QA account")
+        self.assertEqual(
+            captured["previous_review_summary_json"], '["Needs nonce verification"]'
+        )
+        self.assertEqual(
+            captured["previous_review_feedback"],
+            "Verify the nonce flow with the QA account",
+        )
         self.assertEqual(captured["pr_url"], "https://example/pull/9")
 
-    def test_review_resume_reuses_previous_review_pr_url_when_response_omits_it(self) -> None:
+    def test_review_resume_reuses_previous_review_pr_url_when_response_omits_it(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -1231,10 +1529,18 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=lambda template_name, **_: template_name,
+            ),
             patch(
                 "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
-                return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None},
+                return_value={
+                    "outcome": "continue",
+                    "summary": ["ok"],
+                    "feedback": None,
+                    "pr_url": None,
+                },
             ),
         ):
             review = agents.review(
@@ -1264,7 +1570,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -1294,7 +1603,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -1318,7 +1630,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             plan = agents.pm(request, 1, None, [], None, None, None)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
@@ -1343,7 +1658,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
         request = self._request()
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with self.assertRaises(RuntimeJsonContractError):
                 agents.pm(request, 1, None, [], None, None, None)
 
@@ -1352,10 +1670,15 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
-            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"2 blocked issues: MAB-1, MAB-2"}',
+            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: (
+                '{"message":"2 blocked issues: MAB-1, MAB-2"}'
+            ),
         )
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             message = answer_board_question_with_runtime(
                 runtime=runtime,
                 question="what is blocked?",
@@ -1379,7 +1702,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
-            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"ok"}',
+            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: (
+                '{"message":"ok"}'
+            ),
         )
         captured: dict = {}
 
@@ -1388,9 +1713,14 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 captured["history_json"] = kwargs.get("history_json")
             return template_name
 
-        sample_history = [{"question": "status?", "answer": "MAB-74 stale", "issue_key": "MAB-74"}]
+        sample_history = [
+            {"question": "status?", "answer": "MAB-74 stale", "issue_key": "MAB-74"}
+        ]
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=_render_prompt,
+            ),
             patch(
                 "orchestrator.core.runtime.agents._invoke_discord_json_maybe_tools",
                 return_value={"message": "ok"},
@@ -1415,12 +1745,16 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         self.assertEqual(json.loads(captured["history_json"]), sample_history)
 
-    def test_answer_board_question_passes_persona_id_to_ask_answer_prompts(self) -> None:
+    def test_answer_board_question_passes_persona_id_to_ask_answer_prompts(
+        self,
+    ) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
             command="override",
-            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: '{"message":"ok"}',
+            _request=lambda _system, _user, _working_dir=None, _on_log_line=None: (
+                '{"message":"ok"}'
+            ),
         )
         calls: list[tuple[str, dict]] = []
 
@@ -1429,7 +1763,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=_render_prompt,
+            ),
             patch(
                 "orchestrator.core.runtime.agents._invoke_discord_json_maybe_tools",
                 return_value={"message": "ok"},
@@ -1476,8 +1813,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with pytest.raises(CodexRuntimeError, match="interview lane without pm persona"):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
+            with pytest.raises(
+                CodexRuntimeError, match="interview lane without pm persona"
+            ):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
                     transcript="We should define MVP scope",
@@ -1488,7 +1830,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
     def test_stage_log_sink_emits_payload(self) -> None:
         captured_logs: list[dict] = []
 
-        def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
+        def _request(
+            _system: str, _user: str, _working_dir: str | None = None, _on_log_line=None
+        ) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
                 _on_log_line("stderr", "line-2")
@@ -1500,9 +1844,14 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
+        agents = CodexWorkflowAgents(
+            runtime=runtime, log_sink=lambda payload: captured_logs.append(payload)
+        )
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             plan = agents.pm(self._request(), 1, None, [], None, None, None)
         self.assertEqual(plan.plan_steps, ["step1"])
         self.assertEqual(len(captured_logs), 2)
@@ -1515,7 +1864,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
     def test_stage_log_sink_fails_when_log_persistence_fails(self) -> None:
         captured_logs: list[dict] = []
 
-        def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
+        def _request(
+            _system: str, _user: str, _working_dir: str | None = None, _on_log_line=None
+        ) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
             return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected","Repeat action remains safe"]}],"next_stage":"dev","execution_worker_capability":"linux"}'
@@ -1526,11 +1877,19 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_request,
         )
-        agents = CodexWorkflowAgents(runtime=runtime, log_sink=lambda payload: captured_logs.append(payload))
+        agents = CodexWorkflowAgents(
+            runtime=runtime, log_sink=lambda payload: captured_logs.append(payload)
+        )
 
         with (
-            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
-            patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=RuntimeError("db down")),
+            patch(
+                "orchestrator.core.runtime.agents.render_prompt",
+                side_effect=lambda template_name, **_: template_name,
+            ),
+            patch(
+                "orchestrator.core.runtime.invocation._enqueue_runtime_log_line",
+                side_effect=RuntimeError("db down"),
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "db down"):
                 agents.pm(self._request(), 1, None, [], None, None, None)
@@ -1555,7 +1914,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with pytest.raises(CodexRuntimeError, match="invalid lane"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -1583,7 +1945,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with pytest.raises(CodexRuntimeError, match="invalid lane"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -1611,7 +1976,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             stage="voice-entry-router",
             working_dir="/tmp",
         )
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
             with pytest.raises(CodexRuntimeError, match="invalid lane"):
                 route_voice_entry_with_runtime(
                     runtime=runtime,
@@ -1632,8 +2000,14 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ),
         )
 
-        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with pytest.raises(CodexRuntimeError, match="Voice room persona payload brief must be an object"):
+        with patch(
+            "orchestrator.core.runtime.agents.render_prompt",
+            side_effect=lambda template_name, **_: template_name,
+        ):
+            with pytest.raises(
+                CodexRuntimeError,
+                match="Voice room persona payload brief must be an object",
+            ):
                 answer_voice_room_persona_with_runtime(
                     runtime=runtime,
                     persona_id="architect",

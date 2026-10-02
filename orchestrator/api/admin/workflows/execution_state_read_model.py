@@ -5,7 +5,12 @@ from dataclasses import dataclass, field
 from orchestrator.api.schemas import WorkflowStatePathEntryRead, WorkflowTypeRead
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES
-from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    WorkflowExecution,
+    WorkflowOperation,
+)
 
 
 @dataclass(frozen=True)
@@ -86,14 +91,22 @@ def build_operation_path(
                 key=definition.operation_type,
                 label=definition.label,
                 status=status,
-                recorded_at=(current.finished_at or current.started_at or current.created_at) if current is not None else None,
-                detail=(current.summary if current is not None else definition.description),
+                recorded_at=(
+                    current.finished_at or current.started_at or current.created_at
+                )
+                if current is not None
+                else None,
+                detail=(
+                    current.summary if current is not None else definition.description
+                ),
             )
         )
     return entries
 
 
-def bucket_workflow_steps(*, state_path: list[WorkflowStatePathEntryRead]) -> WorkflowStepBuckets:
+def bucket_workflow_steps(
+    *, state_path: list[WorkflowStatePathEntryRead]
+) -> WorkflowStepBuckets:
     completed: list[str] = []
     failed: list[str] = []
     pending: list[str] = []
@@ -106,7 +119,13 @@ def bucket_workflow_steps(*, state_path: list[WorkflowStatePathEntryRead]) -> Wo
             failed.append(entry.label)
         elif normalized == "retrying":
             retrying.append(entry.label)
-        elif normalized in {"running", "queued", "waiting_for_input", "pending", "not_started"}:
+        elif normalized in {
+            "running",
+            "queued",
+            "waiting_for_input",
+            "pending",
+            "not_started",
+        }:
             pending.append(entry.label)
     return WorkflowStepBuckets(
         completed=completed,
@@ -123,7 +142,10 @@ def resolve_waiting_on(
 ) -> str | None:
     if pending_request is not None:
         return "human_input"
-    if any(str(operation.status or "").strip().lower() == "retrying" for operation in operations):
+    if any(
+        str(operation.status or "").strip().lower() == "retrying"
+        for operation in operations
+    ):
         return "retry_backoff"
     return None
 
@@ -170,8 +192,14 @@ def resolve_resume_execution_state(
         return False, "Completed executions cannot be restarted."
     if normalized_status not in {"running", "failed"}:
         return False, "Execution is not resumable."
-    normalized_checkpoint_kinds = {str(kind or "").strip().lower() for kind in checkpoint_kinds if str(kind).strip()}
-    if not normalized_checkpoint_kinds.intersection({"pm", "execution", "orchestrated"}):
+    normalized_checkpoint_kinds = {
+        str(kind or "").strip().lower()
+        for kind in checkpoint_kinds
+        if str(kind).strip()
+    }
+    if not normalized_checkpoint_kinds.intersection(
+        {"pm", "execution", "orchestrated"}
+    ):
         return False, "No resumable execution state is available."
     return True, None
 
@@ -191,7 +219,9 @@ def build_workflow_execution_state_read_model(
         if workflow_uses_run_state_path(workflow_type=workflow_type)
         else build_operation_path(workflow_type=workflow_type, operations=operations)
     )
-    waiting_on = resolve_waiting_on(pending_request=pending_request, operations=operations)
+    waiting_on = resolve_waiting_on(
+        pending_request=pending_request, operations=operations
+    )
     branches_taken, branches_available = resolve_branch_sets(runs=runs)
     can_resume, resume_unavailable_reason = resolve_resume_execution_state(
         workflow=workflow,
@@ -201,7 +231,9 @@ def build_workflow_execution_state_read_model(
         state_path=state_path,
         step_buckets=bucket_workflow_steps(state_path=state_path),
         waiting_on=waiting_on,
-        next_step=resolve_next_step(waiting_on=waiting_on, state_path=state_path, workflow=workflow),
+        next_step=resolve_next_step(
+            waiting_on=waiting_on, state_path=state_path, workflow=workflow
+        ),
         conditional_branches_taken=branches_taken,
         conditional_branches_available=branches_available,
         can_resume=can_resume,

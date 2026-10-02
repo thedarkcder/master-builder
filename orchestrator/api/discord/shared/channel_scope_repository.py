@@ -8,7 +8,9 @@ from orchestrator.storage.models import Tenant
 
 
 class SqlAlchemyDiscordChannelScopeRepository:
-    def resolve_project_scope(self, *, session: Session, tenant: Tenant, channel_id: str) -> ResolvedChannelScope | None:
+    def resolve_project_scope(
+        self, *, session: Session, tenant: Tenant, channel_id: str
+    ) -> ResolvedChannelScope | None:
         project = resolve_project_for_discord_channel(
             session=session,
             tenant_id=tenant.tenant_id,

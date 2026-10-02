@@ -12,14 +12,22 @@ from orchestrator.core.workflow.definition import (
 JIRA_PROJECT_RECONCILIATION_STEP_SCAN = "jira_project_scan"
 JIRA_PROJECT_RECONCILIATION_STEP_CLASSIFICATION = "jira_issue_classification"
 JIRA_PROJECT_RECONCILIATION_STEP_LABEL_RECONCILIATION = "jira_label_reconciliation"
-JIRA_PROJECT_RECONCILIATION_STEP_PARENT_RECONCILIATION = "parent_workflow_reconciliation"
+JIRA_PROJECT_RECONCILIATION_STEP_PARENT_RECONCILIATION = (
+    "parent_workflow_reconciliation"
+)
 JIRA_PROJECT_RECONCILIATION_STEP_SUMMARY = "reconciliation_summary"
 
 JIRA_PROJECT_RECONCILIATION_WU_PAGE_FETCH = "jira_project_scan.page_fetch"
-JIRA_PROJECT_RECONCILIATION_WU_ISSUE_DETAIL_FETCH = "jira_project_scan.issue_detail_fetch"
-JIRA_PROJECT_RECONCILIATION_WU_CLASSIFICATION_COMPUTE = "jira_issue_classification.compute"
+JIRA_PROJECT_RECONCILIATION_WU_ISSUE_DETAIL_FETCH = (
+    "jira_project_scan.issue_detail_fetch"
+)
+JIRA_PROJECT_RECONCILIATION_WU_CLASSIFICATION_COMPUTE = (
+    "jira_issue_classification.compute"
+)
 JIRA_PROJECT_RECONCILIATION_WU_LABEL_REPLACE = "jira_label_reconciliation.label_replace"
-JIRA_PROJECT_RECONCILIATION_WU_PARENT_UPSERT = "parent_workflow_reconciliation.parent_upsert"
+JIRA_PROJECT_RECONCILIATION_WU_PARENT_UPSERT = (
+    "parent_workflow_reconciliation.parent_upsert"
+)
 JIRA_PROJECT_RECONCILIATION_WU_SUMMARY_COMPUTE = "reconciliation_summary.compute"
 
 _EXTERNAL_RETRY = WorkflowWorkUnitRetryPolicy(

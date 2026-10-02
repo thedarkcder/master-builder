@@ -72,7 +72,7 @@ export default function HetznerInstallTutorialPage() {
                 <code>ORCHESTRATOR_SECRETS_ENCRYPTION_KEY</code>
               </li>
               <li>
-                <code>NEXTAUTH_SECRET</code>
+                <code>AUTH_SECRET</code>
               </li>
               <li>
                 <code>ORCHESTRATOR_EMAIL_FROM_ADDRESS</code> and provider secrets

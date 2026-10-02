@@ -17,7 +17,9 @@ branch_labels = None
 depends_on = None
 
 LEGACY_EXPO_WEB_START_COMMAND = "npx expo-cli start --web --non-interactive --host lan"
-INVALID_LEGACY_EXPO_WEB_START_COMMAND = "npx expo-cli start --web --non-interactive --host 0.0.0.0"
+INVALID_LEGACY_EXPO_WEB_START_COMMAND = (
+    "npx expo-cli start --web --non-interactive --host 0.0.0.0"
+)
 
 
 def _table_exists(table_name: str) -> bool:
@@ -29,11 +31,18 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
-def canonical_legacy_expo_web_host(*, detected_runtime: str | None, start_command: str | None) -> tuple[str | None, bool]:
-    if detected_runtime != "react_native_web" or start_command != INVALID_LEGACY_EXPO_WEB_START_COMMAND:
+def canonical_legacy_expo_web_host(
+    *, detected_runtime: str | None, start_command: str | None
+) -> tuple[str | None, bool]:
+    if (
+        detected_runtime != "react_native_web"
+        or start_command != INVALID_LEGACY_EXPO_WEB_START_COMMAND
+    ):
         return start_command, False
     return LEGACY_EXPO_WEB_START_COMMAND, True
 
@@ -51,17 +60,21 @@ def upgrade() -> None:
         sa.column("app_id", sa.String()),
         sa.column("start_command", sa.Text()),
     )
-    rows = bind.execute(
-        sa.text(
-            """
+    rows = (
+        bind.execute(
+            sa.text(
+                """
             SELECT app_id, detected_runtime, start_command
             FROM project_apps
             WHERE detected_runtime = 'react_native_web'
               AND start_command = :invalid_start_command
             """
-        ),
-        {"invalid_start_command": INVALID_LEGACY_EXPO_WEB_START_COMMAND},
-    ).mappings().all()
+            ),
+            {"invalid_start_command": INVALID_LEGACY_EXPO_WEB_START_COMMAND},
+        )
+        .mappings()
+        .all()
+    )
     for row in rows:
         updated_start_command, changed = canonical_legacy_expo_web_host(
             detected_runtime=row["detected_runtime"],

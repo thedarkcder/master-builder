@@ -98,7 +98,9 @@ class PMInterviewEvidence:
             "summary": self.summary,
             "content": self.content,
             "metadata": dict(self.metadata),
-            "captured_at": self.captured_at.isoformat() if self.captured_at is not None else None,
+            "captured_at": self.captured_at.isoformat()
+            if self.captured_at is not None
+            else None,
         }
         return {
             key: value
@@ -122,7 +124,9 @@ class PMInterviewAssessment:
             "brief": self.brief.to_payload(),
             "evidence": [item.to_payload() for item in self.evidence],
             "missing_slots": list(self.missing_slots),
-            "next_question": self.next_question.to_payload() if self.next_question is not None else None,
+            "next_question": self.next_question.to_payload()
+            if self.next_question is not None
+            else None,
             "ready_to_write": self.ready_to_write,
         }
 
@@ -132,6 +136,7 @@ class PMInterviewCaseResolution:
     status: str
     interview_case: PMInterviewCase | None = None
     matches: tuple[PMInterviewCase, ...] = ()
+
 
 _PM_INTERVIEW_REQUIRED_SLOT_KEYS = (
     "objective",
@@ -213,7 +218,9 @@ def _merge_text_list_with_explicit_clear(current: object, update: object) -> obj
     return current
 
 
-def normalize_pm_interview_brief(payload: Mapping[str, Any] | PMInterviewBrief | None) -> PMInterviewBrief:
+def normalize_pm_interview_brief(
+    payload: Mapping[str, Any] | PMInterviewBrief | None,
+) -> PMInterviewBrief:
     if isinstance(payload, PMInterviewBrief):
         return payload
     mapping = _normalize_mapping(payload)
@@ -257,13 +264,19 @@ def merge_pm_interview_brief(
             merged_payload[key] = _merge_text_or_list(current_value, update_value)
             continue
         if key in {"open_questions", "next_steps"}:
-            merged_payload[key] = _merge_text_list_with_explicit_clear(current_value, update_value)
+            merged_payload[key] = _merge_text_list_with_explicit_clear(
+                current_value, update_value
+            )
             continue
-        merged_payload[key] = update_value if update_value is not None else current_value
+        merged_payload[key] = (
+            update_value if update_value is not None else current_value
+        )
     return normalize_pm_interview_brief(merged_payload)
 
 
-def _evidence_update_payloads(evidence: Sequence[Mapping[str, Any] | PMInterviewEvidence] | None) -> tuple[PMInterviewEvidence, ...]:
+def _evidence_update_payloads(
+    evidence: Sequence[Mapping[str, Any] | PMInterviewEvidence] | None,
+) -> tuple[PMInterviewEvidence, ...]:
     if evidence is None:
         return ()
     normalized: list[PMInterviewEvidence] = []
@@ -275,7 +288,8 @@ def _evidence_update_payloads(evidence: Sequence[Mapping[str, Any] | PMInterview
         normalized.append(
             PMInterviewEvidence(
                 evidence_id=_normalized_text(mapping.get("evidence_id")) or uuid4().hex,
-                evidence_type=_normalized_text(mapping.get("evidence_type")) or "stakeholder_answer",
+                evidence_type=_normalized_text(mapping.get("evidence_type"))
+                or "stakeholder_answer",
                 source_ref=_normalized_text(mapping.get("source_ref")) or None,
                 title=_normalized_text(mapping.get("title")) or None,
                 summary=_normalized_text(mapping.get("summary")) or None,
@@ -354,11 +368,16 @@ def assess_pm_interview_brief(
 ) -> PMInterviewAssessment:
     normalized_brief = normalize_pm_interview_brief(brief)
     normalized_evidence = _evidence_update_payloads(evidence)
-    merged_brief = apply_pm_interview_evidence(brief=normalized_brief, evidence=normalized_evidence)
+    merged_brief = apply_pm_interview_evidence(
+        brief=normalized_brief, evidence=normalized_evidence
+    )
     missing_slots = pm_interview_missing_slots(brief=merged_brief)
 
     requested_status = _normalized_text(status_hint).lower()
-    if requested_status in {PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED}:
+    if requested_status in {
+        PM_INTERVIEW_STATUS_PM_COMPLETED,
+        PM_INTERVIEW_STATUS_ABANDONED,
+    }:
         return PMInterviewAssessment(
             status=requested_status,
             brief=merged_brief,
@@ -399,7 +418,8 @@ def pm_interview_case_from_row(row: PMInterviewCase) -> PMInterviewAssessment:
         status_hint=str(getattr(row, "status", "") or "").strip().lower() or None,
     )
     stored_question = _question_from_payload(
-        getattr(row, "next_question_json", None) or getattr(row, "current_question_json", None)
+        getattr(row, "next_question_json", None)
+        or getattr(row, "current_question_json", None)
     )
     if stored_question is None:
         return assessment
@@ -429,9 +449,13 @@ def resolve_pm_interview_case_match(
     if normalized_request_id:
         identifier_filters.append(PMInterviewCase.request_id == normalized_request_id)
     if normalized_thread_channel_id:
-        identifier_filters.append(PMInterviewCase.thread_channel_id == normalized_thread_channel_id)
+        identifier_filters.append(
+            PMInterviewCase.thread_channel_id == normalized_thread_channel_id
+        )
     if normalized_root_message_id:
-        identifier_filters.append(PMInterviewCase.root_message_id == normalized_root_message_id)
+        identifier_filters.append(
+            PMInterviewCase.root_message_id == normalized_root_message_id
+        )
     if normalized_channel_id and not identifier_filters:
         return PMInterviewCaseResolution(status="no_match")
     if not identifier_filters:
@@ -442,17 +466,33 @@ def resolve_pm_interview_case_match(
         PMInterviewCase.status.in_(PM_INTERVIEW_ACTIVE_STATUSES),
         or_(*identifier_filters),
     )
-    rows = session.execute(query.order_by(PMInterviewCase.updated_at.desc())).scalars().all()
+    rows = (
+        session.execute(query.order_by(PMInterviewCase.updated_at.desc()))
+        .scalars()
+        .all()
+    )
     if not rows:
         return PMInterviewCaseResolution(status="no_match")
 
     scored_rows: list[tuple[int, datetime, PMInterviewCase]] = []
     for row in rows:
-        if normalized_request_id and _normalized_text(getattr(row, "request_id", "")) != normalized_request_id:
+        if (
+            normalized_request_id
+            and _normalized_text(getattr(row, "request_id", ""))
+            != normalized_request_id
+        ):
             continue
-        if normalized_thread_channel_id and _normalized_text(getattr(row, "thread_channel_id", "")) != normalized_thread_channel_id:
+        if (
+            normalized_thread_channel_id
+            and _normalized_text(getattr(row, "thread_channel_id", ""))
+            != normalized_thread_channel_id
+        ):
             continue
-        if normalized_root_message_id and _normalized_text(getattr(row, "root_message_id", "")) != normalized_root_message_id:
+        if (
+            normalized_root_message_id
+            and _normalized_text(getattr(row, "root_message_id", ""))
+            != normalized_root_message_id
+        ):
             continue
         if normalized_owner_user_id:
             row_owner = _normalized_text(getattr(row, "owner_user_id", "")) or None
@@ -460,15 +500,35 @@ def resolve_pm_interview_case_match(
                 continue
 
         score = 0
-        if normalized_request_id and _normalized_text(getattr(row, "request_id", "")) == normalized_request_id:
+        if (
+            normalized_request_id
+            and _normalized_text(getattr(row, "request_id", ""))
+            == normalized_request_id
+        ):
             score += 100
-        if normalized_root_message_id and _normalized_text(getattr(row, "root_message_id", "")) == normalized_root_message_id:
+        if (
+            normalized_root_message_id
+            and _normalized_text(getattr(row, "root_message_id", ""))
+            == normalized_root_message_id
+        ):
             score += 80
-        if normalized_thread_channel_id and _normalized_text(getattr(row, "thread_channel_id", "")) == normalized_thread_channel_id:
+        if (
+            normalized_thread_channel_id
+            and _normalized_text(getattr(row, "thread_channel_id", ""))
+            == normalized_thread_channel_id
+        ):
             score += 60
-        if normalized_channel_id and _normalized_text(getattr(row, "channel_id", "")) == normalized_channel_id:
+        if (
+            normalized_channel_id
+            and _normalized_text(getattr(row, "channel_id", ""))
+            == normalized_channel_id
+        ):
             score += 20
-        if normalized_owner_user_id and _normalized_text(getattr(row, "owner_user_id", "")) == normalized_owner_user_id:
+        if (
+            normalized_owner_user_id
+            and _normalized_text(getattr(row, "owner_user_id", ""))
+            == normalized_owner_user_id
+        ):
             score += 10
         scored_rows.append((score, getattr(row, "updated_at", _now()), row))
 
@@ -477,10 +537,14 @@ def resolve_pm_interview_case_match(
 
     scored_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
     top_score = scored_rows[0][0]
-    top_rows = tuple(row for score, _updated_at, row in scored_rows if score == top_score)
+    top_rows = tuple(
+        row for score, _updated_at, row in scored_rows if score == top_score
+    )
     if len(top_rows) > 1:
         return PMInterviewCaseResolution(status="ambiguous", matches=top_rows)
-    return PMInterviewCaseResolution(status="matched", interview_case=top_rows[0], matches=top_rows)
+    return PMInterviewCaseResolution(
+        status="matched", interview_case=top_rows[0], matches=top_rows
+    )
 
 
 def resolve_pm_interview_case(
@@ -511,12 +575,16 @@ def _get_existing_pm_interview_case(
     tenant_id: str,
     request_id: str,
 ) -> PMInterviewCase | None:
-    return session.execute(
-        select(PMInterviewCase).where(
-            PMInterviewCase.tenant_id == _normalized_text(tenant_id),
-            PMInterviewCase.request_id == _normalized_text(request_id),
+    return (
+        session.execute(
+            select(PMInterviewCase).where(
+                PMInterviewCase.tenant_id == _normalized_text(tenant_id),
+                PMInterviewCase.request_id == _normalized_text(request_id),
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 def upsert_pm_interview_case(
@@ -545,7 +613,11 @@ def upsert_pm_interview_case(
     normalized_request_id = _normalized_text(request_id)
     normalized_source_kind = _normalized_text(source_kind) or "drafting"
     normalized_channel_id = _normalized_text(channel_id)
-    if not normalized_tenant_id or not normalized_request_id or not normalized_channel_id:
+    if (
+        not normalized_tenant_id
+        or not normalized_request_id
+        or not normalized_channel_id
+    ):
         raise ValueError("tenant_id, request_id, and channel_id are required")
 
     existing = _get_existing_pm_interview_case(
@@ -553,11 +625,20 @@ def upsert_pm_interview_case(
         tenant_id=normalized_tenant_id,
         request_id=normalized_request_id,
     )
-    current_brief = normalize_pm_interview_brief(getattr(existing, "brief_json", None) if existing else None)
+    current_brief = normalize_pm_interview_brief(
+        getattr(existing, "brief_json", None) if existing else None
+    )
     if brief is not None:
         current_brief = merge_pm_interview_brief(current=current_brief, updates=brief)
     normalized_evidence = _evidence_update_payloads(evidence)
-    all_evidence = tuple((normalize_pm_interview_evidence(getattr(existing, "evidence_json", None) or []) + normalized_evidence))
+    all_evidence = tuple(
+        (
+            normalize_pm_interview_evidence(
+                getattr(existing, "evidence_json", None) or []
+            )
+            + normalized_evidence
+        )
+    )
     assessment = assess_pm_interview_brief(
         brief=current_brief,
         evidence=all_evidence,
@@ -602,7 +683,10 @@ def upsert_pm_interview_case(
             notes_json=_json_safe_value(dict(notes or {})),
             created_at=now,
             updated_at=now,
-            closed_at=now if normalized_status in {PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED} else None,
+            closed_at=now
+            if normalized_status
+            in {PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED}
+            else None,
         )
         session.add(case)
         session.flush()
@@ -613,7 +697,9 @@ def upsert_pm_interview_case(
     case.source_kind = normalized_source_kind
     case.status = normalized_status
     case.channel_id = normalized_channel_id
-    case.thread_channel_id = _normalized_text(thread_channel_id) or case.thread_channel_id
+    case.thread_channel_id = (
+        _normalized_text(thread_channel_id) or case.thread_channel_id
+    )
     case.root_message_id = _normalized_text(root_message_id) or case.root_message_id
     case.owner_user_id = _normalized_text(owner_user_id) or case.owner_user_id
     case.source_text = _normalized_text(source_text) or case.source_text
@@ -626,19 +712,34 @@ def upsert_pm_interview_case(
     case.question_history_json = existing_history
     current_question_payload = _question_payload(current_question)
     next_question_payload = _question_payload(next_question)
-    if normalized_status in {PM_INTERVIEW_STATUS_READY_TO_WRITE, PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED}:
+    if normalized_status in {
+        PM_INTERVIEW_STATUS_READY_TO_WRITE,
+        PM_INTERVIEW_STATUS_PM_COMPLETED,
+        PM_INTERVIEW_STATUS_ABANDONED,
+    }:
         case.current_question_json = {}
         case.next_question_json = {}
     elif current_question_payload:
         case.current_question_json = current_question_payload
-    if normalized_status not in {PM_INTERVIEW_STATUS_READY_TO_WRITE, PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED} and next_question_payload:
+    if (
+        normalized_status
+        not in {
+            PM_INTERVIEW_STATUS_READY_TO_WRITE,
+            PM_INTERVIEW_STATUS_PM_COMPLETED,
+            PM_INTERVIEW_STATUS_ABANDONED,
+        }
+        and next_question_payload
+    ):
         case.next_question_json = next_question_payload
     case.missing_slots_json = list(assessment.missing_slots)
     merged_notes = dict(case.notes_json or {})
     merged_notes.update(_json_safe_value(dict(notes or {})))
     case.notes_json = merged_notes
     case.updated_at = now
-    if normalized_status in {PM_INTERVIEW_STATUS_PM_COMPLETED, PM_INTERVIEW_STATUS_ABANDONED}:
+    if normalized_status in {
+        PM_INTERVIEW_STATUS_PM_COMPLETED,
+        PM_INTERVIEW_STATUS_ABANDONED,
+    }:
         case.closed_at = now
     elif normalized_status == PM_INTERVIEW_STATUS_READY_TO_WRITE:
         case.closed_at = None
@@ -653,7 +754,9 @@ def append_pm_interview_evidence(
     request_id: str,
     evidence: Sequence[Mapping[str, Any] | PMInterviewEvidence],
 ) -> PMInterviewCase:
-    case = _get_existing_pm_interview_case(session=session, tenant_id=tenant_id, request_id=request_id)
+    case = _get_existing_pm_interview_case(
+        session=session, tenant_id=tenant_id, request_id=request_id
+    )
     if case is None:
         raise ValueError("PM interview case not found")
     existing_evidence = normalize_pm_interview_evidence(case.evidence_json or [])
@@ -664,7 +767,9 @@ def append_pm_interview_evidence(
         status_hint=case.status,
     )
     case.brief_json = assessment.brief.to_payload()
-    case.evidence_json = [item.to_payload() for item in existing_evidence + normalized_new_evidence]
+    case.evidence_json = [
+        item.to_payload() for item in existing_evidence + normalized_new_evidence
+    ]
     case.missing_slots_json = list(assessment.missing_slots)
     case.status = assessment.status
     case.updated_at = _now()
@@ -680,7 +785,9 @@ def mark_pm_interview_case_completed(
     parent_issue_key: str | None = None,
     notes: Mapping[str, Any] | None = None,
 ) -> PMInterviewCase:
-    case = _get_existing_pm_interview_case(session=session, tenant_id=tenant_id, request_id=request_id)
+    case = _get_existing_pm_interview_case(
+        session=session, tenant_id=tenant_id, request_id=request_id
+    )
     if case is None:
         raise ValueError("PM interview case not found")
     case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
@@ -703,7 +810,9 @@ def mark_pm_interview_case_abandoned(
     request_id: str,
     notes: Mapping[str, Any] | None = None,
 ) -> PMInterviewCase:
-    case = _get_existing_pm_interview_case(session=session, tenant_id=tenant_id, request_id=request_id)
+    case = _get_existing_pm_interview_case(
+        session=session, tenant_id=tenant_id, request_id=request_id
+    )
     if case is None:
         raise ValueError("PM interview case not found")
     case.status = PM_INTERVIEW_STATUS_ABANDONED
@@ -753,12 +862,16 @@ def normalize_parent_feature_brief_with_runtime(
         user_prompt=user_prompt,
     )
     if not isinstance(payload, dict):
-        raise CodexRuntimeError("Codex did not return a parent brief normalization JSON object")
+        raise CodexRuntimeError(
+            "Codex did not return a parent brief normalization JSON object"
+        )
     brief_payload = payload.get("brief")
     if not isinstance(brief_payload, Mapping):
         raise CodexRuntimeError("Codex did not return a normalized parent brief object")
     normalized_brief = normalize_pm_interview_brief(brief_payload)
-    assessment = assess_pm_interview_brief(brief=normalized_brief.to_payload(), evidence=())
+    assessment = assess_pm_interview_brief(
+        brief=normalized_brief.to_payload(), evidence=()
+    )
     questions = _normalized_text_list(payload.get("open_questions"))
     if not assessment.ready_to_write and not questions:
         raise CodexRuntimeError(
@@ -782,16 +895,22 @@ def pm_interview_question_from_payload(
         question = _normalized_text(payload.get("question"))
         examples = _normalized_text_list(payload.get("examples"))
         if question:
-            return PMInterviewQuestion(slot_key=slot_key, question=question, examples=examples)
+            return PMInterviewQuestion(
+                slot_key=slot_key, question=question, examples=examples
+            )
     return None
 
 
-def _question_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> dict[str, Any]:
+def _question_payload(
+    value: Mapping[str, Any] | PMInterviewQuestion | None,
+) -> dict[str, Any]:
     question = pm_interview_question_from_payload(value)
     return question.to_payload() if question is not None else {}
 
 
-def _question_from_payload(value: Mapping[str, Any] | PMInterviewQuestion | None) -> PMInterviewQuestion | None:
+def _question_from_payload(
+    value: Mapping[str, Any] | PMInterviewQuestion | None,
+) -> PMInterviewQuestion | None:
     return pm_interview_question_from_payload(value)
 
 
@@ -813,9 +932,15 @@ def plan_pm_interview_with_runtime(
     settings: Any | None = None,
 ) -> dict[str, Any]:
     normalized_brief = normalize_pm_interview_brief(brief)
-    normalized_evidence = [item.to_payload() for item in normalize_pm_interview_evidence(evidence)]
-    normalized_history = [dict(item) for item in history or [] if isinstance(item, Mapping)]
-    current_question_payload = current_question.to_payload() if current_question is not None else None
+    normalized_evidence = [
+        item.to_payload() for item in normalize_pm_interview_evidence(evidence)
+    ]
+    normalized_history = [
+        dict(item) for item in history or [] if isinstance(item, Mapping)
+    ]
+    current_question_payload = (
+        current_question.to_payload() if current_question is not None else None
+    )
 
     user_prompt = render_prompt(
         "discord/pm_interview_user.j2",
@@ -824,7 +949,9 @@ def plan_pm_interview_with_runtime(
         evidence_json=json.dumps(normalized_evidence),
         missing_slots_json=json.dumps(list(missing_slots)),
         current_question_json=json.dumps(current_question_payload or {}),
-        current_question_examples_json=json.dumps(list(current_question.examples) if current_question is not None else []),
+        current_question_examples_json=json.dumps(
+            list(current_question.examples) if current_question is not None else []
+        ),
         project_keys_json=json.dumps(project_keys),
         status_counts_json=json.dumps(status_counts),
         github_context_json=json.dumps(dict(github_context or {})),
@@ -847,7 +974,9 @@ def plan_pm_interview_with_runtime(
         raise CodexRuntimeError(str(exc)) from exc
 
     normalized_payload = parsed_payload.to_payload()
-    normalized_payload["brief"] = normalize_pm_interview_brief(parsed_payload.brief.to_payload()).to_payload()
+    normalized_payload["brief"] = normalize_pm_interview_brief(
+        parsed_payload.brief.to_payload()
+    ).to_payload()
     normalized_payload["missing_slots"] = list(missing_slots)
     normalized_payload["evidence"] = normalized_evidence
     return normalized_payload

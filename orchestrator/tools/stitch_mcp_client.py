@@ -52,7 +52,11 @@ def _parse_json_rpc_error(payload: dict[str, Any]) -> _JsonRpcError | None:
         return None
     code = err.get("code")
     message = str(err.get("message") or "rpc_error")
-    return _JsonRpcError(code=int(code) if code is not None else -32603, message=message, data=err.get("data"))
+    return _JsonRpcError(
+        code=int(code) if code is not None else -32603,
+        message=message,
+        data=err.get("data"),
+    )
 
 
 def parse_stitch_tool_mcp_result(result: dict[str, Any], *, tool_name: str) -> Any:
@@ -241,7 +245,9 @@ class StitchMcpClient:
             return result
         raise StitchMcpError("JSON-RPC response missing matching result")
 
-    def _send_request(self, payload: dict[str, Any], *, request_id: int) -> dict[str, Any]:
+    def _send_request(
+        self, payload: dict[str, Any], *, request_id: int
+    ) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
         lines_iter = self._post_stream_lines(body)
         buffered_lines: list[str] = []
@@ -279,17 +285,23 @@ class StitchMcpClient:
         try:
             payload_json = json.loads(rest_bytes.decode("utf-8"))
         except json.JSONDecodeError as exc:
-            raise StitchMcpError(f"Non-SSE non-JSON response: {rest_bytes[:300]!r}") from exc
+            raise StitchMcpError(
+                f"Non-SSE non-JSON response: {rest_bytes[:300]!r}"
+            ) from exc
         return self._json_rpc_result_dict(request_id=request_id, payload=payload_json)
 
-    def _send_notification(self, method: str, params: dict[str, Any] | None = None) -> None:
+    def _send_notification(
+        self, method: str, params: dict[str, Any] | None = None
+    ) -> None:
         note: dict[str, Any] = {"jsonrpc": JSONRPC_VERSION, "method": method}
         if params is not None:
             note["params"] = params
         body = json.dumps(note).encode("utf-8")
         resp, data = self._post_raw(body)
         if resp.status not in (200, 202):
-            raise StitchMcpError(f"Notification failed HTTP {resp.status}: {data[:300]!r}")
+            raise StitchMcpError(
+                f"Notification failed HTTP {resp.status}: {data[:300]!r}"
+            )
 
     def connect(self) -> None:
         req_id = self._alloc_id()
@@ -306,7 +318,9 @@ class StitchMcpClient:
         result = self._send_request(init_payload, request_id=req_id)
         protocol_version = str(result.get("protocolVersion") or "").strip()
         if protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
-            raise StitchMcpError(f"Unsupported MCP protocol version: {protocol_version!r}")
+            raise StitchMcpError(
+                f"Unsupported MCP protocol version: {protocol_version!r}"
+            )
         self._protocol_version = protocol_version
         self._send_notification("notifications/initialized")
 
@@ -316,7 +330,10 @@ class StitchMcpClient:
             "jsonrpc": JSONRPC_VERSION,
             "id": req_id,
             "method": "tools/call",
-            "params": {"name": str(name or "").strip(), "arguments": dict(arguments or {})},
+            "params": {
+                "name": str(name or "").strip(),
+                "arguments": dict(arguments or {}),
+            },
         }
         mcp_result = self._send_request(payload, request_id=req_id)
         return parse_stitch_tool_mcp_result(mcp_result, tool_name=name)
@@ -331,7 +348,9 @@ class StitchMcpClient:
         }
         result = self._send_request(payload, request_id=req_id)
         tools = result.get("tools")
-        return [t for t in tools if isinstance(t, dict)] if isinstance(tools, list) else []
+        return (
+            [t for t in tools if isinstance(t, dict)] if isinstance(tools, list) else []
+        )
 
     def close(self) -> None:
         if not self._session_id:

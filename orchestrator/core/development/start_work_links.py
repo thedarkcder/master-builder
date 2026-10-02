@@ -28,7 +28,9 @@ def create_start_work_action_token(
     ttl_seconds: int = DEFAULT_START_WORK_ACTION_TTL_SECONDS,
 ) -> str:
     normalized_secret = _required_secret(secret)
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(60, int(ttl_seconds)))
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        seconds=max(60, int(ttl_seconds))
+    )
     payload = {
         "action": START_WORK_ACTION,
         "tenant_id": _required("tenant_id", claims.tenant_id),
@@ -38,7 +40,9 @@ def create_start_work_action_token(
         "issue_key": _required("issue_key", claims.issue_key).upper(),
         "exp": int(expires_at.timestamp()),
     }
-    encoded_payload = _urlsafe_b64encode(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    encoded_payload = _urlsafe_b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
     signature = _signature(encoded_payload=encoded_payload, secret=normalized_secret)
     return f"{encoded_payload}.{signature}"
 
@@ -51,7 +55,9 @@ def verify_start_work_action_token(
 ) -> StartWorkActionTokenClaims:
     normalized_secret = _required_secret(secret)
     encoded_payload, signature = _split_token(token)
-    expected_signature = _signature(encoded_payload=encoded_payload, secret=normalized_secret)
+    expected_signature = _signature(
+        encoded_payload=encoded_payload, secret=normalized_secret
+    )
     if not hmac.compare_digest(signature, expected_signature):
         raise ValueError("Start work action token signature is invalid")
     payload = json.loads(_urlsafe_b64decode(encoded_payload).decode("utf-8"))
@@ -81,8 +87,12 @@ def build_start_work_action_url(
 ) -> str:
     base_url = str(admin_ui_base_url or "").strip().rstrip("/")
     if not base_url:
-        raise ValueError("Admin UI base URL is required to build a start work action link")
-    token = create_start_work_action_token(claims=claims, secret=secret, ttl_seconds=ttl_seconds)
+        raise ValueError(
+            "Admin UI base URL is required to build a start work action link"
+        )
+    token = create_start_work_action_token(
+        claims=claims, secret=secret, ttl_seconds=ttl_seconds
+    )
     path = f"/{quote(claims.tenant_id, safe='')}/start/{quote(claims.execution_id, safe='')}"
     return f"{base_url}{path}?{urlencode({'startDevelopmentToken': token})}"
 
@@ -98,7 +108,9 @@ def _split_token(token: str) -> tuple[str, str]:
 
 
 def _signature(*, encoded_payload: str, secret: str) -> str:
-    digest = hmac.new(secret.encode("utf-8"), encoded_payload.encode("ascii"), hashlib.sha256).digest()
+    digest = hmac.new(
+        secret.encode("utf-8"), encoded_payload.encode("ascii"), hashlib.sha256
+    ).digest()
     return _urlsafe_b64encode(digest)
 
 

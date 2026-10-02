@@ -47,7 +47,11 @@ def _loads_json(value: object) -> object:
 
 def _is_raw_secret_config_key(key: object) -> bool:
     normalized = str(key or "").strip().lower()
-    if not normalized or normalized.endswith("_secret_ref") or normalized.endswith("_secret_refs"):
+    if (
+        not normalized
+        or normalized.endswith("_secret_ref")
+        or normalized.endswith("_secret_refs")
+    ):
         return False
     if normalized == "secret_refs":
         return False
@@ -73,9 +77,11 @@ def _update_json_rows(*, table_name: str, id_column: str, json_column: str) -> N
     if not _table_exists(table_name):
         return
     bind = op.get_bind()
-    rows = bind.execute(
-        text(f"SELECT {id_column}, {json_column} FROM {table_name}")
-    ).mappings().all()
+    rows = (
+        bind.execute(text(f"SELECT {id_column}, {json_column} FROM {table_name}"))
+        .mappings()
+        .all()
+    )
     for row in rows:
         row_id = str(row.get(id_column) or "").strip()
         if not row_id:
@@ -85,7 +91,9 @@ def _update_json_rows(*, table_name: str, id_column: str, json_column: str) -> N
         if redacted == original:
             continue
         bind.execute(
-            text(f"UPDATE {table_name} SET {json_column} = :payload WHERE {id_column} = :row_id"),
+            text(
+                f"UPDATE {table_name} SET {json_column} = :payload WHERE {id_column} = :row_id"
+            ),
             {
                 "payload": json.dumps(redacted, sort_keys=True),
                 "row_id": row_id,
@@ -94,8 +102,12 @@ def _update_json_rows(*, table_name: str, id_column: str, json_column: str) -> N
 
 
 def upgrade() -> None:
-    _update_json_rows(table_name="projects", id_column="project_id", json_column="deployment_config")
-    _update_json_rows(table_name="project_apps", id_column="app_id", json_column="deployment_config")
+    _update_json_rows(
+        table_name="projects", id_column="project_id", json_column="deployment_config"
+    )
+    _update_json_rows(
+        table_name="project_apps", id_column="app_id", json_column="deployment_config"
+    )
     _update_json_rows(
         table_name="project_deployment_releases",
         id_column="release_id",

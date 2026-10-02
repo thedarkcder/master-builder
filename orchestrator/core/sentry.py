@@ -24,7 +24,9 @@ def initialize_sentry(
     )
     if _initialized_fingerprint is not None:
         if _initialized_fingerprint != fingerprint:
-            raise RuntimeError("Sentry has already been initialized with different settings")
+            raise RuntimeError(
+                "Sentry has already been initialized with different settings"
+            )
         logger.info(
             "sentry_already_initialized environment=%s release=%s traces_sample_rate=%s",
             settings.sentry_environment,

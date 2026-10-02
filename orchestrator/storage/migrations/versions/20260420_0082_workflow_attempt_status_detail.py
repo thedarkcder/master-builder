@@ -21,14 +21,22 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-    columns = {column["name"] for column in inspector.get_columns("workflow_operation_attempts")}
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("workflow_operation_attempts")
+    }
 
     if "status_detail" not in columns:
         if bind.dialect.name == "sqlite":
             with op.batch_alter_table("workflow_operation_attempts") as batch_op:
-                batch_op.add_column(sa.Column("status_detail", sa.Text(), nullable=True))
+                batch_op.add_column(
+                    sa.Column("status_detail", sa.Text(), nullable=True)
+                )
         else:
-            op.add_column("workflow_operation_attempts", sa.Column("status_detail", sa.Text(), nullable=True))
+            op.add_column(
+                "workflow_operation_attempts",
+                sa.Column("status_detail", sa.Text(), nullable=True),
+            )
 
     bind.execute(
         sa.text(
@@ -47,7 +55,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = inspect(bind)
-    columns = {column["name"] for column in inspector.get_columns("workflow_operation_attempts")}
+    columns = {
+        column["name"]
+        for column in inspector.get_columns("workflow_operation_attempts")
+    }
     if "status_detail" in columns:
         bind.execute(
             sa.text(

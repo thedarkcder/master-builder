@@ -26,11 +26,12 @@ def is_supported_audio_attachment(attachment: dict[str, str]) -> bool:
     return Path(filename).suffix in _SUPPORTED_AUDIO_EXTENSIONS
 
 
-def select_first_supported_audio_attachment(attachments: list[dict[str, str]]) -> dict[str, str] | None:
+def select_first_supported_audio_attachment(
+    attachments: list[dict[str, str]],
+) -> dict[str, str] | None:
     for attachment in attachments:
         if not isinstance(attachment, dict):
             continue
         if is_supported_audio_attachment(attachment):
             return attachment
     return None
-

@@ -60,21 +60,39 @@ def upgrade() -> None:
             sa.Column("pushed_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.UniqueConstraint("run_id", "artifact_kind", name="uq_workflow_execution_artifacts_run_kind"),
+            sa.UniqueConstraint(
+                "run_id",
+                "artifact_kind",
+                name="uq_workflow_execution_artifacts_run_kind",
+            ),
         )
         op.create_index(
             "ix_workflow_execution_artifacts_tenant_project",
             "workflow_execution_artifacts",
             ["tenant_id", "project_id"],
         )
-        op.create_index("ix_workflow_execution_artifacts_workflow_id", "workflow_execution_artifacts", ["workflow_id"])
-        op.create_index("ix_workflow_execution_artifacts_run_id", "workflow_execution_artifacts", ["run_id"])
-        op.create_index("ix_workflow_execution_artifacts_status", "workflow_execution_artifacts", ["status"])
+        op.create_index(
+            "ix_workflow_execution_artifacts_workflow_id",
+            "workflow_execution_artifacts",
+            ["workflow_id"],
+        )
+        op.create_index(
+            "ix_workflow_execution_artifacts_run_id",
+            "workflow_execution_artifacts",
+            ["run_id"],
+        )
+        op.create_index(
+            "ix_workflow_execution_artifacts_status",
+            "workflow_execution_artifacts",
+            ["status"],
+        )
 
     if bind.dialect.name == "postgresql":
         op.execute("ALTER TABLE workflow_execution_artifacts ENABLE ROW LEVEL SECURITY")
         op.execute("ALTER TABLE workflow_execution_artifacts FORCE ROW LEVEL SECURITY")
-        op.execute("DROP POLICY IF EXISTS workflow_execution_artifacts_tenant_isolation ON workflow_execution_artifacts")
+        op.execute(
+            "DROP POLICY IF EXISTS workflow_execution_artifacts_tenant_isolation ON workflow_execution_artifacts"
+        )
         op.execute(
             """
             CREATE POLICY workflow_execution_artifacts_tenant_isolation

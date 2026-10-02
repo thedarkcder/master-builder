@@ -6,7 +6,9 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.project_app_artifact_pr_runtime import create_project_app_artifact_pr
+from orchestrator.core.project_app_artifact_pr_runtime import (
+    create_project_app_artifact_pr,
+)
 from orchestrator.core.project_app_planner import (
     ProjectAppAnalysisResult,
     ProjectAppAnalysisRunMetadata,
@@ -23,7 +25,11 @@ def _git(repo_dir: Path, *args: str) -> str:
         check=False,
     )
     if process.returncode != 0:
-        raise RuntimeError(process.stderr.strip() or process.stdout.strip() or f"git {' '.join(args)} failed")
+        raise RuntimeError(
+            process.stderr.strip()
+            or process.stdout.strip()
+            or f"git {' '.join(args)} failed"
+        )
     return process.stdout
 
 
@@ -44,7 +50,9 @@ def _init_repo(root: Path) -> Path:
     return repo_dir
 
 
-def _analysis_result(candidate: ProjectAppNormalizedCandidate) -> ProjectAppAnalysisResult:
+def _analysis_result(
+    candidate: ProjectAppNormalizedCandidate,
+) -> ProjectAppAnalysisResult:
     return ProjectAppAnalysisResult(
         apps=(candidate,),
         metadata=ProjectAppAnalysisRunMetadata(
@@ -66,7 +74,9 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_create_project_app_artifact_pr_generates_missing_dockerfile_and_opens_pr() -> None:
+def test_create_project_app_artifact_pr_generates_missing_dockerfile_and_opens_pr() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         repo_dir = _init_repo(Path(tmp))
         candidate = ProjectAppNormalizedCandidate(
@@ -100,7 +110,9 @@ def test_create_project_app_artifact_pr_generates_missing_dockerfile_and_opens_p
 
             def create_pull_request(self, **kwargs):  # noqa: ANN003
                 captured.update(kwargs)
-                return SimpleNamespace(number=17, html_url="https://github.com/example/repo/pull/17")
+                return SimpleNamespace(
+                    number=17, html_url="https://github.com/example/repo/pull/17"
+                )
 
         with (
             patch(
@@ -120,7 +132,11 @@ def test_create_project_app_artifact_pr_generates_missing_dockerfile_and_opens_p
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", name="Project 1", github_repository="https://github.com/example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                ),
                 checkout_path=str(repo_dir),
                 analysis_run_id="analysis-run-1",
                 analysis_result=_analysis_result(candidate),
@@ -133,7 +149,10 @@ def test_create_project_app_artifact_pr_generates_missing_dockerfile_and_opens_p
         assert result.generated_files == ("Dockerfile",)
         dockerfile = (repo_dir / "Dockerfile").read_text(encoding="utf-8")
         assert "FROM python:3.12-slim" in dockerfile
-        assert 'CMD ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port 8000"]' in dockerfile
+        assert (
+            'CMD ["sh", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port 8000"]'
+            in dockerfile
+        )
         assert captured["head_branch"] == "project-app-artifacts/analysis-run-1"
         assert captured["base_branch"] == "main"
         assert captured["repo_full_name"] == "example/repo"
@@ -141,7 +160,9 @@ def test_create_project_app_artifact_pr_generates_missing_dockerfile_and_opens_p
         assert "- Dockerfile" in captured["body"]
 
 
-def test_create_project_app_artifact_pr_returns_existing_pr_without_writing_files() -> None:
+def test_create_project_app_artifact_pr_returns_existing_pr_without_writing_files() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         repo_dir = _init_repo(Path(tmp))
         candidate = ProjectAppNormalizedCandidate(
@@ -170,10 +191,14 @@ def test_create_project_app_artifact_pr_returns_existing_pr_without_writing_file
                 return "token-123"
 
             def find_open_pull_request(self, **_kwargs):  # noqa: ANN003
-                return SimpleNamespace(number=99, html_url="https://github.com/example/repo/pull/99")
+                return SimpleNamespace(
+                    number=99, html_url="https://github.com/example/repo/pull/99"
+                )
 
             def create_pull_request(self, **_kwargs):  # noqa: ANN003
-                raise AssertionError("create_pull_request should not be called when an open PR exists")
+                raise AssertionError(
+                    "create_pull_request should not be called when an open PR exists"
+                )
 
         with patch(
             "orchestrator.core.project_app_artifact_pr_runtime.github_client_from_tenant_config",
@@ -183,7 +208,11 @@ def test_create_project_app_artifact_pr_returns_existing_pr_without_writing_file
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", name="Project 1", github_repository="https://github.com/example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                ),
                 checkout_path=str(repo_dir),
                 analysis_run_id="analysis-run-1",
                 analysis_result=_analysis_result(candidate),
@@ -197,7 +226,9 @@ def test_create_project_app_artifact_pr_returns_existing_pr_without_writing_file
         assert _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
 
 
-def test_create_project_app_artifact_pr_generates_compose_file_for_docker_compose_strategy() -> None:
+def test_create_project_app_artifact_pr_generates_compose_file_for_docker_compose_strategy() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         repo_dir = _init_repo(Path(tmp))
         candidate = ProjectAppNormalizedCandidate(
@@ -229,7 +260,9 @@ def test_create_project_app_artifact_pr_generates_compose_file_for_docker_compos
                 return None
 
             def create_pull_request(self, **_kwargs):  # noqa: ANN003
-                return SimpleNamespace(number=21, html_url="https://github.com/example/repo/pull/21")
+                return SimpleNamespace(
+                    number=21, html_url="https://github.com/example/repo/pull/21"
+                )
 
         with patch(
             "orchestrator.core.project_app_artifact_pr_runtime.github_client_from_tenant_config",
@@ -239,24 +272,35 @@ def test_create_project_app_artifact_pr_generates_compose_file_for_docker_compos
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", name="Project 1", github_repository="https://github.com/example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                ),
                 checkout_path=str(repo_dir),
                 analysis_run_id="analysis-run-2",
                 analysis_result=_analysis_result(candidate),
             )
 
         assert result is not None
-        compose_file = (repo_dir / "frontend" / "docker-compose.yml").read_text(encoding="utf-8")
+        compose_file = (repo_dir / "frontend" / "docker-compose.yml").read_text(
+            encoding="utf-8"
+        )
         assert "image: node:20-slim" in compose_file
         assert 'command: ["sh", "-lc", "npm run start"]' in compose_file
-        assert '3000:3000' in compose_file
+        assert "3000:3000" in compose_file
 
 
-def test_create_project_app_artifact_pr_does_not_regenerate_or_commit_when_files_already_exist() -> None:
+def test_create_project_app_artifact_pr_does_not_regenerate_or_commit_when_files_already_exist() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         repo_dir = _init_repo(Path(tmp))
         _write(repo_dir / "Dockerfile", "FROM python:3.12-slim\nEXPOSE 8000\n")
-        _write(repo_dir / "frontend" / "docker-compose.yml", "services:\n  app:\n    image: python:3.12-slim\n")
+        _write(
+            repo_dir / "frontend" / "docker-compose.yml",
+            "services:\n  app:\n    image: python:3.12-slim\n",
+        )
         _git(repo_dir, "add", "-A")
         _git(repo_dir, "commit", "-m", "add generated files")
         _git(repo_dir, "push", "-u", "origin", "main")
@@ -353,7 +397,9 @@ def test_create_project_app_artifact_pr_does_not_regenerate_or_commit_when_files
 
             def create_pull_request(self, **kwargs):  # noqa: ANN003
                 create_pull_request_calls.append(kwargs)
-                return SimpleNamespace(number=21, html_url="https://github.com/example/repo/pull/21")
+                return SimpleNamespace(
+                    number=21, html_url="https://github.com/example/repo/pull/21"
+                )
 
         with patch(
             "orchestrator.core.project_app_artifact_pr_runtime.github_client_from_tenant_config",
@@ -363,7 +409,11 @@ def test_create_project_app_artifact_pr_does_not_regenerate_or_commit_when_files
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", name="Project 1", github_repository="https://github.com/example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                ),
                 checkout_path=str(repo_dir),
                 analysis_run_id="analysis-run-4",
                 analysis_result=analysis_result,
@@ -373,11 +423,17 @@ def test_create_project_app_artifact_pr_does_not_regenerate_or_commit_when_files
         assert create_pull_request_calls == []
         assert _git(repo_dir, "rev-parse", "HEAD").strip() == head_before
         assert _git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
-        assert (repo_dir / "Dockerfile").read_text(encoding="utf-8") == "FROM python:3.12-slim\nEXPOSE 8000\n"
-        assert (repo_dir / "frontend" / "docker-compose.yml").read_text(encoding="utf-8") == "services:\n  app:\n    image: python:3.12-slim\n"
+        assert (repo_dir / "Dockerfile").read_text(
+            encoding="utf-8"
+        ) == "FROM python:3.12-slim\nEXPOSE 8000\n"
+        assert (repo_dir / "frontend" / "docker-compose.yml").read_text(
+            encoding="utf-8"
+        ) == "services:\n  app:\n    image: python:3.12-slim\n"
 
 
-def test_create_project_app_artifact_pr_ignores_nixpacks_candidates_without_generated_files() -> None:
+def test_create_project_app_artifact_pr_ignores_nixpacks_candidates_without_generated_files() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         repo_dir = _init_repo(Path(tmp))
         candidate = ProjectAppNormalizedCandidate(
@@ -411,7 +467,9 @@ def test_create_project_app_artifact_pr_ignores_nixpacks_candidates_without_gene
 
             def create_pull_request(self, **kwargs):  # noqa: ANN003
                 create_pull_request_calls.append(kwargs)
-                return SimpleNamespace(number=21, html_url="https://github.com/example/repo/pull/21")
+                return SimpleNamespace(
+                    number=21, html_url="https://github.com/example/repo/pull/21"
+                )
 
         with patch(
             "orchestrator.core.project_app_artifact_pr_runtime.github_client_from_tenant_config",
@@ -421,7 +479,11 @@ def test_create_project_app_artifact_pr_ignores_nixpacks_candidates_without_gene
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", name="Project 1", github_repository="https://github.com/example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                ),
                 checkout_path=str(repo_dir),
                 analysis_run_id="analysis-run-3",
                 analysis_result=_analysis_result(candidate),

@@ -9,12 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
+from orchestrator.core.jira_project_reconciliation.start import (
+    start_jira_project_reconciliation,
+)
 from orchestrator.core.observability.logging import configure_logging
 from orchestrator.core.observability.otel_telemetry import initialize_telemetry
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
+from orchestrator.storage.run_queue_events import (
+    is_postgres_database_url,
+    postgres_dsn_from_database_url,
+)
 
 try:
     import psycopg
@@ -69,7 +74,12 @@ def run_scheduled_jira_project_reconciliation_pass(
                 settings=settings,
                 tenant=tenant,
                 project=project,
-                max_items=max(1, int(getattr(settings, "jira_project_reconciliation_max_items", 1000))),
+                max_items=max(
+                    1,
+                    int(
+                        getattr(settings, "jira_project_reconciliation_max_items", 1000)
+                    ),
+                ),
                 trigger_event="scheduled_reconciliation",
             )
         )
@@ -92,9 +102,25 @@ class JiraProjectReconciliationRuntime:
             raise RuntimeError("Jira project reconciliation runtime requires psycopg")
 
         stop_event = threading.Event()
-        lock_key = int(getattr(self._settings, "jira_project_reconciliation_lock_key", 947102033132))
-        poll_seconds = max(5, int(getattr(self._settings, "jira_project_reconciliation_poll_seconds", 30)))
-        interval_seconds = max(30, int(getattr(self._settings, "jira_project_reconciliation_interval_seconds", 1800)))
+        lock_key = int(
+            getattr(
+                self._settings, "jira_project_reconciliation_lock_key", 947102033132
+            )
+        )
+        poll_seconds = max(
+            5,
+            int(
+                getattr(self._settings, "jira_project_reconciliation_poll_seconds", 30)
+            ),
+        )
+        interval_seconds = max(
+            30,
+            int(
+                getattr(
+                    self._settings, "jira_project_reconciliation_interval_seconds", 1800
+                )
+            ),
+        )
         dsn = postgres_dsn_from_database_url(self._settings.database_url)
 
         def _request_stop() -> None:
@@ -116,7 +142,10 @@ class JiraProjectReconciliationRuntime:
                     if not _try_acquire_leader_lock(conn=conn, lock_key=lock_key):
                         stop_event.wait(timeout=poll_seconds)
                         continue
-                    logger.info("jira_project_reconciliation_leader_acquired lock_key=%s", lock_key)
+                    logger.info(
+                        "jira_project_reconciliation_leader_acquired lock_key=%s",
+                        lock_key,
+                    )
                     while not stop_event.is_set():
                         with self._session_factory() as session:
                             scheduled = run_scheduled_jira_project_reconciliation_pass(
@@ -134,9 +163,14 @@ class JiraProjectReconciliationRuntime:
                             step = min(poll_seconds, interval_seconds - waited)
                             stop_event.wait(timeout=step)
                             waited += step
-                    logger.info("jira_project_reconciliation_leader_released lock_key=%s", lock_key)
+                    logger.info(
+                        "jira_project_reconciliation_leader_released lock_key=%s",
+                        lock_key,
+                    )
             except Exception as exc:  # noqa: BLE001
-                logger.exception("jira_project_reconciliation_runtime_loop_failed error=%s", exc)
+                logger.exception(
+                    "jira_project_reconciliation_runtime_loop_failed error=%s", exc
+                )
                 stop_event.wait(timeout=poll_seconds)
         logger.info("jira_project_reconciliation_runtime_stopped")
 

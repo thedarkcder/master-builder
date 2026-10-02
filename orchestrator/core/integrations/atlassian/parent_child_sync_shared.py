@@ -159,7 +159,9 @@ def extract_parent_issue_key(*, child_detail: JiraIssueDetail) -> str | None:
     return None
 
 
-def material_parent_changed_fields(*, payload: dict[str, Any], extract_changed_fields_fn) -> list[str]:  # noqa: ANN001
+def material_parent_changed_fields(
+    *, payload: dict[str, Any], extract_changed_fields_fn
+) -> list[str]:  # noqa: ANN001
     changed_fields = extract_changed_fields_fn(payload)
     material: list[str] = []
     seen: set[str] = set()
@@ -167,7 +169,10 @@ def material_parent_changed_fields(*, payload: dict[str, Any], extract_changed_f
         normalized = str(changed_field or "").strip().casefold()
         if normalized in {"status", "labels"}:
             continue
-        if normalized in _PARENT_SYNC_MATERIAL_FIELDS or normalized in {"summary", "description"}:
+        if normalized in _PARENT_SYNC_MATERIAL_FIELDS or normalized in {
+            "summary",
+            "description",
+        }:
             if normalized not in seen:
                 seen.add(normalized)
                 material.append(normalized)
@@ -178,7 +183,9 @@ def normalize_status_name(value: str | None) -> str:
     return str(value or "").strip().casefold()
 
 
-def parent_board_entry_target_status(*, payload: dict[str, Any], extract_status_transition_fn) -> str | None:  # noqa: ANN001
+def parent_board_entry_target_status(
+    *, payload: dict[str, Any], extract_status_transition_fn
+) -> str | None:  # noqa: ANN001
     from_status, to_status = extract_status_transition_fn(payload)
     normalized_to_status = normalize_status_name(to_status)
     if normalized_to_status not in _PARENT_BOARD_ENTRY_STATUSES:
@@ -203,8 +210,12 @@ def build_parent_resync_prompt(
     child_details: list[JiraIssueDetail],
     changed_fields: list[str],
 ) -> str:
-    child_block = "\n\n".join(build_child_snapshot_markdown(detail) for detail in child_details)
-    changed_lines = "\n".join(f"- {field}" for field in changed_fields) or "- description"
+    child_block = "\n\n".join(
+        build_child_snapshot_markdown(detail) for detail in child_details
+    )
+    changed_lines = (
+        "\n".join(f"- {field}" for field in changed_fields) or "- description"
+    )
     return (
         "Refresh the existing Jira parent/child hierarchy from the latest PM parent issue edit.\n\n"
         f"## Parent feature\n"
@@ -245,8 +256,12 @@ def build_clarification_followup_prompt(
                     f"- {source_child_key or 'child'} asked: {original_question}\n"
                     f"  Product clarification needed: {stakeholder_question}"
                 )
-    child_block = "\n\n".join(build_child_snapshot_markdown(detail) for detail in child_details)
-    questions_block = "\n".join(pending_lines) or "- No prior clarification prompts were captured."
+    child_block = "\n\n".join(
+        build_child_snapshot_markdown(detail) for detail in child_details
+    )
+    questions_block = (
+        "\n".join(pending_lines) or "- No prior clarification prompts were captured."
+    )
     return (
         "Update the existing Jira parent/child hierarchy using the PM clarification reply below.\n\n"
         f"## Parent feature\n"
@@ -268,7 +283,9 @@ def build_clarification_followup_prompt(
     )
 
 
-def combined_child_updates(*, seed_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+def combined_child_updates(
+    *, seed_data: dict[str, Any]
+) -> tuple[list[str], list[str], list[str]]:
     updated_children = [
         str(value).strip().upper()
         for value in seed_data.get("updated_children", [])
@@ -283,12 +300,18 @@ def combined_child_updates(*, seed_data: dict[str, Any]) -> tuple[list[str], lis
     return updated_children, created_children, changed_children
 
 
-def sync_completion_note(*, updated_children: list[str], created_children: list[str]) -> str:
+def sync_completion_note(
+    *, updated_children: list[str], created_children: list[str]
+) -> str:
     parts: list[str] = ["Parent feature sync complete after Jira edit."]
     if updated_children:
-        parts.append(f"Refreshed engineering child tickets: {', '.join(updated_children)}.")
+        parts.append(
+            f"Refreshed engineering child tickets: {', '.join(updated_children)}."
+        )
     if created_children:
-        parts.append(f"Created engineering child tickets: {', '.join(created_children)}.")
+        parts.append(
+            f"Created engineering child tickets: {', '.join(created_children)}."
+        )
     if not updated_children and not created_children:
         parts.append("No engineering child changes were required.")
     return " ".join(parts)
@@ -318,11 +341,17 @@ def fanout_completion_note(
     skipped_children: list[str],
     failed_children: list[str],
 ) -> str:
-    parts = [f"Parent feature moved onto the board. Promoted engineering child tickets to {target_status}: {', '.join(promoted_children)}." if promoted_children else f"Parent feature moved onto the board. No engineering child tickets needed promotion to {target_status}."]
+    parts = [
+        f"Parent feature moved onto the board. Promoted engineering child tickets to {target_status}: {', '.join(promoted_children)}."
+        if promoted_children
+        else f"Parent feature moved onto the board. No engineering child tickets needed promotion to {target_status}."
+    ]
     if unchanged_children:
         parts.append(f"Already on board or terminal: {', '.join(unchanged_children)}.")
     if skipped_children:
-        parts.append(f"Skipped non-engineering children: {', '.join(skipped_children)}.")
+        parts.append(
+            f"Skipped non-engineering children: {', '.join(skipped_children)}."
+        )
     if failed_children:
         parts.append(f"Failed to promote: {', '.join(failed_children)}.")
     return " ".join(parts)

@@ -11,8 +11,8 @@ import {
 } from "./support/admin-ui";
 
 test("project routes use project-scoped nav with a project picker instead of in-page section tabs", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
-  const exampleProject = makeProject({ tenant_id: tenant.tenant_id, project_id: "example-default", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
+  const exampleProject = makeProject({ tenant_id: tenant.tenant_id, project_id: "example-workspace-default", name: "Example Workspace" });
   const paymentsProject = makeProject({ tenant_id: tenant.tenant_id, project_id: "payments", name: "Payments" });
 
   await seedAdminSession(page);
@@ -20,56 +20,56 @@ test("project routes use project-scoped nav with a project picker instead of in-
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/example") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/example/project-navigation") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/project-navigation") {
       return fulfillJson(route, [exampleProject, paymentsProject]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default") return fulfillJson(route, exampleProject);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps") return fulfillJson(route, []);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/analysis-runs") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default") return fulfillJson(route, exampleProject);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/analysis-runs") return fulfillJson(route, []);
     return route.fallback();
   });
 
-  await page.goto("/example/projects/example-default/deployments");
+  await page.goto("/example-workspace/projects/example-workspace-default/deployments");
 
-  await expect(page.getByRole("link", { name: "Back to Route 25 workspace" })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: "Back to Example Workspace workspace" })).toHaveAttribute(
     "href",
-    "/example/dashboard",
+    "/example-workspace/dashboard",
   );
-  await expect(page.getByLabel("Project")).toHaveValue("example-default");
-  await expect(page.getByRole("link", { name: "Board" })).toHaveAttribute("href", "/example/projects/example-default");
-  await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/example/projects/example-default/knowledge");
-  await expect(page.getByRole("link", { name: "Architecture" })).toHaveAttribute("href", "/example/projects/example-default/architecture");
+  await expect(page.getByLabel("Project")).toHaveValue("example-workspace-default");
+  await expect(page.getByRole("link", { name: "Board" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default");
+  await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default/knowledge");
+  await expect(page.getByRole("link", { name: "Architecture" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default/architecture");
   await expect(page.locator("summary").filter({ hasText: "Deployments" })).toHaveCount(0);
   await expect(page.locator("summary").filter({ hasText: "Development" })).toBeVisible();
   await expect(page.locator("summary").filter({ hasText: "Delivery" })).toBeVisible();
   await expect(page.locator("summary")).toHaveText(["Work", "Project", "Development", "Delivery"]);
-  await expect(page.getByRole("link", { name: "Releases" })).toHaveAttribute("href", "/example/projects/example-default/deployments");
-  await expect(page.getByRole("link", { name: "Policy" })).toHaveAttribute("href", "/example/projects/example-default/deployment");
+  await expect(page.getByRole("link", { name: "Releases" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default/deployments");
+  await expect(page.getByRole("link", { name: "Policy" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default/deployment");
   await page.locator("summary").filter({ hasText: "Project" }).click();
   await page.locator("summary").filter({ hasText: "Development" }).click();
-  await expect(page.getByRole("link", { name: "Webhooks" })).toHaveAttribute("href", "/example/projects/example-default/webhooks");
-  await expect(page.getByRole("link", { name: "Installs" })).toHaveAttribute("href", "/example/projects/example-default/installs");
+  await expect(page.getByRole("link", { name: "Webhooks" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default/webhooks");
+  await expect(page.getByRole("link", { name: "Installs" })).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default/installs");
   await expect(page.getByLabel("Project sections")).toBeHidden();
 
   await page.getByLabel("Project").selectOption("payments");
-  await expect(page).toHaveURL(/\/example\/projects\/payments\/deployments$/);
+  await expect(page).toHaveURL(/\/example-workspace\/projects\/payments\/deployments$/);
 
-  await page.goto("/example/projects/example-default/architecture");
+  await page.goto("/example-workspace/projects/example-workspace-default/architecture");
   await page.getByLabel("Project").selectOption("payments");
-  await expect(page).toHaveURL(/\/example\/projects\/payments\/architecture$/);
+  await expect(page).toHaveURL(/\/example-workspace\/projects\/payments\/architecture$/);
 });
 
 test("deployment detail header exposes a deployment selector", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
-  const project = makeProject({ tenant_id: tenant.tenant_id, project_id: "example-default", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
+  const project = makeProject({ tenant_id: tenant.tenant_id, project_id: "example-workspace-default", name: "Example Workspace" });
   const web = makeProjectAppRecord({
     app_id: "web",
     tenant_id: tenant.tenant_id,
     project_id: project.project_id,
     name: "docker",
     slug: "docker",
-    source_path: "api/docker",
+    source_path: ".",
     latest_release_name: "main @ abcdef12",
     latest_release_status: "live",
     latest_release_git_ref: "main",
@@ -81,6 +81,7 @@ test("deployment detail header exposes a deployment selector", async ({ page }) 
     project_id: project.project_id,
     name: "API",
     slug: "api",
+    source_path: ".",
   });
 
   await seedAdminSession(page);
@@ -88,13 +89,13 @@ test("deployment detail header exposes a deployment selector", async ({ page }) 
     const url = new URL(route.request().url());
     const pathname = url.pathname.replace(/\/$/, "");
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
-    if (pathname === "/api/bff/api/admin/tenants/example") return fulfillJson(route, tenant);
-    if (pathname === "/api/bff/api/admin/tenants/example/project-navigation") return fulfillJson(route, [project]);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default") return fulfillJson(route, project);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps") return fulfillJson(route, [web, api]);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/analysis-runs") return fulfillJson(route, []);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/web") return fulfillJson(route, web);
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/api") return fulfillJson(route, api);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/project-navigation") return fulfillJson(route, [project]);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps") return fulfillJson(route, [web, api]);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/analysis-runs") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/web") return fulfillJson(route, web);
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/api") return fulfillJson(route, api);
     if (pathname.endsWith("/deployment-config")) {
       return fulfillJson(route, makeProjectAppDeploymentConfig({ app_id: pathname.includes("/apps/api/") ? api.app_id : web.app_id }));
     }
@@ -140,15 +141,21 @@ test("deployment detail header exposes a deployment selector", async ({ page }) 
     return route.fallback();
   });
 
-  await page.goto("/example/projects/example-default/deployments/web");
+  await page.route("https://web.example.test/**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: "<!doctype html><title>Example deployment preview</title>",
+  }));
 
-  await expect(page.getByLabel("Deployment selector")).toHaveValue("web");
-  await expect(page.locator("#deployment-selector option:checked")).toHaveText("main @ abcdef12");
+  await page.goto("/example-workspace/projects/example-workspace-default/deployments/web");
+
+  await expect(page.getByLabel("Deployment selector")).toHaveValue("app:web");
+  await expect(page.locator("#deployment-selector option:checked")).toHaveText("Main: main @ abcdef12");
   await expect(page.getByRole("heading", { name: "main @ abcdef12" })).toBeVisible();
   await expect(page.locator("iframe[title='main @ abcdef12 preview']")).toHaveAttribute("src", "https://web.example.test");
   await expect(page.locator("iframe[title='main @ abcdef12 preview']")).toHaveCSS("width", "1440px");
   await expect(page.getByText("api/docker")).toHaveCount(0);
   await expect(page.getByText("docker", { exact: true })).toHaveCount(0);
-  await page.getByLabel("Deployment selector").selectOption("api");
-  await expect(page).toHaveURL(/\/example\/projects\/example-default\/deployments\/api$/);
+  await page.getByLabel("Deployment selector").selectOption("app:api");
+  await expect(page).toHaveURL(/\/example-workspace\/projects\/example-workspace-default\/deployments\/api$/);
 });

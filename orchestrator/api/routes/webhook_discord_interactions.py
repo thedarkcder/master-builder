@@ -16,8 +16,12 @@ from orchestrator.api.discord.interactions.auth import (
     _resolve_discord_interactions_public_key,
     _validate_discord_interaction_signature,
 )
-from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
-from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
+from orchestrator.api.discord.shared.state_repository import (
+    resolve_project_for_discord_channel,
+)
+from orchestrator.api.webhooks.payload_utils import (
+    read_json_payload as _read_json_payload,
+)
 from orchestrator.api.transport_runtime import execute_http_ingress_result
 from orchestrator.core.communications import (
     DiscordInteractionResponseAction,
@@ -39,6 +43,7 @@ from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
 
 router = APIRouter(tags=["discord-interactions"])
 logger = logging.getLogger(__name__)
+
 
 def _http_result_from_interaction_result(result: IngressResult) -> IngressResult:
     http_actions: list[TransportAction] = []
@@ -64,8 +69,12 @@ async def ingest_discord_interaction(
     settings = get_settings()
     request_id = request.headers.get("X-Request-Id") or str(uuid4())
 
-    payload, payload_bytes = await _read_json_payload(request, request_id=request_id, source="discord")
-    public_key = _resolve_discord_interactions_public_key(session=session, settings=settings)
+    payload, payload_bytes = await _read_json_payload(
+        request, request_id=request_id, source="discord"
+    )
+    public_key = _resolve_discord_interactions_public_key(
+        session=session, settings=settings
+    )
     _validate_discord_interaction_signature(
         request=request,
         payload_bytes=payload_bytes,

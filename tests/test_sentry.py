@@ -3,7 +3,10 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.api.main import create_app
-from orchestrator.core.sentry import _reset_sentry_initialization_for_tests, initialize_sentry
+from orchestrator.core.sentry import (
+    _reset_sentry_initialization_for_tests,
+    initialize_sentry,
+)
 
 
 class SentryInitializationTests(unittest.TestCase):
@@ -59,7 +62,9 @@ class SentryInitializationTests(unittest.TestCase):
         self.assertTrue(initialize_sentry(settings=settings, init_fn=_fake_init))
         self.assertEqual(calls, 1)
 
-    def test_initialize_sentry_rejects_changed_settings_after_initialization(self) -> None:
+    def test_initialize_sentry_rejects_changed_settings_after_initialization(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             sentry_dsn="https://examplePublicKey@o0.ingest.sentry.io/0",
             sentry_environment="staging",
@@ -74,7 +79,9 @@ class SentryInitializationTests(unittest.TestCase):
         )
 
         self.assertTrue(initialize_sentry(settings=settings, init_fn=lambda **_: None))
-        with self.assertRaisesRegex(RuntimeError, "already been initialized with different settings"):
+        with self.assertRaisesRegex(
+            RuntimeError, "already been initialized with different settings"
+        ):
             initialize_sentry(settings=changed_settings, init_fn=lambda **_: None)
 
     def test_create_app_initializes_sentry(self) -> None:

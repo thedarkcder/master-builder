@@ -68,7 +68,9 @@ def list_due_project_automations(
                 ProjectAutomation.enabled.is_(True),
                 ProjectAutomation.next_run_at <= now,
             )
-            .order_by(ProjectAutomation.next_run_at.asc(), ProjectAutomation.created_at.asc())
+            .order_by(
+                ProjectAutomation.next_run_at.asc(), ProjectAutomation.created_at.asc()
+            )
         ).scalars()
     )
 
@@ -82,7 +84,9 @@ def get_execution_by_dedupe_key(
     if not normalized:
         return None
     return session.execute(
-        select(ProjectAutomationExecution).where(ProjectAutomationExecution.dedupe_key == normalized)
+        select(ProjectAutomationExecution).where(
+            ProjectAutomationExecution.dedupe_key == normalized
+        )
     ).scalar_one_or_none()
 
 

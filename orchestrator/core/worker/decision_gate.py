@@ -6,7 +6,9 @@ from orchestrator.core.platform.dashboard_links import admin_run_url
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 from orchestrator.core.runs.service import mark_run_terminal
 from orchestrator.core.worker.run_not_ready import derive_run_not_ready_outcome
-from orchestrator.core.worker.readiness import evaluate_worker_decision as evaluate_worker_readiness_decision
+from orchestrator.core.worker.readiness import (
+    evaluate_worker_decision as evaluate_worker_readiness_decision,
+)
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
 from orchestrator.core.worker.stage_events import run_not_ready_update
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -29,7 +31,9 @@ def _load_live_issue_context(
     issue_description = fallback_description
     issue_labels: list[str] | None = None
     try:
-        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context_fn(
+            session=session, tenant=tenant, settings=settings
+        )
         client = getattr(oauth, "client", None)
         connection = getattr(oauth, "connection", None)
         access_token = getattr(oauth, "access_token", None)
@@ -41,11 +45,18 @@ def _load_live_issue_context(
             cloud_id=str(cloud_id),
             issue_id_or_key=issue_key,
         )
-        issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or issue_summary
-        issue_description = str(getattr(issue_detail, "description", "") or "").strip() or issue_description
+        issue_summary = (
+            str(getattr(issue_detail, "summary", "") or "").strip() or issue_summary
+        )
+        issue_description = (
+            str(getattr(issue_detail, "description", "") or "").strip()
+            or issue_description
+        )
         labels_raw = getattr(issue_detail, "labels", None)
         if isinstance(labels_raw, (list, tuple, set)):
-            issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+            issue_labels = [
+                str(label).strip() for label in labels_raw if str(label).strip()
+            ]
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "worker_issue_context_refresh_failed tenant_id=%s issue_key=%s error=%s",
@@ -71,7 +82,9 @@ def apply_decision_gate(
     failed_status: str,
     mark_run_terminal_fn=None,
 ) -> tuple[object | None, dict | None]:
-    terminalizer = mark_run_terminal if mark_run_terminal_fn is None else mark_run_terminal_fn
+    terminalizer = (
+        mark_run_terminal if mark_run_terminal_fn is None else mark_run_terminal_fn
+    )
     project = resolve_project_for_run(session, run=run)
     issue_summary, issue_description, issue_labels = _load_live_issue_context(
         session=session,
@@ -136,13 +149,17 @@ def apply_decision_gate(
         )
         return terminal_run, None
 
-    jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
+    jira_url = tenant_jira_issue_url(
+        session=session, tenant=tenant, issue_key=run.issue_key
+    )
     stage_update = run_not_ready_update(
         tenant_id=run.tenant_id,
         issue_key=run.issue_key,
         run_id=run.run_id,
         jira_url=jira_url,
-        run_url=admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id),
+        run_url=admin_run_url(
+            admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id
+        ),
         reason=run_not_ready.reason,
         next_steps=run_not_ready.next_steps,
     )
@@ -158,7 +175,9 @@ def apply_decision_gate(
     )
     snapshot.events.stage_updates = [stage_update.to_payload()]
     snapshot.context.execution_context["run_not_ready"] = run_not_ready.dump()
-    snapshot.context.execution_context["pre_check_outcome"] = run_not_ready.pre_check_outcome
+    snapshot.context.execution_context["pre_check_outcome"] = (
+        run_not_ready.pre_check_outcome
+    )
     run.plan = snapshot.dump()
     terminal_run = terminalizer(
         session=session,

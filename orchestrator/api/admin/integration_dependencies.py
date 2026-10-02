@@ -97,10 +97,14 @@ def refresh_atlassian_connection_tokens(
     )
 
 
-def project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
+def project_for_tenant_or_404(
+    *, session: Session, tenant_id: str, project_id: str
+) -> Project:
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     return project
 
 

@@ -29,7 +29,9 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -60,7 +62,11 @@ def upgrade() -> None:
             sa.column("project_id", sa.String()),
             sa.column("deployment_config", sa.JSON()),
         )
-        rows = bind.execute(sa.text("SELECT project_id, deployment_config FROM projects")).mappings().all()
+        rows = (
+            bind.execute(sa.text("SELECT project_id, deployment_config FROM projects"))
+            .mappings()
+            .all()
+        )
         for row in rows:
             current = _coerce_dict(row["deployment_config"])
             policy: dict[str, Any] = {}
@@ -69,25 +75,39 @@ def upgrade() -> None:
                 branch = _normalize_branch(current.get("production_branch"))
                 if branch is not None:
                     policy["production_branch"] = branch
-            elif current.get("enabled") is True and _normalize_branch(current.get("production_branch")) is not None:
+            elif (
+                current.get("enabled") is True
+                and _normalize_branch(current.get("production_branch")) is not None
+            ):
                 policy["enabled"] = True
-                policy["production_branch"] = _normalize_branch(current.get("production_branch"))
+                policy["production_branch"] = _normalize_branch(
+                    current.get("production_branch")
+                )
             bind.execute(
                 projects_table.update()
                 .where(projects_table.c.project_id == row["project_id"])
                 .values(deployment_config=policy)
             )
 
-    if _table_exists("project_apps") and _column_exists("project_apps", "deployment_config"):
+    if _table_exists("project_apps") and _column_exists(
+        "project_apps", "deployment_config"
+    ):
         project_apps_table = sa.table(
             "project_apps",
             sa.column("app_id", sa.String()),
             sa.column("deployment_config", sa.JSON()),
         )
-        rows = bind.execute(sa.text("SELECT app_id, deployment_config FROM project_apps")).mappings().all()
+        rows = (
+            bind.execute(sa.text("SELECT app_id, deployment_config FROM project_apps"))
+            .mappings()
+            .all()
+        )
         for row in rows:
             current = _coerce_dict(row["deployment_config"])
-            if "auto_deploy_enabled" not in current and "production_branch" not in current:
+            if (
+                "auto_deploy_enabled" not in current
+                and "production_branch" not in current
+            ):
                 continue
             current.pop("auto_deploy_enabled", None)
             current.pop("production_branch", None)

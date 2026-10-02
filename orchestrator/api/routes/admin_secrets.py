@@ -42,7 +42,9 @@ def _build_tenant_secret_ref(*, tenant_id: str, secret_key: str) -> str:
 
 def _require_tenant_exists(*, session: Session, tenant_id: str) -> None:
     if session.get(Tenant, tenant_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
 
 @router.get("/secrets", response_model=list[ManagedSecretRead])
@@ -70,7 +72,9 @@ def upsert_secret(
             encryption_key=settings.secrets_encryption_key,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return _secret_metadata_to_schema(metadata)
 
 
@@ -93,7 +97,9 @@ def resolve_secret(
             encryption_key=settings.secrets_encryption_key,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return ManagedSecretResolveResult(
         secret_ref=metadata.secret_ref,
         source=metadata.source,
@@ -107,10 +113,14 @@ def delete_secret(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    metadata = platform_secret_service.resolve_secret_metadata(session=session, secret_ref=secret_ref)
+    metadata = platform_secret_service.resolve_secret_metadata(
+        session=session, secret_ref=secret_ref
+    )
     row = session.get(ManagedSecret, metadata.secret_ref)
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found"
+        )
     session.delete(row)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -127,7 +137,9 @@ def list_tenant_secrets(
     return [_secret_metadata_to_schema(metadata) for metadata in refs]
 
 
-@router.put("/tenants/{tenant_id}/secrets/{secret_key:path}", response_model=ManagedSecretRead)
+@router.put(
+    "/tenants/{tenant_id}/secrets/{secret_key:path}", response_model=ManagedSecretRead
+)
 def upsert_tenant_secret(
     tenant_id: str,
     secret_key: str,
@@ -147,11 +159,15 @@ def upsert_tenant_secret(
             tenant_id=tenant_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return _secret_metadata_to_schema(metadata)
 
 
-@router.post("/tenants/{tenant_id}/secrets/resolve", response_model=ManagedSecretResolveResult)
+@router.post(
+    "/tenants/{tenant_id}/secrets/resolve", response_model=ManagedSecretResolveResult
+)
 def resolve_tenant_secret(
     tenant_id: str,
     payload: ManagedSecretResolveRequest,
@@ -160,7 +176,9 @@ def resolve_tenant_secret(
 ) -> ManagedSecretResolveResult:
     settings = get_settings()
     _require_tenant_exists(session=session, tenant_id=tenant_id)
-    secret_ref = _build_tenant_secret_ref(tenant_id=tenant_id, secret_key=payload.secret_ref)
+    secret_ref = _build_tenant_secret_ref(
+        tenant_id=tenant_id, secret_key=payload.secret_ref
+    )
     metadata = tenant_secret_service.resolve_secret_metadata(
         session=session,
         secret_ref=secret_ref,
@@ -179,7 +197,10 @@ def resolve_tenant_secret(
     )
 
 
-@router.delete("/tenants/{tenant_id}/secrets/{secret_key:path}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/tenants/{tenant_id}/secrets/{secret_key:path}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 def delete_tenant_secret(
     tenant_id: str,
     secret_key: str,
@@ -195,7 +216,9 @@ def delete_tenant_secret(
     )
     row = session.get(ManagedSecret, secret_ref)
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Managed secret not found"
+        )
     session.delete(row)
     session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

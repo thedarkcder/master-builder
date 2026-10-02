@@ -63,9 +63,17 @@ class IngressDecision:
             guidance_for_precheck_block_reason,
         )
 
-        if self.pre_check is None or not applied_labels or not isinstance(self.pre_check, PreRunCheckResult):
+        if (
+            self.pre_check is None
+            or not applied_labels
+            or not isinstance(self.pre_check, PreRunCheckResult)
+        ):
             return self
-        normalized_applied = {str(label).strip().casefold() for label in applied_labels if str(label).strip()}
+        normalized_applied = {
+            str(label).strip().casefold()
+            for label in applied_labels
+            if str(label).strip()
+        }
         if not normalized_applied:
             return self
 
@@ -81,7 +89,9 @@ class IngressDecision:
             and updated_pre_check.required_worker_label.casefold() in normalized_applied
             and not updated_pre_check.required_worker_label_present
         ):
-            updated_pre_check = replace(updated_pre_check, required_worker_label_present=True)
+            updated_pre_check = replace(
+                updated_pre_check, required_worker_label_present=True
+            )
 
         updated_block_reason = blocking_reason_for_precheck(updated_pre_check)
         return IngressDecision(
@@ -171,7 +181,11 @@ class PrecheckOutcome(str, Enum):
 
     @property
     def is_decision_block(self) -> bool:
-        return self in {self.DECISION_GATE_REQUIRED, self.GTD_REQUIRED, self.EXECUTION_BLOCKED}
+        return self in {
+            self.DECISION_GATE_REQUIRED,
+            self.GTD_REQUIRED,
+            self.EXECUTION_BLOCKED,
+        }
 
 
 class JiraConfigKey(str, Enum):
@@ -262,7 +276,9 @@ def tenant_jira_ready_statuses(tenant: object | None) -> tuple[str, ...]:
 
 
 def tenant_ready_trigger_mode(tenant: object | None) -> str:
-    raw_mode = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.READY_TRIGGER_MODE)
+    raw_mode = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.READY_TRIGGER_MODE
+    )
     if raw_mode is None:
         return "status_recheck"
     normalized_mode = raw_mode.lower()
@@ -323,7 +339,9 @@ class DecisionEngineResult:
     outbox_effect_ids: tuple[str, ...]
     duplicate_event: bool
     execution_gate: ExecutionGateResolution = field(
-        default_factory=lambda: ExecutionGateResolution(state=ExecutionGateState.ALLOW_EXECUTION)
+        default_factory=lambda: ExecutionGateResolution(
+            state=ExecutionGateState.ALLOW_EXECUTION
+        )
     )
 
     @property

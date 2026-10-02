@@ -16,7 +16,11 @@ def rewrite_plain_text_command(
 ) -> str:  # noqa: ANN001
     raw_command = str(payload.command or "")
     normalized_command = raw_command.strip()
-    if not allow_plain_ask or not normalized_command or normalized_command.startswith("!"):
+    if (
+        not allow_plain_ask
+        or not normalized_command
+        or normalized_command.startswith("!")
+    ):
         return raw_command
 
     normalized_channel_id = str(payload.channel_id or "").strip()

@@ -74,7 +74,9 @@ class ProjectMigrationTests(unittest.TestCase):
                     "github_config": json.dumps(github_config),
                     "repos_config": json.dumps(repos_config),
                     "policy_config": json.dumps(policy_config),
-                    "discord_config": json.dumps(discord_config) if discord_config is not None else None,
+                    "discord_config": json.dumps(discord_config)
+                    if discord_config is not None
+                    else None,
                     "created_at": created_at.isoformat(),
                     "updated_at": updated_at.isoformat(),
                 },
@@ -118,7 +120,9 @@ class ProjectMigrationTests(unittest.TestCase):
                     "policy_overrides": json.dumps({}),
                     "environment": json.dumps({}),
                     "secret_refs": json.dumps({}),
-                    "discord_config": json.dumps(discord_config) if discord_config is not None else None,
+                    "discord_config": json.dumps(discord_config)
+                    if discord_config is not None
+                    else None,
                     "is_archived": False,
                     "created_at": created_at.isoformat(),
                     "updated_at": updated_at.isoformat(),
@@ -126,7 +130,9 @@ class ProjectMigrationTests(unittest.TestCase):
             )
             session.commit()
 
-    def test_project_migration_backfills_default_project_from_existing_tenant(self) -> None:
+    def test_project_migration_backfills_default_project_from_existing_tenant(
+        self,
+    ) -> None:
         self._alembic_upgrade("20260207_0006")
         session_factory = create_session_factory(database_url=self.database_url)
         now = datetime.now(timezone.utc)
@@ -162,21 +168,33 @@ class ProjectMigrationTests(unittest.TestCase):
         self._alembic_upgrade("head")
 
         with session_factory() as session:
-            projects = session.execute(select(Project).where(Project.tenant_id == "tenant-one")).scalars().all()
+            projects = (
+                session.execute(
+                    select(Project).where(Project.tenant_id == "tenant-one")
+                )
+                .scalars()
+                .all()
+            )
             self.assertEqual(len(projects), 1)
             project = projects[0]
             self.assertEqual(project.project_id, "tenant-one-default")
             self.assertEqual(project.name, "project-one")
-            self.assertEqual(project.github_repository, "https://github.com/example/project-one")
+            self.assertEqual(
+                project.github_repository, "https://github.com/example/project-one"
+            )
             self.assertEqual(project.jira_project_key, "ABC")
             self.assertFalse(project.is_archived)
 
         # Upgrade to head again should not create duplicates.
         self._alembic_upgrade("head")
         with session_factory() as session:
-            project_count = session.execute(
-                select(Project).where(Project.tenant_id == "tenant-one")
-            ).scalars().all()
+            project_count = (
+                session.execute(
+                    select(Project).where(Project.tenant_id == "tenant-one")
+                )
+                .scalars()
+                .all()
+            )
             self.assertEqual(len(project_count), 1)
 
     def test_thread_channels_migrate_from_tenant_to_project_scope(self) -> None:
@@ -229,10 +247,18 @@ class ProjectMigrationTests(unittest.TestCase):
             project_discord = dict(project.discord_config or {})
             self.assertNotIn("ask_thread_channel_ids", tenant_discord)
             self.assertNotIn("seed_followup_thread_channel_ids", tenant_discord)
-            self.assertIn("discord-ask-thread-1", project_discord.get("ask_thread_channel_ids", []))
-            self.assertIn("discord-seed-thread-1", project_discord.get("seed_followup_thread_channel_ids", []))
+            self.assertIn(
+                "discord-ask-thread-1",
+                project_discord.get("ask_thread_channel_ids", []),
+            )
+            self.assertIn(
+                "discord-seed-thread-1",
+                project_discord.get("seed_followup_thread_channel_ids", []),
+            )
 
-    def test_thread_channels_keep_unresolved_tenant_entries_for_multi_project_tenants(self) -> None:
+    def test_thread_channels_keep_unresolved_tenant_entries_for_multi_project_tenants(
+        self,
+    ) -> None:
         self._alembic_upgrade("20260209_0011")
         session_factory = create_session_factory(database_url=self.database_url)
         now = datetime.now(timezone.utc)
@@ -254,8 +280,14 @@ class ProjectMigrationTests(unittest.TestCase):
             },
             discord_config={
                 "channel_id": "discord-main",
-                "ask_thread_channel_ids": ["discord-app-thread", "discord-unmapped-thread"],
-                "seed_followup_thread_channel_ids": ["discord-seed-thread", "discord-unmapped-seed-thread"],
+                "ask_thread_channel_ids": [
+                    "discord-app-thread",
+                    "discord-unmapped-thread",
+                ],
+                "seed_followup_thread_channel_ids": [
+                    "discord-seed-thread",
+                    "discord-unmapped-seed-thread",
+                ],
                 "seed_followups": [
                     {
                         "channel_ids": ["discord-app-thread", "discord-seed-thread"],
@@ -296,8 +328,14 @@ class ProjectMigrationTests(unittest.TestCase):
             self.assertIsNotNone(app_project)
             tenant_discord = dict(tenant.discord_config or {})
             app_project_discord = dict(app_project.discord_config or {})
-            self.assertIn("discord-app-thread", app_project_discord.get("ask_thread_channel_ids", []))
-            self.assertIn("discord-seed-thread", app_project_discord.get("seed_followup_thread_channel_ids", []))
+            self.assertIn(
+                "discord-app-thread",
+                app_project_discord.get("ask_thread_channel_ids", []),
+            )
+            self.assertIn(
+                "discord-seed-thread",
+                app_project_discord.get("seed_followup_thread_channel_ids", []),
+            )
             self.assertEqual(
                 tenant_discord.get("ask_thread_channel_ids"),
                 ["discord-unmapped-thread"],

@@ -23,7 +23,9 @@ WEBHOOK_TRANSPORT_DISCORD_INTERACTION = "discord_interaction"
 WEBHOOK_TRANSPORT_PROJECT_AUTOMATION = "project_automation"
 WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT = "coolify_deployment_webhook"
 WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS = "project_app_analysis"
-WEBHOOK_SUBJECT_BATCH_TRANSPORTS = frozenset({WEBHOOK_TRANSPORT_JIRA, WEBHOOK_TRANSPORT_GITHUB})
+WEBHOOK_SUBJECT_BATCH_TRANSPORTS = frozenset(
+    {WEBHOOK_TRANSPORT_JIRA, WEBHOOK_TRANSPORT_GITHUB}
+)
 
 _LEASE_DURATION = timedelta(minutes=5)
 
@@ -114,7 +116,9 @@ def enqueue_webhook_job(
             )
         ).scalar_one_or_none()
         if existing is not None:
-            return WebhookJobEnqueueResult(created=False, reason="duplicate_delivery", job=existing)
+            return WebhookJobEnqueueResult(
+                created=False, reason="duplicate_delivery", job=existing
+            )
 
     job = WebhookJob(
         job_id=str(uuid4()),
@@ -154,7 +158,9 @@ def enqueue_webhook_job(
         ).scalar_one_or_none()
         if existing is None:
             raise
-        return WebhookJobEnqueueResult(created=False, reason="duplicate_delivery", job=existing)
+        return WebhookJobEnqueueResult(
+            created=False, reason="duplicate_delivery", job=existing
+        )
     session.flush()
     session.refresh(job)
     return WebhookJobEnqueueResult(created=True, reason=None, job=job)
@@ -267,12 +273,16 @@ def _claim_job_batch_for_candidate(
     ):
         return None
 
-    batch_query = select(WebhookJob).where(
-        WebhookJob.transport == candidate.transport,
-        WebhookJob.subject_key == candidate.subject_key,
-        WebhookJob.available_at <= now,
-        _claimable_job_filter(now),
-    ).order_by(WebhookJob.created_at.asc())
+    batch_query = (
+        select(WebhookJob)
+        .where(
+            WebhookJob.transport == candidate.transport,
+            WebhookJob.subject_key == candidate.subject_key,
+            WebhookJob.available_at <= now,
+            _claimable_job_filter(now),
+        )
+        .order_by(WebhookJob.created_at.asc())
+    )
     if candidate.transport not in WEBHOOK_SUBJECT_BATCH_TRANSPORTS:
         batch_query = batch_query.where(WebhookJob.job_id == candidate.job_id)
     if _is_postgres(session):
@@ -311,10 +321,14 @@ def claim_next_webhook_subject_batch(
     now: datetime | None = None,
 ) -> WebhookJobBatchClaimResult:
     timestamp = now or _now()
-    candidate_query = select(WebhookJob.job_id).where(
-        WebhookJob.available_at <= timestamp,
-        _claimable_job_filter(timestamp),
-    ).order_by(WebhookJob.created_at.asc())
+    candidate_query = (
+        select(WebhookJob.job_id)
+        .where(
+            WebhookJob.available_at <= timestamp,
+            _claimable_job_filter(timestamp),
+        )
+        .order_by(WebhookJob.created_at.asc())
+    )
     candidate_ids = [row[0] for row in session.execute(candidate_query).all()]
     for job_id in candidate_ids:
         batch = _claim_job_batch_for_candidate(
@@ -327,7 +341,9 @@ def claim_next_webhook_subject_batch(
             session.rollback()
             continue
         return WebhookJobBatchClaimResult(acquired=True, reason=None, batch=batch)
-    return WebhookJobBatchClaimResult(acquired=False, reason="no_pending_job", batch=None)
+    return WebhookJobBatchClaimResult(
+        acquired=False, reason="no_pending_job", batch=None
+    )
 
 
 def _finalize_jobs(
@@ -380,9 +396,7 @@ def _finalize_job_ids(
         refreshed.append(persisted)
     session.flush()
     subject_keys = {
-        job.subject_key
-        for job in refreshed
-        if str(job.subject_key or "").strip()
+        job.subject_key for job in refreshed if str(job.subject_key or "").strip()
     }
     for subject_key in subject_keys:
         _release_subject_claim(
@@ -429,9 +443,7 @@ def requeue_webhook_job_ids(
         refreshed.append(persisted)
     session.flush()
     subject_keys = {
-        job.subject_key
-        for job in refreshed
-        if str(job.subject_key or "").strip()
+        job.subject_key for job in refreshed if str(job.subject_key or "").strip()
     }
     for subject_key in subject_keys:
         _release_subject_claim(

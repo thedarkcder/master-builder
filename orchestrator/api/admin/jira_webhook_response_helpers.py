@@ -27,7 +27,9 @@ def build_jira_webhook_diagnostics(
     jira_webhook_callback_url_fn,
     parse_managed_webhook_ids_fn,
 ) -> JiraWebhookDiagnosticsRead:  # noqa: ANN001
-    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = jira_config_text(
+        jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID
+    )
     connected = bool(connection_id)
     last_received_at_raw = jira_config.get("webhook_last_received_at")
     last_received_at = (
@@ -38,7 +40,9 @@ def build_jira_webhook_diagnostics(
     recent_delivery_ok = False
     if last_received_at:
         try:
-            parsed_last_received = datetime.fromisoformat(last_received_at.replace("Z", "+00:00"))
+            parsed_last_received = datetime.fromisoformat(
+                last_received_at.replace("Z", "+00:00")
+            )
             threshold = datetime.now(timezone.utc) - timedelta(minutes=within_minutes)
             recent_delivery_ok = parsed_last_received >= threshold
         except ValueError:
@@ -47,7 +51,9 @@ def build_jira_webhook_diagnostics(
     return JiraWebhookDiagnosticsRead(
         tenant_id=tenant_id,
         connected=connected,
-        webhook_url=jira_webhook_callback_url_fn(settings=settings, tenant_id=tenant_id),
+        webhook_url=jira_webhook_callback_url_fn(
+            settings=settings, tenant_id=tenant_id
+        ),
         managed_webhook_ids=parse_managed_webhook_ids_fn(jira_config),
         last_provisioned_at=jira_config.get("webhook_last_provisioned_at"),
         last_received_at=last_received_at,

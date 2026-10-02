@@ -21,24 +21,34 @@ def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     if not _has_column("workflow_types", "system_key"):
         if bind.dialect.name != "sqlite":
-            op.add_column("workflow_types", sa.Column("system_key", sa.String(length=64), nullable=True))
+            op.add_column(
+                "workflow_types",
+                sa.Column("system_key", sa.String(length=64), nullable=True),
+            )
         else:
             with op.batch_alter_table("workflow_types") as batch_op:
-                batch_op.add_column(sa.Column("system_key", sa.String(length=64), nullable=True))
+                batch_op.add_column(
+                    sa.Column("system_key", sa.String(length=64), nullable=True)
+                )
 
     bind.execute(
         sa.text(
@@ -54,19 +64,30 @@ def upgrade() -> None:
         )
     )
 
-    missing = bind.execute(sa.text("SELECT COUNT(*) FROM workflow_types WHERE system_key IS NULL")).scalar_one()
+    missing = bind.execute(
+        sa.text("SELECT COUNT(*) FROM workflow_types WHERE system_key IS NULL")
+    ).scalar_one()
     if missing:
-        raise RuntimeError("workflow_types contains rows without a backfilled system_key")
+        raise RuntimeError(
+            "workflow_types contains rows without a backfilled system_key"
+        )
 
     if bind.dialect.name != "sqlite":
         op.alter_column("workflow_types", "system_key", nullable=False)
         if not _has_index("workflow_types", "ix_workflow_types_system_key"):
-            op.create_index("ix_workflow_types_system_key", "workflow_types", ["system_key"], unique=True)
+            op.create_index(
+                "ix_workflow_types_system_key",
+                "workflow_types",
+                ["system_key"],
+                unique=True,
+            )
     else:
         with op.batch_alter_table("workflow_types") as batch_op:
             batch_op.alter_column("system_key", nullable=False)
             if not _has_index("workflow_types", "ix_workflow_types_system_key"):
-                batch_op.create_index("ix_workflow_types_system_key", ["system_key"], unique=True)
+                batch_op.create_index(
+                    "ix_workflow_types_system_key", ["system_key"], unique=True
+                )
 
 
 def downgrade() -> None:

@@ -56,7 +56,9 @@ def _dumps_json(value: dict[str, str]) -> str:
 def _project_secret_ref(*, tenant_id: str, project_id: str, secret_key: str) -> str:
     normalized_key = normalize_secret_ref(secret_key)
     if normalized_key.startswith(("platform/", "tenant/", "project/")):
-        raise ValueError("Project secret variable names must not include a scope prefix")
+        raise ValueError(
+            "Project secret variable names must not include a scope prefix"
+        )
     return f"project/{tenant_id}/{project_id}/{normalized_key}"
 
 
@@ -82,16 +84,20 @@ def _load_plaintext_secret(
         _append(f"tenant/{tenant_id}/{normalized_ref}")
 
     for candidate in candidates:
-        row = bind.execute(
-            text(
-                """
+        row = (
+            bind.execute(
+                text(
+                    """
                 SELECT value_encrypted
                 FROM managed_secrets
                 WHERE secret_ref = :secret_ref
                 """
-            ),
-            {"secret_ref": candidate},
-        ).mappings().first()
+                ),
+                {"secret_ref": candidate},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             continue
         encrypted_value = str(row.get("value_encrypted") or "").strip()
@@ -109,7 +115,9 @@ def _upsert_project_managed_secret(
     encryption_key: str,
     now: datetime,
 ) -> None:
-    encrypted_value = encrypt_value(plaintext=plaintext_value, encryption_key=encryption_key)
+    encrypted_value = encrypt_value(
+        plaintext=plaintext_value, encryption_key=encryption_key
+    )
     existing = bind.execute(
         text(
             """
@@ -157,14 +165,18 @@ def upgrade() -> None:
     bind = op.get_bind()
     settings = get_settings()
     encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
-    rows = bind.execute(
-        text(
-            """
+    rows = (
+        bind.execute(
+            text(
+                """
             SELECT project_id, tenant_id, secret_refs
             FROM projects
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
 
     for row in rows:
         project_id = str(row.get("project_id") or "").strip()
@@ -201,12 +213,16 @@ def upgrade() -> None:
                     project_id=project_id,
                     encryption_key=encryption_key,
                 )
-                if plaintext_value is None and normalized_candidate.startswith(("platform/", "tenant/", "project/")):
+                if plaintext_value is None and normalized_candidate.startswith(
+                    ("platform/", "tenant/", "project/")
+                ):
                     raise ValueError(
                         f"Project secret '{secret_key}' references missing secret '{normalized_candidate}'"
                     )
 
-            resolved_plaintext = plaintext_value if plaintext_value is not None else candidate
+            resolved_plaintext = (
+                plaintext_value if plaintext_value is not None else candidate
+            )
             _upsert_project_managed_secret(
                 bind=bind,
                 secret_ref=managed_ref,

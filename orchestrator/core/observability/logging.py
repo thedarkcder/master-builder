@@ -65,7 +65,7 @@ def configure_logging(
                     "level": normalized_level,
                     "handlers": ["stdout", "stderr"],
                     "propagate": False,
-                }
+                },
             },
         }
     )

@@ -9,9 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.types import jira_config_project_keys
-from orchestrator.core.platform.secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordCategoryChannel, DiscordTextChannel, DiscordVoiceChannel
+from orchestrator.tools.discord_api import (
+    DiscordApiClient,
+    DiscordCategoryChannel,
+    DiscordTextChannel,
+    DiscordVoiceChannel,
+)
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -96,10 +104,14 @@ def resolve_project_discord_channel_binding(
         raise ValueError("Discord guild ID is not configured")
 
     parent_id = settings.discord_channel_category_id.strip() or None
-    channel_name = resolve_project_discord_channel_name_fn(settings=settings, tenant=tenant, project=project)
+    channel_name = resolve_project_discord_channel_name_fn(
+        settings=settings, tenant=tenant, project=project
+    )
     client = DiscordApiClient(bot_token=bot_token)
     existing_channel_id = str(normalized.get("channel_id") or "").strip()
-    if existing_channel_id and not _discord_channel_exists(client=client, channel_id=existing_channel_id):
+    if existing_channel_id and not _discord_channel_exists(
+        client=client, channel_id=existing_channel_id
+    ):
         existing_channel_id = ""
         normalized.pop("channel_id", None)
     if not existing_channel_id:
@@ -112,16 +124,23 @@ def resolve_project_discord_channel_binding(
     normalized["channel_id"] = existing_channel_id
 
     live_voice_links: dict[str, str] = {}
-    for voice_channel_id, linked_channel_id in dict(normalized.get("live_voice_room_links") or {}).items():
+    for voice_channel_id, linked_channel_id in dict(
+        normalized.get("live_voice_room_links") or {}
+    ).items():
         normalized_voice_channel_id = str(voice_channel_id).strip()
         normalized_linked_channel_id = str(linked_channel_id).strip()
         if not normalized_voice_channel_id or not normalized_linked_channel_id:
             continue
-        if not _discord_channel_exists(client=client, channel_id=normalized_voice_channel_id):
+        if not _discord_channel_exists(
+            client=client, channel_id=normalized_voice_channel_id
+        ):
             continue
-        if normalized_linked_channel_id != existing_channel_id and not _discord_channel_exists(
-            client=client,
-            channel_id=normalized_linked_channel_id,
+        if (
+            normalized_linked_channel_id != existing_channel_id
+            and not _discord_channel_exists(
+                client=client,
+                channel_id=normalized_linked_channel_id,
+            )
         ):
             normalized_linked_channel_id = existing_channel_id
         live_voice_links[normalized_voice_channel_id] = normalized_linked_channel_id
@@ -143,7 +162,9 @@ def resolve_project_discord_channel_binding(
     normalized["live_voice_room_links"] = live_voice_links
     voice_room_channel_ids = [
         channel_id
-        for channel_id in [str(value).strip() for value in normalized.get("voice_room_channel_ids", [])]
+        for channel_id in [
+            str(value).strip() for value in normalized.get("voice_room_channel_ids", [])
+        ]
         if channel_id
     ]
     for voice_channel_id in live_voice_links:
@@ -177,24 +198,36 @@ def _resolve_voice_channel_parent_id(
         return fallback_parent_id
 
     voice_channels = client.list_voice_channels(guild_id=guild_id)
-    voice_parent_counts = Counter(channel.parent_id for channel in voice_channels if channel.parent_id)
-    voice_named_categories = [category for category in categories if _looks_like_voice_category_name(category.name)]
+    voice_parent_counts = Counter(
+        channel.parent_id for channel in voice_channels if channel.parent_id
+    )
+    voice_named_categories = [
+        category
+        for category in categories
+        if _looks_like_voice_category_name(category.name)
+    ]
     candidates = [
         category
         for category in voice_named_categories
         if voice_parent_counts.get(category.channel_id, 0) > 0
     ]
     if candidates:
-        return _select_preferred_category_id(candidates=candidates, voice_parent_counts=voice_parent_counts)
+        return _select_preferred_category_id(
+            candidates=candidates, voice_parent_counts=voice_parent_counts
+        )
     if voice_named_categories:
-        return _select_preferred_category_id(candidates=voice_named_categories, voice_parent_counts=voice_parent_counts)
+        return _select_preferred_category_id(
+            candidates=voice_named_categories, voice_parent_counts=voice_parent_counts
+        )
     voice_backed_categories = [
         category
         for category in categories
         if voice_parent_counts.get(category.channel_id, 0) > 0
     ]
     if voice_backed_categories:
-        return _select_preferred_category_id(candidates=voice_backed_categories, voice_parent_counts=voice_parent_counts)
+        return _select_preferred_category_id(
+            candidates=voice_backed_categories, voice_parent_counts=voice_parent_counts
+        )
     return fallback_parent_id
 
 
@@ -242,7 +275,9 @@ def ensure_default_project_for_tenant(
         Project(
             project_id=allocate_project_id(session),
             tenant_id=tenant.tenant_id,
-            name=default_project_name_from_repo_fn(repo_url=repo_url, tenant_id=tenant.tenant_id),
+            name=default_project_name_from_repo_fn(
+                repo_url=repo_url, tenant_id=tenant.tenant_id
+            ),
             github_repository=repo_url,
             jira_project_key=jira_project_key,
             policy_overrides={},
@@ -267,11 +302,17 @@ def sync_tenant_project_discord_channels(
     if not guild_id:
         return
 
-    persisted_projects = session.execute(
-        select(Project)
-        .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
-        .order_by(Project.created_at.asc())
-    ).scalars().all()
+    persisted_projects = (
+        session.execute(
+            select(Project)
+            .where(
+                Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False)
+            )
+            .order_by(Project.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
     pending_projects = [
         project
         for project in session.new
@@ -280,7 +321,11 @@ def sync_tenant_project_discord_channels(
         and not project.is_archived
     ]
     persisted_ids = {item.project_id for item in persisted_projects}
-    projects = persisted_projects + [project for project in pending_projects if project.project_id not in persisted_ids]
+    projects = persisted_projects + [
+        project
+        for project in pending_projects
+        if project.project_id not in persisted_ids
+    ]
     if not projects:
         return
 
@@ -311,11 +356,17 @@ def sync_tenant_jira_project_keys(
     tenant: Tenant,
     normalize_project_key_fn,
 ) -> None:
-    persisted_projects = session.execute(
-        select(Project)
-        .where(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
-        .order_by(Project.created_at.asc())
-    ).scalars().all()
+    persisted_projects = (
+        session.execute(
+            select(Project)
+            .where(
+                Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False)
+            )
+            .order_by(Project.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
     pending_projects = [
         project
         for project in session.new
@@ -324,7 +375,11 @@ def sync_tenant_jira_project_keys(
         and not project.is_archived
     ]
     persisted_ids = {item.project_id for item in persisted_projects}
-    projects = persisted_projects + [project for project in pending_projects if project.project_id not in persisted_ids]
+    projects = persisted_projects + [
+        project
+        for project in pending_projects
+        if project.project_id not in persisted_ids
+    ]
     keys: list[str] = []
     for project in projects:
         if project.is_archived:

@@ -11,15 +11,18 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = '20260507_0107'
-down_revision = '20260505_0106'
+revision = "20260507_0107"
+down_revision = "20260505_0106"
 branch_labels = None
 depends_on = None
 
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def upgrade() -> None:

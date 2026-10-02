@@ -34,6 +34,7 @@ from orchestrator.api.schemas import (
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+
 @router.get("/workflows", response_model=list[WorkflowRead])
 def list_workflows(
     tenant_id: str | None = Query(default=None),
@@ -99,9 +100,14 @@ def list_workflow_types(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[WorkflowTypeSummaryRead]:
-    return use_cases.list_workflow_types(session=session, principal=principal, tenant_id=tenant_id)
+    return use_cases.list_workflow_types(
+        session=session, principal=principal, tenant_id=tenant_id
+    )
 
-@router.get("/workflow-types/{workflow_type_key}", response_model=WorkflowTypeDetailRead)
+
+@router.get(
+    "/workflow-types/{workflow_type_key}", response_model=WorkflowTypeDetailRead
+)
 def get_workflow_type_detail(
     workflow_type_key: str,
     tenant_id: str | None = Query(default=None),
@@ -115,13 +121,16 @@ def get_workflow_type_detail(
         tenant_id=tenant_id,
     )
 
+
 @router.get("/workflows/{execution_id}", response_model=WorkflowRead)
 def get_workflow(
     execution_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> WorkflowRead:
-    return use_cases.get_workflow(session=session, principal=principal, execution_id=execution_id)
+    return use_cases.get_workflow(
+        session=session, principal=principal, execution_id=execution_id
+    )
 
 
 @router.post("/workflows/work-items/start", response_model=WorkflowWorkItemStartRead)
@@ -137,7 +146,10 @@ def start_work_item_from_board(
     )
 
 
-@router.get("/workflows/{execution_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
+@router.get(
+    "/workflows/{execution_id}/telemetry",
+    response_model=list[WorkflowObservabilityEventRead],
+)
 def list_workflow_telemetry_events(
     execution_id: str,
     limit: int = Query(default=200, ge=1, le=500),
@@ -155,7 +167,11 @@ def list_workflow_telemetry_events(
         before_event_id=before_event_id,
     )
 
-@router.get("/workflows/{execution_id}/audit", response_model=list[WorkflowObservabilityEventRead])
+
+@router.get(
+    "/workflows/{execution_id}/audit",
+    response_model=list[WorkflowObservabilityEventRead],
+)
 def list_workflow_audit_events(
     execution_id: str,
     limit: int = Query(default=200, ge=1, le=500),
@@ -173,7 +189,11 @@ def list_workflow_audit_events(
         before_event_id=before_event_id,
     )
 
-@router.get("/workflows/{execution_id}/operations/{operation_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])
+
+@router.get(
+    "/workflows/{execution_id}/operations/{operation_id}/telemetry",
+    response_model=list[WorkflowObservabilityEventRead],
+)
 def list_workflow_operation_telemetry_events(
     execution_id: str,
     operation_id: str,
@@ -190,6 +210,7 @@ def list_workflow_operation_telemetry_events(
         attempt_id=attempt_id,
         limit=limit,
     )
+
 
 @router.get(
     "/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry",
@@ -212,6 +233,7 @@ def list_workflow_operation_attempt_telemetry_events(
         limit=limit,
     )
 
+
 @router.get("/workflows/{execution_id}/operations/{operation_id}/telemetry/stream")
 def stream_workflow_operation_telemetry_events(
     execution_id: str,
@@ -231,7 +253,10 @@ def stream_workflow_operation_telemetry_events(
         media_type="application/x-ndjson",
     )
 
-@router.get("/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream")
+
+@router.get(
+    "/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream"
+)
 def stream_workflow_operation_attempt_telemetry_events(
     execution_id: str,
     operation_id: str,
@@ -247,7 +272,11 @@ def stream_workflow_operation_attempt_telemetry_events(
         principal=principal,
     )
 
-@router.get("/workflows/{execution_id}/operations/{operation_id}/audit", response_model=list[WorkflowObservabilityEventRead])
+
+@router.get(
+    "/workflows/{execution_id}/operations/{operation_id}/audit",
+    response_model=list[WorkflowObservabilityEventRead],
+)
 def list_workflow_operation_audit_events(
     execution_id: str,
     operation_id: str,
@@ -267,7 +296,11 @@ def list_workflow_operation_audit_events(
         before_event_id=before_event_id,
     )
 
-@router.get("/workflows/{execution_id}/operations/{operation_id}/transcript", response_model=WorkflowStepTranscriptRead)
+
+@router.get(
+    "/workflows/{execution_id}/operations/{operation_id}/transcript",
+    response_model=WorkflowStepTranscriptRead,
+)
 def get_workflow_operation_transcript(
     execution_id: str,
     operation_id: str,
@@ -286,6 +319,7 @@ def get_workflow_operation_transcript(
         attempt_id=attempt_id,
         limit=limit,
     )
+
 
 @router.get(
     "/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/audit",
@@ -308,7 +342,12 @@ def get_workflow_operation_attempt_audit(
         limit=limit,
     )
 
-@router.post("/workflows/{execution_id}/attempts", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/workflows/{execution_id}/attempts",
+    response_model=RunRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_workflow_attempt(
     execution_id: str,
     payload: WorkflowAttemptCreateRequest,
@@ -322,16 +361,26 @@ def create_workflow_attempt(
         checkpoint_kind=payload.checkpoint_kind,
     )
 
-@router.post("/workflows/{execution_id}/resume", response_model=RunRead, status_code=status.HTTP_201_CREATED)
+
+@router.post(
+    "/workflows/{execution_id}/resume",
+    response_model=RunRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def resume_workflow_execution(
     execution_id: str,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> RunRead:
-    return use_cases.resume_workflow_execution(session=session, execution_id=execution_id)
+    return use_cases.resume_workflow_execution(
+        session=session, execution_id=execution_id
+    )
 
 
-@router.post("/workflows/{execution_id}/operations/{operation_id}/retry", response_model=WorkflowOperationRetryRead)
+@router.post(
+    "/workflows/{execution_id}/operations/{operation_id}/retry",
+    response_model=WorkflowOperationRetryRead,
+)
 def retry_workflow_operation(
     execution_id: str,
     operation_id: str,
@@ -345,7 +394,10 @@ def retry_workflow_operation(
     )
 
 
-@router.post("/workflows/{execution_id}/operations/{operation_id}/restart", response_model=WorkflowOperationRetryRead)
+@router.post(
+    "/workflows/{execution_id}/operations/{operation_id}/restart",
+    response_model=WorkflowOperationRetryRead,
+)
 def restart_workflow_operation(
     execution_id: str,
     operation_id: str,

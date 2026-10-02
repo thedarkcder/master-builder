@@ -42,7 +42,9 @@ class JiraOAuthTests(unittest.TestCase):
             )
         )
 
-        with patch.object(client, "_request_json", return_value={"issues": []}) as mocked:
+        with patch.object(
+            client, "_request_json", return_value={"issues": []}
+        ) as mocked:
             issues = client.search_issues_by_jql(
                 access_token="token",
                 cloud_id="cloud-id",
@@ -91,7 +93,9 @@ class JiraOAuthTests(unittest.TestCase):
             captured["payload"] = request.data
             return _FakeResponse()
 
-        with patch("orchestrator.tools.atlassian_oauth.urlopen", side_effect=_fake_urlopen):
+        with patch(
+            "orchestrator.tools.atlassian_oauth.urlopen", side_effect=_fake_urlopen
+        ):
             result = client.upload_issue_attachment(
                 access_token="token",
                 cloud_id="cloud-id",
@@ -103,10 +107,15 @@ class JiraOAuthTests(unittest.TestCase):
 
         self.assertEqual(captured["method"], "POST")
         self.assertIn("/issue/MAB-1/attachments", str(captured["url"]))
-        normalized_headers = {str(key).lower(): str(value) for key, value in dict(captured["headers"]).items()}
-        self.assertIn("multipart/form-data; boundary=", normalized_headers.get("content-type", ""))
+        normalized_headers = {
+            str(key).lower(): str(value)
+            for key, value in dict(captured["headers"]).items()
+        }
+        self.assertIn(
+            "multipart/form-data; boundary=", normalized_headers.get("content-type", "")
+        )
         self.assertEqual(normalized_headers.get("x-atlassian-token"), "no-check")
-        self.assertIn(b"filename=\"screen.png\"", captured["payload"])
+        self.assertIn(b'filename="screen.png"', captured["payload"])
         self.assertIn(b"binary-data", captured["payload"])
         self.assertEqual(result[0]["id"], "1001")
 
@@ -127,7 +136,11 @@ class JiraOAuthTests(unittest.TestCase):
             return {"issues": [{"key": "MAB-1", "id": "1001"}], "errors": []}
 
         with (
-            patch.object(client, "_get_json", return_value={"values": [{"name": "Story"}, {"name": "Bug"}]}),
+            patch.object(
+                client,
+                "_get_json",
+                return_value={"values": [{"name": "Story"}, {"name": "Bug"}]},
+            ),
             patch.object(client, "_request_json", side_effect=_fake_request_json),
         ):
             with self.assertRaisesRegex(AtlassianOAuthError, "not available"):
@@ -155,7 +168,9 @@ class JiraOAuthTests(unittest.TestCase):
             )
         )
         with (
-            patch.object(client, "_get_json", return_value={"values": [{"name": "Task"}]}),
+            patch.object(
+                client, "_get_json", return_value={"values": [{"name": "Task"}]}
+            ),
             patch.object(
                 client,
                 "_request_json",
@@ -187,7 +202,9 @@ class JiraOAuthTests(unittest.TestCase):
                 ],
             )
         self.assertEqual(result.created, [])
-        self.assertEqual(result.errors, ["Item 0: issuetype: Specify a valid issue type"])
+        self.assertEqual(
+            result.errors, ["Item 0: issuetype: Specify a valid issue type"]
+        )
 
     def test_to_adf_description_returns_adf_doc_unchanged(self) -> None:
         adf_doc = {
@@ -221,7 +238,11 @@ class JiraOAuthTests(unittest.TestCase):
 
         limited = _to_adf_description(adf_doc)
 
-        serialized = __import__("json").dumps(limited, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        serialized = (
+            __import__("json")
+            .dumps(limited, separators=(",", ":"), ensure_ascii=False)
+            .encode("utf-8")
+        )
         self.assertLessEqual(len(serialized), MAX_JIRA_ADF_DOCUMENT_BYTES)
         flattened = __import__("json").dumps(limited)
         self.assertIn("Content truncated to fit Jira content size limit.", flattened)
@@ -236,33 +257,74 @@ class JiraOAuthTests(unittest.TestCase):
         )
 
         with (
-            patch.object(client._callback_flow, "exchange_code", return_value="tokens") as exchange_mock,
-            patch.object(client._callback_flow, "refresh_tokens", return_value="refreshed") as refresh_mock,
-            patch.object(client._callback_flow, "list_accessible_resources", return_value=["resource"]) as resources_mock,
-            patch.object(client._issue_service, "list_projects", return_value=["project"]) as list_projects_mock,
-            patch.object(client._issue_service, "get_issue_detail", return_value="detail") as issue_detail_mock,
-            patch.object(client._issue_service, "list_issue_comments", return_value=["comment"]) as issue_comments_mock,
-            patch.object(client._issue_service, "list_issue_attachments", return_value=["attachment"]) as issue_attachments_mock,
+            patch.object(
+                client._callback_flow, "exchange_code", return_value="tokens"
+            ) as exchange_mock,
+            patch.object(
+                client._callback_flow, "refresh_tokens", return_value="refreshed"
+            ) as refresh_mock,
+            patch.object(
+                client._callback_flow,
+                "list_accessible_resources",
+                return_value=["resource"],
+            ) as resources_mock,
+            patch.object(
+                client._issue_service, "list_projects", return_value=["project"]
+            ) as list_projects_mock,
+            patch.object(
+                client._issue_service, "get_issue_detail", return_value="detail"
+            ) as issue_detail_mock,
+            patch.object(
+                client._issue_service, "list_issue_comments", return_value=["comment"]
+            ) as issue_comments_mock,
+            patch.object(
+                client._issue_service,
+                "list_issue_attachments",
+                return_value=["attachment"],
+            ) as issue_attachments_mock,
             patch.object(client._issue_service, "update_issue_fields") as update_mock,
-            patch.object(client._issue_service, "upsert_remote_issue_link") as upsert_remote_link_mock,
+            patch.object(
+                client._issue_service, "upsert_remote_issue_link"
+            ) as upsert_remote_link_mock,
             patch.object(client._issue_service, "add_issue_labels") as add_labels_mock,
-            patch.object(client._issue_service, "add_issue_comment", return_value={"id": "c1"}) as comment_mock,
-            patch.object(client._webhook_manager, "register_webhook", return_value=[1]) as register_mock,
-            patch.object(client._webhook_manager, "list_webhooks", return_value=[{"id": 1}]) as list_webhooks_mock,
+            patch.object(
+                client._issue_service, "add_issue_comment", return_value={"id": "c1"}
+            ) as comment_mock,
+            patch.object(
+                client._webhook_manager, "register_webhook", return_value=[1]
+            ) as register_mock,
+            patch.object(
+                client._webhook_manager, "list_webhooks", return_value=[{"id": 1}]
+            ) as list_webhooks_mock,
             patch.object(client._webhook_manager, "delete_webhooks") as delete_mock,
-            patch.object(client._attachment_service, "download_attachment", return_value=b"bytes") as download_attachment_mock,
+            patch.object(
+                client._attachment_service, "download_attachment", return_value=b"bytes"
+            ) as download_attachment_mock,
         ):
             self.assertEqual(client.exchange_code(code="abc"), "tokens")
             self.assertEqual(client.refresh_tokens(refresh_token="r1"), "refreshed")
-            self.assertEqual(client.list_accessible_resources(access_token="tok"), ["resource"])
-            self.assertEqual(client.list_projects(access_token="tok", cloud_id="cloud"), ["project"])
-            self.assertEqual(client.get_issue_detail(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"), "detail")
             self.assertEqual(
-                client.list_issue_comments(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"),
+                client.list_accessible_resources(access_token="tok"), ["resource"]
+            )
+            self.assertEqual(
+                client.list_projects(access_token="tok", cloud_id="cloud"), ["project"]
+            )
+            self.assertEqual(
+                client.get_issue_detail(
+                    access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"
+                ),
+                "detail",
+            )
+            self.assertEqual(
+                client.list_issue_comments(
+                    access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"
+                ),
                 ["comment"],
             )
             self.assertEqual(
-                client.list_issue_attachments(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"),
+                client.list_issue_attachments(
+                    access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1"
+                ),
                 ["attachment"],
             )
             client.update_issue_fields(
@@ -289,7 +351,12 @@ class JiraOAuthTests(unittest.TestCase):
                 labels=["worker:linux"],
             )
             self.assertEqual(
-                client.add_issue_comment(access_token="tok", cloud_id="cloud", issue_id_or_key="MAB-1", comment="hi"),
+                client.add_issue_comment(
+                    access_token="tok",
+                    cloud_id="cloud",
+                    issue_id_or_key="MAB-1",
+                    comment="hi",
+                ),
                 {"id": "c1"},
             )
             self.assertEqual(
@@ -302,9 +369,18 @@ class JiraOAuthTests(unittest.TestCase):
                 ),
                 [1],
             )
-            self.assertEqual(client.list_webhooks(access_token="tok", cloud_id="cloud"), [{"id": 1}])
-            client.delete_webhooks(access_token="tok", cloud_id="cloud", webhook_ids=[1])
-            self.assertEqual(client.download_attachment(access_token="tok", content_url="https://jira/attachment/1"), b"bytes")
+            self.assertEqual(
+                client.list_webhooks(access_token="tok", cloud_id="cloud"), [{"id": 1}]
+            )
+            client.delete_webhooks(
+                access_token="tok", cloud_id="cloud", webhook_ids=[1]
+            )
+            self.assertEqual(
+                client.download_attachment(
+                    access_token="tok", content_url="https://jira/attachment/1"
+                ),
+                b"bytes",
+            )
 
         exchange_mock.assert_called_once()
         refresh_mock.assert_called_once()

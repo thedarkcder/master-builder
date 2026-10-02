@@ -25,7 +25,10 @@ def resolve_run_disposition(*, workflow_result: WorkflowResult) -> RunDispositio
             last_error=(
                 workflow_result.diagnostics.message
                 if workflow_result.diagnostics is not None
-                else (workflow_result.blocker_message or "Workflow failed without diagnostics")
+                else (
+                    workflow_result.blocker_message
+                    or "Workflow failed without diagnostics"
+                )
             ),
         )
     if outcome == "blocked":
@@ -33,7 +36,11 @@ def resolve_run_disposition(*, workflow_result: WorkflowResult) -> RunDispositio
             status=RUN_STATUS_BLOCKED,
             last_error=(
                 workflow_result.blocker_message
-                or (workflow_result.diagnostics.message if workflow_result.diagnostics is not None else None)
+                or (
+                    workflow_result.diagnostics.message
+                    if workflow_result.diagnostics is not None
+                    else None
+                )
                 or "Workflow blocked without diagnostics"
             ),
         )

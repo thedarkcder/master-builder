@@ -7,19 +7,29 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state import normalize_status_name
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.webhooks.contracts import create_jira_comment, post_jira_comment
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, TODO_STATUS
-from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
+from orchestrator.core.communications import (
+    DiscordTenantNotificationAction,
+    TransportAction,
+)
 from orchestrator.core.communications.execution_admission_format import (
     present_jira_admission,
 )
 from orchestrator.core.communications.jira_enqueue_presentation import (
     format_jira_enqueue_skipped_message,
 )
-from orchestrator.core.decision.clarification_service import evaluate_issue_clarification_state
+from orchestrator.core.decision.clarification_service import (
+    evaluate_issue_clarification_state,
+)
 from orchestrator.core.decision.engine import DecisionEngineResult, DecisionEventInput
-from orchestrator.core.decision.types import tenant_ready_label, tenant_ready_trigger_mode
+from orchestrator.core.decision.types import (
+    tenant_ready_label,
+    tenant_ready_trigger_mode,
+)
 from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     admission_from_enqueue_reason,
@@ -34,12 +44,19 @@ from orchestrator.core.precheck.question_lock import (
 )
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 from orchestrator.core.development.start_work import StartWorkUseCase
-from orchestrator.core.integrations.atlassian.parent_child_sync_shared import JiraParentChildSyncContext
-from orchestrator.core.integrations.workflow.provider import JiraWorkflowConnectionProvider, WorkflowIntegrationAdapterProvider
+from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
+    JiraParentChildSyncContext,
+)
+from orchestrator.core.integrations.workflow.provider import (
+    JiraWorkflowConnectionProvider,
+    WorkflowIntegrationAdapterProvider,
+)
 from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
 from orchestrator.core.issue_fanout.service import list_child_issue_previews_for_parent
 from orchestrator.core.parent_feature_workflow.adapters import _JiraParentIssueGateway
-from orchestrator.core.workflow.execution_projection import resolve_latest_workflow_execution_by_source
+from orchestrator.core.workflow.execution_projection import (
+    resolve_latest_workflow_execution_by_source,
+)
 from orchestrator.core.runs.gate_service import enqueue_issue_run_with_precheck
 
 logger = logging.getLogger(__name__)
@@ -79,7 +96,9 @@ def resolve_jira_issue_board_location(
     session: Session,
     settings,  # noqa: ANN001
 ) -> tuple[str | None, str | None]:
-    from orchestrator.api.webhooks.jira_board_location import resolve_project_issue_board_location
+    from orchestrator.api.webhooks.jira_board_location import (
+        resolve_project_issue_board_location,
+    )
 
     return resolve_project_issue_board_location(
         context=context,
@@ -97,7 +116,9 @@ def build_jira_enqueue_skipped_notification_action(
 ) -> DiscordTenantNotificationAction:
     message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
-        issue_url=tenant_jira_issue_url(session=session, tenant=context.tenant, issue_key=context.issue_key),
+        issue_url=tenant_jira_issue_url(
+            session=session, tenant=context.tenant, issue_key=context.issue_key
+        ),
         issue_status=context.issue_status,
         admission=admission,
         extra_detail=extra_detail,
@@ -140,7 +161,9 @@ def evaluate_precheck_decision_with_labels(
     issue_description: str | None = None,
     idempotency_key: str | None = None,
 ) -> DecisionEngineResult:
-    effective_description = context.issue_description if issue_description is None else issue_description
+    effective_description = (
+        context.issue_description if issue_description is None else issue_description
+    )
 
     def _publish_jira_comment(comment: str) -> tuple[bool, str | None]:
         return post_jira_comment(
@@ -190,6 +213,7 @@ def evaluate_precheck_decision_with_labels(
     )
     return result
 
+
 def _sync_precheck_questions_block(
     *,
     context: JiraWebhookContext,
@@ -210,7 +234,9 @@ def _sync_precheck_questions_block(
     )
     decision_gate_questions = [
         str(question).strip()
-        for question in getattr(getattr(pre_check, "decision_gate", None), "questions", ())
+        for question in getattr(
+            getattr(pre_check, "decision_gate", None), "questions", ()
+        )
         if str(question).strip()
     ]
     gtd_questions = [
@@ -224,19 +250,29 @@ def _sync_precheck_questions_block(
         gtd_questions=gtd_questions,
     )
     next_description = (
-        upsert_precheck_questions_block(current_description=str(current_description or ""), block=block)
+        upsert_precheck_questions_block(
+            current_description=str(current_description or ""), block=block
+        )
         if block
-        else remove_precheck_questions_block(current_description=str(current_description or ""))
+        else remove_precheck_questions_block(
+            current_description=str(current_description or "")
+        )
     )
     if next_description.strip() == str(current_description or "").strip():
         return
     try:
-        oauth = tenant_atlassian_oauth_context(session=session, tenant=context.tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context(
+            session=session, tenant=context.tenant, settings=settings
+        )
         oauth_client = _oauth_context_value(oauth, "client")
         oauth_connection = _oauth_context_value(oauth, "connection")
         oauth_access_token = _oauth_context_value(oauth, "access_token")
         cloud_id = getattr(oauth_connection, "cloud_id", None)
-        if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+        if (
+            oauth_client is None
+            or oauth_access_token is None
+            or not str(cloud_id or "").strip()
+        ):
             raise RuntimeError("Tenant Atlassian context is incomplete")
         oauth_client.update_issue_summary_and_description(
             access_token=str(oauth_access_token),
@@ -274,7 +310,9 @@ def plan_jira_run_flow(
             jira_webhook_response_fn=jira_webhook_response_fn,
         )
 
-    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
+    normalized_labels = {
+        str(label).strip().casefold() for label in context.issue_labels or []
+    }
     if "pm-parent" in normalized_labels or "sync-blocked" in normalized_labels:
         logger.info(
             "jira_webhook_ignored request_id=%s tenant_id=%s issue_key=%s reason=pm_parent_or_sync_blocked labels=%s",
@@ -293,8 +331,10 @@ def plan_jira_run_flow(
             )
         )
 
-    backlog_followup_response = jira_webhook_board_gate.stage_handle_backlog_followup_issue_created(
-        context=context
+    backlog_followup_response = (
+        jira_webhook_board_gate.stage_handle_backlog_followup_issue_created(
+            context=context
+        )
     )
     if backlog_followup_response is not None:
         return JiraRunPlan(content=backlog_followup_response)
@@ -469,7 +509,10 @@ def plan_jira_run_flow(
     )
     precheck_decision = decision_result.decision
     admission = resolve_execution_admission(decision_result=decision_result)
-    if admission.blocked and admission.reason is ExecutionAdmissionReason.POLICY_EVAL_FAILED:
+    if (
+        admission.blocked
+        and admission.reason is ExecutionAdmissionReason.POLICY_EVAL_FAILED
+    ):
         logger.warning(
             "jira_webhook_not_started request_id=%s tenant_id=%s issue_key=%s reason=policy_eval_failed error=%s",
             context.request_id,
@@ -542,7 +585,9 @@ def plan_jira_run_flow(
             enqueue_result.reason,
             enqueue_result.run.run_id,
         )
-        enqueue_admission = admission_from_enqueue_reason(raw_reason=enqueue_result.reason)
+        enqueue_admission = admission_from_enqueue_reason(
+            raw_reason=enqueue_result.reason
+        )
         enqueue_presentation = present_jira_admission(admission=enqueue_admission)
         return JiraRunPlan(
             content=jira_webhook_response_fn(
@@ -619,7 +664,8 @@ def _plan_jira_start_work(
     )
     source_workflow_id = (
         source_workflow.workflow_id
-        if source_workflow is not None and str(source_workflow.workflow_type_key or "").strip() == "parent_planning"
+        if source_workflow is not None
+        and str(source_workflow.workflow_type_key or "").strip() == "parent_planning"
         else None
     )
     gateway = _JiraParentIssueGateway(
@@ -669,8 +715,18 @@ def _plan_jira_start_work(
             reason=None if result.queued else "start_work_no_new_runs",
             command=context.comment_command,
             webhook_event=context.webhook_event,
-            queued_runs=[{"issue_key": item.issue_key, "run_id": item.run_id} for item in result.queued],
-            skipped_issues=[{"issue_key": item.issue_key, "run_id": item.run_id, "reason": item.reason} for item in result.skipped],
+            queued_runs=[
+                {"issue_key": item.issue_key, "run_id": item.run_id}
+                for item in result.queued
+            ],
+            skipped_issues=[
+                {
+                    "issue_key": item.issue_key,
+                    "run_id": item.run_id,
+                    "reason": item.reason,
+                }
+                for item in result.skipped
+            ],
             promoted_issue_keys=list(result.promoted_issue_keys),
         )
     )

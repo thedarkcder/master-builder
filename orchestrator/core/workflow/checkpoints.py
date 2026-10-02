@@ -97,7 +97,9 @@ def upsert_workflow_checkpoint(
         if payload is None:
             raise ValueError("payload is required when creating a workflow checkpoint")
         checkpoint = WorkflowCheckpoint(
-            checkpoint_id=checkpoint_id_for(run_id=normalized_run_id, checkpoint_kind=normalized_kind),
+            checkpoint_id=checkpoint_id_for(
+                run_id=normalized_run_id, checkpoint_kind=normalized_kind
+            ),
             workflow_id=normalized_workflow_id,
             run_id=normalized_run_id,
             checkpoint_kind=normalized_kind,

@@ -23,7 +23,13 @@ from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, Project, Tenant
+from orchestrator.storage.models import (
+    DecisionAnswer,
+    DecisionCase,
+    DecisionCycle,
+    Project,
+    Tenant,
+)
 
 
 class DecisionReplyServiceTests(unittest.TestCase):
@@ -134,7 +140,9 @@ class DecisionReplyServiceTests(unittest.TestCase):
         self._tmp.cleanup()
         reset_db_engine_cache()
 
-    def _create_gtd_dependencies_cycle(self, *, session, issue_key: str, question_text: str) -> tuple[DecisionCase, DecisionCycle]:
+    def _create_gtd_dependencies_cycle(
+        self, *, session, issue_key: str, question_text: str
+    ) -> tuple[DecisionCase, DecisionCycle]:
         case = DecisionCase(
             case_id=f"case-{issue_key}",
             tenant_id="tenant-reply",
@@ -183,7 +191,9 @@ class DecisionReplyServiceTests(unittest.TestCase):
         session.flush()
         return case, cycle
 
-    def test_serialize_recorded_answers_for_policy_includes_answered_and_accepted_answers(self) -> None:
+    def test_serialize_recorded_answers_for_policy_includes_answered_and_accepted_answers(
+        self,
+    ) -> None:
         answered = DecisionAnswer(
             answer_id="a1",
             case_id="c1",
@@ -241,7 +251,9 @@ class DecisionReplyServiceTests(unittest.TestCase):
             ],
         )
 
-    def test_capture_decision_reply_persists_accepted_answer_and_stages_effects(self) -> None:
+    def test_capture_decision_reply_persists_accepted_answer_and_stages_effects(
+        self,
+    ) -> None:
         with (
             self.session_factory() as session,
             unittest.mock.patch(
@@ -262,7 +274,7 @@ class DecisionReplyServiceTests(unittest.TestCase):
                                 "notes": "Cross-account relink policy confirmed.",
                             },
                         }
-                    ]
+                    ],
                 },
             ),
         ):
@@ -318,7 +330,12 @@ class DecisionReplyServiceTests(unittest.TestCase):
             project = session.get(Project, "project-reply")
             case = session.get(DecisionCase, "case-1")
             cycle = session.get(DecisionCycle, "cycle-1")
-            assert tenant is not None and project is not None and case is not None and cycle is not None
+            assert (
+                tenant is not None
+                and project is not None
+                and case is not None
+                and cycle is not None
+            )
 
             with (
                 unittest.mock.patch(
@@ -326,10 +343,10 @@ class DecisionReplyServiceTests(unittest.TestCase):
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                "orchestrator.core.decision.reply_service.invoke_runtime_json",
-                return_value={
-                    "message": "Captured.",
-                    "actions": [
+                    "orchestrator.core.decision.reply_service.invoke_runtime_json",
+                    return_value={
+                        "message": "Captured.",
+                        "actions": [
                             {
                                 "type": "capture_decision_answer",
                                 "payload": {
@@ -339,7 +356,7 @@ class DecisionReplyServiceTests(unittest.TestCase):
                                     "notes": "Entitlement confirmation is still missing.",
                                 },
                             }
-                        ]
+                        ],
                     },
                 ),
             ):
@@ -372,7 +389,11 @@ class DecisionReplyServiceTests(unittest.TestCase):
             )
             session.commit()
 
-            question_feedback = list(unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id))
+            question_feedback = list(
+                unresolved_question_feedback_for_cycle(
+                    session=session, cycle_id=cycle.cycle_id
+                )
+            )
             comment = build_cycle_comment(session=session, case=case, cycle=cycle)
 
         self.assertEqual(capture.answered_question_ids, ("dg_1",))
@@ -385,7 +406,10 @@ class DecisionReplyServiceTests(unittest.TestCase):
             "Config values were captured, but entitlement confirmation is still missing.",
             question_feedback[0]["note"],
         )
-        self.assertIn("Missing detail: Config values were captured, but entitlement confirmation is still missing.", comment)
+        self.assertIn(
+            "Missing detail: Config values were captured, but entitlement confirmation is still missing.",
+            comment,
+        )
 
     def test_all_accepted_cycle_shows_no_outstanding_questions(self) -> None:
         with self.session_factory() as session:
@@ -401,13 +425,20 @@ class DecisionReplyServiceTests(unittest.TestCase):
             session.commit()
 
             comment = build_cycle_comment(session=session, case=case, cycle=cycle)
-            feedback = unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id)
+            feedback = unresolved_question_feedback_for_cycle(
+                session=session, cycle_id=cycle.cycle_id
+            )
 
         self.assertIn("Outstanding questions:", comment)
-        self.assertNotIn("[dg_1] What config is approved?", comment.split("Outstanding questions:")[-1])
+        self.assertNotIn(
+            "[dg_1] What config is approved?",
+            comment.split("Outstanding questions:")[-1],
+        )
         self.assertEqual(feedback, ())
 
-    def test_capture_decision_reply_keeps_answered_status_until_planner_accepts(self) -> None:
+    def test_capture_decision_reply_keeps_answered_status_until_planner_accepts(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-reply")
             project = session.get(Project, "project-reply")
@@ -425,10 +456,10 @@ class DecisionReplyServiceTests(unittest.TestCase):
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                "orchestrator.core.decision.reply_service.invoke_runtime_json",
-                return_value={
-                    "message": "Captured.",
-                    "actions": [
+                    "orchestrator.core.decision.reply_service.invoke_runtime_json",
+                    return_value={
+                        "message": "Captured.",
+                        "actions": [
                             {
                                 "type": "capture_decision_answer",
                                 "payload": {
@@ -438,7 +469,7 @@ class DecisionReplyServiceTests(unittest.TestCase):
                                     "notes": "Concrete final dependencies/risks entry.",
                                 },
                             }
-                        ]
+                        ],
                     },
                 ),
             ):
@@ -465,7 +496,9 @@ class DecisionReplyServiceTests(unittest.TestCase):
         self.assertEqual(capture.answered_question_ids, ("gtd_dependencies_risks",))
         self.assertEqual(answer.status, "answered")
 
-    def test_sync_cycle_answers_from_planner_keeps_planner_answered_status(self) -> None:
+    def test_sync_cycle_answers_from_planner_keeps_planner_answered_status(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-reply")
             project = session.get(Project, "project-reply")
@@ -528,7 +561,9 @@ class DecisionReplyServiceTests(unittest.TestCase):
         )
         self.assertEqual(effect_ids, ())
 
-    def test_sync_cycle_answers_from_planner_keeps_meta_dependencies_and_risks_answer_open(self) -> None:
+    def test_sync_cycle_answers_from_planner_keeps_meta_dependencies_and_risks_answer_open(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-reply")
             project = session.get(Project, "project-reply")
@@ -587,7 +622,9 @@ class DecisionReplyServiceTests(unittest.TestCase):
         self.assertEqual(answer.status, "answered")
         self.assertEqual(effect_ids, ())
 
-    def test_apply_frozen_cycle_to_precheck_hides_questions_when_none_unresolved(self) -> None:
+    def test_apply_frozen_cycle_to_precheck_hides_questions_when_none_unresolved(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             cycle = session.get(DecisionCycle, "cycle-1")
             assert cycle is not None
@@ -616,11 +653,15 @@ class DecisionReplyServiceTests(unittest.TestCase):
                 ),
             )
 
-            resolved = apply_frozen_cycle_to_precheck(pre_check=pre_check, cycle=cycle, classification="decision_gate")
+            resolved = apply_frozen_cycle_to_precheck(
+                pre_check=pre_check, cycle=cycle, classification="decision_gate"
+            )
 
         self.assertEqual(resolved.decision_gate.questions, ())
 
-    def test_question_set_resolved_status_is_not_unresolved_without_answer_row(self) -> None:
+    def test_question_set_resolved_status_is_not_unresolved_without_answer_row(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             cycle = session.get(DecisionCycle, "cycle-1")
             assert cycle is not None
@@ -653,9 +694,13 @@ class DecisionReplyServiceTests(unittest.TestCase):
             cycle.unresolved_question_ids_json = ["objective", "scope", "owner"]
             session.commit()
 
-            unresolved_ids = unresolved_question_ids_for_cycle(session=session, cycle=cycle)
+            unresolved_ids = unresolved_question_ids_for_cycle(
+                session=session, cycle=cycle
+            )
             cycle.unresolved_question_ids_json = list(unresolved_ids)
-            feedback = unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id)
+            feedback = unresolved_question_feedback_for_cycle(
+                session=session, cycle_id=cycle.cycle_id
+            )
 
         self.assertEqual(unresolved_ids, ("owner",))
         self.assertEqual([item["question_id"] for item in feedback], ["owner"])

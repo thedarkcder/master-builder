@@ -54,7 +54,12 @@ def _is_canonical_snapshot(payload: dict[str, Any]) -> bool:
     workflow = payload.get("workflow")
     events = payload.get("events")
     stages = payload.get("stages")
-    return isinstance(context, dict) and isinstance(workflow, dict) and isinstance(events, dict) and isinstance(stages, dict)
+    return (
+        isinstance(context, dict)
+        and isinstance(workflow, dict)
+        and isinstance(events, dict)
+        and isinstance(stages, dict)
+    )
 
 
 def _to_snapshot_v1(payload: dict[str, Any]) -> dict[str, Any]:
@@ -80,7 +85,9 @@ def _to_snapshot_v1(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "version": 1,
         "context": {
-            "trigger_context": dict(trigger_context) if isinstance(trigger_context, dict) else {},
+            "trigger_context": dict(trigger_context)
+            if isinstance(trigger_context, dict)
+            else {},
             "execution_context": execution_context,
         },
         "workflow": {
@@ -105,7 +112,13 @@ def _derive_outcome(payload: dict[str, Any]) -> str | None:
     explicit_outcome = payload.get("outcome")
     if isinstance(explicit_outcome, str):
         normalized = explicit_outcome.strip().lower()
-        if normalized in {"success", "requeue", "waiting_for_input", "blocked", "failed"}:
+        if normalized in {
+            "success",
+            "requeue",
+            "waiting_for_input",
+            "blocked",
+            "failed",
+        }:
             return normalized
     succeeded = payload.get("succeeded")
     if succeeded is True:

@@ -13,7 +13,9 @@ class LiveVoiceGatewayRuntimeTests(unittest.TestCase):
         runtime_stop_event = threading.Event()
         attempt_stop_event.set()
 
-        with patch("orchestrator.core.discord.live_voice_gateway_runtime.logger.exception") as logger_mock:
+        with patch(
+            "orchestrator.core.discord.live_voice_gateway_runtime.logger.exception"
+        ) as logger_mock:
             _healthcheck_loop(
                 conn=object(),
                 attempt_stop_event=attempt_stop_event,
@@ -32,7 +34,9 @@ class LiveVoiceGatewayRuntimeTests(unittest.TestCase):
                 "orchestrator.core.discord.live_voice_gateway_runtime._leader_lock_healthcheck",
                 side_effect=RuntimeError("connection lost"),
             ),
-            patch("orchestrator.core.discord.live_voice_gateway_runtime.logger.exception") as logger_mock,
+            patch(
+                "orchestrator.core.discord.live_voice_gateway_runtime.logger.exception"
+            ) as logger_mock,
         ):
             _healthcheck_loop(
                 conn=object(),

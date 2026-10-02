@@ -13,7 +13,9 @@ from tests.test_discord_commands import DiscordCommandApiTestHarness
 
 
 class PmInterviewFlowTests(DiscordCommandApiTestHarness):
-    def test_incomplete_pm_request_stays_in_interview_mode_and_does_not_seed_jira(self) -> None:
+    def test_incomplete_pm_request_stays_in_interview_mode_and_does_not_seed_jira(
+        self,
+    ) -> None:
         with (
             self.session_factory() as session,
             patch(
@@ -51,7 +53,11 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
             ),
             patch(
                 "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
-                new=MagicMock(side_effect=AssertionError("PM interview should not seed Jira before completion")),
+                new=MagicMock(
+                    side_effect=AssertionError(
+                        "PM interview should not seed Jira before completion"
+                    )
+                ),
             ) as seed_mock,
         ):
             response = execute_discord_command(
@@ -86,9 +92,15 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                         "capability": "Share entry points",
                         "delivery": "Build share entry points in onboarding and Profile so users can start the share flow from the intended surfaces.",
                         "expected_outcome": "Users can reach the share flow from onboarding and Profile.",
-                        "acceptance_criteria": ["Needs entry points in onboarding and profile."],
-                        "how_to_test": ["Verify onboarding and Profile both expose the share entry point"],
-                        "done_means": ["Share entry points are live and covered by automation"],
+                        "acceptance_criteria": [
+                            "Needs entry points in onboarding and profile."
+                        ],
+                        "how_to_test": [
+                            "Verify onboarding and Profile both expose the share entry point"
+                        ],
+                        "done_means": [
+                            "Share entry points are live and covered by automation"
+                        ],
                         "dependencies": [],
                         "risks": ["Entry-point behavior can drift between surfaces"],
                         "labels": ["engineering"],
@@ -110,7 +122,9 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "required_tasks": ["Add share-link verification"],
                 "technical_decisions": [],
                 "pm_decision_requests": [],
-                "acceptance_impacts": ["Security checks must be covered in acceptance."],
+                "acceptance_impacts": [
+                    "Security checks must be covered in acceptance."
+                ],
             },
         )
         testing_stage = TestingStageOutput.from_payload(
@@ -128,7 +142,10 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
         )
         planning_result = SpecialistPlanningResult(
             planning_state="planning_completed",
-            required_tasks=("Implement share entry points", "Add share-link verification"),
+            required_tasks=(
+                "Implement share entry points",
+                "Add share-link verification",
+            ),
             findings=("Share flows need abuse checks.",),
             recommendations=("Keep the first version link-only.",),
             acceptance_impacts=("Acceptance criteria should cover store fallback.",),
@@ -162,7 +179,11 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                             "A user can share a link from onboarding",
                             "A user can share a link from profile",
                         ],
-                        "scope_in": ["Share link", "Profile entry point", "Onboarding entry point"],
+                        "scope_in": [
+                            "Share link",
+                            "Profile entry point",
+                            "Onboarding entry point",
+                        ],
                         "scope_out": ["Referral rewards"],
                         "ui_references": ["Profile page", "Onboarding screen"],
                         "constraints": ["iOS and Android"],
@@ -170,7 +191,9 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                         "success_outcomes": ["More invites sent"],
                         "recommendation": "Ship the link-only version first.",
                         "open_questions": [],
-                        "next_steps": ["Create the parent feature and planning tickets."],
+                        "next_steps": [
+                            "Create the parent feature and planning tickets."
+                        ],
                     },
                     "status": "ready_to_write",
                     "ready_to_write": True,
@@ -184,7 +207,9 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                         "all_parent_issue_keys": ["TP-501"],
                         "created_parent_issue_keys": ["TP-501"],
                         "updated_parent_issue_keys": [],
-                        "created_parent_issue_links": ["https://jira.example.com/browse/TP-501"],
+                        "created_parent_issue_links": [
+                            "https://jira.example.com/browse/TP-501"
+                        ],
                         "updated_parent_issue_links": [],
                     },
                 ),
@@ -224,14 +249,24 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(response.data["planning_state"], "planning_completed")
         self.assertIn("TP-501", response.message)
         self.assertIn("Issue upsert complete", response.message)
-        self.assertEqual(seed_parent_mock.call_args.kwargs["pm_status"], "ready_to_write")
-        self.assertEqual(seed_children_mock.call_args.kwargs["pm_status"], "pm_completed")
+        self.assertEqual(
+            seed_parent_mock.call_args.kwargs["pm_status"], "ready_to_write"
+        )
+        self.assertEqual(
+            seed_children_mock.call_args.kwargs["pm_status"], "pm_completed"
+        )
         planning_package = seed_children_mock.call_args.kwargs["planning_package"]
         self.assertEqual(planning_package["planning_state"], "planning_completed")
         self.assertEqual(len(planning_package["child_issues"]), 1)
-        self.assertEqual(planning_package["child_issues"][0]["summary"], "Implement share entry points")
+        self.assertEqual(
+            planning_package["child_issues"][0]["summary"],
+            "Implement share entry points",
+        )
         self.assertIn("architecture", planning_package["specialist_outputs"])
-        self.assertIn("Parent[Parent brief] --> Child[Engineering child]", planning_package["architecture_diagram"])
+        self.assertIn(
+            "Parent[Parent brief] --> Child[Engineering child]",
+            planning_package["architecture_diagram"],
+        )
         planning_mock.assert_called_once()
 
 

@@ -2,36 +2,34 @@ FROM golang:1.25-trixie AS live-voice-transport-builder
 
 WORKDIR /src/discord_live_voice_transport
 
-ARG GODAVE_VERSION=v0.1.0
+ARG TARGETARCH
 ARG LIBDAVE_VERSION=v1.1.0
-ARG LIBDAVE_FORCE_BUILD=0
 ENV SHELL=/bin/sh
+ENV GOTOOLCHAIN=local GOFLAGS=-p=2
 
 RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       build-essential \
+      binutils \
       cmake \
-      curl \
       git \
       libssl-dev \
-      nasm \
-      ninja-build \
-      perl \
       pkg-config \
-      python3 \
-      unzip \
-      zip && \
+      python3 && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://raw.githubusercontent.com/disgoorg/godave/${GODAVE_VERSION}/scripts/libdave_install.sh" \
-      -o /tmp/libdave_install.sh && \
-    if [ "${LIBDAVE_FORCE_BUILD}" = "1" ] || [ "${LIBDAVE_FORCE_BUILD}" = "true" ] || [ "${LIBDAVE_FORCE_BUILD}" = "yes" ]; then \
-      FORCE_BUILD=1 sh /tmp/libdave_install.sh "${LIBDAVE_VERSION}"; \
-    else \
-      sh /tmp/libdave_install.sh "${LIBDAVE_VERSION}"; \
-    fi && \
-    rm -f /tmp/libdave_install.sh
+COPY scripts/install_libdave.py /tmp/install_libdave.py
+COPY third_party/licenses/libdave-openssl3 /tmp/libdave-notices
+
+# Pinned native source builds require OpenSSL 3; no prebuilt or crypto fallback.
+RUN python3 /tmp/install_libdave.py \
+      --version "${LIBDAVE_VERSION}" \
+      --architecture "${TARGETARCH}" \
+      --notices /tmp/libdave-notices \
+      --parallel 1 \
+      --prefix /root/.local && \
+    rm -f /tmp/install_libdave.py
 
 COPY discord_live_voice_transport/go.mod ./
 COPY discord_live_voice_transport/go.sum ./
@@ -43,24 +41,45 @@ ENV LD_LIBRARY_PATH=/root/.local/lib
 
 RUN --mount=type=cache,target=/root/.cache/go-build,sharing=locked \
     --mount=type=cache,target=/go/pkg/mod,sharing=locked \
-    go build -tags=libdave -o /tmp/live-voice-transport ./cmd/discord-live-voice-transport
+    go mod download && go mod verify && \
+    mkdir -p /root/.local/licenses/voice-go /root/.local/share/master-builder/voice-go && \
+    go list -m -json all > /root/.local/share/master-builder/voice-go/modules.json && \
+    go mod graph > /root/.local/share/master-builder/voice-go/module-graph.txt && \
+    go mod vendor && \
+    go test -mod=vendor -tags=libdave ./... && \
+    go build -mod=vendor -tags=libdave -o /tmp/live-voice-transport ./cmd/discord-live-voice-transport && \
+    cp "$(go env GOROOT)/LICENSE" /root/.local/licenses/voice-go/Go-LICENSE && \
+    find vendor -type f \( -iname '*license*' -o -iname '*notice*' -o -iname '*copyright*' -o -iname '*copying*' \) \
+      -exec cp --parents '{}' /root/.local/licenses/voice-go/ \; && \
+    cp go.mod go.sum /root/.local/share/master-builder/voice-go/ && \
+    go version > /root/.local/share/master-builder/voice-go/go-version.txt && \
+    go version -m /tmp/live-voice-transport > /root/.local/share/master-builder/voice-go/build-info.txt && \
+    tar -czf /root/.local/share/master-builder/voice-go/vendor-source.tar.gz vendor && \
+    tar -czf /root/.local/share/master-builder/voice-go/transport-source.tar.gz go.mod go.sum cmd internal
 
 
 FROM python:3.11-slim-trixie AS python-common-base
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator
 ENV ORCHESTRATOR_ADMIN_USERNAME=admin
-ENV ORCHESTRATOR_ADMIN_PASSWORD=change-me
 ENV VIRTUAL_ENV=/opt/venv
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_LINK_MODE=copy
+ENV UV_HTTP_TIMEOUT=120
+ENV UV_HTTP_RETRIES=10
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 ENV PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000
 
-ARG CODEX_NPM_VERSION=latest
-ARG PLAYWRIGHT_NPM_VERSION=1.51.1
+COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /usr/local/bin/uv
+
+ARG CODEX_NPM_VERSION=0.160.0
+ARG PLAYWRIGHT_NPM_VERSION=1.58.2
 
 WORKDIR /app
+
+RUN printf '%s\n' "${CODEX_NPM_VERSION}" | grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+$' || \
+    { echo 'CODEX_NPM_VERSION must be an exact stable release' >&2; exit 1; }
 
 RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
@@ -105,29 +124,18 @@ RUN apt-get update -o Acquire::Retries=3 && \
       xvfb \
       xfonts-scalable && \
     npm install -g "@openai/codex@${CODEX_NPM_VERSION}" "playwright@${PLAYWRIGHT_NPM_VERSION}" && \
+    test "$(codex --version)" = "codex-cli ${CODEX_NPM_VERSION}" && \
     playwright install chromium && \
     rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 
-RUN python -m venv "${VIRTUAL_ENV}"
-
-RUN python - <<'PY'
-from pathlib import Path
-import tomllib
-
-project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-dependencies = project.get("project", {}).get("dependencies", [])
-voice_dependencies = project.get("project", {}).get("optional-dependencies", {}).get("voice", [])
-Path("/tmp/requirements-base.txt").write_text("\n".join(dependencies) + "\n", encoding="utf-8")
-Path("/tmp/requirements-voice.txt").write_text("\n".join(voice_dependencies) + "\n", encoding="utf-8")
-PY
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-base.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
 FROM python-common-base AS app-runtime-base
 
-COPY README.md ./
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY third_party ./third_party
 COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
@@ -182,9 +190,11 @@ RUN apt-get update -o Acquire::Retries=3 && \
 
 FROM python-android-base AS android-runtime
 
-COPY README.md ./
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY third_party ./third_party
 COPY .codex ./.codex
 COPY orchestrator ./orchestrator
+COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
 COPY scripts/qa_demo_android_recorder.py ./scripts/qa_demo_android_recorder.py
 COPY scripts/qa_demo_mobile_recorder.py ./scripts/qa_demo_mobile_recorder.py
 COPY scripts/qa_demo_release_context.py ./scripts/qa_demo_release_context.py
@@ -211,18 +221,26 @@ ENV LD_LIBRARY_PATH=/root/.local/lib
 RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       ffmpeg \
-      libopus0 && \
+      libopus0 \
+      libssl3t64 \
+      libstdc++6 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=live-voice-transport-builder /root/.local /root/.local
 COPY --from=live-voice-transport-builder /tmp/live-voice-transport /usr/local/bin/live-voice-transport
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-voice.txt
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project --extra voice
 
-COPY README.md ./
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY third_party ./third_party
 COPY .codex ./.codex
 COPY orchestrator ./orchestrator
+COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
+COPY scripts/qa_demo_android_recorder.py ./scripts/qa_demo_android_recorder.py
+COPY scripts/qa_demo_mobile_recorder.py ./scripts/qa_demo_mobile_recorder.py
+COPY scripts/qa_demo_release_context.py ./scripts/qa_demo_release_context.py
+COPY scripts/qa_demo_recorder.mjs ./scripts/qa_demo_recorder.mjs
 COPY alembic.ini ./alembic.ini
 
 RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \

@@ -31,17 +31,33 @@ def upgrade() -> None:
         sa.Column("stream", sa.String(length=16), nullable=False),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+        ),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("event_id"),
     )
-    op.create_index("ix_run_log_events_tenant_id", "run_log_events", ["tenant_id"], unique=False)
-    op.create_index("ix_run_log_events_project_id", "run_log_events", ["project_id"], unique=False)
-    op.create_index("ix_run_log_events_run_id", "run_log_events", ["run_id"], unique=False)
-    op.create_index("ix_run_log_events_agent_id", "run_log_events", ["agent_id"], unique=False)
-    op.create_index("ix_run_log_events_stage", "run_log_events", ["stage"], unique=False)
-    op.create_index("ix_run_log_events_recorded_at", "run_log_events", ["recorded_at"], unique=False)
+    op.create_index(
+        "ix_run_log_events_tenant_id", "run_log_events", ["tenant_id"], unique=False
+    )
+    op.create_index(
+        "ix_run_log_events_project_id", "run_log_events", ["project_id"], unique=False
+    )
+    op.create_index(
+        "ix_run_log_events_run_id", "run_log_events", ["run_id"], unique=False
+    )
+    op.create_index(
+        "ix_run_log_events_agent_id", "run_log_events", ["agent_id"], unique=False
+    )
+    op.create_index(
+        "ix_run_log_events_stage", "run_log_events", ["stage"], unique=False
+    )
+    op.create_index(
+        "ix_run_log_events_recorded_at", "run_log_events", ["recorded_at"], unique=False
+    )
 
 
 def downgrade() -> None:

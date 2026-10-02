@@ -12,11 +12,17 @@ from uuid import uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import (
+    record_agent_lifecycle_event,
+)
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.workflow.execution_lifecycle import apply_execution_failure
-from orchestrator.core.runs.service import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
+from orchestrator.core.runs.service import (
+    RUN_STATUS_DISPATCHING,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_RUNNING,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Run, WorkflowExecution
 
@@ -31,9 +37,14 @@ def worker_service_instance_id() -> str:
     return os.uname().nodename
 
 
-def worker_service_instance_id_for_mode(*, settings: Settings | None = None, mode: str | None = None) -> str:
+def worker_service_instance_id_for_mode(
+    *, settings: Settings | None = None, mode: str | None = None
+) -> str:
     resolved_settings = settings or get_settings()
-    base_id = str(getattr(resolved_settings, "agent_id", "") or "").strip() or os.uname().nodename
+    base_id = (
+        str(getattr(resolved_settings, "agent_id", "") or "").strip()
+        or os.uname().nodename
+    )
     normalized_mode = str(mode or "").strip().lower()
     if normalized_mode:
         return f"{base_id}:{normalized_mode}"
@@ -41,13 +52,17 @@ def worker_service_instance_id_for_mode(*, settings: Settings | None = None, mod
 
 
 def stale_run_cutoff(*, settings: Settings, now: datetime | None = None) -> datetime:
-    heartbeat_timeout_seconds = max(60, int(getattr(settings, "worker_run_stale_timeout_seconds", 300)))
+    heartbeat_timeout_seconds = max(
+        60, int(getattr(settings, "worker_run_stale_timeout_seconds", 300))
+    )
     anchor = now or datetime.now(timezone.utc)
     return anchor - timedelta(seconds=heartbeat_timeout_seconds)
 
 
 def _effective_last_seen_expr():  # noqa: ANN202
-    return func.coalesce(Run.last_heartbeat_at, Run.started_at, Run.dispatch_claimed_at, Run.created_at)
+    return func.coalesce(
+        Run.last_heartbeat_at, Run.started_at, Run.dispatch_claimed_at, Run.created_at
+    )
 
 
 def touch_run_heartbeat(
@@ -111,18 +126,29 @@ def recover_stale_running_runs(
     ]
     if normalized_excluded_run_ids:
         filters.append(Run.run_id.not_in(normalized_excluded_run_ids))
-    rows = session.execute(
-        select(Run)
-        .where(*filters)
-        .order_by(Run.started_at.asc(), Run.created_at.asc())
-    ).scalars().all()
+    rows = (
+        session.execute(
+            select(Run)
+            .where(*filters)
+            .order_by(Run.started_at.asc(), Run.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
 
     recovered: list[StaleRunRecoveryRecord] = []
     for row in rows:
-        last_seen = row.last_heartbeat_at or row.started_at or row.dispatch_claimed_at or row.created_at
+        last_seen = (
+            row.last_heartbeat_at
+            or row.started_at
+            or row.dispatch_claimed_at
+            or row.created_at
+        )
         recovered_at = now or datetime.now(timezone.utc)
         stale_status = str(row.status or "").strip().lower()
-        stale_kind = "dispatching" if stale_status == RUN_STATUS_DISPATCHING else "running"
+        stale_kind = (
+            "dispatching" if stale_status == RUN_STATUS_DISPATCHING else "running"
+        )
         message = (
             f"Recovered stale {stale_kind} run after heartbeat timeout. "
             f"previous_owner={row.worker_service_instance_id or 'unknown'} "
@@ -174,9 +200,14 @@ def recover_stale_running_runs(
                 {
                     "event_kind": "stale_run_recovered",
                     "previous_owner": row.worker_service_instance_id,
-                    "last_heartbeat_at": last_seen.isoformat() if last_seen is not None else None,
+                    "last_heartbeat_at": last_seen.isoformat()
+                    if last_seen is not None
+                    else None,
                     "recovered_by": recovered_by_service_instance_id,
-                    "stale_timeout_seconds": max(60, int(getattr(settings, "worker_run_stale_timeout_seconds", 300))),
+                    "stale_timeout_seconds": max(
+                        60,
+                        int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
+                    ),
                 },
                 sort_keys=True,
             ),

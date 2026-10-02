@@ -23,7 +23,10 @@ def present_discord_enqueue_conflict(
     enqueue_run_obj: _RunLike | None,
 ) -> DiscordEnqueueConflictPresentation:
     guidance = reason.guidance
-    if reason is EnqueueFailureReason.RUN_ALREADY_ACTIVE and enqueue_run_obj is not None:
+    if (
+        reason is EnqueueFailureReason.RUN_ALREADY_ACTIVE
+        and enqueue_run_obj is not None
+    ):
         return DiscordEnqueueConflictPresentation(
             detail=(
                 f"{prefix}: {reason.value} "
@@ -31,4 +34,6 @@ def present_discord_enqueue_conflict(
                 f"{guidance}"
             )
         )
-    return DiscordEnqueueConflictPresentation(detail=f"{prefix}: {reason.value}. {guidance}")
+    return DiscordEnqueueConflictPresentation(
+        detail=f"{prefix}: {reason.value}. {guidance}"
+    )

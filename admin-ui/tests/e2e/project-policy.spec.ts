@@ -10,13 +10,13 @@ import {
 
 test("project policy page saves the QA demo recording switch override", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
     policy_overrides: {},
     effective_policy: {
       ...tenant.policy,
@@ -29,7 +29,7 @@ test("project policy page saves the QA demo recording switch override", async ({
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
@@ -47,17 +47,17 @@ test("project policy page saves the QA demo recording switch override", async ({
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "PATCH",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/policy",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/policy",
       handler: async (route) => {
         savedPayload = await route.request().postDataJSON();
         return fulfillJson(route, {
@@ -74,7 +74,7 @@ test("project policy page saves the QA demo recording switch override", async ({
     },
   ]);
 
-  await page.goto("/example/projects/example-default/settings");
+  await page.goto("/example-workspace/projects/example-workspace-default/settings");
 
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "Automation" }).click();

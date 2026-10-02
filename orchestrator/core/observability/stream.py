@@ -57,7 +57,9 @@ class ProductEventStream:
                 if len(rows) < batch_limit:
                     break
 
-            next_marker = self.wait_for_marker(notification_marker, heartbeat_timeout_seconds)
+            next_marker = self.wait_for_marker(
+                notification_marker, heartbeat_timeout_seconds
+            )
             if next_marker <= notification_marker:
                 yield "\n"
                 continue

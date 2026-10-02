@@ -19,7 +19,9 @@ class RunQueueEventsTests(unittest.TestCase):
         self.assertFalse(is_postgres_database_url("not-a-url"))
 
     def test_postgres_dsn_from_database_url(self) -> None:
-        dsn = postgres_dsn_from_database_url("postgresql+psycopg://user:pass@localhost:5432/db")
+        dsn = postgres_dsn_from_database_url(
+            "postgresql+psycopg://user:pass@localhost:5432/db"
+        )
         self.assertTrue(dsn.startswith("postgresql://"))
         self.assertIn("user:pass", dsn)
         with self.assertRaisesRegex(ValueError, "requires a PostgreSQL"):
@@ -80,7 +82,9 @@ class RunQueueEventsTests(unittest.TestCase):
         session.get_bind.return_value.dialect.name = "postgresql"
         session.execute.side_effect = RuntimeError("pg notify failed")
 
-        with patch("orchestrator.storage.run_queue_events.logger.exception") as logger_mock:
+        with patch(
+            "orchestrator.storage.run_queue_events.logger.exception"
+        ) as logger_mock:
             notify_run_enqueued(
                 session,
                 tenant_id="t1",

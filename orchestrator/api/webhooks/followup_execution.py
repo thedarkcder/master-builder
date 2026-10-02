@@ -19,7 +19,9 @@ from orchestrator.core.communications import (
     DiscordSeedWithThreadAction,
     DiscordThreadReplyAction,
 )
-from orchestrator.core.communications.integration_contracts import TransportActionExecutor
+from orchestrator.core.communications.integration_contracts import (
+    TransportActionExecutor,
+)
 from orchestrator.core.observability.error import emit_hard_error
 from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
@@ -41,7 +43,9 @@ def _followup_context_type_for_message(
     normalized_command_name = str(command_name or "").strip().lower()
     normalized_content = str(content or "").strip()
     normalized_issue_key = str(issue_key or "").strip().upper()
-    normalized_response_followup_context_type = str(response_followup_context_type or "").strip().lower()
+    normalized_response_followup_context_type = (
+        str(response_followup_context_type or "").strip().lower()
+    )
     if normalized_response_followup_context_type:
         return normalized_response_followup_context_type
     if normalized_command_name == "pm":
@@ -68,7 +72,9 @@ class DiscordFollowupExecutionDeps:
     consume_pending_ask_action: Callable[..., dict | None]
 
 
-def resolve_issue_key_hint(*, command_text: str, command_params: dict[str, str] | None) -> str | None:
+def resolve_issue_key_hint(
+    *, command_text: str, command_params: dict[str, str] | None
+) -> str | None:
     if isinstance(command_params, dict):
         candidate = str(command_params.get("issue_key") or "").strip().upper()
         if ISSUE_KEY_PATTERN.fullmatch(candidate):
@@ -160,12 +166,23 @@ async def run_discord_command_followup(
                             ingress_source="discord",
                         )
                         command_name_hint = command_response.command
-                        data = command_response.data if isinstance(command_response.data, dict) else {}
-                        requires_confirmation = bool(data.get("requires_confirmation")) and command_response.command == "ask"
+                        data = (
+                            command_response.data
+                            if isinstance(command_response.data, dict)
+                            else {}
+                        )
+                        requires_confirmation = (
+                            bool(data.get("requires_confirmation"))
+                            and command_response.command == "ask"
+                        )
                         if requires_confirmation:
                             request_id = str(data.get("request_id") or "").strip()
-                            proposed_command = str(data.get("proposed_command") or "").strip()
-                            summary = str(data.get("summary") or command_response.message or "").strip()
+                            proposed_command = str(
+                                data.get("proposed_command") or ""
+                            ).strip()
+                            summary = str(
+                                data.get("summary") or command_response.message or ""
+                            ).strip()
                             if request_id and proposed_command:
                                 content = "\n".join(
                                     [
@@ -175,7 +192,9 @@ async def run_discord_command_followup(
                                         "Approve this action?",
                                     ]
                                 )
-                                components = deps.ask_confirmation_components(request_id)
+                                components = deps.ask_confirmation_components(
+                                    request_id
+                                )
                             else:
                                 content = f"<@{user_id}> Command failed: ask confirmation payload was incomplete."
                         else:
@@ -185,14 +204,26 @@ async def run_discord_command_followup(
                                 user_id=user_id,
                                 command_response=command_response,
                             )
-                            raw_issue_key = str(data.get("issue_key") or "").strip().upper()
-                            followup_request_id = str(data.get("request_id") or "").strip() or None
-                            response_followup_context_type = str(data.get("followup_context_type") or "").strip() or None
+                            raw_issue_key = (
+                                str(data.get("issue_key") or "").strip().upper()
+                            )
+                            followup_request_id = (
+                                str(data.get("request_id") or "").strip() or None
+                            )
+                            response_followup_context_type = (
+                                str(data.get("followup_context_type") or "").strip()
+                                or None
+                            )
                             if ISSUE_KEY_PATTERN.fullmatch(raw_issue_key):
                                 issue_key = raw_issue_key
-                            if command_response.command == "reply" and bool(data.get("recheck_required")):
+                            if command_response.command == "reply" and bool(
+                                data.get("recheck_required")
+                            ):
                                 components = deps.ask_reply_components()
-                            if command_response.command == "ask" and not reply_to_message_id:
+                            if (
+                                command_response.command == "ask"
+                                and not reply_to_message_id
+                            ):
                                 initial_thread_attempted = True
                                 try:
                                     deps.transport_executor.execute(
@@ -208,7 +239,11 @@ async def run_discord_command_followup(
                                         )
                                     )
                                     sent_to_thread = True
-                                except (DiscordApiError, RuntimeError, ValueError) as exc:
+                                except (
+                                    DiscordApiError,
+                                    RuntimeError,
+                                    ValueError,
+                                ) as exc:
                                     logger.exception(
                                         "discord_ask_thread_send_failed tenant_id=%s user_id=%s error=%s",
                                         tenant_id,
@@ -216,12 +251,20 @@ async def run_discord_command_followup(
                                         exc,
                                     )
                                     components = deps.ask_reply_components()
-                            elif command_response.command == "issues" and bool(data.get("requires_input")) and not reply_to_message_id:
+                            elif (
+                                command_response.command == "issues"
+                                and bool(data.get("requires_input"))
+                                and not reply_to_message_id
+                            ):
                                 initial_thread_attempted = True
-                                followup_request_id = str(data.get("followup_request_id") or "").strip()
+                                followup_request_id = str(
+                                    data.get("followup_request_id") or ""
+                                ).strip()
                                 question_values = data.get("questions")
                                 questions = (
-                                    ClarificationQuestionSet.from_values(question_values).questions
+                                    ClarificationQuestionSet.from_values(
+                                        question_values
+                                    ).questions
                                     if isinstance(question_values, list)
                                     else ()
                                 )
@@ -238,7 +281,11 @@ async def run_discord_command_followup(
                                             )
                                         )
                                         sent_to_thread = True
-                                    except (DiscordApiError, RuntimeError, ValueError) as exc:
+                                    except (
+                                        DiscordApiError,
+                                        RuntimeError,
+                                        ValueError,
+                                    ) as exc:
                                         logger.exception(
                                             "discord_seed_followup_thread_send_failed tenant_id=%s user_id=%s error=%s",
                                             tenant_id,
@@ -246,7 +293,11 @@ async def run_discord_command_followup(
                                             exc,
                                         )
                     except HTTPException as exc:
-                        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                        detail = (
+                            exc.detail
+                            if isinstance(exc.detail, str)
+                            else str(exc.detail)
+                        )
                         logger.exception(
                             "discord_command_followup_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
                             tenant_id,
@@ -274,7 +325,11 @@ async def run_discord_command_followup(
                             event="discord_command_followup_failed",
                             error_ref=error_ref,
                             exc=exc,
-                            context={"tenant_id": tenant_id, "user_id": user_id, "channel_id": channel_id},
+                            context={
+                                "tenant_id": tenant_id,
+                                "user_id": user_id,
+                                "channel_id": channel_id,
+                            },
                         )
                         content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
                     if reply_to_message_id and not sent_to_thread:
@@ -297,7 +352,11 @@ async def run_discord_command_followup(
                                 reply_to_message_id,
                                 exc,
                             )
-                    if not sent_to_thread and not reply_to_message_id and not initial_thread_attempted:
+                    if (
+                        not sent_to_thread
+                        and not reply_to_message_id
+                        and not initial_thread_attempted
+                    ):
                         try:
                             deps.transport_executor.execute(
                                 action=DiscordAskWithThreadAction(
@@ -367,7 +426,11 @@ async def run_discord_command_followup(
                 event="discord_command_followup_runtime_failed",
                 error_ref=error_ref,
                 exc=exc,
-                context={"tenant_id": tenant_id, "user_id": user_id, "channel_id": channel_id},
+                context={
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                },
             )
             content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
         if not sent_to_thread and not interaction_ack_sent:
@@ -396,7 +459,10 @@ async def run_discord_command_followup(
                         with deps.session_factory() as session:
                             tenant = session.get(Tenant, tenant_id)
                             if tenant is not None and tenant.is_enabled:
-                                fallback_message_id = reply_to_message_id or f"interaction-{correlation_id}"
+                                fallback_message_id = (
+                                    reply_to_message_id
+                                    or f"interaction-{correlation_id}"
+                                )
                                 deps.transport_executor.execute(
                                     action=DiscordThreadReplyAction(
                                         tenant_id=tenant.tenant_id,
@@ -453,7 +519,9 @@ async def run_discord_ask_confirmation_followup(
         with deps.session_factory() as session:
             tenant = session.get(Tenant, tenant_id)
             if tenant is None or not tenant.is_enabled:
-                content = f"<@{user_id}> Ask confirmation failed: tenant is unavailable."
+                content = (
+                    f"<@{user_id}> Ask confirmation failed: tenant is unavailable."
+                )
             else:
                 pending = deps.consume_pending_ask_action(
                     session=session,
@@ -472,7 +540,9 @@ async def run_discord_ask_confirmation_followup(
                     elif decision == "reject":
                         content = f"<@{user_id}> Action rejected. No changes were made."
                     else:
-                        proposed_command = str(pending.get("proposed_command") or "").strip()
+                        proposed_command = str(
+                            pending.get("proposed_command") or ""
+                        ).strip()
                         if not proposed_command:
                             content = f"<@{user_id}> Ask approval failed: missing proposed command."
                         elif command_matches(proposed_command, command_name="ask"):
@@ -498,7 +568,11 @@ async def run_discord_ask_confirmation_followup(
                                     command_response=command_response,
                                 )
                             except HTTPException as exc:
-                                detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                                detail = (
+                                    exc.detail
+                                    if isinstance(exc.detail, str)
+                                    else str(exc.detail)
+                                )
                                 logger.exception(
                                     "discord_ask_approval_http_error tenant_id=%s user_id=%s channel_id=%s detail=%s error=%s",
                                     tenant_id,
@@ -507,7 +581,9 @@ async def run_discord_ask_confirmation_followup(
                                     detail,
                                     exc,
                                 )
-                                content = f"<@{user_id}> Approved action failed: {detail}"
+                                content = (
+                                    f"<@{user_id}> Approved action failed: {detail}"
+                                )
                             except Exception as exc:  # pragma: no cover
                                 error_ref = uuid4().hex[:8]
                                 logger.exception(
@@ -521,7 +597,11 @@ async def run_discord_ask_confirmation_followup(
                                     event="discord_ask_approval_execute_failed",
                                     error_ref=error_ref,
                                     exc=exc,
-                                    context={"tenant_id": tenant_id, "user_id": user_id, "channel_id": channel_id},
+                                    context={
+                                        "tenant_id": tenant_id,
+                                        "user_id": user_id,
+                                        "channel_id": channel_id,
+                                    },
                                 )
                                 content = f"<@{user_id}> Approved action failed due to an internal error. Ref: `{error_ref}`"
     except Exception as exc:  # pragma: no cover
@@ -537,7 +617,11 @@ async def run_discord_ask_confirmation_followup(
             event="discord_ask_approval_runtime_failed",
             error_ref=error_ref,
             exc=exc,
-            context={"tenant_id": tenant_id, "user_id": user_id, "channel_id": channel_id},
+            context={
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "channel_id": channel_id,
+            },
         )
         content = f"<@{user_id}> Approved action failed due to an internal error. Ref: `{error_ref}`"
     try:
@@ -559,7 +643,9 @@ async def run_discord_ask_confirmation_followup(
         )
 
 
-def _emit_followup_send_failed(*, event: str, tenant_id: str, user_id: str, channel_id: str, exc: Exception) -> None:
+def _emit_followup_send_failed(
+    *, event: str, tenant_id: str, user_id: str, channel_id: str, exc: Exception
+) -> None:
     error_ref = uuid4().hex[:8]
     logger.exception(
         "%s tenant_id=%s user_id=%s error_ref=%s error=%s",

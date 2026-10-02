@@ -11,7 +11,11 @@ from orchestrator.core.platform.admin_notifications import (
     resolve_admin_notification_state,
 )
 from orchestrator.storage.models import Tenant
-from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthError, AtlassianOAuthHttpError
+from orchestrator.tools.atlassian_oauth_models import (
+    AtlassianOAuthAuthRequiredError,
+    AtlassianOAuthError,
+    AtlassianOAuthHttpError,
+)
 
 
 def _is_jira_reauth_required(exc: Exception) -> bool:
@@ -41,12 +45,20 @@ def list_jira_projects_for_connection(
 ):  # noqa: ANN001
     connection = session.get(atlassian_oauth_connection_model, connection_id)
     if connection is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Atlassian connection not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Atlassian connection not found",
+        )
     tenant = session.execute(
-        select(Tenant).where(Tenant.jira_config["connection_id"].as_string() == connection.connection_id)
+        select(Tenant).where(
+            Tenant.jira_config["connection_id"].as_string() == connection.connection_id
+        )
     ).scalar_one_or_none()
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Atlassian connection is not linked to a tenant")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Atlassian connection is not linked to a tenant",
+        )
 
     notification_scope = AdminNotificationScope(
         scope_type="jira_connection",
@@ -86,7 +98,9 @@ def list_jira_projects_for_connection(
             ) from exc
         raise
     client = atlassian_oauth_client_fn(session=session, settings=settings)
-    projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
+    projects = client.list_projects(
+        access_token=access_token, cloud_id=connection.cloud_id
+    )
     resolve_admin_notification_state(
         session=session,
         scope=notification_scope,

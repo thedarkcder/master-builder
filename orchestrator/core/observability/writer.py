@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.observability.models import EventClass, ProductEvent
-from orchestrator.core.observability.notifications import publish_product_event_notification
+from orchestrator.core.observability.notifications import (
+    publish_product_event_notification,
+)
 from orchestrator.core.observability.repository import ProductEventRepository
 from orchestrator.storage.models import WorkflowOperationAttempt
 
@@ -73,10 +75,18 @@ class ProductEventWriter:
         normalized_message = redact_sensitive_text(str(message or "").strip())
         normalized_event_kind = str(event_kind or "").strip().lower()
         normalized_tenant_id = str(tenant_id or "").strip()
-        if not normalized_tenant_id or not normalized_message or not normalized_event_kind:
-            raise ValueError("Product events require tenant_id, event_kind, and message")
+        if (
+            not normalized_tenant_id
+            or not normalized_message
+            or not normalized_event_kind
+        ):
+            raise ValueError(
+                "Product events require tenant_id, event_kind, and message"
+            )
         row = ProductEvent(
-            event_sequence=_event_sequence(event_id=normalized_event_id, recorded_at=timestamp),
+            event_sequence=_event_sequence(
+                event_id=normalized_event_id, recorded_at=timestamp
+            ),
             event_id=normalized_event_id,
             event_class=event_class,
             tenant_id=normalized_tenant_id,
@@ -137,11 +147,15 @@ def _normalize_payload(payload: dict | None) -> dict[str, object]:
     return normalized
 
 
-def _validate_attempt_ownership(*, session: Session, operation_id: str | None, attempt_id: str | None) -> None:
+def _validate_attempt_ownership(
+    *, session: Session, operation_id: str | None, attempt_id: str | None
+) -> None:
     if operation_id is None and attempt_id is None:
         return
     if operation_id is None or attempt_id is None:
-        raise ValueError("Operation-scoped events require operation_id and attempt_id together")
+        raise ValueError(
+            "Operation-scoped events require operation_id and attempt_id together"
+        )
     attempt = session.get(WorkflowOperationAttempt, attempt_id)
     if attempt is None or attempt.operation_id != operation_id:
         raise ValueError("Event attempt_id must belong to the supplied operation_id")

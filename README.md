@@ -1,423 +1,188 @@
-# master-builder
+# Master Builder
 
-Multi-tenant Jira-driven agent orchestrator service.
+Master Builder is a self-hosted, multi-tenant service that coordinates AI-assisted software delivery from Jira work items. It connects Jira and GitHub, queues work for execution workers, records workflow state and evidence, and provides a Next.js administration interface. Optional integrations support Discord, knowledge search, deployment previews and QA recordings.
 
-## Deployment packaging
-- Deployment execution contract: `docs/deployment-packaging.md`
-- Provider package workspace: `deploy/README.md`
-- Shared deployment contracts:
-  - `deploy/common/env.required.md`
-  - `deploy/common/service-profile.md`
+This is an early project (`0.1.0`). Read the [readiness report](OPEN_SOURCE_READINESS_REPORT.md) before publishing or deploying it. API schemas and extension interfaces are provisional. Workers execute repository code and development tools: use isolated machines and grant credentials only for repositories you authorize.
 
 ## Requirements
-- Python 3.11+
-- Atlassian OAuth app credentials for Jira connect flow
 
-## Local setup
+- Python 3.11+ on a current patch release, [uv](https://docs.astral.sh/uv/getting-started/installation/), and Git.
+- Node.js 20.9+ and npm for the administration UI.
+- Docker Engine or Docker Desktop with Docker Compose v2 for local backing services. For first full runtime-image builds, budget at least 30 GiB of free host and Docker storage; dependency installation and layer export temporarily duplicate data. This is planning headroom, not a measured minimum.
+- PostgreSQL with the `vector` extension; the supplied Compose stack provides it.
+- A C compiler and `pkg-config` for native header contract tests in the Python
+  suite. Debian/Ubuntu packages are `build-essential` and `pkg-config`; macOS
+  developers need Xcode Command Line Tools and `pkg-config`.
+
+You can run the local API and UI without Jira, GitHub, Discord or company infrastructure credentials. Executing delivery workflows requires your own Jira OAuth app, GitHub App installation, and an authenticated supported agent runtime. Mobile QA additionally requires platform-specific toolchains.
+
+## Installation and support boundary
+
+Use a complete source checkout or a runtime image built from this repository. The Python wheel is not a standalone service installer; runtime startup validates the required source assets and fails with setup guidance if they are absent. `uv build` checks packaging, not independent service installation.
+
+See the [support matrix](docs/support-matrix.md) for platform prerequisites and validation limits. Mobile QA, voice and provider deployment packages are experimental; AWS/GCP directories are design specifications. The Docker runtime pins Codex CLI `0.160.0`; real authenticated delivery and provider recovery require separate verification.
+
+## Quick start
+
+Install the locked development dependencies:
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev]
+uv sync --frozen --extra dev
+uv run --frozen --extra dev python scripts/init_local_env.py
 ```
 
-Set required environment values:
+The initializer creates private `.env` and `admin-ui/.env.local` files with independent random passwords, signing secrets and a Fernet encryption key, plus `.runtime-home/seaweedfs/s3.json` containing environment references for storage credentials. It refuses to overwrite existing configuration. Inspect your own `.env` privately to find the initial administrator password, and see [configuration](docs/configuration.md) for optional settings. Compose reads `.env`; the Python service reads exported environment variables, and Next.js reads `admin-ui/.env.local`.
+
+Start the core API and its backing services. This deliberately selects services instead of starting optional workers and public tunnels:
+
 ```bash
-export ORCHESTRATOR_ADMIN_USERNAME=admin
-export ORCHESTRATOR_ADMIN_PASSWORD=change-me
-export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@localhost:60003/orchestrator
-export ORCHESTRATOR_CORS_ORIGINS=http://localhost:60002,http://127.0.0.1:60002
-export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:60002
-export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:60001
-export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=smtp
-export ORCHESTRATOR_EMAIL_FROM_ADDRESS=no-reply@masterbuilder.local
-export ORCHESTRATOR_SMTP_HOST=localhost
-export ORCHESTRATOR_SMTP_PORT=60004
-# Production email via Resend (HTTPS API, no SMTP): set provider to `resend`, add a Resend API key,
-# and use ORCHESTRATOR_EMAIL_FROM_ADDRESS on a domain you verified in the Resend dashboard.
-# export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=resend
-# export ORCHESTRATOR_RESEND_API_KEY=re_xxxxxxxx
-export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
-export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
-export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
-export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
-export ORCHESTRATOR_CODEX_STDERR_LOG_MODE=errors_only # all|errors_only|off
-export ORCHESTRATOR_CODEX_PERSIST_TURN_COMPLETED_USAGE=true
-export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
-export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator
-export ORCHESTRATOR_VOICE_STT_PROVIDER=whisper
-export ORCHESTRATOR_VOICE_TTS_PROVIDER=pocket_tts
-# Optional fallback voice if room/persona config does not supply one.
-export ORCHESTRATOR_POCKET_TTS_VOICE=alba
-export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
-from cryptography.fernet import Fernet
-print(Fernet.generate_key().decode())
-PY
-)
-
-# Store OAuth secret values via managed secrets API/UI, not shell exports:
-# - secret ref JIRA_OAUTH_CLIENT_ID -> Jira OAuth client id
-# - secret ref JIRA_OAUTH_CLIENT_SECRET -> Jira OAuth client secret
-
+docker compose up --build -d api
+curl --fail http://localhost:60001/health
 ```
 
-Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
-For containers, run one-time login and keep the shared Codex auth volume:
-```bash
-docker compose run --rm run-worker codex login --device-auth
-```
+The health response should contain `"status":"ok"`. Database migrations run through the Compose `migrate` service before the API starts. Container builds download public packages and browser tooling and can take several minutes.
 
-## Jira release-train automation (repo-level)
-This repo uses two release-train workflows:
-- a fast label sync loop for `Ready to Release` issues
-- a close loop that waits checks, merges release PRs, and closes Jira issues
+Start the UI on your host in a second terminal:
 
-Workflows:
-- `.github/workflows/release-train-sync.yml`
-  - runs every 30 minutes (and manual dispatch)
-  - assigns `release:vX.Y.Z` labels to `READY TO RELEASE` issues
-- `.github/workflows/release-train-close.yml`
-  - runs hourly (plus release publish/manual dispatch)
-  - finds `release:vX.Y.Z` issues, waits for required checks, merges matching PRs to `main`, then transitions issues to `Done`
-
-Enable with:
-- Repository variable: `ENABLE_JIRA_RELEASE_AUTOMATION=true`
-- Variables:
-  - `RELEASE_JIRA_BASE_URL`
-  - optional `RELEASE_JIRA_CLOUD_ID` (required for scoped Atlassian API tokens)
-  - `RELEASE_JIRA_EMAIL`
-  - `RELEASE_JIRA_PROJECT_KEY`
-  - optional `RELEASE_DONE_STATUS` (default `Done`)
-- Secret:
-  - `RELEASE_JIRA_API_TOKEN`
-
-Detailed setup:
-- `docs/release-train-automation.md`
-- `docs/run-decision-engine.md` (where run queue/start decisions are made)
-
-## Public API
-- `GET /health`
-- `POST /jira/webhook/{tenant_id}`
-- `GET /runs/{run_id}` (admin-auth protected run lookup policy)
-
-## Admin API
-- `GET /api/admin/tenants`
-- `POST /api/admin/tenants`
-- `GET /api/admin/tenants/{tenant_id}`
-- `PUT /api/admin/tenants/{tenant_id}`
-- `DELETE /api/admin/tenants/{tenant_id}`
-- `POST /api/admin/tenants/{tenant_id}/test-jira`
-- `POST /api/admin/tenants/{tenant_id}/test-github`
-- `GET /api/admin/runs`
-- `GET /api/admin/runs/{run_id}`
-- `GET /api/admin/secrets`
-- `PUT /api/admin/secrets/{secret_ref}`
-- `POST /api/admin/secrets/resolve`
-
-All admin and run lookup endpoints use HTTP Basic auth with:
-- username: `ORCHESTRATOR_ADMIN_USERNAME`
-- password: `ORCHESTRATOR_ADMIN_PASSWORD`
-
-## Managed secrets
-The orchestrator now supports an encrypted managed secret store (database-backed) with environment fallback:
-- store/update refs via admin API/UI without restarting containers
-- resolve refs at runtime for Jira OAuth, GitHub App credentials, and webhook secrets
-- list endpoints never return plaintext values
-
-Example upsert:
-```bash
-AUTH_HEADER="Authorization: Basic $(printf '%s:%s' \"$ORCHESTRATOR_ADMIN_USERNAME\" \"$ORCHESTRATOR_ADMIN_PASSWORD\" | base64)"
-curl \
-  -X PUT \
-  -H "$AUTH_HEADER" \
-  -H 'Content-Type: application/json' \
-  -d '{"value":"12345"}' \
-  http://localhost:60001/api/admin/secrets/MB_GH_APP_ID
-```
-
-Example resolve check:
-```bash
-AUTH_HEADER="Authorization: Basic $(printf '%s:%s' \"$ORCHESTRATOR_ADMIN_USERNAME\" \"$ORCHESTRATOR_ADMIN_PASSWORD\" | base64)"
-curl \
-  -X POST \
-  -H "$AUTH_HEADER" \
-  -H 'Content-Type: application/json' \
-  -d '{"secret_ref":"MB_GH_APP_ID"}' \
-  http://localhost:60001/api/admin/secrets/resolve
-```
-
-## CLI entrypoints
-```bash
-python -m orchestrator migrate
-python -m orchestrator worker-runs
-python -m orchestrator worker-webhooks
-python -m orchestrator run --tenant TENANT_ID --issue MAB-123
-python -m orchestrator poll --tenant all
-python -m orchestrator poll --tenant TENANT_ID
-```
-
-Equivalent installed console script:
-```bash
-orchestrator migrate
-```
-
-## Run locally
-Start API:
-```bash
-uvicorn orchestrator.api.main:app --reload --port 60001
-```
-
-Start run worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
-```bash
-python -m orchestrator worker-runs
-```
-
-Start webhook worker (processes queued Jira/GitHub/Discord webhook jobs):
-```bash
-python -m orchestrator worker-webhooks
-```
-
-## Admin UI (Next.js + shadcn)
-The admin UI lives in `admin-ui/` and runs separately from the API service.
-
-Local UI dev:
 ```bash
 cd admin-ui
-npm install
+npm ci
 npm run dev
 ```
 
-Default UI URL: `http://localhost:60002`
-Login route: `http://localhost:60002/login`
+For a full-container UI instead, run `docker compose up --build -d admin-ui`. Compose supplies the internal backend origin `http://api:4000` and UI port `4100`; keep `AUTH_URL` set to the browser-facing URL.
 
-UI sections:
-- `/tenants` for list and health checks
-- `/tenants/new` for wizard-based tenant setup (Jira connect + GitHub install)
-- `/tenants/{tenant_id}/edit` for structured tenant update form
-- `/runs` for run observability
+Open [the local login page](http://localhost:60002/login) and sign in with `ORCHESTRATOR_ADMIN_USERNAME` and the password you generated. This core check does not run an agent or create external work items. The SMTP sink is available at [Mailpit](http://localhost:60005).
 
-## Docker
-Build and run API + worker + Postgres + optional admin UI + tailscale sidecar:
+To stop the local services without deleting data:
+
 ```bash
-cp .env.example .env
-docker compose up --build
+docker compose down
 ```
 
-API is exposed on `http://localhost:60001`.
-Admin UI is exposed on `http://localhost:60002`.
-Postgres is exposed on `localhost:60003`.
-Mailpit SMTP is exposed on `localhost:60004`.
-Mailpit inbox UI is exposed on `http://localhost:60005`.
-Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
+For host Python development, export your local settings, point `ORCHESTRATOR_DATABASE_URL` at the host Postgres port, and use `ORCHESTRATOR_SMTP_HOST=127.0.0.1`, `ORCHESTRATOR_SMTP_PORT=60004`. Run migrations before the API:
 
-For host-based API development, you can run only the local mail sink:
 ```bash
-docker compose up -d mailpit
+ORCHESTRATOR_DATABASE_URL="$ORCHESTRATOR_MIGRATION_DATABASE_URL" uv run --frozen python -m orchestrator migrate
+uv run --frozen uvicorn orchestrator.api.main:app --reload --host 127.0.0.1 --port 60001
 ```
-Then keep `ORCHESTRATOR_SMTP_HOST=localhost` and `ORCHESTRATOR_SMTP_PORT=60004` so invite and onboarding emails land in Mailpit instead of a real provider.
 
-### Worker build toolchains
-The worker image now includes:
-- Java 17 JDK
-- Android SDK command-line tools (`platform-tools`, `build-tools;34.0.0`, `platforms;android-34`)
-- Node/npm, `ripgrep`, and Codex CLI
+Do not run the host API while the Compose API is using the same port. See [configuration](docs/configuration.md) for database credentials and host/container addresses.
 
-Quick checks:
+## Using delivery workflows
+
+1. Create a workspace (tenant) in the UI.
+2. Connect your Jira OAuth application and select the projects you authorize.
+3. Install your GitHub App into the intended repositories and configure repository allowlists.
+4. Configure your agent runtime and authenticate it on an isolated execution worker.
+5. Review project policy and ready statuses, then start the required worker processes.
+
+See [GitHub and Jira onboarding](docs/github-app-oauth-onboarding.md), [public contracts](docs/public-contracts.md), [workflow decisions](docs/run-decision-engine.md), and [deployment packaging](docs/deployment-packaging.md). Secrets belong in the encrypted managed secret store or the documented runtime environment, never in repository files.
+
+Discover commands without needing service credentials:
+
 ```bash
-docker compose run --rm run-worker java -version
-docker compose run --rm run-worker sdkmanager --version
+uv run --frozen python -m orchestrator --help
 ```
 
-Swift/iOS note:
-- `xcodebuild` (iOS/macOS builds) cannot run in this Linux worker container.
-- Use a macOS self-hosted runner/container host for iOS build/test steps.
+Typical commands after configuration:
 
-### Tailscale Funnel URL
-Start API and Tailscale sidecar:
 ```bash
-docker compose up -d api tailscale
+uv run --frozen python -m orchestrator worker-runs
+uv run --frozen python -m orchestrator worker-webhooks
+uv run --frozen python -m orchestrator run --tenant TENANT_ID --issue PROJECT-123
+uv run --frozen python -m orchestrator poll --tenant TENANT_ID
 ```
 
-Connect and verify:
+Worker startup is a separate operational step; local health does not prove that Jira delivery, agent execution or deployment previews are configured. Codex-backed execution needs the Codex CLI and its own authentication. A container worker can authenticate with `docker compose run --rm run-worker codex login --device-auth`. Keep that auth volume private. iOS execution requires a macOS worker and Xcode; it cannot run in Linux containers.
+
+## QA recording storage and native voice
+
+The local QA recording store uses the published **SeaweedFS 4.48** Docker image,
+pinned by digest, through its S3 interface. Start it separately when needed:
+
 ```bash
-docker exec -it master-builder-tailscale tailscale status
+docker compose up --build -d seaweedfs-init
 ```
 
-Expose API publicly on Funnel:
+Recordings remain private: the application uses scoped storage credentials, and
+users download through authenticated routes that enforce tenant, project and run
+ownership. The local lifecycle policy expires recordings after 30 days; physical
+deletion and backup retention need operator verification. The Python dependency
+named `minio` is an Apache-2.0 S3 client; it does not require a MinIO server.
+
+Existing MinIO deployments need an explicit backup, object-copy verification and
+configuration cutover before enabling the replacement. Keep the old volume until
+the migration is verified; changing the endpoint alone does not move recordings.
+See the storage setup and migration instructions in [ops/seaweedfs](ops/seaweedfs/README.md).
+
+Native Discord voice builds **libdave 1.1.0** from pinned upstream source with
+**OpenSSL 3**, rather than installing the upstream BoringSSL binary archive.
+The build must retain dependency notices and source material; a successful compile
+does not establish working Discord audio or clear every bundled component for
+redistribution. Voice remains experimental. See [distribution guidance](docs/distribution-material.md)
+and the [support matrix](docs/support-matrix.md) before building or distributing it.
+
+## Development and checks
+
 ```bash
-docker exec -it master-builder-tailscale tailscale funnel --bg 4000
-docker exec -it master-builder-tailscale tailscale funnel status
+uv run --frozen pytest
+uv run --frozen ruff check orchestrator tests scripts
+uv run --frozen ruff format --check orchestrator tests scripts
+uv run --frozen python scripts/quality/check_compat_shims.py
+uv run --frozen python scripts/quality/check_dead_code.py
+uv run --frozen python scripts/quality/check_no_todo_markers.py
+uv build
 ```
 
-The Funnel command uses the API container's internal port `4000`; the host-facing API port remains `60001`.
+Frontend checks:
 
-Use the returned `https://<device>.<tailnet>.ts.net` URL for external callbacks (Jira/GitHub/Discord) during local testing.
+Use the UI configuration generated in the quick start. Existing checkouts must add
+`ORCHESTRATOR_API_BASE_URL=http://localhost:60001` to their private
+`admin-ui/.env.local` before building; missing configuration stops the build.
 
-If your admin UI is hosted on Vercel, use this Funnel URL for API callbacks only.
-
-## Tenant onboarding
-1. Create a tenant via `POST /api/admin/tenants`.
-2. Connect Jira from the wizard (`Connect Jira`) and select `project_keys`.
-3. Connect GitHub integration from the wizard (`Install GitHub App`) so `installation_id` is saved automatically.
-4. Set tenant repository under `repos.github_repository`.
-5. Validate connections:
-   - `POST /api/admin/tenants/{tenant_id}/test-jira`
-   - `POST /api/admin/tenants/{tenant_id}/test-github`
-
-## Discord app setup
-Configure one Discord app (bot) and install it into your server. The same app can be reused across tenants.
-
-1. Create app + bot
-   - Open Discord Developer Portal: `https://discord.com/developers/applications`
-   - Create a new application
-   - Go to `Bot` and click `Add Bot`
-   - Copy and store bot token securely (do not commit it)
-
-2. Enable intents
-   - In `Bot` settings, enable:
-     - `SERVER MEMBERS INTENT`
-     - `MESSAGE CONTENT INTENT` (required for prefix commands like `!status`)
-
-3. Configure OAuth install
-   - In `OAuth2 > URL Generator`:
-     - Scopes: `bot` (and `applications.commands` if you later add slash commands)
-     - Bot permissions:
-       - `View Channels`
-       - `Send Messages`
-       - `Read Message History`
-       - `Manage Channels` (required for automatic tenant channel create/reuse)
-   - Open generated invite URL and install bot into your target Discord server
-
-4. Capture IDs (Developer Mode must be enabled in Discord client)
-   - Server ID (`guild_id`): right-click server -> `Copy Server ID`
-   - User ID for command allowlist: right-click user -> `Copy User ID`
-
-5. Configure backend globals
-   - Set `ORCHESTRATOR_DISCORD_GUILD_ID` to your server ID, or store it in Secrets Manager as `DISCORD_GUILD_ID`.
-   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_NAME_TEMPLATE` (default `tenant-{tenant_id}`).
-   - Optional: set `ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID` to place channels under a category.
-   - Store bot token in Secrets Manager under `DISCORD_BOT_TOKEN` (or change `ORCHESTRATOR_DISCORD_BOT_TOKEN_SECRET_REF`).
-   - Store Discord interactions public key in Secrets Manager under `DISCORD_INTERACTIONS_PUBLIC_KEY`.
-
-6. Configure Discord Interactions callback
-   - In Discord Developer Portal -> your app -> `General Information` copy `Public Key`.
-   - Save it as managed secret `DISCORD_INTERACTIONS_PUBLIC_KEY`.
-   - In Discord Developer Portal -> `Interactions Endpoint URL`, set:
-     - `https://<your-api-domain>/discord/interactions`
-
-7. Configure tenant in admin UI
-   - Enable Discord settings for tenant.
-   - Set `notify_events` checkboxes.
-   - Save tenant: backend auto-creates/reuses tenant channel and stores `channel_id`.
-
-Notes:
-- Server ID and channel ID are different values.
-- Native interactions endpoint is `POST /discord/interactions`.
-- Internal command API endpoint is `POST /discord/command/{tenant_id}`.
-- Slash commands are auto-synced to the configured guild on API startup (best-effort).
-- Command set includes `/ask` for board questions (`!ask` in internal command format).
-- Automatic channel create/reuse requires `Manage Channels` permission.
-8. Inspect repo bootstrap state:
-   - `GET /api/admin/tenants/{tenant_id}/repo-bootstrap`
-
-## GitHub App setup
-GitHub App credentials resolve with scoped fallback in this order:
-1. `project/{tenant_id}/{project_id}/{ref}`
-2. `tenant/{tenant_id}/{ref}`
-3. `platform/{ref}`
-4. `{ref}` (legacy direct ref / env var)
-
-Default refs:
-- secret ref `GITHUB_APP_SLUG` (GitHub App slug)
-- `ORCHESTRATOR_GITHUB_APP_ID_REF` (defaults to `GITHUB_APP_ID`)
-- `ORCHESTRATOR_GITHUB_PRIVATE_KEY_REF` (defaults to `GITHUB_APP_PRIVATE_KEY`)
-
-Tenants only store GitHub mode + installation state (`installation_id`).
-
-The service enforces tenant repo allowlists before clone/push/PR actions.
-
-## GitHub App creation and OAuth onboarding direction
-Yes, you need to create a GitHub App (or use one already owned by your org) and install it on target repos.
-
-The full creation + onboarding direction is documented here:
-- `docs/github-app-oauth-onboarding.md`
-
-Short version:
-- Create one org-level GitHub App with required repo permissions.
-- Configure app ID/private key in server-managed secret refs.
-- In tenant setup:
-  - create tenant basics
-  - click `Connect Jira`
-  - click `Install GitHub App`
-  - approve install on GitHub
-  - continue wizard to repo mapping and webhook checks
-
-GitHub App setup callback URL:
-- `GET /api/admin/github/install/callback`
-
-GitHub App webhook URL:
-- `POST /github/webhook`
-
-Recommended webhook signature verification setup:
-- set `ORCHESTRATOR_GITHUB_WEBHOOK_SECRET_REF` to the secret-ref key name (example: `secret/github-webhook`)
-- set the matching environment variable to the raw GitHub App webhook secret value
-- configure the same raw secret in GitHub App webhook settings
-
-## Jira webhook setup
-Point Jira webhook to:
-```text
-POST /jira/webhook/{tenant_id}
-```
-
-If tenant webhook auth is configured:
-- set `jira.webhook_secret_ref` to an environment variable name
-- send token via `X-Webhook-Token` or `Authorization: Bearer <token>`
-
-Only issues in tenant `ready_statuses` are enqueued (default: `Ready for Agent`).
-Issues in done status categories are never enqueued.
-Issue status is not auto-transitioned when a run starts.
-Status transitions into a ready status are treated as primary triggers; updates while already ready are rechecked idempotently.
-
-## End-to-end local flow
-1. Apply migrations:
-   - `python -m orchestrator migrate`
-2. Create tenant via Admin API.
-3. Send Jira webhook payload with issue status set to a configured ready status (for example `Ready for Agent`).
-4. Confirm run created:
-   - `GET /api/admin/runs?tenant_id=...`
-   - or `GET /runs/{run_id}`
-5. Use manual queue command when needed:
-   - `python -m orchestrator run --tenant TENANT_ID --issue MAB-123`
-
-## Repo bootstrap
-Canonical bootstrap utilities now ensure repo-level `.codex` assets exist:
-- `.codex/OPERATING.md`
-- `.codex/POLICY.md`
-- `.codex/skills/run_tests.md`
-- `.codex/skills/add_tests.md`
-- `.codex/skills/pr_checklist.md`
-- `.codex/skills/security_sanity.md`
-- optional `AGENTS.md` at repo root
-
-Bootstrap persistence is tracked per tenant/repo in `repo_bootstrap_states`.
-
-## Tests
 ```bash
-pytest -q
+cd admin-ui
+npm ci
+npm run test:unit
+npm run lint
+npm run build
+npx playwright install --with-deps chromium
+npm run test:e2e
 ```
 
-## Coverage
-```bash
-pytest -q --cov=orchestrator --cov-report=term-missing --cov-report=xml
-```
+Run `npm run build` before either browser suite: Playwright starts the production build with `next start` and fails if that build is absent. The default Playwright suite mocks backend responses; it validates frontend behavior, not end-to-end backend correctness. `npm run test:e2e:live` exercises a real disposable backend and database; read [CONTRIBUTING.md](CONTRIBUTING.md) before running it. Some baseline checks may fail; the readiness report records verification results and publication blockers.
 
-## Lint
-```bash
-ruff check .
-```
+## Architecture
 
-## Project structure
-- `orchestrator/api`: FastAPI routes and schemas.
-- `orchestrator/core`: workflow logic, policy/guardrail utilities, security.
-- `orchestrator/storage`: SQLAlchemy models and migrations.
-- `orchestrator/tools`: Jira/GitHub/git/bootstrap integrations.
-- `orchestrator/worker.py`: worker process loop.
+- `orchestrator/api`: FastAPI routes, authentication and request schemas.
+- `orchestrator/core`: policies, workflow decisions, runtime adapters and integration services.
+- `orchestrator/storage`: SQLAlchemy models, PostgreSQL persistence and Alembic migrations.
+- `orchestrator/tools`: governed Jira, GitHub, Git and repository bootstrap tools.
+- `orchestrator/prompts`: packaged agent prompt templates.
+- `admin-ui`: Next.js UI, Auth.js sessions and backend proxy routes.
+- `discord_live_voice_transport`: optional Go voice transport.
+- `deploy` and `ops`: deployment contracts and observability configuration.
+
+PostgreSQL owns durable operational state. ClickHouse and OpenTelemetry provide observability. Optional Temporal orchestration coordinates workers; execution workers own repository toolchains. [Public contracts](docs/public-contracts.md) identifies supported entry points and provisional extension boundaries.
+
+## Troubleshooting
+
+- **Compose reports a missing variable:** fill the required entry in `.env`; do not remove the validation or paste a shared key.
+- **API startup fails:** inspect `docker compose logs migrate api postgres clickhouse`. Check migrations, credentials, and the Postgres `vector` extension. Redact secrets and user data before sharing logs.
+- **UI login fails:** check the API health response, matching admin credentials, `AUTH_SECRET`, and the UI backend address. Host UI uses `http://localhost:60001`; a container must use its internal API address.
+- **Port is already in use:** stop the old process or adjust ports and update all API/UI callback and CORS URLs together.
+- **A run cannot execute:** verify its project policy, repository allowlist, runtime authentication and worker platform. A successful health check is not runtime readiness evidence.
+- **Browser tests cannot start:** install Chromium and its dependencies using the command above. Live tests require a running backend; mocked tests do not.
+
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Release notes are maintained in [CHANGELOG.md](CHANGELOG.md). Do not post credentials or exploit details in public issues.
+
+## License
+
+The project license is **GNU Affero General Public License version 3 only**, SPDX identifier **`AGPL-3.0-only`**. The official, unmodified license text in [LICENSE](LICENSE) governs use and distribution.
+
+Commercial use is permitted: you may use, modify, fork, redistribute and self-host the software, including charging for products, hosting, support or services. The AGPL imposes corresponding-source requirements, including the requirements in section 13 for users interacting with certain modified versions over a network. This summary does not replace the license's terms and adds no restrictions.
+
+Third-party dependencies and assets retain their own licenses and notices; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the readiness report for attribution and unresolved rights questions. Contributions are normally made under the project's existing AGPL license; no Contributor License Agreement is required.

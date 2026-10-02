@@ -28,7 +28,9 @@ DEFAULT_IOS_COMMAND_TIMEOUT_SECONDS = 600
 
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
-        raise RuntimeError("usage: qa_demo_mobile_recorder.py <input.json> <output.json>")
+        raise RuntimeError(
+            "usage: qa_demo_mobile_recorder.py <input.json> <output.json>"
+        )
 
     input_path = Path(argv[1]).resolve()
     output_path = Path(argv[2]).resolve()
@@ -56,18 +58,16 @@ def main(argv: list[str]) -> int:
     test_class_name = ui_test_file.stem
     ui_test_target = ui_test_file.parent.name
     scheme = str(os.environ.get("QA_DEMO_IOS_SCHEME") or project_path.stem).strip()
-    bundle_id = (
-        str(os.environ.get("QA_DEMO_IOS_BUNDLE_ID") or "").strip()
-        or resolve_bundle_identifier(project_path=project_path, scheme=scheme)
-    )
-    simulator_udid = (
-        str(os.environ.get("QA_DEMO_IOS_SIMULATOR_UDID") or "").strip()
-        or preferred_simulator_udid(
-            _run(
-                ["xcrun", "simctl", "list", "devices", "available"],
-                capture_output=True,
-            ).stdout
-        )
+    bundle_id = str(
+        os.environ.get("QA_DEMO_IOS_BUNDLE_ID") or ""
+    ).strip() or resolve_bundle_identifier(project_path=project_path, scheme=scheme)
+    simulator_udid = str(
+        os.environ.get("QA_DEMO_IOS_SIMULATOR_UDID") or ""
+    ).strip() or preferred_simulator_udid(
+        _run(
+            ["xcrun", "simctl", "list", "devices", "available"],
+            capture_output=True,
+        ).stdout
     )
 
     output_dir = Path(str(payload.get("output_dir") or "").strip()).resolve()
@@ -80,7 +80,9 @@ def main(argv: list[str]) -> int:
         launch_environment=qa_demo_launch_environment(payload),
     )
     ui_test_file.write_text(generated_source, encoding="utf-8")
-    capture_reference = str(payload.get("capture_reference") or "ios-simulator://configured").strip()
+    capture_reference = str(
+        payload.get("capture_reference") or "ios-simulator://configured"
+    ).strip()
 
     try:
         _reboot_simulator(simulator_udid)
@@ -96,11 +98,21 @@ def main(argv: list[str]) -> int:
         for scenario in qa_result.scenarios:
             sanitized_name = sanitize_recording_name(scenario.name)
             video_path = output_dir / f"{sanitized_name}.mp4"
-            result_bundle_path = output_dir / "result-bundles" / f"{sanitized_name}.xcresult"
+            result_bundle_path = (
+                output_dir / "result-bundles" / f"{sanitized_name}.xcresult"
+            )
             result_bundle_path.parent.mkdir(parents=True, exist_ok=True)
             _reset_app_state(simulator_udid=simulator_udid, bundle_id=bundle_id)
             recorder = subprocess.Popen(
-                ["xcrun", "simctl", "io", simulator_udid, "recordVideo", "--force", str(video_path)],
+                [
+                    "xcrun",
+                    "simctl",
+                    "io",
+                    simulator_udid,
+                    "recordVideo",
+                    "--force",
+                    str(video_path),
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 text=True,
@@ -124,13 +136,19 @@ def main(argv: list[str]) -> int:
                     capture_output=True,
                 )
             except Exception as exc:  # pragma: no cover - exercised via helper tests
-                primary_error = RuntimeError(f"{exc}\nResult bundle: {result_bundle_path}")
+                primary_error = RuntimeError(
+                    f"{exc}\nResult bundle: {result_bundle_path}"
+                )
             finally:
                 try:
                     _stop_video_recording(recorder)
-                except Exception as exc:  # pragma: no cover - exercised via helper tests
+                except (
+                    Exception
+                ) as exc:  # pragma: no cover - exercised via helper tests
                     stop_error = exc
-            combined_error = _combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
+            combined_error = _combined_recording_failure(
+                primary_error=primary_error, stop_error=stop_error
+            )
             if combined_error is not None:
                 diagnostics = _ios_failure_diagnostics(
                     result_bundle_path=result_bundle_path,
@@ -182,21 +200,29 @@ def main(argv: list[str]) -> int:
                 )
                 return 1
             if not video_path.exists():
-                raise RuntimeError(f"Expected mobile QA recording missing: {video_path}")
+                raise RuntimeError(
+                    f"Expected mobile QA recording missing: {video_path}"
+                )
             recordings.append({"name": scenario.name, "path": str(video_path)})
 
-        output_path.write_text(json.dumps({"recordings": recordings}, indent=2), encoding="utf-8")
+        output_path.write_text(
+            json.dumps({"recordings": recordings}, indent=2), encoding="utf-8"
+        )
         return 0
     finally:
         ui_test_file.write_text(original_test_source, encoding="utf-8")
 
 
 def sanitize_recording_name(name: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip("-")
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip(
+        "-"
+    )
     return normalized or "demo"
 
 
-def _ios_failure_message(*, scenario_name: str, error: Exception, diagnostics: str) -> str:
+def _ios_failure_message(
+    *, scenario_name: str, error: Exception, diagnostics: str
+) -> str:
     parts = [f"QA demo iOS scenario failed: {scenario_name}", str(error)]
     if diagnostics:
         parts.append(diagnostics)
@@ -230,11 +256,15 @@ def _ios_failure_diagnostics(
         try:
             payload = json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
-            diagnostics.append(f"iOS diagnostics unavailable: xcresult payload was not valid JSON: {exc}")
+            diagnostics.append(
+                f"iOS diagnostics unavailable: xcresult payload was not valid JSON: {exc}"
+            )
         else:
             messages = _xcresult_failure_messages(payload)
             if messages:
-                diagnostics.append("iOS diagnostics:\n" + _bounded_diagnostic_text(messages))
+                diagnostics.append(
+                    "iOS diagnostics:\n" + _bounded_diagnostic_text(messages)
+                )
 
     simulator_logs = _ios_simulator_failure_logs(
         simulator_udid=simulator_udid,
@@ -245,7 +275,9 @@ def _ios_failure_diagnostics(
     return "\n".join(diagnostics).strip()
 
 
-def _ios_simulator_failure_logs(*, simulator_udid: str | None, bundle_id: str | None) -> str:
+def _ios_simulator_failure_logs(
+    *, simulator_udid: str | None, bundle_id: str | None
+) -> str:
     normalized_udid = str(simulator_udid or "").strip()
     normalized_bundle_id = str(bundle_id or "").strip()
     if not normalized_udid or not normalized_bundle_id:
@@ -346,7 +378,9 @@ def _validate_mp4_recording(path: Path) -> None:
         raise RuntimeError(f"Expected iOS QA failure recording missing: {path}")
     payload = path.read_bytes()
     if len(payload) < 1024 or b"ftyp" not in payload[:64] or b"moov" not in payload:
-        raise RuntimeError(f"iOS QA failure recording is not valid video evidence: {path}")
+        raise RuntimeError(
+            f"iOS QA failure recording is not valid video evidence: {path}"
+        )
 
 
 def _target_source_paths(value: object) -> list[str]:
@@ -384,12 +418,18 @@ def discover_ios_project_files(
         for swift_file in search_root.rglob("*UITests/*.swift")
     )
     return (
-        _discover_xcode_container(repo_dir=repo_dir, workspace_paths=workspace_paths, project_paths=project_paths),
+        _discover_xcode_container(
+            repo_dir=repo_dir,
+            workspace_paths=workspace_paths,
+            project_paths=project_paths,
+        ),
         discover_xcuitest_file(repo_dir=repo_dir, swift_files=swift_files),
     )
 
 
-def _discover_xcode_container(*, repo_dir: Path, workspace_paths: list[Path], project_paths: list[Path]) -> Path:
+def _discover_xcode_container(
+    *, repo_dir: Path, workspace_paths: list[Path], project_paths: list[Path]
+) -> Path:
     candidates = list(workspace_paths or project_paths)
     if not candidates:
         raise ValueError(f"No Xcode project or workspace found under {repo_dir}")
@@ -398,10 +438,16 @@ def _discover_xcode_container(*, repo_dir: Path, workspace_paths: list[Path], pr
     return sorted(preferred, key=lambda path: (len(path.parts), str(path)))[0]
 
 
-def _ios_project_search_roots(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> list[Path]:
+def _ios_project_search_roots(
+    *, repo_dir: Path, target_source_paths: list[str] | None = None
+) -> list[Path]:
     configured = str(os.environ.get("QA_DEMO_IOS_PROJECT_DIR") or "").strip()
     if configured:
-        return [_resolve_repo_relative_source_path(repo_dir=repo_dir, source_path=configured)]
+        return [
+            _resolve_repo_relative_source_path(
+                repo_dir=repo_dir, source_path=configured
+            )
+        ]
     roots = [
         _resolve_repo_relative_source_path(repo_dir=repo_dir, source_path=source_path)
         for source_path in target_source_paths or []
@@ -412,12 +458,16 @@ def _ios_project_search_roots(*, repo_dir: Path, target_source_paths: list[str] 
 def _resolve_repo_relative_source_path(*, repo_dir: Path, source_path: str) -> Path:
     raw_path = Path(str(source_path or "").strip())
     if raw_path.is_absolute():
-        raise RuntimeError(f"iOS project source path must be repo-relative: {source_path}")
+        raise RuntimeError(
+            f"iOS project source path must be repo-relative: {source_path}"
+        )
     candidate = (repo_dir / raw_path).resolve()
     try:
         candidate.relative_to(repo_dir.resolve())
     except ValueError as exc:
-        raise RuntimeError(f"iOS project source path escapes the repository: {source_path}") from exc
+        raise RuntimeError(
+            f"iOS project source path escapes the repository: {source_path}"
+        ) from exc
     if not candidate.exists():
         raise RuntimeError(f"iOS project source path does not exist: {source_path}")
     return candidate
@@ -425,12 +475,20 @@ def _resolve_repo_relative_source_path(*, repo_dir: Path, source_path: str) -> P
 
 def resolve_bundle_identifier(*, project_path: Path, scheme: str) -> str:
     result = _run(
-        ["xcodebuild", *_xcode_container_args(project_path), "-scheme", scheme, "-showBuildSettings"],
+        [
+            "xcodebuild",
+            *_xcode_container_args(project_path),
+            "-scheme",
+            scheme,
+            "-showBuildSettings",
+        ],
         capture_output=True,
     )
     match = re.search(r"PRODUCT_BUNDLE_IDENTIFIER = ([^\s]+)", result.stdout)
     if match is None:
-        raise RuntimeError("Unable to resolve iOS bundle identifier from build settings")
+        raise RuntimeError(
+            "Unable to resolve iOS bundle identifier from build settings"
+        )
     return match.group(1).strip()
 
 
@@ -444,7 +502,9 @@ def _reboot_simulator(simulator_udid: str) -> None:
     _ensure_simulator_booted(simulator_udid)
 
 
-def _build_for_testing(*, project_path: Path, scheme: str, simulator_udid: str, derived_data_dir: Path) -> None:
+def _build_for_testing(
+    *, project_path: Path, scheme: str, simulator_udid: str, derived_data_dir: Path
+) -> None:
     _run(
         [
             "xcodebuild",
@@ -494,7 +554,9 @@ def _stop_video_recording(process: subprocess.Popen[str]) -> None:
             process.wait(timeout=5)
             raise RuntimeError("Timed out stopping simulator video recording") from exc
     if process.returncode not in {0, -signal.SIGINT}:
-        raise RuntimeError(f"Simulator video recording failed with exit code {process.returncode}")
+        raise RuntimeError(
+            f"Simulator video recording failed with exit code {process.returncode}"
+        )
 
 
 def _combined_recording_failure(
@@ -506,7 +568,9 @@ def _combined_recording_failure(
         return stop_error
     if stop_error is None:
         return primary_error
-    return RuntimeError(f"{primary_error}\nVideo recording shutdown also failed: {stop_error}")
+    return RuntimeError(
+        f"{primary_error}\nVideo recording shutdown also failed: {stop_error}"
+    )
 
 
 def _run(
@@ -529,7 +593,9 @@ def _run(
         raise _timeout_error(args=args, timeout_seconds=timeout_seconds) from exc
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "").strip()
-        raise RuntimeError(f"Command failed ({completed.returncode}): {' '.join(args)}\n{message}")
+        raise RuntimeError(
+            f"Command failed ({completed.returncode}): {' '.join(args)}\n{message}"
+        )
     return completed
 
 
@@ -548,7 +614,9 @@ def _run_unchecked(args: list[str]) -> None:
 
 
 def _timeout_error(*, args: list[str], timeout_seconds: int) -> RuntimeError:
-    return RuntimeError(f"iOS QA recorder command timed out after {timeout_seconds} seconds: {' '.join(args)}")
+    return RuntimeError(
+        f"iOS QA recorder command timed out after {timeout_seconds} seconds: {' '.join(args)}"
+    )
 
 
 def _ios_command_timeout_seconds() -> int:
@@ -558,9 +626,13 @@ def _ios_command_timeout_seconds() -> int:
     try:
         configured = int(raw_value)
     except ValueError as exc:
-        raise RuntimeError("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS must be an integer") from exc
+        raise RuntimeError(
+            "QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS must be an integer"
+        ) from exc
     if configured < 1:
-        raise RuntimeError("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS must be greater than zero")
+        raise RuntimeError(
+            "QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS must be greater than zero"
+        )
     return configured
 
 

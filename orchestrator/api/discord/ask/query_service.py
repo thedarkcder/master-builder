@@ -8,7 +8,9 @@ from orchestrator.storage.models import Run
 from orchestrator.storage.models import Tenant
 
 
-def _latest_run_diagnostics_by_issue(*, session: Session, tenant_id: str, issue_keys: list[str]) -> dict[str, dict[str, str]]:
+def _latest_run_diagnostics_by_issue(
+    *, session: Session, tenant_id: str, issue_keys: list[str]
+) -> dict[str, dict[str, str]]:
     if not issue_keys:
         return {}
     try:
@@ -25,7 +27,10 @@ def _latest_run_diagnostics_by_issue(*, session: Session, tenant_id: str, issue_
         issue_key = str(run.issue_key or "").strip().upper()
         if not issue_key or issue_key in latest_by_issue:
             continue
-        if not run.last_error and str(run.status or "").strip().lower() not in {"failed", "blocked"}:
+        if not run.last_error and str(run.status or "").strip().lower() not in {
+            "failed",
+            "blocked",
+        }:
             continue
         latest_by_issue[issue_key] = {
             "status": str(run.status or "").strip(),
@@ -45,7 +50,9 @@ def collect_ask_context(
     project_filter_jql_fn,
     search_issues_fn,
 ) -> tuple[str | None, str | None, list[dict], dict[str, int]]:
-    project_jql = project_filter_jql_fn(session=session, tenant=tenant, channel_id=channel_id)
+    project_jql = project_filter_jql_fn(
+        session=session, tenant=tenant, channel_id=channel_id
+    )
     if scoped_issue_key:
         normalized_issue_key = scoped_issue_key.strip().upper()
         jira_issues = search_issues_fn(
@@ -83,7 +90,11 @@ def collect_ask_context(
     run_diagnostics = _latest_run_diagnostics_by_issue(
         session=session,
         tenant_id=tenant.tenant_id,
-        issue_keys=[str(issue["key"]).strip().upper() for issue in issues if str(issue["key"]).strip()],
+        issue_keys=[
+            str(issue["key"]).strip().upper()
+            for issue in issues
+            if str(issue["key"]).strip()
+        ],
     )
     for issue in issues:
         diagnostics = run_diagnostics.get(str(issue["key"] or "").strip().upper())

@@ -4,7 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.observability.logging_pane import emit_logging_pane_event
-from orchestrator.core.observability.repository import configure_product_event_repository_for_tests
+from orchestrator.core.observability.repository import (
+    configure_product_event_repository_for_tests,
+)
 from tests.test_support.product_events import RecordingProductEventRepository
 
 
@@ -18,7 +20,10 @@ class RunLogRedactionTests(unittest.TestCase):
         )
         repository = RecordingProductEventRepository()
 
-        with patch("orchestrator.core.observability.writer.publish_product_event_notification", lambda **_kwargs: None):
+        with patch(
+            "orchestrator.core.observability.writer.publish_product_event_notification",
+            lambda **_kwargs: None,
+        ):
             configure_product_event_repository_for_tests(repository)
             emit_logging_pane_event(
                 session=object(),
@@ -38,7 +43,9 @@ class RunLogRedactionTests(unittest.TestCase):
             )
 
         self.assertEqual(len(repository.inserted), 1)
-        persisted = f"{repository.inserted[0].message} {repository.inserted[0].payload_json}"
+        persisted = (
+            f"{repository.inserted[0].message} {repository.inserted[0].payload_json}"
+        )
         self.assertNotIn("super-secret-value", persisted)
         self.assertNotIn("user@example.com", persisted)
         self.assertNotIn("BEGIN PRIVATE KEY", persisted)

@@ -33,14 +33,16 @@ def test_store_and_consume_pending_ask_action_roundtrip() -> None:
         channel_id="c1",
         question="q",
         summary="s",
-        proposed_command="!run example-1",
+        proposed_command="!run DEMO-1",
     )
     assert stored["request_id"] == "req-1"
     assert session.commits == 1
 
-    consumed = service.consume_pending_ask_action(session=session, tenant=tenant, request_id="req-1")
+    consumed = service.consume_pending_ask_action(
+        session=session, tenant=tenant, request_id="req-1"
+    )
     assert consumed is not None
-    assert consumed["proposed_command"] == "!run example-1"
+    assert consumed["proposed_command"] == "!run DEMO-1"
     assert session.commits == 2
 
 
@@ -55,7 +57,7 @@ def test_collect_ask_context_with_history_context_infers_scope_from_history() ->
                     "channel_id": "c1",
                     "question": "old",
                     "answer": "ans",
-                    "issue_key": "example-46",
+                    "issue_key": "DEMO-46",
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
             ]
@@ -63,8 +65,13 @@ def test_collect_ask_context_with_history_context_infers_scope_from_history() ->
     )
 
     def _collect(**kwargs):  # type: ignore[no-untyped-def]
-        assert kwargs["scoped_issue_key"] == "example-46"
-        return None, None, [{"key": "example-46", "summary": "x", "status": "Testing"}], {"Testing": 1}
+        assert kwargs["scoped_issue_key"] == "DEMO-46"
+        return (
+            None,
+            None,
+            [{"key": "DEMO-46", "summary": "x", "status": "Testing"}],
+            {"Testing": 1},
+        )
 
     result = service.collect_ask_context_with_history_context(
         session=session,
@@ -74,7 +81,7 @@ def test_collect_ask_context_with_history_context_infers_scope_from_history() ->
         question="what changed",
         scoped_issue_key=None,
         collect_ask_context_fn=_collect,
-        existing_issue_keys_fn=lambda **_kwargs: {"example-46"},
+        existing_issue_keys_fn=lambda **_kwargs: {"DEMO-46"},
     )
     assert result[0] is None
-    assert result[4][0]["issue_key"] == "example-46"
+    assert result[4][0]["issue_key"] == "DEMO-46"

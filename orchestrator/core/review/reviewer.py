@@ -7,13 +7,18 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from orchestrator.core.policy_pack import find_banned_pattern_violations, select_policy_pack_for_files
+from orchestrator.core.policy_pack import (
+    find_banned_pattern_violations,
+    select_policy_pack_for_files,
+)
 from orchestrator.core.review.pr_ready import PrReadinessResult, evaluate_pr_readiness
 from orchestrator.core.signal_templates import format_discord_pr_ready_message
 from orchestrator.tools.github_app import GitHubAppClient
 
 logger = logging.getLogger(__name__)
-_DEMO_EVIDENCE_SECTION_PATTERN = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+_DEMO_EVIDENCE_SECTION_PATTERN = re.compile(
+    r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL
+)
 _DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 _DEMO_EVIDENCE_REQUIRED_TARGETS_PATTERN = re.compile(
     r"<!--\s*master-builder:qa-demo-required-targets\s+([^>]*)-->",
@@ -57,16 +62,24 @@ class ReviewAgentGate:
         project_id: str | None = None,
         demo_artifact_public_base_url: str | None = None,
         demo_evidence_run_id_resolver: Callable[[str], str | None] | None = None,
-        demo_evidence_recordings_resolver: Callable[[str], tuple[dict[str, str], ...] | None] | None = None,
-        demo_proof_status_resolver: Callable[[str, str], dict[str, object] | None] | None = None,
+        demo_evidence_recordings_resolver: Callable[
+            [str], tuple[dict[str, str], ...] | None
+        ]
+        | None = None,
+        demo_proof_status_resolver: Callable[[str, str], dict[str, object] | None]
+        | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
         self._require_demo_evidence = require_demo_evidence
-        self._required_demo_capture_targets = _normalize_required_demo_targets(required_demo_capture_targets)
+        self._required_demo_capture_targets = _normalize_required_demo_targets(
+            required_demo_capture_targets
+        )
         self._tenant_id = tenant_id
         self._project_id = project_id
-        self._demo_artifact_public_base_url = str(demo_artifact_public_base_url or "").strip().rstrip("/")
+        self._demo_artifact_public_base_url = (
+            str(demo_artifact_public_base_url or "").strip().rstrip("/")
+        )
         self._demo_evidence_run_id_resolver = demo_evidence_run_id_resolver
         self._demo_evidence_recordings_resolver = demo_evidence_recordings_resolver
         self._demo_proof_status_resolver = demo_proof_status_resolver
@@ -139,13 +152,17 @@ class ReviewAgentGate:
                 policy_pack=selected_policy_pack_key,
             )
 
-        if _source_changes_present(changed_files) and not _test_changes_present(changed_files):
+        if _source_changes_present(changed_files) and not _test_changes_present(
+            changed_files
+        ):
             return ReviewerSignal(
                 ready=False,
                 state="missing_test_coverage",
                 message="PR blocked: source changes detected without test file updates",
                 readiness=readiness,
-                must_fix_findings=("Add or update tests that cover the changed behavior.",),
+                must_fix_findings=(
+                    "Add or update tests that cover the changed behavior.",
+                ),
                 policy_pack=selected_policy_pack_key,
             )
 
@@ -153,7 +170,9 @@ class ReviewAgentGate:
             pr_url = str(pr.html_url or "").strip()
             pr_head_sha = str(pr.head_sha or "").strip().lower()
             if self._demo_proof_status_resolver is not None:
-                demo_proof_status = self._demo_proof_status_resolver(pr_url, pr_head_sha)
+                demo_proof_status = self._demo_proof_status_resolver(
+                    pr_url, pr_head_sha
+                )
                 if not _demo_proof_status_ready(
                     demo_proof_status,
                     expected_release_commit_sha=pr_head_sha,
@@ -163,7 +182,9 @@ class ReviewAgentGate:
                         state="missing_demo_evidence",
                         message="PR blocked: completed QA demo proof workflow is required before ready-for-review signaling",
                         readiness=readiness,
-                        must_fix_findings=("Complete the QA demo proof workflow and attach checked evidence links.",),
+                        must_fix_findings=(
+                            "Complete the QA demo proof workflow and attach checked evidence links.",
+                        ),
                         policy_pack=selected_policy_pack_key,
                     )
             expected_run_id = (
@@ -173,7 +194,8 @@ class ReviewAgentGate:
             )
             expected_recordings = (
                 self._demo_evidence_recordings_resolver(expected_run_id) or ()
-                if self._demo_evidence_recordings_resolver is not None and expected_run_id is not None
+                if self._demo_evidence_recordings_resolver is not None
+                and expected_run_id is not None
                 else ()
             )
             if not _demo_evidence_present(
@@ -191,18 +213,24 @@ class ReviewAgentGate:
                     state="missing_demo_evidence",
                     message="PR blocked: QA demo evidence is required before ready-for-review signaling",
                     readiness=readiness,
-                    must_fix_findings=("Attach QA demo evidence links in the PR body.",),
+                    must_fix_findings=(
+                        "Attach QA demo evidence links in the PR body.",
+                    ),
                     policy_pack=selected_policy_pack_key,
-            )
+                )
 
         if readiness.ready:
             ready_signal = format_discord_pr_ready_message(
                 pr_url=pr.html_url,
                 jira_url=None,
                 run_id=None,
-                what_changed=(f"Required checks passed: {', '.join(self._required_workflows)}",),
+                what_changed=(
+                    f"Required checks passed: {', '.join(self._required_workflows)}",
+                ),
                 risk_impact=("No failing required checks detected.",),
-                how_to_test=("Open the PR checks tab and verify CI/Security are green.",),
+                how_to_test=(
+                    "Open the PR checks tab and verify CI/Security are green.",
+                ),
                 questions=(),
                 next_action="Please review + merge",
             )
@@ -376,14 +404,18 @@ def _is_test_path(filename: str) -> bool:
     return False
 
 
-def _normalize_required_demo_targets(required_demo_capture_targets: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+def _normalize_required_demo_targets(
+    required_demo_capture_targets: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
     ordered: list[str] = []
     for target in required_demo_capture_targets or ():
         normalized = str(target or "").strip()
         if not normalized:
             continue
         if normalized not in _SUPPORTED_DEMO_CAPTURE_TARGETS:
-            raise ValueError(f"Unsupported QA demo capture target requirement: {normalized}")
+            raise ValueError(
+                f"Unsupported QA demo capture target requirement: {normalized}"
+            )
         if normalized not in ordered:
             ordered.append(normalized)
     return tuple(ordered)
@@ -394,20 +426,28 @@ def _required_demo_targets_from_section(section: str) -> tuple[str, ...] | None:
     if match is None:
         return None
     try:
-        return _normalize_required_demo_targets(re.split(r"[,\s]+", match.group(1).strip()))
+        return _normalize_required_demo_targets(
+            re.split(r"[,\s]+", match.group(1).strip())
+        )
     except ValueError:
         return ()
 
 
-def _normalize_required_demo_counts(required_demo_capture_counts: dict[str, int]) -> dict[str, int]:
+def _normalize_required_demo_counts(
+    required_demo_capture_counts: dict[str, int],
+) -> dict[str, int]:
     normalized_counts: dict[str, int] = {}
     for target, count in required_demo_capture_counts.items():
         normalized_target = str(target or "").strip()
         if normalized_target not in _SUPPORTED_DEMO_CAPTURE_TARGETS:
-            raise ValueError(f"Unsupported QA demo capture target count requirement: {normalized_target}")
+            raise ValueError(
+                f"Unsupported QA demo capture target count requirement: {normalized_target}"
+            )
         normalized_count = int(count)
         if normalized_count <= 0:
-            raise ValueError(f"QA demo capture target count must be positive: {normalized_target}")
+            raise ValueError(
+                f"QA demo capture target count must be positive: {normalized_target}"
+            )
         normalized_counts[normalized_target] = normalized_count
     return normalized_counts
 
@@ -416,7 +456,11 @@ def _required_demo_counts_from_section(section: str) -> dict[str, int] | None:
     match = _DEMO_EVIDENCE_REQUIRED_COUNTS_PATTERN.search(section)
     if match is None:
         return None
-    raw_entries = [entry.strip() for entry in re.split(r"[,\s]+", match.group(1).strip()) if entry.strip()]
+    raw_entries = [
+        entry.strip()
+        for entry in re.split(r"[,\s]+", match.group(1).strip())
+        if entry.strip()
+    ]
     parsed_counts: dict[str, int] = {}
     try:
         for entry in raw_entries:
@@ -444,8 +488,12 @@ def _demo_evidence_present(
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_project_id = str(project_id or "").strip()
     normalized_run_id = str(run_id or "").strip()
-    normalized_artifact_public_base_url = str(artifact_public_base_url or "").strip().rstrip("/")
-    normalized_expected_release_commit_sha = str(expected_release_commit_sha or "").strip().lower()
+    normalized_artifact_public_base_url = (
+        str(artifact_public_base_url or "").strip().rstrip("/")
+    )
+    normalized_expected_release_commit_sha = (
+        str(expected_release_commit_sha or "").strip().lower()
+    )
     if (
         not normalized_tenant_id
         or not normalized_project_id
@@ -474,35 +522,56 @@ def _demo_evidence_present(
         for match in structured_matches
     ):
         return False
-    if expected_recordings is not None and not _structured_demo_evidence_matches_expected_recordings(
-        structured_matches=structured_matches,
-        expected_recordings=expected_recordings,
+    if (
+        expected_recordings is not None
+        and not _structured_demo_evidence_matches_expected_recordings(
+            structured_matches=structured_matches,
+            expected_recordings=expected_recordings,
+        )
     ):
         return False
-    content_sha256_counts = Counter(match.group("sha256") for match in structured_matches)
+    content_sha256_counts = Counter(
+        match.group("sha256") for match in structured_matches
+    )
     if any(count > 1 for count in content_sha256_counts.values()):
         return False
-    release_context_sha256_counts = Counter(match.group("release_context_sha256") for match in structured_matches)
+    release_context_sha256_counts = Counter(
+        match.group("release_context_sha256") for match in structured_matches
+    )
     if len(release_context_sha256_counts) != 1:
         return False
-    release_commit_sha_counts = Counter(match.group("release_commit_sha") for match in structured_matches)
+    release_commit_sha_counts = Counter(
+        match.group("release_commit_sha") for match in structured_matches
+    )
     if len(release_commit_sha_counts) != 1:
         return False
-    if next(iter(release_commit_sha_counts)).lower() != normalized_expected_release_commit_sha:
+    if (
+        next(iter(release_commit_sha_counts)).lower()
+        != normalized_expected_release_commit_sha
+    ):
         return False
     required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
     embedded_required_targets = _required_demo_targets_from_section(section)
     if not embedded_required_targets:
         return False
-    required_targets = tuple(dict.fromkeys((*required_targets, *embedded_required_targets)))
-    recorded_targets = {structured_match.group("target") for structured_match in structured_matches}
+    required_targets = tuple(
+        dict.fromkeys((*required_targets, *embedded_required_targets))
+    )
+    recorded_targets = {
+        structured_match.group("target") for structured_match in structured_matches
+    }
     if not all(target in recorded_targets for target in required_targets):
         return False
     embedded_required_counts = _required_demo_counts_from_section(section)
     if not embedded_required_counts:
         return False
-    recorded_counts = Counter(structured_match.group("target") for structured_match in structured_matches)
-    return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())
+    recorded_counts = Counter(
+        structured_match.group("target") for structured_match in structured_matches
+    )
+    return all(
+        recorded_counts.get(target, 0) >= count
+        for target, count in embedded_required_counts.items()
+    )
 
 
 def _demo_proof_status_ready(
@@ -512,7 +581,9 @@ def _demo_proof_status_ready(
 ) -> bool:
     if not isinstance(status, dict):
         return False
-    normalized_expected_release_commit_sha = str(expected_release_commit_sha or "").strip().lower()
+    normalized_expected_release_commit_sha = (
+        str(expected_release_commit_sha or "").strip().lower()
+    )
     if not normalized_expected_release_commit_sha:
         return False
     if str(status.get("status") or "").strip() != "completed":
@@ -523,7 +594,10 @@ def _demo_proof_status_ready(
         return False
     if str(status.get("artifact_url_check_status") or "").strip() != "passed":
         return False
-    if str(status.get("release_commit_sha") or "").strip().lower() != normalized_expected_release_commit_sha:
+    if (
+        str(status.get("release_commit_sha") or "").strip().lower()
+        != normalized_expected_release_commit_sha
+    ):
         return False
     checked_urls = status.get("checked_artifact_urls")
     return isinstance(checked_urls, tuple | list) and bool(checked_urls)
@@ -588,6 +662,10 @@ def _structured_demo_evidence_line_is_run_artifact(
     key_parts = object_key.split("/")
     if len(key_parts) < 4 or any(not part for part in key_parts):
         return False
-    if key_parts[0] != tenant_id or key_parts[1] != project_id or key_parts[2] != run_id:
+    if (
+        key_parts[0] != tenant_id
+        or key_parts[1] != project_id
+        or key_parts[2] != run_id
+    ):
         return False
     return parsed_url.path.endswith(f"/{object_key}")

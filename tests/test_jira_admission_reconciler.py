@@ -6,7 +6,11 @@ from orchestrator.core.communications.execution_admission_format import (
     present_discord_admission_conflict,
     present_jira_admission,
 )
-from orchestrator.core.decision.types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision.types import (
+    ExecutionGateReason,
+    ExecutionGateResolution,
+    ExecutionGateState,
+)
 from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     resolve_execution_admission,
@@ -58,7 +62,9 @@ def test_resolve_execution_admission_allows_when_execution_gate_allows() -> None
     assert present_jira_admission(admission=decision).response_fields == {}
 
 
-def test_resolve_execution_admission_formats_discord_missing_ready_label_detail() -> None:
+def test_resolve_execution_admission_formats_discord_missing_ready_label_detail() -> (
+    None
+):
     decision = resolve_execution_admission(
         decision_result=_decision_result(
             state=ExecutionGateState.BLOCK_READY_LABEL,
@@ -66,7 +72,10 @@ def test_resolve_execution_admission_formats_discord_missing_ready_label_detail(
         )
     )
     assert decision.reason is ExecutionAdmissionReason.MISSING_READY_LABEL
-    assert present_discord_admission_conflict(admission=decision).detail == "Guidance (agent:ready)"
+    assert (
+        present_discord_admission_conflict(admission=decision).detail
+        == "Guidance (agent:ready)"
+    )
 
 
 def test_jira_admission_response_fields_do_not_use_fallback_ready_label() -> None:
@@ -83,11 +92,16 @@ def test_jira_admission_response_fields_do_not_use_fallback_ready_label() -> Non
     }
 
 
-def test_jira_admission_notification_detail_includes_decision_gate_reason_marker() -> None:
+def test_jira_admission_notification_detail_includes_decision_gate_reason_marker() -> (
+    None
+):
     decision = resolve_execution_admission(
         decision_result=_decision_result(
             state=ExecutionGateState.BLOCK_DECISION,
             reason_code="decision_gate_required",
         )
     )
-    assert present_jira_admission(admission=decision).notification_detail == "decision_gate_reason=detail"
+    assert (
+        present_jira_admission(admission=decision).notification_detail
+        == "decision_gate_reason=detail"
+    )

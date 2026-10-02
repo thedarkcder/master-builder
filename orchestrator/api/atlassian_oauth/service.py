@@ -12,8 +12,14 @@ from orchestrator.core.platform.secret_service import (
     resolve_platform_secret_ref,
 )
 from orchestrator.storage.models import AtlassianOAuthConnection
-from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient, AtlassianOAuthClientConfig
-from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthHttpError
+from orchestrator.tools.atlassian_oauth import (
+    AtlassianOAuthClient,
+    AtlassianOAuthClientConfig,
+)
+from orchestrator.tools.atlassian_oauth_models import (
+    AtlassianOAuthAuthRequiredError,
+    AtlassianOAuthHttpError,
+)
 
 T = TypeVar("T")
 
@@ -89,7 +95,9 @@ def refresh_atlassian_connection_tokens(
             encryption_key=settings.secrets_encryption_key,
         )
 
-    client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant_id)
+    client = atlassian_oauth_client(
+        session=session, settings=settings, tenant_id=tenant_id
+    )
     refresh_token = decrypt_value(
         ciphertext=connection.refresh_token_encrypted,
         encryption_key=settings.secrets_encryption_key,
@@ -148,5 +156,7 @@ def execute_atlassian_operation_with_refresh_retry(
             return _run_once(force_refresh=True)
         except AtlassianOAuthHttpError as retry_exc:
             if retry_exc.status_code in {401, 403}:
-                raise AtlassianOAuthAuthRequiredError("Atlassian authorization is required") from retry_exc
+                raise AtlassianOAuthAuthRequiredError(
+                    "Atlassian authorization is required"
+                ) from retry_exc
             raise

@@ -40,7 +40,9 @@ def _normalize_key(value: object) -> str:
     return str(value or "").strip().lower().replace(" ", "-") or "app"
 
 
-def _service_key_for_domain(domain: dict[str, object], config: dict[str, object]) -> str:
+def _service_key_for_domain(
+    domain: dict[str, object], config: dict[str, object]
+) -> str:
     existing = str(domain.get("service_key") or "").strip()
     if existing:
         return _normalize_key(existing)
@@ -52,10 +54,15 @@ def _service_key_for_domain(domain: dict[str, object], config: dict[str, object]
             resource_config = resource.get("config")
             if not isinstance(resource_config, dict):
                 continue
-            service_type = str(resource_config.get("service_type") or "").strip().lower()
-            compose_service = str(resource_config.get("compose_service") or resource.get("key") or "").strip()
+            service_type = (
+                str(resource_config.get("service_type") or "").strip().lower()
+            )
+            compose_service = str(
+                resource_config.get("compose_service") or resource.get("key") or ""
+            ).strip()
             if service_type in {"web", "website", "api"} or any(
-                marker in compose_service.lower() for marker in ("web", "ui", "frontend", "app", "api")
+                marker in compose_service.lower()
+                for marker in ("web", "ui", "frontend", "app", "api")
             ):
                 return _normalize_key(compose_service)
     return "app"
@@ -90,7 +97,11 @@ def _update_json_rows(*, table_name: str, id_column: str, json_column: str) -> N
     if not _table_exists(table_name):
         return
     bind = op.get_bind()
-    rows = bind.execute(text(f"SELECT {id_column}, {json_column} FROM {table_name}")).mappings().all()
+    rows = (
+        bind.execute(text(f"SELECT {id_column}, {json_column} FROM {table_name}"))
+        .mappings()
+        .all()
+    )
     for row in rows:
         row_id = str(row.get(id_column) or "").strip()
         if not row_id:
@@ -100,14 +111,20 @@ def _update_json_rows(*, table_name: str, id_column: str, json_column: str) -> N
         if rewritten == original:
             continue
         bind.execute(
-            text(f"UPDATE {table_name} SET {json_column} = :payload WHERE {id_column} = :row_id"),
+            text(
+                f"UPDATE {table_name} SET {json_column} = :payload WHERE {id_column} = :row_id"
+            ),
             {"payload": json.dumps(rewritten, sort_keys=True), "row_id": row_id},
         )
 
 
 def upgrade() -> None:
-    _update_json_rows(table_name="projects", id_column="project_id", json_column="deployment_config")
-    _update_json_rows(table_name="project_apps", id_column="app_id", json_column="deployment_config")
+    _update_json_rows(
+        table_name="projects", id_column="project_id", json_column="deployment_config"
+    )
+    _update_json_rows(
+        table_name="project_apps", id_column="app_id", json_column="deployment_config"
+    )
     _update_json_rows(
         table_name="project_deployment_releases",
         id_column="release_id",

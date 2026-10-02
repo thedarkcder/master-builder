@@ -6,13 +6,21 @@ from typing import Any, Callable, Iterable, Mapping
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.clarification.questions import (
+    ClarificationQuestion,
+    ClarificationQuestionSet,
+)
 from orchestrator.core.runtime.runtime import CodexRuntime
 from orchestrator.core.decision.engine import DecisionEngineResult
-from orchestrator.core.decision.reply_service import unresolved_question_feedback_for_cycle
+from orchestrator.core.decision.reply_service import (
+    unresolved_question_feedback_for_cycle,
+)
 from orchestrator.core.decision.types import DecisionClassification
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.payload_models import PrecheckMessage
 
 
@@ -35,7 +43,10 @@ class DecisionClarificationPresentation:
 
     @property
     def requires_decision_gate_feedback(self) -> bool:
-        return self.mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH}
+        return self.mode in {
+            DecisionClassification.DECISION_GATE,
+            DecisionClassification.BOTH,
+        }
 
 
 @dataclass(frozen=True)
@@ -75,11 +86,17 @@ def build_runtime_precheck_message(
     return parsed_payload.message, list(parsed_payload.questions)
 
 
-def load_cycle_question_feedback(*, session: Session, cycle_id: str | None) -> tuple[dict[str, str], ...]:
+def load_cycle_question_feedback(
+    *, session: Session, cycle_id: str | None
+) -> tuple[dict[str, str], ...]:
     normalized_cycle_id = str(cycle_id or "").strip()
     if not normalized_cycle_id:
         return ()
-    return tuple(unresolved_question_feedback_for_cycle(session=session, cycle_id=normalized_cycle_id))
+    return tuple(
+        unresolved_question_feedback_for_cycle(
+            session=session, cycle_id=normalized_cycle_id
+        )
+    )
 
 
 def build_decision_clarification_presentation(
@@ -87,7 +104,9 @@ def build_decision_clarification_presentation(
     decision_result: DecisionEngineResult,
     question_feedback: Iterable[Mapping[str, Any]] = (),
 ) -> DecisionClarificationPresentation:
-    mode = DecisionClassification.parse(getattr(decision_result, "classification", None))
+    mode = DecisionClassification.parse(
+        getattr(decision_result, "classification", None)
+    )
     pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
     normalized_feedback = _normalize_question_feedback(question_feedback)
     missing_slots = tuple(
@@ -102,7 +121,9 @@ def build_decision_clarification_presentation(
         slot
         for slot in (
             str(slot_value).strip()
-            for slot_value in (getattr(decision_result, "auto_resolved_slots", ()) or ())
+            for slot_value in (
+                getattr(decision_result, "auto_resolved_slots", ()) or ()
+            )
         )
         if slot
     )
@@ -121,7 +142,9 @@ def build_decision_clarification_presentation(
         )
 
     decision_gate = getattr(pre_check, "decision_gate", None)
-    decision_gate_reason = str(getattr(decision_gate, "reason", "") or "").strip() or None
+    decision_gate_reason = (
+        str(getattr(decision_gate, "reason", "") or "").strip() or None
+    )
     decision_gate_questions = ClarificationQuestionSet.from_values(
         getattr(decision_gate, "questions", ()) or ()
     ).questions
@@ -137,7 +160,10 @@ def build_decision_clarification_presentation(
         getattr(pre_check, "gtd_clarification_questions", ()) or ()
     ).questions
 
-    if mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH} and normalized_feedback:
+    if (
+        mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH}
+        and normalized_feedback
+    ):
         questions = ClarificationQuestionSet.from_values(
             {
                 "question": str(item.get("question_text") or "").strip(),
@@ -146,13 +172,18 @@ def build_decision_clarification_presentation(
             for item in normalized_feedback
         ).questions
     else:
-        questions = ClarificationQuestionSet.from_values((*decision_gate_questions, *gtd_questions)).questions
+        questions = ClarificationQuestionSet.from_values(
+            (*decision_gate_questions, *gtd_questions)
+        ).questions
 
     return DecisionClarificationPresentation(
         mode=mode,
         recheck_required=True,
         decision_gate_reason=(
-            decision_gate_reason if mode in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH} else None
+            decision_gate_reason
+            if mode
+            in {DecisionClassification.DECISION_GATE, DecisionClassification.BOTH}
+            else None
         ),
         decision_gate_questions=decision_gate_questions,
         gtd_missing_criteria=gtd_missing_criteria,
@@ -169,7 +200,9 @@ def build_decision_clarification_response_fields(
     presentation: DecisionClarificationPresentation,
     questions: Iterable[ClarificationQuestion] | None = None,
 ) -> dict[str, object]:
-    effective_questions = ClarificationQuestionSet.from_values(questions or presentation.questions)
+    effective_questions = ClarificationQuestionSet.from_values(
+        questions or presentation.questions
+    )
     return {
         "classification": presentation.mode.value,
         "decision_gate_reason": presentation.decision_gate_reason,
@@ -203,7 +236,9 @@ def present_discord_decision_clarification(
         generated_questions = presentation.questions
     else:
         message, generated_questions = precheck_message_builder()
-        generated_questions = ClarificationQuestionSet.from_values(generated_questions).questions
+        generated_questions = ClarificationQuestionSet.from_values(
+            generated_questions
+        ).questions
     return DiscordDecisionClarificationPresentation(
         message=message,
         response_fields=build_decision_clarification_response_fields(
@@ -283,10 +318,10 @@ def _humanize_feedback_note(*, note: str, answer: str) -> str:
     if normalized_note and normalized_answer:
         current_answer_prefix = f"Current answer '{normalized_answer}' is "
         if normalized_note.startswith(current_answer_prefix):
-            return f"that is {normalized_note[len(current_answer_prefix):]}"
+            return f"that is {normalized_note[len(current_answer_prefix) :]}"
         double_quote_prefix = f'Current answer "{normalized_answer}" is '
         if normalized_note.startswith(double_quote_prefix):
-            return f"that is {normalized_note[len(double_quote_prefix):]}"
+            return f"that is {normalized_note[len(double_quote_prefix) :]}"
     return normalized_note
 
 
@@ -302,7 +337,13 @@ def _normalize_question_feedback(
         answer = str(item.get("answer") or "").strip()
         if status.lower() == "accepted" or item.get("unresolved") is False:
             continue
-        if not question_id and not question_text and not note and not status and not answer:
+        if (
+            not question_id
+            and not question_text
+            and not note
+            and not status
+            and not answer
+        ):
             continue
         normalized_item = {
             "question_id": question_id,

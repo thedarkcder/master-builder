@@ -18,7 +18,9 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             )
         )
 
-    def _session_with_project_apps(self, apps: list[SimpleNamespace]) -> SimpleNamespace:
+    def _session_with_project_apps(
+        self, apps: list[SimpleNamespace]
+    ) -> SimpleNamespace:
         return SimpleNamespace(
             execute=lambda *_args, **_kwargs: SimpleNamespace(
                 scalars=lambda: SimpleNamespace(all=lambda: apps)
@@ -26,7 +28,9 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             flush=lambda: None,
         )
 
-    def _base_inputs(self, checkout_base_dir: str) -> tuple[SimpleNamespace, SimpleNamespace, dict, SimpleNamespace]:
+    def _base_inputs(
+        self, checkout_base_dir: str
+    ) -> tuple[SimpleNamespace, SimpleNamespace, dict, SimpleNamespace]:
         tenant = SimpleNamespace(tenant_id="tenant-1")
         run = SimpleNamespace(
             run_id="run-1",
@@ -42,7 +46,11 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             entry_stage=None,
             entry_checkpoint_id=None,
         )
-        effective_policy = {"max_dev_test_review_loops": 1, "allowed_commands": [], "allow_pr_creation": True}
+        effective_policy = {
+            "max_dev_test_review_loops": 1,
+            "allowed_commands": [],
+            "allow_pr_creation": True,
+        }
         settings = SimpleNamespace(
             project_repo_checkout_base_dir=checkout_base_dir,
             worker_capabilities="linux",
@@ -95,7 +103,10 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     tenant=tenant,
                     run=run,
                     project=project,
-                    effective_policy={"allowed_commands": [], "allow_pr_creation": True},
+                    effective_policy={
+                        "allowed_commands": [],
+                        "allow_pr_creation": True,
+                    },
                     settings=settings,
                 )
 
@@ -139,10 +150,14 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             self.assertEqual(request.start_point_ref, "origin/main")
             self.assertEqual(request.start_point_sha, "abc123")
             self.assertEqual(request.current_worker_capability, WorkerCapability.LINUX)
-            self.assertEqual(request.available_worker_capabilities, (WorkerCapability.LINUX,))
+            self.assertEqual(
+                request.available_worker_capabilities, (WorkerCapability.LINUX,)
+            )
             self.assertEqual(request.project_id, "project-1")
             self.assertEqual(request.project_name, "Project")
-            self.assertEqual(request.github_repository, "https://github.com/example/repo")
+            self.assertEqual(
+                request.github_repository, "https://github.com/example/repo"
+            )
             self.assertEqual(request.jira_project_key, "TP")
             self.assertTrue(request.allow_pr_creation)
             self.assertEqual(request.integration_branch, "feature/TP-1")
@@ -173,7 +188,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     detected_runtime="swiftui",
                     detected_language="swift",
                     build_strategy="xcode",
-                    name="example iOS",
+                    name="ExampleApp iOS",
                     source_path="ios",
                     deployment_config={},
                 ),
@@ -181,7 +196,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     detected_runtime="android",
                     detected_language="kotlin",
                     build_strategy="gradle",
-                    name="example Android",
+                    name="ExampleApp Android",
                     source_path="android",
                     deployment_config={},
                 ),
@@ -201,13 +216,17 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     answered_human_inputs_for_attempt_fn=lambda **_: [],
                 )
 
-            self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
+            self.assertEqual(
+                request.project_demo_capture_targets, ("browser", "ios", "android")
+            )
             self.assertEqual(
                 request.project_demo_capture_target_sources,
                 {"browser": ("web",), "ios": ("ios",), "android": ("android",)},
             )
 
-    def test_qa_enabled_build_refreshes_demo_targets_from_current_checkout(self) -> None:
+    def test_qa_enabled_build_refreshes_demo_targets_from_current_checkout(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
             effective_policy = {**effective_policy, "qa_demo_recording_enabled": True}
@@ -277,7 +296,9 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     settings=settings,
                     answered_human_inputs_for_attempt_fn=lambda **_: [],
                     scan_repo_for_project_apps_fn=lambda **_: ("pre-scan",),
-                    normalize_project_app_planner_output_fn=lambda **_: refreshed_candidates,
+                    normalize_project_app_planner_output_fn=lambda **_: (
+                        refreshed_candidates
+                    ),
                     ensure_project_app_fn=_ensure_project_app,
                 )
 
@@ -285,7 +306,9 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             for candidate in persisted:
                 self.assertNotIn("capture_target", candidate.deployment_config)
                 self.assertNotIn("mobile_platform", candidate.deployment_config)
-            self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
+            self.assertEqual(
+                request.project_demo_capture_targets, ("browser", "ios", "android")
+            )
             self.assertEqual(
                 request.project_demo_capture_target_sources,
                 {"browser": (".",), "ios": ("ios",), "android": ("android",)},
@@ -325,7 +348,9 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 "orchestrator.core.worker.workflow_request_factory.prepare_execution_repo_for_run",
                 return_value=self._prepared_repo(checkout_dir),
             ):
-                with self.assertRaisesRegex(ValueError, "Unsupported execution snapshot version/shape"):
+                with self.assertRaisesRegex(
+                    ValueError, "Unsupported execution snapshot version/shape"
+                ):
                     build_workflow_request(
                         session=self._session_with_no_human_inputs(),
                         tenant=tenant,

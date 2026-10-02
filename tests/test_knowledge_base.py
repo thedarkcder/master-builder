@@ -22,7 +22,9 @@ from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeFact, Project, Tenant
 
 
-def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env() -> None:
+def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env() -> (
+    None
+):
     captured: dict[str, object] = {}
 
     class _FakeTextEmbedding:
@@ -31,8 +33,13 @@ def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env
             captured["kwargs"] = kwargs
 
     with (
-        patch.dict(os.environ, {"HF_HOME": "/tmp/hf-cache", "HF_HUB_OFFLINE": "1"}, clear=False),
-        patch.dict(sys.modules, {"fastembed": SimpleNamespace(TextEmbedding=_FakeTextEmbedding)}),
+        patch.dict(
+            os.environ, {"HF_HOME": "/tmp/hf-cache", "HF_HUB_OFFLINE": "1"}, clear=False
+        ),
+        patch.dict(
+            sys.modules,
+            {"fastembed": SimpleNamespace(TextEmbedding=_FakeTextEmbedding)},
+        ),
     ):
         _knowledge_text_embedding_model.cache_clear()
         try:
@@ -41,12 +48,17 @@ def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env
             _knowledge_text_embedding_model.cache_clear()
 
     assert captured["model_name"] == "BAAI/bge-small-en-v1.5"
-    assert captured["kwargs"] == {"cache_dir": "/tmp/hf-cache", "local_files_only": True}
+    assert captured["kwargs"] == {
+        "cache_dir": "/tmp/hf-cache",
+        "local_files_only": True,
+    }
 
 
 def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
     fake_model = SimpleNamespace(embed=lambda texts: [[0.1] for _ in texts])
-    previous_unavailable_until = knowledge_base_module._embedding_model_unavailable_until_epoch
+    previous_unavailable_until = (
+        knowledge_base_module._embedding_model_unavailable_until_epoch
+    )
 
     try:
         knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
@@ -59,14 +71,18 @@ def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
                 embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
             )
     finally:
-        knowledge_base_module._embedding_model_unavailable_until_epoch = previous_unavailable_until
+        knowledge_base_module._embedding_model_unavailable_until_epoch = (
+            previous_unavailable_until
+        )
 
     model_mock.assert_called_once_with(True)
     assert vectors == [[0.1]]
 
 
 def test_embed_texts_suppresses_repeated_embedding_bootstrap_failures() -> None:
-    previous_unavailable_until = knowledge_base_module._embedding_model_unavailable_until_epoch
+    previous_unavailable_until = (
+        knowledge_base_module._embedding_model_unavailable_until_epoch
+    )
     try:
         knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
         with patch(
@@ -86,7 +102,9 @@ def test_embed_texts_suppresses_repeated_embedding_bootstrap_failures() -> None:
         assert second == [None]
         model_mock.assert_called_once_with(True)
     finally:
-        knowledge_base_module._embedding_model_unavailable_until_epoch = previous_unavailable_until
+        knowledge_base_module._embedding_model_unavailable_until_epoch = (
+            previous_unavailable_until
+        )
 
 
 def test_build_knowledge_prompt_context_requires_project_scope() -> None:
@@ -169,7 +187,7 @@ def test_build_knowledge_prompt_context_returns_project_scoped_match() -> None:
                 title="GP-122 comment",
                 mime_type="text/plain",
                 source_ref="comment:GP-122:1",
-                text_content="Production Bundle ID is com.example.girlpower and staging bundle ID is com.example.girlpower.stage",
+                text_content="Production Bundle ID is com.example-workspace.girlpower and staging bundle ID is com.example-workspace.girlpower.stage",
             )
 
             context = build_knowledge_prompt_context(
@@ -180,13 +198,15 @@ def test_build_knowledge_prompt_context_returns_project_scoped_match() -> None:
             )
 
         assert "Relevant facts:" in context.text
-        assert "com.example.girlpower" in context.text
+        assert "com.example-workspace.girlpower" in context.text
         assert context.citations
         assert context.citations[0]["source_type"] == "jira_comment"
         assert context.citations[0]["layer"] == "knowledge_fact"
 
 
-def test_build_knowledge_prompt_context_filters_jira_knowledge_to_active_issue() -> None:
+def test_build_knowledge_prompt_context_filters_jira_knowledge_to_active_issue() -> (
+    None
+):
     with TemporaryDirectory() as temp_dir:
         database_url = f"sqlite:///{temp_dir}/knowledge_issue_scope_test.db"
         reset_db_engine_cache()
@@ -232,7 +252,7 @@ def test_build_knowledge_prompt_context_filters_jira_knowledge_to_active_issue()
                 title="GP-113 comment",
                 mime_type="text/plain",
                 source_ref="comment:GP-113:1",
-                text_content="Production Bundle ID: com.example.girlpower",
+                text_content="Production Bundle ID: com.example-workspace.girlpower",
             )
             create_knowledge_asset(
                 session=session,
@@ -242,7 +262,7 @@ def test_build_knowledge_prompt_context_filters_jira_knowledge_to_active_issue()
                 title="GP-125 comment",
                 mime_type="text/plain",
                 source_ref="comment:GP-125:1",
-                text_content="Production Bundle ID: com.example.otherapp",
+                text_content="Production Bundle ID: com.example-workspace.otherapp",
             )
             create_knowledge_asset(
                 session=session,
@@ -264,11 +284,19 @@ def test_build_knowledge_prompt_context_filters_jira_knowledge_to_active_issue()
                 max_items=3,
             )
 
-        assert "com.example.girlpower" in context.text
-        assert "com.example.otherapp" not in context.text
-        assert any(citation["source_ref"] == "comment:GP-113:1" for citation in context.citations)
-        assert all(citation["source_ref"] != "comment:GP-125:1" for citation in context.citations)
-        assert any(citation["source_type"] == "web_page" for citation in context.citations)
+        assert "com.example-workspace.girlpower" in context.text
+        assert "com.example-workspace.otherapp" not in context.text
+        assert any(
+            citation["source_ref"] == "comment:GP-113:1"
+            for citation in context.citations
+        )
+        assert all(
+            citation["source_ref"] != "comment:GP-125:1"
+            for citation in context.citations
+        )
+        assert any(
+            citation["source_type"] == "web_page" for citation in context.citations
+        )
 
 
 def test_create_knowledge_asset_extracts_source_agnostic_facts() -> None:
@@ -319,16 +347,28 @@ def test_create_knowledge_asset_extracts_source_agnostic_facts() -> None:
                 mime_type="text/plain",
                 source_ref="https://example.test/auth",
                 text_content=(
-                    "Production Bundle ID: com.example.girlpower\n"
+                    "Production Bundle ID: com.example-workspace.girlpower\n"
                     "Decision owner: Platform Identity & Security owner\n"
                     "Rollback plan: Disable the gate and retry login with the previous session policy."
                 ),
             )
 
-            facts = session.query(KnowledgeFact).order_by(KnowledgeFact.fact_type, KnowledgeFact.fact_key).all()
+            facts = (
+                session.query(KnowledgeFact)
+                .order_by(KnowledgeFact.fact_type, KnowledgeFact.fact_key)
+                .all()
+            )
 
-        assert {fact.fact_type for fact in facts} >= {"configuration", "decision_slot", "ownership", "rollout_constraint"}
-        assert any(fact.fact_key == "decision_owner" and "Platform Identity" in fact.fact_value for fact in facts)
+        assert {fact.fact_type for fact in facts} >= {
+            "configuration",
+            "decision_slot",
+            "ownership",
+            "rollout_constraint",
+        }
+        assert any(
+            fact.fact_key == "decision_owner" and "Platform Identity" in fact.fact_value
+            for fact in facts
+        )
         assert any(fact.fact_key == "production_bundle_id" for fact in facts)
         assert all(fact.approval_state == "approved" for fact in facts)
 
@@ -386,12 +426,18 @@ def test_create_knowledge_asset_keeps_long_generic_labels_with_safe_slot_name() 
                 ),
             )
 
-            facts = session.query(KnowledgeFact).filter(KnowledgeFact.fact_type == "reference_fact").all()
+            facts = (
+                session.query(KnowledgeFact)
+                .filter(KnowledgeFact.fact_type == "reference_fact")
+                .all()
+            )
 
         assert facts
         assert any(fact.slot_name == "reference_fact" for fact in facts)
         assert all(len(fact.slot_name) <= 128 for fact in facts)
-        assert any("implemented_gp_122_on_branch_run_gp_122" in fact.fact_key for fact in facts)
+        assert any(
+            "implemented_gp_122_on_branch_run_gp_122" in fact.fact_key for fact in facts
+        )
 
 
 def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> None:
@@ -436,10 +482,12 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
 
             class _JiraClient:
                 def __init__(self) -> None:
-                    self._attachment_body = b"Bundle ID: com.example.girlpower\nService ID: com.example.girlpower.auth"
+                    self._attachment_body = b"Bundle ID: com.example-workspace.girlpower\nService ID: com.example-workspace.girlpower.auth"
 
                 def search_issues_by_jql_page(self, **_kwargs):
-                    return SimpleNamespace(issues=[SimpleNamespace(key="GP-122")], next_page_token=None)
+                    return SimpleNamespace(
+                        issues=[SimpleNamespace(key="GP-122")], next_page_token=None
+                    )
 
                 def get_issue_detail(self, **_kwargs):
                     return SimpleNamespace(
@@ -454,9 +502,11 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
                     return [
                         SimpleNamespace(
                             comment_id="2001",
-                            body="Production Bundle ID: com.example.girlpower",
+                            body="Production Bundle ID: com.example-workspace.girlpower",
                             author_display_name="Alice",
-                            updated_at=datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc),
+                            updated_at=datetime(
+                                2026, 3, 10, 12, 0, tzinfo=timezone.utc
+                            ),
                         )
                     ]
 
@@ -468,7 +518,9 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
                             content_url="https://jira.test/attachment/3001",
                             mime_type="text/plain",
                             size_bytes=len(self._attachment_body),
-                            created_at=datetime(2026, 3, 10, 12, 30, tzinfo=timezone.utc),
+                            created_at=datetime(
+                                2026, 3, 10, 12, 30, tzinfo=timezone.utc
+                            ),
                         ),
                         SimpleNamespace(
                             attachment_id="3002",
@@ -476,7 +528,9 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
                             content_url="https://jira.test/attachment/3002",
                             mime_type="application/zip",
                             size_bytes=100,
-                            created_at=datetime(2026, 3, 10, 12, 31, tzinfo=timezone.utc),
+                            created_at=datetime(
+                                2026, 3, 10, 12, 31, tzinfo=timezone.utc
+                            ),
                         ),
                     ]
 
@@ -495,22 +549,32 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
                 cloud_id="cloud",
             )
 
-            assets = session.query(KnowledgeAsset).order_by(KnowledgeAsset.source_type, KnowledgeAsset.source_ref).all()
+            assets = (
+                session.query(KnowledgeAsset)
+                .order_by(KnowledgeAsset.source_type, KnowledgeAsset.source_ref)
+                .all()
+            )
             assert result.created_assets == 3
             assert result.updated_assets == 0
             assert result.deleted_assets == 0
             assert result.failed_assets == 0
             assert result.skipped_assets == 1
-            assert [asset.source_type for asset in assets] == ["jira_attachment", "jira_comment", "jira_issue"]
+            assert [asset.source_type for asset in assets] == [
+                "jira_attachment",
+                "jira_comment",
+                "jira_issue",
+            ]
 
             class _JiraClientUpdated(_JiraClient):
                 def list_issue_comments(self, **_kwargs):
                     return [
                         SimpleNamespace(
                             comment_id="2001",
-                            body="Production Bundle ID: com.example.girlpower\nStaging Bundle ID: com.example.girlpower.stage",
+                            body="Production Bundle ID: com.example-workspace.girlpower\nStaging Bundle ID: com.example-workspace.girlpower.stage",
                             author_display_name="Alice",
-                            updated_at=datetime(2026, 3, 10, 13, 0, tzinfo=timezone.utc),
+                            updated_at=datetime(
+                                2026, 3, 10, 13, 0, tzinfo=timezone.utc
+                            ),
                         )
                     ]
 
@@ -527,15 +591,27 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
                 cloud_id="cloud",
             )
 
-            active_assets = session.query(KnowledgeAsset).filter(KnowledgeAsset.status != "deleted").all()
-            deleted_assets = session.query(KnowledgeAsset).filter(KnowledgeAsset.status == "deleted").all()
+            active_assets = (
+                session.query(KnowledgeAsset)
+                .filter(KnowledgeAsset.status != "deleted")
+                .all()
+            )
+            deleted_assets = (
+                session.query(KnowledgeAsset)
+                .filter(KnowledgeAsset.status == "deleted")
+                .all()
+            )
             assert updated.created_assets == 0
             assert updated.updated_assets >= 1
             assert updated.deleted_assets == 1
             assert updated.failed_assets == 0
             assert len(active_assets) == 2
             assert len(deleted_assets) == 1
-            assert any(asset.source_type == "jira_comment" and "com.example.girlpower.stage" in str(asset.text_content) for asset in active_assets)
+            assert any(
+                asset.source_type == "jira_comment"
+                and "com.example-workspace.girlpower.stage" in str(asset.text_content)
+                for asset in active_assets
+            )
 
 
 def test_sync_project_knowledge_from_jira_handles_long_labeled_fact_lines() -> None:
@@ -580,7 +656,9 @@ def test_sync_project_knowledge_from_jira_handles_long_labeled_fact_lines() -> N
 
             class _JiraClient:
                 def search_issues_by_jql_page(self, **_kwargs):
-                    return SimpleNamespace(issues=[SimpleNamespace(key="GP-122")], next_page_token=None)
+                    return SimpleNamespace(
+                        issues=[SimpleNamespace(key="GP-122")], next_page_token=None
+                    )
 
                 def get_issue_detail(self, **_kwargs):
                     return SimpleNamespace(
@@ -610,7 +688,11 @@ def test_sync_project_knowledge_from_jira_handles_long_labeled_fact_lines() -> N
                 cloud_id="cloud",
             )
 
-            facts = session.query(KnowledgeFact).filter(KnowledgeFact.fact_type == "reference_fact").all()
+            facts = (
+                session.query(KnowledgeFact)
+                .filter(KnowledgeFact.fact_type == "reference_fact")
+                .all()
+            )
 
         assert result.failed_assets == 0
         assert facts
@@ -662,7 +744,9 @@ def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> N
 
             class _JiraClient:
                 def search_issues_by_jql_page(self, **_kwargs):
-                    return SimpleNamespace(issues=[SimpleNamespace(key="GP-122")], next_page_token=None)
+                    return SimpleNamespace(
+                        issues=[SimpleNamespace(key="GP-122")], next_page_token=None
+                    )
 
                 def get_issue_detail(self, **_kwargs):
                     return SimpleNamespace(

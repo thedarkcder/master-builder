@@ -11,7 +11,9 @@ from orchestrator.api.webhooks.github_staging_admission import (
 
 
 class GitHubStagingAdmissionTests(unittest.TestCase):
-    def test_resolve_staging_admission_config_normalizes_enabled_and_branch(self) -> None:
+    def test_resolve_staging_admission_config_normalizes_enabled_and_branch(
+        self,
+    ) -> None:
         config = resolve_staging_admission_config(
             {
                 "staging_admission_enabled": True,
@@ -42,7 +44,10 @@ class GitHubStagingAdmissionTests(unittest.TestCase):
             normalized_action="opened",
             payload={},
             repo_full_name="org/repo",
-            project_overrides={"staging_admission_enabled": True, "staging_branch": "staging"},
+            project_overrides={
+                "staging_admission_enabled": True,
+                "staging_branch": "staging",
+            },
             pr_targets=[(17, True)],
             github_client=github_client,
         )
@@ -78,7 +83,10 @@ class GitHubStagingAdmissionTests(unittest.TestCase):
             normalized_action="synchronize",
             payload={},
             repo_full_name="org/repo",
-            project_overrides={"staging_admission_enabled": True, "staging_branch": "staging"},
+            project_overrides={
+                "staging_admission_enabled": True,
+                "staging_branch": "staging",
+            },
             pr_targets=[(22, True)],
             github_client=github_client,
         )
@@ -91,9 +99,30 @@ class GitHubStagingAdmissionTests(unittest.TestCase):
 
     def test_push_to_staging_rechecks_all_open_staging_pull_requests(self) -> None:
         open_prs = [
-            SimpleNamespace(number=31, head_ref="feature/a", base_ref="staging", title="A", state="open", html_url=""),
-            SimpleNamespace(number=32, head_ref="feature/b", base_ref="main", title="B", state="open", html_url=""),
-            SimpleNamespace(number=33, head_ref="feature/c", base_ref="staging", title="C", state="open", html_url=""),
+            SimpleNamespace(
+                number=31,
+                head_ref="feature/a",
+                base_ref="staging",
+                title="A",
+                state="open",
+                html_url="",
+            ),
+            SimpleNamespace(
+                number=32,
+                head_ref="feature/b",
+                base_ref="main",
+                title="B",
+                state="open",
+                html_url="",
+            ),
+            SimpleNamespace(
+                number=33,
+                head_ref="feature/c",
+                base_ref="staging",
+                title="C",
+                state="open",
+                html_url="",
+            ),
         ]
         details_by_number = {
             31: SimpleNamespace(
@@ -116,7 +145,9 @@ class GitHubStagingAdmissionTests(unittest.TestCase):
             ),
         }
         github_client = SimpleNamespace(
-            get_pull_request_details=lambda **kwargs: details_by_number[kwargs["pr_number"]],
+            get_pull_request_details=lambda **kwargs: details_by_number[
+                kwargs["pr_number"]
+            ],
             get_branch_head_sha=lambda **_: "staging999",
             list_open_pull_requests=lambda **_: open_prs,
         )
@@ -126,10 +157,15 @@ class GitHubStagingAdmissionTests(unittest.TestCase):
             normalized_action=None,
             payload={"ref": "refs/heads/staging"},
             repo_full_name="org/repo",
-            project_overrides={"staging_admission_enabled": True, "staging_branch": "staging"},
+            project_overrides={
+                "staging_admission_enabled": True,
+                "staging_branch": "staging",
+            },
             pr_targets=[],
             github_client=github_client,
         )
 
-        self.assertEqual({action.head_sha for action in plan.actions}, {"sha31", "sha33"})
+        self.assertEqual(
+            {action.head_sha for action in plan.actions}, {"sha31", "sha33"}
+        )
         self.assertEqual({result["pr_number"] for result in plan.results}, {31, 33})

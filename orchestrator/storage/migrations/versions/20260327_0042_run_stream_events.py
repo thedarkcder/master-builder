@@ -24,14 +24,18 @@ def _table_exists(table_name: str) -> bool:
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _table_exists("run_stream_events"):
         op.create_table(
             "run_stream_events",
-            sa.Column("stream_offset", sa.Integer(), nullable=False, autoincrement=True),
+            sa.Column(
+                "stream_offset", sa.Integer(), nullable=False, autoincrement=True
+            ),
             sa.Column("event_kind", sa.String(length=32), nullable=False),
             sa.Column("tenant_id", sa.String(length=128), nullable=False),
             sa.Column("project_id", sa.String(length=128), nullable=True),
@@ -48,8 +52,12 @@ def upgrade() -> None:
             sa.Column("stream", sa.String(length=16), nullable=True),
             sa.Column("message", sa.Text(), nullable=True),
             sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
             sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
             sa.PrimaryKeyConstraint("stream_offset"),
         )
@@ -67,7 +75,10 @@ def upgrade() -> None:
         ("ix_run_stream_events_stage", ["stage"]),
         ("ix_run_stream_events_recorded_at", ["recorded_at"]),
         ("ix_run_stream_events_run_id_stream_offset", ["run_id", "stream_offset"]),
-        ("ix_run_stream_events_tenant_id_stream_offset", ["tenant_id", "stream_offset"]),
+        (
+            "ix_run_stream_events_tenant_id_stream_offset",
+            ["tenant_id", "stream_offset"],
+        ),
     ):
         if not _has_index("run_stream_events", index_name):
             op.create_index(index_name, "run_stream_events", columns, unique=False)

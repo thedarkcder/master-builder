@@ -5,8 +5,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision.engine import DecisionEventInput, evaluate_decision_event
+from orchestrator.core.decision.planner import (
+    DecisionPlannerQuestion,
+    DecisionPlannerResult,
+)
+from orchestrator.core.decision.engine import (
+    DecisionEventInput,
+    evaluate_decision_event,
+)
 from orchestrator.core.decision.state_repository import existing_case_for_issue
 from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
@@ -48,7 +54,9 @@ def _precheck_result(
             reason=decision_gate_reason,
             missing_sections=decision_gate_missing_sections,
             questions=decision_gate_questions,
-            recommendation="Proceed" if not decision_gate_triggered else "Clarification required",
+            recommendation="Proceed"
+            if not decision_gate_triggered
+            else "Clarification required",
             tags=(),
         ),
         gtd=GoodToDoValidationResult(
@@ -106,7 +114,9 @@ def _planner_result(
     )
 
 
-def _add_active_tenant_member(*, session, tenant_id: str, user_id: str, email: str) -> None:  # noqa: ANN001
+def _add_active_tenant_member(
+    *, session, tenant_id: str, user_id: str, email: str
+) -> None:  # noqa: ANN001
     now = datetime.now(timezone.utc)
     session.add(
         TenantUser(
@@ -140,7 +150,9 @@ def _add_active_tenant_member(*, session, tenant_id: str, user_id: str, email: s
 class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
     @classmethod
     def bootstrap_template_database(cls) -> None:
-        session_factory = create_session_factory(database_url=cls._template_database_url)
+        session_factory = create_session_factory(
+            database_url=cls._template_database_url
+        )
         with session_factory() as session:
             tenant = Tenant(
                 tenant_id="tenant-stateful",
@@ -149,7 +161,10 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 jira_config={},
                 github_config={},
                 repos_config={},
-                policy_config={"knowledge_base_enabled": True, "knowledge_auto_answer_mode": "aggressive"},
+                policy_config={
+                    "knowledge_base_enabled": True,
+                    "knowledge_auto_answer_mode": "aggressive",
+                },
                 discord_config={},
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
@@ -218,20 +233,23 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             precheck_calls += 1
             return prechecks.pop(0)
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need owner decision",
-                    questions=(("dg_owner", "Who owns this decision?"),),
-                ),
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need owner decision",
-                    questions=(("dg_owner", "Who owns this decision?"),),
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need owner decision",
+                        questions=(("dg_owner", "Who owns this decision?"),),
+                    ),
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need owner decision",
+                        questions=(("dg_owner", "Who owns this decision?"),),
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -288,23 +306,43 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             decision_gate_missing_sections=("auth configuration",),
         )
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need auth decisions",
-                    questions=(("dg_auth", "Confirm Apple Sign In and Supabase auth configuration."),),
-                ),
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need auth decisions",
-                    questions=(("dg_auth", "What entitlement/capability values are required for production and staging?"),),
-                    question_states=(("dg_auth", "Confirm Apple Sign In and Supabase auth configuration."),),
-                    statuses={"dg_auth": "answered"},
-                    details={"dg_auth": "Bundle IDs and redirect URI were captured; entitlement values are still missing."},
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need auth decisions",
+                        questions=(
+                            (
+                                "dg_auth",
+                                "Confirm Apple Sign In and Supabase auth configuration.",
+                            ),
+                        ),
+                    ),
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need auth decisions",
+                        questions=(
+                            (
+                                "dg_auth",
+                                "What entitlement/capability values are required for production and staging?",
+                            ),
+                        ),
+                        question_states=(
+                            (
+                                "dg_auth",
+                                "Confirm Apple Sign In and Supabase auth configuration.",
+                            ),
+                        ),
+                        statuses={"dg_auth": "answered"},
+                        details={
+                            "dg_auth": "Bundle IDs and redirect URI were captured; entitlement values are still missing."
+                        },
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -349,7 +387,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         assert cycle is not None
         self.assertEqual(
             tuple(second.decision.pre_check.decision_gate.questions),
-            ("What entitlement/capability values are required for production and staging?",),
+            (
+                "What entitlement/capability values are required for production and staging?",
+            ),
         )
         self.assertEqual(
             cycle.question_set_json,
@@ -365,27 +405,41 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             ],
         )
 
-    def test_decision_owner_question_is_suppressed_for_single_member_account(self) -> None:
+    def test_decision_owner_question_is_suppressed_for_single_member_account(
+        self,
+    ) -> None:
         precheck = _precheck_result(
             outcome="decision_gate_required",
             decision_gate_triggered=True,
             decision_gate_reason="Need business owner and rollout decision",
-            decision_gate_questions=("Who owns this decision?", "What is the rollout policy?"),
+            decision_gate_questions=(
+                "Who owns this decision?",
+                "What is the rollout policy?",
+            ),
             decision_gate_missing_sections=("decision_owner", "rollout_constraints"),
         )
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            return_value=_planner_result(
-                gate_status="blocked_decision_gate",
-                reason="Need business owner and rollout decision",
-                questions=(
-                    ("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),
-                    ("rollout_constraints", "What rollout constraints apply?"),
-                ),
-                question_states=(
-                    ("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),
-                    ("rollout_constraints", "What rollout constraints apply?"),
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=_planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need business owner and rollout decision",
+                    questions=(
+                        (
+                            "decision_owner",
+                            "Who is the accountable decision owner approving MAB-248 (name and role)?",
+                        ),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
+                    question_states=(
+                        (
+                            "decision_owner",
+                            "Who is the accountable decision owner approving MAB-248 (name and role)?",
+                        ),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
                 ),
             ),
         ):
@@ -418,9 +472,14 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             cycle = session.get(DecisionCycle, result.cycle_id)
 
         assert cycle is not None
-        self.assertEqual(tuple(result.decision.pre_check.decision_gate.questions), ("What rollout constraints apply?",))
+        self.assertEqual(
+            tuple(result.decision.pre_check.decision_gate.questions),
+            ("What rollout constraints apply?",),
+        )
         self.assertEqual(cycle.unresolved_question_ids_json, ["rollout_constraints"])
-        owner_state = next(item for item in cycle.question_set_json if item["id"] == "decision_owner")
+        owner_state = next(
+            item for item in cycle.question_set_json if item["id"] == "decision_owner"
+        )
         self.assertEqual(owner_state["status"], "accepted")
         self.assertFalse(owner_state["unresolved"])
 
@@ -433,14 +492,25 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             decision_gate_missing_sections=("decision_owner",),
         )
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            return_value=_planner_result(
-                gate_status="blocked_decision_gate",
-                reason="Need business owner",
-                questions=(("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),),
-                question_states=(
-                    ("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=_planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need business owner",
+                    questions=(
+                        (
+                            "decision_owner",
+                            "Who is the accountable decision owner approving MAB-248 (name and role)?",
+                        ),
+                    ),
+                    question_states=(
+                        (
+                            "decision_owner",
+                            "Who is the accountable decision owner approving MAB-248 (name and role)?",
+                        ),
+                    ),
                 ),
             ),
         ):
@@ -481,16 +551,23 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         assert cycle is not None
         self.assertEqual(
             tuple(result.decision.pre_check.decision_gate.questions),
-            ("Who is the accountable decision owner approving MAB-248 (name and role)?",),
+            (
+                "Who is the accountable decision owner approving MAB-248 (name and role)?",
+            ),
         )
         self.assertEqual(cycle.unresolved_question_ids_json, ["decision_owner"])
 
-    def test_cycle_transitions_from_open_to_answered_unresolved_to_accepted_clear(self) -> None:
+    def test_cycle_transitions_from_open_to_answered_unresolved_to_accepted_clear(
+        self,
+    ) -> None:
         precheck = _precheck_result(
             outcome="decision_gate_required",
             decision_gate_triggered=True,
             decision_gate_reason="Need subscription decisions",
-            decision_gate_questions=("What is in scope?", "What rollout constraints apply?"),
+            decision_gate_questions=(
+                "What is in scope?",
+                "What rollout constraints apply?",
+            ),
             decision_gate_missing_sections=("scope", "rollout_constraints"),
         )
         precheck_calls = 0
@@ -500,49 +577,63 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             precheck_calls += 1
             return precheck
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need subscription decisions",
-                    questions=(
-                        ("scope", "What is in scope?"),
-                        ("rollout_constraints", "What rollout constraints apply?"),
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need subscription decisions",
+                        questions=(
+                            ("scope", "What is in scope?"),
+                            ("rollout_constraints", "What rollout constraints apply?"),
+                        ),
                     ),
-                ),
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need remaining rollout decision",
-                    questions=(
-                        ("scope", "Which HubSpot information should drive subscription access?"),
-                        ("rollout_constraints", "What rollout constraints apply?"),
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need remaining rollout decision",
+                        questions=(
+                            (
+                                "scope",
+                                "Which HubSpot information should drive subscription access?",
+                            ),
+                            ("rollout_constraints", "What rollout constraints apply?"),
+                        ),
+                        question_states=(
+                            ("scope", "What is in scope?"),
+                            ("rollout_constraints", "What rollout constraints apply?"),
+                        ),
+                        statuses={"scope": "answered", "rollout_constraints": "open"},
+                        details={
+                            "scope": "HubSpot invoices are in scope; subscription access rules are still missing."
+                        },
                     ),
-                    question_states=(
-                        ("scope", "What is in scope?"),
-                        ("rollout_constraints", "What rollout constraints apply?"),
+                    _planner_result(
+                        gate_status="clear",
+                        reason="All decisions accepted",
+                        questions=(
+                            (
+                                "scope",
+                                "Which HubSpot information should drive subscription access?",
+                            ),
+                            ("rollout_constraints", "What rollout constraints apply?"),
+                        ),
+                        question_states=(
+                            ("scope", "What is in scope?"),
+                            ("rollout_constraints", "What rollout constraints apply?"),
+                        ),
+                        statuses={
+                            "scope": "accepted",
+                            "rollout_constraints": "accepted",
+                        },
+                        details={
+                            "scope": "Required HubSpot subscription rules accepted.",
+                            "rollout_constraints": "No rollout constraints.",
+                        },
                     ),
-                    statuses={"scope": "answered", "rollout_constraints": "open"},
-                    details={"scope": "HubSpot invoices are in scope; subscription access rules are still missing."},
-                ),
-                _planner_result(
-                    gate_status="clear",
-                    reason="All decisions accepted",
-                    questions=(
-                        ("scope", "Which HubSpot information should drive subscription access?"),
-                        ("rollout_constraints", "What rollout constraints apply?"),
-                    ),
-                    question_states=(
-                        ("scope", "What is in scope?"),
-                        ("rollout_constraints", "What rollout constraints apply?"),
-                    ),
-                    statuses={"scope": "accepted", "rollout_constraints": "accepted"},
-                    details={
-                        "scope": "Required HubSpot subscription rules accepted.",
-                        "rollout_constraints": "No rollout constraints.",
-                    },
-                ),
-            ],
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -613,7 +704,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             )
             cycle_after_partial = session.get(DecisionCycle, str(first.cycle_id))
             assert cycle_after_partial is not None
-            partial_unresolved_question_ids = list(cycle_after_partial.unresolved_question_ids_json)
+            partial_unresolved_question_ids = list(
+                cycle_after_partial.unresolved_question_ids_json
+            )
             partial_question_set = list(cycle_after_partial.question_set_json)
 
             scope_answer = (
@@ -622,12 +715,16 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 .one()
             )
             scope_answer.status = "accepted"
-            scope_answer.normalized_answer = "Required HubSpot subscription rules accepted."
+            scope_answer.normalized_answer = (
+                "Required HubSpot subscription rules accepted."
+            )
             scope_answer.accepted_at = datetime.now(timezone.utc)
             scope_answer.updated_at = datetime.now(timezone.utc)
             rollout_answer = (
                 session.query(DecisionAnswer)
-                .filter_by(cycle_id=str(first.cycle_id), question_id="rollout_constraints")
+                .filter_by(
+                    cycle_id=str(first.cycle_id), question_id="rollout_constraints"
+                )
                 .one()
             )
             rollout_answer.status = "accepted"
@@ -658,7 +755,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
 
         self.assertEqual(first.classification, "decision_gate")
         self.assertEqual(second.classification, "decision_gate")
-        self.assertEqual(partial_unresolved_question_ids, ["scope", "rollout_constraints"])
+        self.assertEqual(
+            partial_unresolved_question_ids, ["scope", "rollout_constraints"]
+        )
         by_id = {item["id"]: item for item in partial_question_set}
         self.assertEqual(by_id["scope"]["status"], "answered")
         self.assertTrue(by_id["scope"]["unresolved"])
@@ -671,12 +770,15 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
     def test_idempotency_key_deduplicates_event_rows(self) -> None:
         precheck = _precheck_result(outcome="ready_for_agent")
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            return_value=_planner_result(
-                gate_status="blocked_decision_gate",
-                reason="Need config",
-                questions=(("dg_config", "What config is approved?"),),
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=_planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need config",
+                    questions=(("dg_config", "What config is approved?"),),
+                ),
             ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
@@ -738,12 +840,15 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
             return prechecks.pop(0)
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            return_value=_planner_result(
-                gate_status="blocked_decision_gate",
-                reason="Need owner decision",
-                questions=(("dg_owner", "Who owns this decision?"),),
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=_planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need owner decision",
+                    questions=(("dg_owner", "Who owns this decision?"),),
+                ),
             ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
@@ -767,7 +872,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
-            case_before = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
+            case_before = (
+                session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
+            )
             updated_at_before = case_before.updated_at
 
             second = evaluate_decision_event(
@@ -787,12 +894,17 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
-            case_after = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
+            case_after = (
+                session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
+            )
 
         self.assertEqual(first.case_state, "blocked_decision_gate")
         self.assertTrue(second.duplicate_event)
         self.assertEqual(second.case_state, "blocked_decision_gate")
-        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("Who owns this decision?",))
+        self.assertEqual(
+            tuple(second.decision.pre_check.decision_gate.questions),
+            ("Who owns this decision?",),
+        )
         self.assertEqual(case_after.updated_at, updated_at_before)
 
     def test_open_cycle_with_answered_reply_does_not_rerun_precheck(self) -> None:
@@ -814,22 +926,27 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
             return prechecks.pop(0)
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need config",
-                    questions=(("dg_config", "What config is approved?"),),
-                ),
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need config",
-                    questions=(("dg_config", "What config is approved?"),),
-                    statuses={"dg_config": "answered"},
-                    details={"dg_config": "Production bundle ID is com.example.app."},
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need config",
+                        questions=(("dg_config", "What config is approved?"),),
+                    ),
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need config",
+                        questions=(("dg_config", "What config is approved?"),),
+                        statuses={"dg_config": "answered"},
+                        details={
+                            "dg_config": "Production bundle ID is com.example.app."
+                        },
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -901,11 +1018,16 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             )
 
         self.assertEqual(second.classification, "decision_gate")
-        self.assertEqual(tuple(second.decision.pre_check.decision_gate.questions), ("What config is approved?",))
+        self.assertEqual(
+            tuple(second.decision.pre_check.decision_gate.questions),
+            ("What config is approved?",),
+        )
         self.assertEqual(precheck_calls, 1)
         self.assertEqual(recorded_answers_seen, [[]])
 
-    def test_resolved_cycle_persists_clear_state_without_rerunning_precheck(self) -> None:
+    def test_resolved_cycle_persists_clear_state_without_rerunning_precheck(
+        self,
+    ) -> None:
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -924,22 +1046,27 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             recorded_answers_seen.append(kwargs.get("recorded_answers"))  # type: ignore[arg-type]
             return prechecks.pop(0)
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need config",
-                    questions=(("dg_config", "What config is approved?"),),
-                ),
-                _planner_result(
-                    gate_status="clear",
-                    reason="Clarification complete",
-                    questions=(("dg_config", "What config is approved?"),),
-                    statuses={"dg_config": "accepted"},
-                    details={"dg_config": "Production bundle ID is com.example.app."},
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need config",
+                        questions=(("dg_config", "What config is approved?"),),
+                    ),
+                    _planner_result(
+                        gate_status="clear",
+                        reason="Clarification complete",
+                        questions=(("dg_config", "What config is approved?"),),
+                        statuses={"dg_config": "accepted"},
+                        details={
+                            "dg_config": "Production bundle ID is com.example.app."
+                        },
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -1019,7 +1146,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.assertIsNone(case.active_cycle_id)
         self.assertIsNone(case.blocked_reason)
 
-    def test_clear_case_with_same_fingerprint_reuses_persisted_clear_snapshot(self) -> None:
+    def test_clear_case_with_same_fingerprint_reuses_persisted_clear_snapshot(
+        self,
+    ) -> None:
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -1036,22 +1165,27 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             precheck_calls += 1
             return prechecks.pop(0)
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need config",
-                    questions=(("dg_config", "What config is approved?"),),
-                ),
-                _planner_result(
-                    gate_status="clear",
-                    reason="Clarification complete",
-                    questions=(("dg_config", "What config is approved?"),),
-                    statuses={"dg_config": "accepted"},
-                    details={"dg_config": "Production bundle ID is com.example.app."},
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need config",
+                        questions=(("dg_config", "What config is approved?"),),
+                    ),
+                    _planner_result(
+                        gate_status="clear",
+                        reason="Clarification complete",
+                        questions=(("dg_config", "What config is approved?"),),
+                        statuses={"dg_config": "accepted"},
+                        details={
+                            "dg_config": "Production bundle ID is com.example.app."
+                        },
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -1148,7 +1282,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.assertIsNone(case.active_cycle_id)
         self.assertIsNone(case.blocked_reason)
 
-    def test_closed_cycle_does_not_reopen_when_issue_summary_description_and_labels_change(self) -> None:
+    def test_closed_cycle_does_not_reopen_when_issue_summary_description_and_labels_change(
+        self,
+    ) -> None:
         precheck_calls = 0
 
         def _evaluate_pre_run_check_stub(**kwargs: object) -> PreRunCheckResult:
@@ -1178,22 +1314,31 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 decision_gate_missing_sections=("policy",),
             )
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need relink policy",
-                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
-                ),
-                _planner_result(
-                    gate_status="clear",
-                    reason="Clarification complete",
-                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
-                    statuses={"dg_relink": "accepted"},
-                    details={"dg_relink": "Reject relink; device_id stays bound to one user only."},
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need relink policy",
+                        questions=(
+                            ("dg_relink", "What is the cross-account relink policy?"),
+                        ),
+                    ),
+                    _planner_result(
+                        gate_status="clear",
+                        reason="Clarification complete",
+                        questions=(
+                            ("dg_relink", "What is the cross-account relink policy?"),
+                        ),
+                        statuses={"dg_relink": "accepted"},
+                        details={
+                            "dg_relink": "Reject relink; device_id stays bound to one user only."
+                        },
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
@@ -1282,7 +1427,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-170").one()
-            cycle_count = session.query(DecisionCycle).filter_by(issue_key="MAB-170").count()
+            cycle_count = (
+                session.query(DecisionCycle).filter_by(issue_key="MAB-170").count()
+            )
 
         self.assertEqual(cleared.classification, "clear")
         self.assertEqual(reused.classification, "clear")
@@ -1292,7 +1439,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.assertIsNone(case.active_cycle_id)
         self.assertEqual(cycle_count, 1)
 
-    def test_closed_cycle_applies_missing_ready_label_without_reopening_gate(self) -> None:
+    def test_closed_cycle_applies_missing_ready_label_without_reopening_gate(
+        self,
+    ) -> None:
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -1315,28 +1464,40 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             "access_token": "token-1",
             "client": oauth_client,
         }
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            side_effect=[
-                _planner_result(
-                    gate_status="blocked_decision_gate",
-                    reason="Need relink policy",
-                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
-                ),
-                _planner_result(
-                    gate_status="clear",
-                    reason="Clarification complete",
-                    questions=(("dg_relink", "What is the cross-account relink policy?"),),
-                    statuses={"dg_relink": "accepted"},
-                    details={"dg_relink": "Reject relink; device_id stays bound to one user only."},
-                ),
-            ],
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                side_effect=[
+                    _planner_result(
+                        gate_status="blocked_decision_gate",
+                        reason="Need relink policy",
+                        questions=(
+                            ("dg_relink", "What is the cross-account relink policy?"),
+                        ),
+                    ),
+                    _planner_result(
+                        gate_status="clear",
+                        reason="Clarification complete",
+                        questions=(
+                            ("dg_relink", "What is the cross-account relink policy?"),
+                        ),
+                        statuses={"dg_relink": "accepted"},
+                        details={
+                            "dg_relink": "Reject relink; device_id stays bound to one user only."
+                        },
+                    ),
+                ],
+            ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
             tenant.jira_config = {"ready_label": "agent:ready"}
-            tenant.policy_config = {**tenant.policy_config, "allow_label_mutations": True}
+            tenant.policy_config = {
+                **tenant.policy_config,
+                "allow_label_mutations": True,
+            }
 
             first = evaluate_decision_event(
                 session=session,
@@ -1420,7 +1581,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-171").one()
-            cycle_count = session.query(DecisionCycle).filter_by(issue_key="MAB-171").count()
+            cycle_count = (
+                session.query(DecisionCycle).filter_by(issue_key="MAB-171").count()
+            )
 
         self.assertEqual(cleared.classification, "clear")
         self.assertIn("agent:ready", cleared.issue_labels)
@@ -1514,7 +1677,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         snapshot = dict(case.metadata_json.get("result_snapshot") or {})
         self.assertEqual(snapshot.get("classification"), "clear")
         self.assertEqual(snapshot.get("block_reason"), "policy_eval_failed")
-        self.assertEqual(snapshot.get("policy_error"), "Codex precheck policy evaluation failed")
+        self.assertEqual(
+            snapshot.get("policy_error"), "Codex precheck policy evaluation failed"
+        )
 
     def test_jira_comment_effect_is_published_after_state_commit(self) -> None:
         precheck = _precheck_result(
@@ -1528,19 +1693,30 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
 
         def _publish(comment: str) -> tuple[bool, str | None]:
             with self.session_factory() as verify_session:
-                case = verify_session.query(DecisionCase).filter_by(issue_key="MAB-165").one()
-                effect = verify_session.query(DecisionEffectOutbox).filter_by(issue_key="MAB-165").one()
+                case = (
+                    verify_session.query(DecisionCase)
+                    .filter_by(issue_key="MAB-165")
+                    .one()
+                )
+                effect = (
+                    verify_session.query(DecisionEffectOutbox)
+                    .filter_by(issue_key="MAB-165")
+                    .one()
+                )
                 observed_state["case_state"] = case.state
                 observed_state["effect_status"] = effect.status
             observed_state["comment"] = comment
             return True, None
 
-        with self.session_factory() as session, patch(
-            "orchestrator.core.decision.engine.plan_decision_questions",
-            return_value=_planner_result(
-                gate_status="blocked_decision_gate",
-                reason="Need owner decision",
-                questions=(("dg_owner", "Who owns this decision?"),),
+        with (
+            self.session_factory() as session,
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=_planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need owner decision",
+                    questions=(("dg_owner", "Who owns this decision?"),),
+                ),
             ),
         ):
             tenant = session.get(Tenant, "tenant-stateful")
@@ -1566,7 +1742,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
 
-            effect = session.query(DecisionEffectOutbox).filter_by(issue_key="MAB-165").one()
+            effect = (
+                session.query(DecisionEffectOutbox).filter_by(issue_key="MAB-165").one()
+            )
 
         self.assertEqual(result.case_state, "blocked_decision_gate")
         self.assertEqual(observed_state["case_state"], "blocked_decision_gate")
@@ -1627,7 +1805,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.assertEqual(result.decision.block_reason, None)
         self.assertIn("objective", result.auto_resolved_slots)
 
-    def test_serializes_auto_resolved_slot_timestamps_for_decision_metadata(self) -> None:
+    def test_serializes_auto_resolved_slot_timestamps_for_decision_metadata(
+        self,
+    ) -> None:
         def _stub_precheck(**kwargs: object) -> PreRunCheckResult:
             description = str(kwargs.get("issue_description") or "")
             if "Auto-resolved context for precheck:" in description:
@@ -1679,7 +1859,9 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     evaluate_pre_run_check_fn=_stub_precheck,
                 )
 
-            case = existing_case_for_issue(session=session, tenant_id=tenant.tenant_id, issue_key="MAB-164")
+            case = existing_case_for_issue(
+                session=session, tenant_id=tenant.tenant_id, issue_key="MAB-164"
+            )
             assert case is not None
 
         self.assertEqual(result.decision.block_reason, None)
@@ -1708,5 +1890,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     ),
                     settings=self.settings,
                     tenant_atlassian_oauth_context_fn=lambda **__: None,
-                    evaluate_pre_run_check_fn=lambda **__: _precheck_result(outcome="ready_for_agent"),
+                    evaluate_pre_run_check_fn=lambda **__: _precheck_result(
+                        outcome="ready_for_agent"
+                    ),
                 )

@@ -40,16 +40,25 @@ class ProductEventRepository(Protocol):
 class ClickHouseProductEventRepository:
     def __init__(self) -> None:
         settings = get_settings()
-        self._base_url = str(getattr(settings, "clickhouse_http_url", "") or "").rstrip("/")
+        self._base_url = str(getattr(settings, "clickhouse_http_url", "") or "").rstrip(
+            "/"
+        )
         self._database = str(getattr(settings, "clickhouse_database", "") or "").strip()
         self._username = str(getattr(settings, "clickhouse_username", "") or "").strip()
         self._password = str(getattr(settings, "clickhouse_password", "") or "")
-        self._timeout = max(1, int(getattr(settings, "clickhouse_query_timeout_seconds", 30)))
+        self._timeout = max(
+            1, int(getattr(settings, "clickhouse_query_timeout_seconds", 30))
+        )
         if not self._base_url or not self._database:
-            raise RuntimeError("ClickHouse product event repository requires clickhouse_http_url and clickhouse_database")
+            raise RuntimeError(
+                "ClickHouse product event repository requires clickhouse_http_url and clickhouse_database"
+            )
 
     def initialize(self) -> None:
-        self._execute("CREATE DATABASE IF NOT EXISTS " + _quote_identifier(self._database), database="")
+        self._execute(
+            "CREATE DATABASE IF NOT EXISTS " + _quote_identifier(self._database),
+            database="",
+        )
         self._execute(_create_execution_log_table_sql())
         self._execute(_create_audit_evidence_table_sql())
 
@@ -114,7 +123,9 @@ class ClickHouseProductEventRepository:
             method="POST",
         )
         if self._username:
-            token = base64.b64encode(f"{self._username}:{self._password}".encode("utf-8")).decode("ascii")
+            token = base64.b64encode(
+                f"{self._username}:{self._password}".encode("utf-8")
+            ).decode("ascii")
             request.add_header("Authorization", f"Basic {token}")
         try:
             with urlopen(request, timeout=self._timeout) as response:
@@ -136,7 +147,9 @@ def default_product_event_repository() -> ProductEventRepository:
     return _repository
 
 
-def configure_product_event_repository_for_tests(repository: ProductEventRepository) -> None:
+def configure_product_event_repository_for_tests(
+    repository: ProductEventRepository,
+) -> None:
     global _repository
     _repository = repository
 
@@ -192,7 +205,11 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _table_name(event_class: EventClass) -> str:
-    return "audit_evidence_events" if event_class == "audit_evidence" else "execution_log_events"
+    return (
+        "audit_evidence_events"
+        if event_class == "audit_evidence"
+        else "execution_log_events"
+    )
 
 
 def _quote_identifier(value: str) -> str:
@@ -215,7 +232,12 @@ def _limit(limit: int) -> int:
     return max(1, min(int(limit), 2000))
 
 
-def _where_clause(filters: dict[str, str | None], *, before: EventCursor | None = None, after_sequence: int | None = None) -> str:
+def _where_clause(
+    filters: dict[str, str | None],
+    *,
+    before: EventCursor | None = None,
+    after_sequence: int | None = None,
+) -> str:
     clauses: list[str] = []
     for column, value in filters.items():
         if value is not None:

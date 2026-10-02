@@ -4,7 +4,9 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import AdminNotificationListRead, AdminNotificationRead
-from orchestrator.core.platform.admin_notifications import list_tenant_admin_notifications
+from orchestrator.core.platform.admin_notifications import (
+    list_tenant_admin_notifications,
+)
 from orchestrator.storage.models import Tenant
 
 
@@ -40,6 +42,10 @@ def list_tenant_notifications(
 ) -> AdminNotificationListRead:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    rows = list_tenant_admin_notifications(session=session, tenant_id=tenant_id, status_filter=status_filter)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    rows = list_tenant_admin_notifications(
+        session=session, tenant_id=tenant_id, status_filter=status_filter
+    )
     return AdminNotificationListRead(notifications=[_to_read(row) for row in rows])

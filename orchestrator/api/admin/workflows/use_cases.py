@@ -8,7 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from temporalio.client import WorkflowUpdateFailedError
 
-from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_operation_attempt_to_schema, workflow_to_schema
+from orchestrator.api.admin.schema_mappers import (
+    run_to_schema,
+    workflow_operation_attempt_to_schema,
+    workflow_to_schema,
+)
 from orchestrator.api.admin.workflows.execution_read_service import workflow_schema
 from orchestrator.api.admin.workflows.live_stream_service import (
     list_workflow_operation_live_events as list_workflow_operation_live_events_impl,
@@ -55,7 +59,9 @@ from orchestrator.api.schemas import (
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
 from orchestrator.core.development.executable_work_items import parse_work_item_id
-from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
+from orchestrator.core.jira_project_reconciliation.start import (
+    start_jira_project_reconciliation,
+)
 from orchestrator.core.platform.admin_notifications import (
     ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
     AdminNotificationDraft,
@@ -64,7 +70,11 @@ from orchestrator.core.platform.admin_notifications import (
 )
 from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE
 from orchestrator.core.qa.demo_proof_start import start_demo_proof_workflow
-from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_permission, require_tenant_workspace_access
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_tenant_permission,
+    require_tenant_workspace_access,
+)
 from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.runtime.issue_fanout import seed_issues_with_runtime
@@ -169,8 +179,12 @@ def get_workflow_type_detail(
     )
 
 
-def get_workflow(*, session: Session, principal: AuthenticatedPrincipal, execution_id: str) -> WorkflowRead:
-    _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+def get_workflow(
+    *, session: Session, principal: AuthenticatedPrincipal, execution_id: str
+) -> WorkflowRead:
+    _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     return get_workflow_impl(
         session=session,
         execution_id=execution_id,
@@ -179,8 +193,12 @@ def get_workflow(*, session: Session, principal: AuthenticatedPrincipal, executi
     )
 
 
-def start_parent_planning(*, session: Session, principal: AuthenticatedPrincipal, execution_id: str) -> WorkflowRead:
-    workflow = _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+def start_parent_planning(
+    *, session: Session, principal: AuthenticatedPrincipal, execution_id: str
+) -> WorkflowRead:
+    workflow = _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     require_tenant_permission(
         principal=principal,
         tenant_id=workflow.tenant_id,
@@ -203,13 +221,23 @@ def start_work_item_from_board(
     try:
         ref = parse_work_item_id(work_item_id)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     work_item = session.get(WorkflowExecutableWorkItem, work_item_id)
     if work_item is None or work_item.item_kind != ref.kind:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executable work item not found")
-    workflow = _require_workflow_access(session=session, principal=principal, execution_id=ref.execution_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Executable work item not found",
+        )
+    workflow = _require_workflow_access(
+        session=session, principal=principal, execution_id=ref.execution_id
+    )
     if work_item.parent_workflow_id != workflow.workflow_id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item does not match workflow")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Executable work item does not match workflow",
+        )
     require_tenant_permission(
         principal=principal,
         tenant_id=workflow.tenant_id,
@@ -250,15 +278,27 @@ def start_work_item_from_board(
                 run_to_schema_fn=run_to_schema,
             ),
             queued=[
-                StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+                StartWorkIssueRead(
+                    issue_key=item.issue_key,
+                    run_id=item.run_id,
+                    status=item.status,
+                    reason=item.reason,
+                )
                 for item in board_result.queued
             ],
             skipped=[
-                StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+                StartWorkIssueRead(
+                    issue_key=item.issue_key,
+                    run_id=item.run_id,
+                    status=item.status,
+                    reason=item.reason,
+                )
                 for item in board_result.skipped
             ],
             promoted_issue_keys=list(board_result.result.promoted_issue_keys),
-            started_attempt=workflow_operation_attempt_to_schema(board_result.started_attempt)
+            started_attempt=workflow_operation_attempt_to_schema(
+                board_result.started_attempt
+            )
             if board_result.started_attempt is not None
             else None,
         )
@@ -278,15 +318,27 @@ def start_work_item_from_board(
             run_to_schema_fn=run_to_schema,
         ),
         queued=[
-            StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+            StartWorkIssueRead(
+                issue_key=item.issue_key,
+                run_id=item.run_id,
+                status=item.status,
+                reason=item.reason,
+            )
             for item in board_result.queued
         ],
         skipped=[
-            StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+            StartWorkIssueRead(
+                issue_key=item.issue_key,
+                run_id=item.run_id,
+                status=item.status,
+                reason=item.reason,
+            )
             for item in board_result.skipped
         ],
         promoted_issue_keys=list(board_result.result.promoted_issue_keys),
-        started_attempt=workflow_operation_attempt_to_schema(board_result.started_attempt)
+        started_attempt=workflow_operation_attempt_to_schema(
+            board_result.started_attempt
+        )
         if board_result.started_attempt is not None
         else None,
     )
@@ -299,9 +351,13 @@ def start_workflow_execution(
     payload: WorkflowExecutionStartRequest,
 ) -> WorkflowExecutionStartRead:
     try:
-        workflow_type = get_workflow_type(session, workflow_type_key=payload.workflow_type_key)
+        workflow_type = get_workflow_type(
+            session, workflow_type_key=payload.workflow_type_key
+        )
     except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow type not found") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow type not found"
+        ) from exc
     if workflow_type.workflow_type_key == "jira_project_reconciliation":
         return _start_jira_project_reconciliation_workflow(
             session=session,
@@ -328,7 +384,10 @@ def _require_start_tenant_and_project(
 ) -> tuple[Tenant, Project]:
     tenant_id = payload.tenant_id.strip()
     if not tenant_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="tenant_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="tenant_id is required",
+        )
     require_tenant_permission(
         principal=principal,
         tenant_id=tenant_id,
@@ -336,13 +395,20 @@ def _require_start_tenant_and_project(
     )
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project_id = str(payload.project_id or "").strip()
     if not project_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="project_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="project_id is required",
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     return tenant, project
 
 
@@ -380,13 +446,17 @@ def _start_demo_proof_workflow(
             detail="Demo proof from_pr must not include release_id",
         )
     required_capture_targets = payload.input.get("required_capture_targets")
-    if required_capture_targets is not None and not isinstance(required_capture_targets, list):
+    if required_capture_targets is not None and not isinstance(
+        required_capture_targets, list
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="input.required_capture_targets must be a list",
         )
     required_recording_counts = payload.input.get("required_recording_counts")
-    if required_recording_counts is not None and not isinstance(required_recording_counts, dict):
+    if required_recording_counts is not None and not isinstance(
+        required_recording_counts, dict
+    ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="input.required_recording_counts must be an object",
@@ -408,7 +478,9 @@ def _start_demo_proof_workflow(
             trigger_event="admin_workflow_start",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     except WorkflowUpdateFailedError as exc:
         session.rollback()
         raise HTTPException(
@@ -436,13 +508,18 @@ def _start_jira_project_reconciliation_workflow(
         payload=payload,
     )
     if project.is_archived:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Archived projects cannot be reconciled")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Archived projects cannot be reconciled",
+        )
 
     settings = get_settings()
     max_items = _workflow_start_positive_int(
         payload.input.get("max_items"),
         field_name="input.max_items",
-        default=max(1, int(getattr(settings, "jira_project_reconciliation_max_items", 1000))),
+        default=max(
+            1, int(getattr(settings, "jira_project_reconciliation_max_items", 1000))
+        ),
     )
     try:
         result = start_jira_project_reconciliation(
@@ -454,7 +531,9 @@ def _start_jira_project_reconciliation_workflow(
             trigger_event="admin_workflow_start",
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except WorkflowUpdateFailedError as exc:
         if _workflow_update_failure_requires_jira_reauth(exc):
             _emit_jira_reauth_required_notification(session=session, tenant=tenant)
@@ -497,7 +576,9 @@ def _workflow_update_failure_requires_jira_reauth(exc: BaseException) -> bool:
     )
 
 
-def _emit_jira_reauth_required_notification(*, session: Session, tenant: Tenant) -> None:
+def _emit_jira_reauth_required_notification(
+    *, session: Session, tenant: Tenant
+) -> None:
     connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
     tenant_id = tenant.tenant_id
     session.rollback()
@@ -530,15 +611,23 @@ def _emit_jira_reauth_required_notification(*, session: Session, tenant: Tenant)
     session.commit()
 
 
-def _workflow_start_positive_int(value: object, *, field_name: str, default: int) -> int:
+def _workflow_start_positive_int(
+    value: object, *, field_name: str, default: int
+) -> int:
     if value is None:
         return default
     if isinstance(value, bool):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must be an integer")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} must be an integer",
+        )
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"{field_name} must be an integer") from exc
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"{field_name} must be an integer",
+        ) from exc
     if parsed < 1:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -556,7 +645,9 @@ def list_workflow_telemetry_events(
     before_recorded_at: datetime | None,
     before_event_id: str | None,
 ) -> list[WorkflowObservabilityEventRead]:
-    _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+    _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     return list_workflow_telemetry_events_impl(
         session=session,
         execution_id=execution_id,
@@ -576,7 +667,9 @@ def list_workflow_audit_events(
     before_event_id: str | None,
     operation_id: str | None = None,
 ) -> list[WorkflowObservabilityEventRead]:
-    _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+    _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     return list_workflow_audit_events_impl(
         session=session,
         execution_id=execution_id,
@@ -596,10 +689,14 @@ def list_workflow_operation_telemetry_events(
     attempt_id: str | None,
     limit: int,
 ) -> list[WorkflowObservabilityEventRead]:
-    workflow = _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+    workflow = _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     operation = session.get(WorkflowOperation, operation_id)
     if operation is None or operation.workflow_id != workflow.workflow_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found"
+        )
     return list_workflow_operation_live_events_impl(
         session=session,
         operation=operation,
@@ -619,15 +716,23 @@ def stream_workflow_operation_telemetry_events(
     normalized_attempt_id = str(attempt_id or "").strip() or None
     session_factory = create_session_factory()
     with session_factory() as session:
-        workflow = _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+        workflow = _require_workflow_access(
+            session=session, principal=principal, execution_id=execution_id
+        )
         operation = session.get(WorkflowOperation, operation_id)
         if operation is None or operation.workflow_id != workflow.workflow_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Workflow operation not found",
+            )
         normalized_operation_id = operation.operation_id
         if normalized_attempt_id is not None:
             attempt = session.get(WorkflowOperationAttempt, normalized_attempt_id)
             if attempt is None or attempt.operation_id != normalized_operation_id:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Workflow operation attempt not found",
+                )
     return stream_workflow_operation_live_events_ndjson_impl(
         operation_id=normalized_operation_id,
         settings=get_settings(),
@@ -646,7 +751,9 @@ def get_workflow_operation_transcript(
     attempt_id: str | None,
     limit: int,
 ) -> WorkflowStepTranscriptRead:
-    _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+    _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     return get_workflow_step_transcript_impl(
         session=session,
         execution_id=execution_id,
@@ -666,7 +773,9 @@ def get_workflow_operation_attempt_audit(
     attempt_id: str,
     limit: int,
 ) -> WorkflowStepAttemptTranscriptRead:
-    _require_workflow_access(session=session, principal=principal, execution_id=execution_id)
+    _require_workflow_access(
+        session=session, principal=principal, execution_id=execution_id
+    )
     return get_workflow_step_audit_attempt_impl(
         session=session,
         execution_id=execution_id,
@@ -793,7 +902,11 @@ def _require_workflow_access(
         .limit(1)
     ).scalar_one_or_none()
     if workflow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
+        )
     if not principal.is_platform_super_admin:
-        require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+        require_tenant_workspace_access(
+            principal=principal, tenant_id=workflow.tenant_id
+        )
     return workflow

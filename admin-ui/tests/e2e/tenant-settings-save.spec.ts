@@ -9,12 +9,12 @@ import {
 
 test("tenant configuration save only calls the configuration endpoint", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const updatedTenant = makeTenant({
     ...tenant,
-    name: "Route 25 Renamed",
+    name: "Example Workspace Renamed",
   });
   const calls: string[] = [];
 
@@ -22,7 +22,7 @@ test("tenant configuration save only calls the configuration endpoint", async ({
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
@@ -40,17 +40,17 @@ test("tenant configuration save only calls the configuration endpoint", async ({
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "PATCH",
-      pathname: /\/api\/bff\/api\/admin\/tenants\/example\/(configuration|policy|jira|github|repos|discord|observability)$/,
+      pathname: /\/api\/bff\/api\/admin\/tenants\/example-workspace\/(configuration|policy|jira|github|repos|discord|observability)$/,
       handler: async (route, url) => {
         calls.push(url.pathname);
         if (url.pathname.endsWith("/configuration")) {
           const payload = await route.request().postDataJSON();
-          expect(payload).toEqual({ name: "Route 25 Renamed" });
+          expect(payload).toEqual({ name: "Example Workspace Renamed" });
           return fulfillJson(route, updatedTenant);
         }
         return fulfillJson(route, { detail: `Unexpected tenant section save: ${url.pathname}` }, 500);
@@ -58,19 +58,19 @@ test("tenant configuration save only calls the configuration endpoint", async ({
     },
   ]);
 
-  await page.goto("/example/settings/config");
+  await page.goto("/example-workspace/settings/config");
   await expect(page.getByLabel("Tenant enabled")).toHaveCount(0);
-  await page.getByPlaceholder("Tenant Demo").fill("Route 25 Renamed");
+  await page.getByPlaceholder("Tenant Demo").fill("Example Workspace Renamed");
   await page.getByRole("button", { name: "Save workspace configuration" }).click();
 
   await expect(page.getByText("Workspace configuration saved")).toBeVisible();
-  expect(calls).toEqual(["/api/bff/api/admin/tenants/example/configuration"]);
+  expect(calls).toEqual(["/api/bff/api/admin/tenants/example-workspace/configuration"]);
 });
 
 test("tenant settings pages do not load project navigation data", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   let projectNavigationLoaded = false;
 
@@ -78,12 +78,12 @@ test("tenant settings pages do not load project navigation data", async ({ page 
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => {
         projectNavigationLoaded = true;
         return fulfillJson(route, []);
@@ -91,15 +91,15 @@ test("tenant settings pages do not load project navigation data", async ({ page 
     },
   ]);
 
-  await page.goto("/example/settings/discord", { waitUntil: "networkidle" });
+  await page.goto("/example-workspace/settings/discord", { waitUntil: "networkidle" });
   await expect(page.getByRole("heading", { name: "Discord Integration" })).toBeVisible();
   expect(projectNavigationLoaded).toBe(false);
 });
 
 test("tenant policy save only calls the policy endpoint", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const updatedTenant = makeTenant({
     ...tenant,
@@ -114,7 +114,7 @@ test("tenant policy save only calls the policy endpoint", async ({ page }) => {
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
@@ -132,12 +132,12 @@ test("tenant policy save only calls the policy endpoint", async ({ page }) => {
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "PATCH",
-      pathname: /\/api\/bff\/api\/admin\/tenants\/example\/(configuration|policy|jira|github|repos|discord|observability)$/,
+      pathname: /\/api\/bff\/api\/admin\/tenants\/example-workspace\/(configuration|policy|jira|github|repos|discord|observability)$/,
       handler: async (route, url) => {
         calls.push(url.pathname);
         if (url.pathname.endsWith("/policy")) {
@@ -154,18 +154,18 @@ test("tenant policy save only calls the policy endpoint", async ({ page }) => {
     },
   ]);
 
-  await page.goto("/example/settings/config");
+  await page.goto("/example-workspace/settings/config");
   await page.getByLabel("Allow PR creation").uncheck();
   await page.getByRole("button", { name: "Save policy" }).click();
 
   await expect(page.getByText("Tenant policy saved")).toBeVisible();
-  expect(calls).toEqual(["/api/bff/api/admin/tenants/example/policy"]);
+  expect(calls).toEqual(["/api/bff/api/admin/tenants/example-workspace/policy"]);
 });
 
 test("tenant Discord settings load and save through the Discord-only contract", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
     discord: null,
   });
   const updatedTenant = makeTenant({
@@ -185,7 +185,7 @@ test("tenant Discord settings load and save through the Discord-only contract", 
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
@@ -205,12 +205,12 @@ test("tenant Discord settings load and save through the Discord-only contract", 
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "PATCH",
-      pathname: /\/api\/bff\/api\/admin\/tenants\/example\/(configuration|policy|jira|github|repos|discord|observability)$/,
+      pathname: /\/api\/bff\/api\/admin\/tenants\/example-workspace\/(configuration|policy|jira|github|repos|discord|observability)$/,
       handler: async (route, url) => {
         calls.push(url.pathname);
         if (url.pathname.endsWith("/discord")) {
@@ -231,7 +231,7 @@ test("tenant Discord settings load and save through the Discord-only contract", 
     },
   ]);
 
-  await page.goto("/example/settings/discord");
+  await page.goto("/example-workspace/settings/discord");
   await expect(page.getByRole("heading", { name: "Discord Integration" })).toBeVisible();
   expect(codexModelsLoaded).toBe(false);
 
@@ -243,13 +243,13 @@ test("tenant Discord settings load and save through the Discord-only contract", 
   await page.getByRole("button", { name: "Save Discord settings" }).click();
 
   await expect(page.getByText("Discord settings saved")).toBeVisible();
-  expect(calls).toEqual(["/api/bff/api/admin/tenants/example/discord"]);
+  expect(calls).toEqual(["/api/bff/api/admin/tenants/example-workspace/discord"]);
 });
 
 test("tenant observability settings save only calls the observability endpoint", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const updatedTenant = makeTenant({
     ...tenant,
@@ -270,7 +270,7 @@ test("tenant observability settings save only calls the observability endpoint",
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
@@ -290,12 +290,12 @@ test("tenant observability settings save only calls the observability endpoint",
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "PATCH",
-      pathname: /\/api\/bff\/api\/admin\/tenants\/example\/(configuration|policy|jira|github|repos|discord|observability)$/,
+      pathname: /\/api\/bff\/api\/admin\/tenants\/example-workspace\/(configuration|policy|jira|github|repos|discord|observability)$/,
       handler: async (route, url) => {
         calls.push(url.pathname);
         if (url.pathname.endsWith("/observability")) {
@@ -315,7 +315,7 @@ test("tenant observability settings save only calls the observability endpoint",
     },
   ]);
 
-  await page.goto("/example/settings/observability");
+  await page.goto("/example-workspace/settings/observability");
   await expect(page.getByRole("heading", { name: "Observability policy" })).toBeVisible();
   expect(codexModelsLoaded).toBe(false);
 
@@ -326,5 +326,5 @@ test("tenant observability settings save only calls the observability endpoint",
   await page.getByRole("button", { name: "Save observability policy" }).click();
 
   await expect(page.getByText("Observability policy saved")).toBeVisible();
-  expect(calls).toEqual(["/api/bff/api/admin/tenants/example/observability"]);
+  expect(calls).toEqual(["/api/bff/api/admin/tenants/example-workspace/observability"]);
 });

@@ -18,8 +18,18 @@ from orchestrator.core.workflow.execution_projection import (
     workflow_execution_id,
 )
 from orchestrator.core.workflow.handler_registry import build_workflow_handler_registry
-from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.core.workflow.runtime import (
+    WorkflowAdvanceRequest,
+    WorkflowTrigger,
+    build_workflow_runtime,
+)
+from orchestrator.storage.models import (
+    Project,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 DEMO_PROOF_WORKFLOW_TYPE_KEY = "demo_proof"
 DEMO_PROOF_TRIGGER_MODES = frozenset(
@@ -76,9 +86,15 @@ def _normalize_pr_url(value: object, *, trigger_mode: str) -> str | None:
     if not normalized:
         if trigger_mode == "cleanup_only":
             return None
-        raise ValueError("Demo proof start requires pr_url before PR evidence can be attached")
-    if not re.fullmatch(r"https://github\.com/[^/\s]+/[^/\s]+/pull/[0-9]+/?", normalized):
-        raise ValueError("Demo proof start requires pr_url to be a GitHub pull request URL")
+        raise ValueError(
+            "Demo proof start requires pr_url before PR evidence can be attached"
+        )
+    if not re.fullmatch(
+        r"https://github\.com/[^/\s]+/[^/\s]+/pull/[0-9]+/?", normalized
+    ):
+        raise ValueError(
+            "Demo proof start requires pr_url to be a GitHub pull request URL"
+        )
     return normalized.rstrip("/")
 
 
@@ -86,7 +102,8 @@ def _normalize_trigger_mode(value: object) -> str:
     normalized = str(value or "").strip()
     if normalized not in DEMO_PROOF_TRIGGER_MODES:
         raise ValueError(
-            "Demo proof trigger_mode must be one of: " + ", ".join(sorted(DEMO_PROOF_TRIGGER_MODES))
+            "Demo proof trigger_mode must be one of: "
+            + ", ".join(sorted(DEMO_PROOF_TRIGGER_MODES))
         )
     return normalized
 
@@ -115,15 +132,26 @@ def _normalize_run_id(value: object, *, trigger_mode: str) -> str | None:
 
 def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     if value is None:
-        raise ValueError("Demo proof required_capture_targets must be provided by PM demo requirements")
+        raise ValueError(
+            "Demo proof required_capture_targets must be provided by PM demo requirements"
+        )
     if not isinstance(value, list):
         raise ValueError("Demo proof required_capture_targets must be a list")
-    targets = tuple(str(item or "").strip() for item in value if str(item or "").strip())
+    targets = tuple(
+        str(item or "").strip() for item in value if str(item or "").strip()
+    )
     if not targets:
         raise ValueError("Demo proof required_capture_targets must not be empty")
-    unsupported = [target for target in targets if target not in DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS]
+    unsupported = [
+        target
+        for target in targets
+        if target not in DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS
+    ]
     if unsupported:
-        raise ValueError("Demo proof required_capture_targets contains unsupported target(s): " + ", ".join(unsupported))
+        raise ValueError(
+            "Demo proof required_capture_targets contains unsupported target(s): "
+            + ", ".join(unsupported)
+        )
     return targets
 
 
@@ -134,27 +162,40 @@ def _normalize_required_recording_counts(
 ) -> dict[str, int]:
     required_targets = set(required_capture_targets)
     if value is None:
-        raise ValueError("Demo proof required_recording_counts must be provided by PM demo requirements")
+        raise ValueError(
+            "Demo proof required_recording_counts must be provided by PM demo requirements"
+        )
     if not isinstance(value, dict):
         raise ValueError("Demo proof required_recording_counts must be a JSON object")
     counts: dict[str, int] = {}
     for raw_target, raw_count in value.items():
         target = str(raw_target or "").strip()
         if target not in required_targets:
-            raise ValueError(f"Demo proof required_recording_counts contains unsupported target: {target}")
+            raise ValueError(
+                f"Demo proof required_recording_counts contains unsupported target: {target}"
+            )
         if isinstance(raw_count, bool):
-            raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+            raise ValueError(
+                f"Demo proof required_recording_counts.{target} must be a positive integer"
+            )
         try:
             count = int(raw_count)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer") from exc
+            raise ValueError(
+                f"Demo proof required_recording_counts.{target} must be a positive integer"
+            ) from exc
         if count < 1:
-            raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+            raise ValueError(
+                f"Demo proof required_recording_counts.{target} must be a positive integer"
+            )
         counts[target] = count
-    missing_targets = [target for target in required_capture_targets if target not in counts]
+    missing_targets = [
+        target for target in required_capture_targets if target not in counts
+    ]
     if missing_targets:
         raise ValueError(
-            "Demo proof required_recording_counts is missing required target(s): " + ", ".join(missing_targets)
+            "Demo proof required_recording_counts is missing required target(s): "
+            + ", ".join(missing_targets)
         )
     return counts
 
@@ -167,7 +208,9 @@ def _normalize_event_metadata(value: object) -> dict[str, object] | None:
     return dict(value)
 
 
-def _request_id(*, tenant: Tenant, project: Project, proof_scope_id: str, trigger_event: str) -> str:
+def _request_id(
+    *, tenant: Tenant, project: Project, proof_scope_id: str, trigger_event: str
+) -> str:
     return (
         f"demo-proof:{tenant.tenant_id}:{project.project_id}:{proof_scope_id}:"
         f"{trigger_event}:{_now().isoformat(timespec='seconds')}"
@@ -177,7 +220,10 @@ def _request_id(*, tenant: Tenant, project: Project, proof_scope_id: str, trigge
 def _latest_attempt_id(*, session: Session, workflow_id: str) -> str | None:
     attempt = session.execute(
         select(WorkflowOperationAttempt)
-        .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id,
+        )
         .where(WorkflowOperation.workflow_id == workflow_id)
         .order_by(desc(WorkflowOperationAttempt.created_at))
         .limit(1)
@@ -224,7 +270,9 @@ def start_demo_proof_workflow(
         workflow_id=result.workflow_id,
         workflow_type_key=result.workflow_type_key,
         status=result.status,
-        started_attempt_id=_latest_attempt_id(session=session, workflow_id=result.workflow_id),
+        started_attempt_id=_latest_attempt_id(
+            session=session, workflow_id=result.workflow_id
+        ),
     )
 
 
@@ -311,7 +359,9 @@ def _advance_demo_proof_workflow(
         required_capture_targets=normalized_targets,
     )
     normalized_run_id = _normalize_run_id(run_id, trigger_mode=normalized_trigger_mode)
-    normalized_release_id = _normalize_release_id(release_id, trigger_mode=normalized_trigger_mode)
+    normalized_release_id = _normalize_release_id(
+        release_id, trigger_mode=normalized_trigger_mode
+    )
     normalized_pr_url = _normalize_pr_url(pr_url, trigger_mode=normalized_trigger_mode)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
     normalized_event_metadata = _normalize_event_metadata(event_metadata)
@@ -381,7 +431,9 @@ def _advance_demo_proof_workflow(
     )
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
-        raise RuntimeError("Demo proof workflow did not create a durable workflow execution")
+        raise RuntimeError(
+            "Demo proof workflow did not create a durable workflow execution"
+        )
     return DemoProofWorkflowEventResult(
         execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,

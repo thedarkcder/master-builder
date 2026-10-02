@@ -21,10 +21,16 @@ def stream_run_events_ndjson(
 ) -> Iterator[str]:  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
 
-    initial_event_limit = max(1, min(int(getattr(settings, "run_events_initial_limit", 100)), 500))
-    initial_log_limit = max(1, min(int(getattr(settings, "logging_pane_initial_log_limit", 200)), 1000))
+    initial_event_limit = max(
+        1, min(int(getattr(settings, "run_events_initial_limit", 100)), 500)
+    )
+    initial_log_limit = max(
+        1, min(int(getattr(settings, "logging_pane_initial_log_limit", 200)), 1000)
+    )
     yield from stream_product_event_rows(
         snapshot_loader=lambda: build_run_logging_stream_snapshot_query(
             session=session,

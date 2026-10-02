@@ -66,7 +66,12 @@ class WorkflowFinalizationTests(unittest.TestCase):
         self.assertEqual(plan.event_types, ("TASK_COMPLETED",))
         self.assertEqual(
             plan.tail_steps,
-            ("orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"),
+            (
+                "orchestration_trace",
+                "jira_feedback",
+                "manual_pr_reporting",
+                "workspace_cleanup",
+            ),
         )
 
     def test_workflow_finalizer_keeps_failed_run_workspace_for_recovery(self) -> None:
@@ -97,7 +102,9 @@ class WorkflowFinalizationTests(unittest.TestCase):
             summary=["failed"],
             test_guidance=[],
             attempts=1,
-            diagnostics=WorkflowDiagnostics(stage="dev", message="dev failed", attempts=1, history=[]),
+            diagnostics=WorkflowDiagnostics(
+                stage="dev", message="dev failed", attempts=1, history=[]
+            ),
         )
 
         finalizer = WorkflowFinalizer(
@@ -121,9 +128,14 @@ class WorkflowFinalizationTests(unittest.TestCase):
         self.assertIs(plan.run, finalized_run)
         self.assertEqual(plan.persisted_status, "failed")
         self.assertEqual(plan.event_types, ("RUN_FAILED", "TASK_FAILED"))
-        self.assertEqual(plan.tail_steps, ("orchestration_trace", "jira_feedback", "manual_pr_reporting"))
+        self.assertEqual(
+            plan.tail_steps,
+            ("orchestration_trace", "jira_feedback", "manual_pr_reporting"),
+        )
 
-    def test_workflow_finalizer_falls_back_to_failed_plan_when_finalize_raises(self) -> None:
+    def test_workflow_finalizer_falls_back_to_failed_plan_when_finalize_raises(
+        self,
+    ) -> None:
         session = MagicMock()
         logger = MagicMock()
         run = SimpleNamespace(
@@ -151,7 +163,9 @@ class WorkflowFinalizationTests(unittest.TestCase):
             summary=[],
             test_guidance=[],
             attempts=1,
-            diagnostics=WorkflowDiagnostics(stage="dev", message="boom", attempts=1, history=[]),
+            diagnostics=WorkflowDiagnostics(
+                stage="dev", message="boom", attempts=1, history=[]
+            ),
         )
 
         finalizer = WorkflowFinalizer(
@@ -179,7 +193,9 @@ class WorkflowFinalizationTests(unittest.TestCase):
         self.assertEqual(plan.tail_steps, ())
         session.rollback.assert_called_once()
 
-    def test_completion_tail_executor_uses_finalized_run_and_keeps_tail_failures_non_authoritative(self) -> None:
+    def test_completion_tail_executor_uses_finalized_run_and_keeps_tail_failures_non_authoritative(
+        self,
+    ) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
         project = SimpleNamespace(project_id="project-1")
@@ -205,7 +221,12 @@ class WorkflowFinalizationTests(unittest.TestCase):
         plan = SimpleNamespace(
             run=run,
             workflow_result=workflow_result,
-            tail_steps=("orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"),
+            tail_steps=(
+                "orchestration_trace",
+                "jira_feedback",
+                "manual_pr_reporting",
+                "workspace_cleanup",
+            ),
         )
 
         send_jira_message = MagicMock(side_effect=RuntimeError("jira down"))
@@ -231,16 +252,27 @@ class WorkflowFinalizationTests(unittest.TestCase):
             recorded_rows.append(dict(kwargs))
 
         with (
-            patch("orchestrator.core.worker.finalization.emit_logging_pane_event", side_effect=_emit_logging_pane_event),
-            patch("orchestrator.core.worker.finalization.publish_manual_pr_remediation_completion") as publish_completion,
+            patch(
+                "orchestrator.core.worker.finalization.emit_logging_pane_event",
+                side_effect=_emit_logging_pane_event,
+            ),
+            patch(
+                "orchestrator.core.worker.finalization.publish_manual_pr_remediation_completion"
+            ) as publish_completion,
         ):
             executor.execute(plan)
 
         publish_completion.assert_called_once()
         self.assertIs(publish_completion.call_args.kwargs["run"], run)
-        self.assertEqual(publish_completion.call_args.kwargs["terminal_status"], "succeeded")
+        self.assertEqual(
+            publish_completion.call_args.kwargs["terminal_status"], "succeeded"
+        )
         cleanup.assert_called_once()
-        failure_messages = [json.loads(str(row["message"])) for row in recorded_rows if row.get("stage") == "telemetry"]
+        failure_messages = [
+            json.loads(str(row["message"]))
+            for row in recorded_rows
+            if row.get("stage") == "telemetry"
+        ]
         self.assertTrue(
             any(
                 message.get("event_kind") == "completion_step_failed"
@@ -275,7 +307,12 @@ class WorkflowFinalizationTests(unittest.TestCase):
         plan = SimpleNamespace(
             run=run,
             workflow_result=workflow_result,
-            tail_steps=("orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"),
+            tail_steps=(
+                "orchestration_trace",
+                "jira_feedback",
+                "manual_pr_reporting",
+                "workspace_cleanup",
+            ),
         )
         order: list[str] = []
         cleanup = MagicMock(side_effect=lambda **_: order.append("workspace_cleanup"))
@@ -313,7 +350,12 @@ class WorkflowFinalizationTests(unittest.TestCase):
 
         self.assertEqual(
             order,
-            ["orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"],
+            [
+                "orchestration_trace",
+                "jira_feedback",
+                "manual_pr_reporting",
+                "workspace_cleanup",
+            ],
         )
 
 

@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification.projection_service import resolve_active_clarification_context
+from orchestrator.core.clarification.projection_service import (
+    resolve_active_clarification_context,
+)
 from orchestrator.core.clarification.questions import ClarificationQuestionSet
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.pm.followup_context_service import (
@@ -52,9 +54,15 @@ from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
 from orchestrator.core.projects.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
 )
-from orchestrator.core.projects.parent_planning_clarification_service import ParentPlanningClarificationService
-from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
-from orchestrator.core.pm.interview_followup_service import continue_pm_interview_from_followup
+from orchestrator.core.projects.parent_planning_clarification_service import (
+    ParentPlanningClarificationService,
+)
+from orchestrator.core.projects.parent_planning_fanout_service import (
+    ParentPlanningFanoutService,
+)
+from orchestrator.core.pm.interview_followup_service import (
+    continue_pm_interview_from_followup,
+)
 from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     mark_pm_interview_case_completed,
@@ -72,8 +80,12 @@ from orchestrator.core.workflow.execution_projection import (
     ensure_workflow_execution,
     resolve_latest_workflow_execution_by_source,
 )
-from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
-from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.handler_composition import (
+    build_installed_workflow_handler_registry,
+)
+from orchestrator.core.workflow.operation_retry_use_case import (
+    retry_workflow_operation_with_registered_handler,
+)
 from orchestrator.core.workflow.operation_service import complete_workflow_operation
 from orchestrator.core.workflow.step_runner import (
     WorkflowStepAttempt,
@@ -82,10 +94,22 @@ from orchestrator.core.workflow.step_runner import (
     start_workflow_step_attempt,
     wait_workflow_step_attempt,
 )
-from orchestrator.core.workflow.type_catalog import get_workflow_type, get_workflow_type_by_handler_key
-from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
+from orchestrator.core.workflow.type_catalog import (
+    get_workflow_type,
+    get_workflow_type_by_handler_key,
+)
+from orchestrator.core.workflow.work_units import (
+    run_work_unit,
+    workflow_work_unit_input_fingerprint,
+)
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import FollowupContext, PMInterviewCase, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    FollowupContext,
+    PMInterviewCase,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +126,11 @@ def _close_answered_parent_planning_context_if_current(
     metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
     current_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
     answered_fingerprint = str(answered_question_fingerprint or "").strip()
-    if current_fingerprint and answered_fingerprint and current_fingerprint != answered_fingerprint:
+    if (
+        current_fingerprint
+        and answered_fingerprint
+        and current_fingerprint != answered_fingerprint
+    ):
         return
     followup_context.status = CLOSED_FOLLOWUP_CONTEXT_STATUS
     followup_context.closed_at = datetime.now(timezone.utc)
@@ -119,13 +147,21 @@ def _complete_answered_backlog_planning_operation(
         workflow=workflow,
         operation_type=PARENT_OP_BACKLOG_PLANNING,
     )
-    latest_attempt = session.execute(
-        select(WorkflowOperationAttempt)
-        .where(WorkflowOperationAttempt.operation_id == backlog_operation.operation_id)
-        .order_by(desc(WorkflowOperationAttempt.attempt_number))
-    ).scalars().first()
+    latest_attempt = (
+        session.execute(
+            select(WorkflowOperationAttempt)
+            .where(
+                WorkflowOperationAttempt.operation_id == backlog_operation.operation_id
+            )
+            .order_by(desc(WorkflowOperationAttempt.attempt_number))
+        )
+        .scalars()
+        .first()
+    )
     if latest_attempt is None:
-        raise RuntimeError("Answered backlog planning operation has no persisted attempt to complete")
+        raise RuntimeError(
+            "Answered backlog planning operation has no persisted attempt to complete"
+        )
     complete_workflow_operation(
         session,
         operation=backlog_operation,
@@ -178,7 +214,9 @@ def _start_parent_workflow_step(
         display_name=parent_detail.summary,
         description=parent_detail.description,
     )
-    return lifecycle, start_workflow_step_attempt(lifecycle=lifecycle, operation_type=operation_type)
+    return lifecycle, start_workflow_step_attempt(
+        lifecycle=lifecycle, operation_type=operation_type
+    )
 
 
 def _context_with_attempt(
@@ -311,7 +349,9 @@ def handle_parent_feature_sync(
         )
     return jira_sync_result_from_advance_result(
         session=session,
-        workflow_type=get_workflow_type_by_handler_key(session, handler_key="jira_parent_feature"),
+        workflow_type=get_workflow_type_by_handler_key(
+            session, handler_key="jira_parent_feature"
+        ),
         tenant_id=context.tenant_id,
         project_id=context.project_id,
         issue_key=context.issue_key,
@@ -369,7 +409,9 @@ def handle_engineering_clarification_command(
         parent_detail=parent_detail,
         operation_type=PARENT_OP_JIRA_COMMENT_PROJECTION,
     )
-    attempt_context = _context_with_attempt(context=context, lifecycle=lifecycle, step=projection_step)
+    attempt_context = _context_with_attempt(
+        context=context, lifecycle=lifecycle, step=projection_step
+    )
     runtime = build_runtime_for_selector_fn(
         session=session,
         settings=settings,
@@ -477,7 +519,9 @@ def handle_engineering_clarification_command(
         )
         metadata = dict(getattr(existing_context, "metadata_json", {}) or {})
         existing_questions = metadata.get("questions")
-        question_entries = list(existing_questions) if isinstance(existing_questions, list) else []
+        question_entries = (
+            list(existing_questions) if isinstance(existing_questions, list) else []
+        )
         question_entries.append(
             {
                 "source_child_key": child_detail.key,
@@ -496,7 +540,11 @@ def handle_engineering_clarification_command(
             ]
         )
         affected_child_keys = {
-            *[str(value).strip().upper() for value in metadata.get("affected_child_keys", []) if str(value).strip()],
+            *[
+                str(value).strip().upper()
+                for value in metadata.get("affected_child_keys", [])
+                if str(value).strip()
+            ],
             child_detail.key.upper(),
         }
         clarification_service = ParentPlanningClarificationService()
@@ -628,7 +676,9 @@ def _parent_planning_blocked_operation(
         .order_by(desc(WorkflowOperation.updated_at))
     ).scalar_one_or_none()
     if operation is None:
-        raise RuntimeError(f"Parent planning workflow has no operation '{operation_type}' to continue")
+        raise RuntimeError(
+            f"Parent planning workflow has no operation '{operation_type}' to continue"
+        )
     return operation
 
 
@@ -647,7 +697,10 @@ def handle_parent_planning_clarification_reply(
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
     if context.comment_command is not None:
         return JiraParentChildSyncResult(handled=False)
-    if not context.project_id or context.webhook_event not in {"comment_created", "comment_updated"}:
+    if not context.project_id or context.webhook_event not in {
+        "comment_created",
+        "comment_updated",
+    }:
         return JiraParentChildSyncResult(handled=False)
     followup_context = resolve_issue_followup_context(
         session=session,
@@ -666,9 +719,14 @@ def handle_parent_planning_clarification_reply(
         return JiraParentChildSyncResult(handled=False)
 
     metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
-    answered_question_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip() or None
+    answered_question_fingerprint = (
+        str(metadata.get("question_state_fingerprint") or "").strip() or None
+    )
     blocked_operation_type = str(metadata.get("blocked_operation_type") or "").strip()
-    if blocked_operation_type not in {PARENT_OP_BACKLOG_PLANNING, PARENT_OP_JIRA_CHILD_FANOUT}:
+    if blocked_operation_type not in {
+        PARENT_OP_BACKLOG_PLANNING,
+        PARENT_OP_JIRA_CHILD_FANOUT,
+    }:
         raise RuntimeError(
             f"Parent planning clarification for {context.issue_key} is missing a valid blocked operation"
         )
@@ -684,7 +742,9 @@ def handle_parent_planning_clarification_reply(
         source_ref=context.issue_key,
     )
     if workflow is None:
-        raise RuntimeError(f"Parent planning clarification for {context.issue_key} has no workflow execution")
+        raise RuntimeError(
+            f"Parent planning clarification for {context.issue_key} has no workflow execution"
+        )
     operation = _parent_planning_blocked_operation(
         session=session,
         workflow=workflow,
@@ -724,7 +784,10 @@ def handle_parent_planning_clarification_reply(
             "Parent planning clarification continuation returned running; "
             "reply context cannot be closed until the continuation reaches a durable state"
         )
-    if blocked_operation_type == PARENT_OP_BACKLOG_PLANNING and str(handle.status or "").strip().lower() == "completed":
+    if (
+        blocked_operation_type == PARENT_OP_BACKLOG_PLANNING
+        and str(handle.status or "").strip().lower() == "completed"
+    ):
         _complete_answered_backlog_planning_operation(
             session=session,
             workflow=workflow,
@@ -760,7 +823,10 @@ def handle_engineering_clarification_reply(
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
     if context.comment_command is not None:
         return JiraParentChildSyncResult(handled=False)
-    if not context.project_id or context.webhook_event not in {"comment_created", "comment_updated"}:
+    if not context.project_id or context.webhook_event not in {
+        "comment_created",
+        "comment_updated",
+    }:
         return JiraParentChildSyncResult(handled=False)
     followup_context = resolve_issue_followup_context(
         session=session,
@@ -779,7 +845,9 @@ def handle_engineering_clarification_reply(
 
     metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
     affected_child_keys = [
-        str(value).strip().upper() for value in metadata.get("affected_child_keys", []) if str(value).strip()
+        str(value).strip().upper()
+        for value in metadata.get("affected_child_keys", [])
+        if str(value).strip()
     ]
     if not affected_child_keys:
         raise RuntimeError(
@@ -805,7 +873,9 @@ def handle_engineering_clarification_reply(
         parent_detail=parent_detail,
         operation_type=PARENT_OP_JIRA_CHILD_FANOUT,
     )
-    attempt_context = _context_with_attempt(context=context, lifecycle=lifecycle, step=fanout_step)
+    attempt_context = _context_with_attempt(
+        context=context, lifecycle=lifecycle, step=fanout_step
+    )
     child_details = [
         jira.get_issue_detail(issue_id_or_key=child_key)
         for child_key in affected_child_keys
@@ -861,7 +931,9 @@ def handle_engineering_clarification_reply(
             context.issue_key,
             exc,
         )
-        _mark_issues_sync_blocked(oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys])
+        _mark_issues_sync_blocked(
+            oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys]
+        )
         _post_sync_note(
             session=session,
             tenant=context.tenant,
@@ -880,7 +952,10 @@ def handle_engineering_clarification_reply(
         return JiraParentChildSyncResult(
             handled=True,
             reason="engineering_clarification_refresh_failed",
-            extra={"stale_child_keys": affected_child_keys, "webhook_event": context.webhook_event},
+            extra={
+                "stale_child_keys": affected_child_keys,
+                "webhook_event": context.webhook_event,
+            },
             failed=True,
         )
 
@@ -890,8 +965,12 @@ def handle_engineering_clarification_reply(
             combine_child_updates_fn=_combined_child_updates,
         )
         if not seed_evaluation.completed:
-            _mark_issues_sync_blocked(oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys])
-            metadata["parent_updated"] = bool(seed_data.get("updated_parent") or seed_data.get("created_parent"))
+            _mark_issues_sync_blocked(
+                oauth=oauth, issue_keys=[context.issue_key, *affected_child_keys]
+            )
+            metadata["parent_updated"] = bool(
+                seed_data.get("updated_parent") or seed_data.get("created_parent")
+            )
             metadata["updated_at"] = datetime.now(timezone.utc).isoformat()
             clarification_service = ParentPlanningClarificationService()
             waiting_state = clarification_service.ensure_waiting_clarification(
@@ -917,7 +996,9 @@ def handle_engineering_clarification_reply(
                 handled=True,
                 reason="engineering_clarification_still_open",
                 extra={
-                    "questions": ClarificationQuestionSet.from_values(seed_evaluation.questions).to_payload(),
+                    "questions": ClarificationQuestionSet.from_values(
+                        seed_evaluation.questions
+                    ).to_payload(),
                     "stale_child_keys": affected_child_keys,
                     "webhook_event": context.webhook_event,
                 },
@@ -1030,7 +1111,9 @@ def _completed_pm_interview_replay_case(
         .order_by(desc(PMInterviewCase.updated_at))
     ).scalars()
     for interview_case in cases:
-        evidence_items = normalize_pm_interview_evidence(interview_case.evidence_json or [])
+        evidence_items = normalize_pm_interview_evidence(
+            interview_case.evidence_json or []
+        )
         if any(item.source_ref == normalized_comment_id for item in evidence_items):
             return interview_case
     return None
@@ -1087,7 +1170,9 @@ def _advance_parent_after_pm_interview(
                 "request_id": context.request_id,
                 "_mb_pm_interview_followup": True,
                 "brief_payload": brief_payload,
-                "next_questions": ClarificationQuestionSet.from_values(next_questions).to_payload(),
+                "next_questions": ClarificationQuestionSet.from_values(
+                    next_questions
+                ).to_payload(),
                 "ready_to_write": ready_to_write,
             },
             trigger=WorkflowTrigger(
@@ -1131,7 +1216,10 @@ def handle_pm_interview_reply(
 ) -> JiraParentChildSyncResult:  # noqa: ANN001
     if context.comment_command is not None:
         return JiraParentChildSyncResult(handled=False)
-    if not context.project_id or context.webhook_event not in {"comment_created", "comment_updated"}:
+    if not context.project_id or context.webhook_event not in {
+        "comment_created",
+        "comment_updated",
+    }:
         return JiraParentChildSyncResult(handled=False)
 
     comment_body = str(extract_jira_comment_text_fn(context.payload) or "").strip()
@@ -1203,7 +1291,11 @@ def handle_pm_interview_reply(
             reply_text=comment_body,
             source_transport="jira_comment",
             source_ref=comment_id or context.delivery_id,
-            actor_ref=str(context.payload.get("comment", {}).get("author", {}).get("accountId") or "").strip() or None,
+            actor_ref=str(
+                context.payload.get("comment", {}).get("author", {}).get("accountId")
+                or ""
+            ).strip()
+            or None,
             invocation_context=AgentInvocationContext(
                 channel="jira",
                 tenant_id=context.tenant_id,

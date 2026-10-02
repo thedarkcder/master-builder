@@ -6,8 +6,14 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.runtime.issue_fanout import build_seed_issue_description, seed_issues_with_runtime
-from orchestrator.core.runtime.payload_models import EngineeringSeedPlan, PmParentSeedPlan
+from orchestrator.runtime.issue_fanout import (
+    build_seed_issue_description,
+    seed_issues_with_runtime,
+)
+from orchestrator.core.runtime.payload_models import (
+    EngineeringSeedPlan,
+    PmParentSeedPlan,
+)
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
@@ -20,7 +26,11 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
     def test_issues_seed_requires_spec(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!issues seed"},
+            json={
+                "user_id": "u-admin",
+                "channel_id": "discord-channel-1",
+                "command": "!issues seed",
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !issues seed", response.json()["detail"])
@@ -47,9 +57,14 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(response.json()["command"], "issues")
         self.assertIn("TP-1", response.json()["message"])
 
-    def test_issues_seed_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
+    def test_issues_seed_with_incomplete_oauth_context_returns_controlled_502(
+        self,
+    ) -> None:
         with (
-            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
+            patch(
+                "orchestrator.runtime.issue_fanout.build_issue_seed_runtime",
+                return_value=object(),
+            ),
             patch(
                 "orchestrator.runtime.issue_fanout.plan_pm_parent_issues_with_runtime",
                 return_value=PmParentSeedPlan.from_payload(
@@ -97,7 +112,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertNotIn("tok-only", response.json()["detail"])
         self.assertNotIn("Internal server error. Ref:", response.json()["detail"])
 
-    def test_seed_issues_requests_clarifications_when_required_fields_missing(self) -> None:
+    def test_seed_issues_requests_clarifications_when_required_fields_missing(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
@@ -111,7 +128,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     account_id="acct-1",
                     account_email="dev@example.com",
                     cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
+                    site_url="https://example-2.atlassian.net",
                     scopes=["read:jira-work", "write:jira-work"],
                     access_token_encrypted="enc",
                     refresh_token_encrypted="enc",
@@ -123,7 +140,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
             session.commit()
 
         class _FakeClient:
-            def list_project_issue_types_for_create(self, **_kwargs: object) -> list[str]:
+            def list_project_issue_types_for_create(
+                self, **_kwargs: object
+            ) -> list[str]:
                 return ["Story", "Sub-task", "Task"]
 
             def search_issues_by_jql(
@@ -182,42 +201,49 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
+            patch(
+                "orchestrator.runtime.issue_fanout.build_issue_seed_runtime",
+                return_value=object(),
+            ),
             patch(
                 "orchestrator.runtime.issue_fanout.plan_seed_issues_with_runtime",
                 return_value=EngineeringSeedPlan.from_payload(
                     {
                         "project_key": "TP",
                         "parent_issue": {
-                        "summary": "Improve worker retry reliability",
-                        "issue_type": "Story",
-                        "objective": "Improve reliability",
-                        "user_value": "Operators see fewer worker failures",
-                        "recommendation": "Ship bounded retries first",
-                        "scope_in": ["Worker retry strategy"],
-                        "scope_out": ["UI changes"],
-                        "acceptance_criteria": ["Retries are bounded and observable"],
-                        "ui_references": [],
-                        "dependencies": [],
-                        "risks": [],
-                        "open_questions": [],
-                        "success_outcomes": ["Lower worker retry failures"],
-                        "labels": ["seeded"],
+                            "summary": "Improve worker retry reliability",
+                            "issue_type": "Story",
+                            "objective": "Improve reliability",
+                            "user_value": "Operators see fewer worker failures",
+                            "recommendation": "Ship bounded retries first",
+                            "scope_in": ["Worker retry strategy"],
+                            "scope_out": ["UI changes"],
+                            "acceptance_criteria": [
+                                "Retries are bounded and observable"
+                            ],
+                            "ui_references": [],
+                            "dependencies": [],
+                            "risks": [],
+                            "open_questions": [],
+                            "success_outcomes": ["Lower worker retry failures"],
+                            "labels": ["seeded"],
                         },
                         "questions": ["What is the rollout plan?"],
                         "engineering_children": [
                             {
-                            "summary": "Create worker retries",
-                            "issue_type": "Sub-task",
-                            "capability": "Worker retry safety",
-                            "delivery": "Build bounded worker retries so failed jobs can be retried safely.",
-                            "expected_outcome": "Failed worker jobs retry within controlled limits and remain observable.",
-                            "acceptance_criteria": ["Retries are bounded and observable"],
-                            "dependencies": [],
-                            "risks": [],
-                            "how_to_test": ["Run worker retry integration test"],
-                            "done_means": ["Retries are bounded and observable"],
-                            "labels": ["seeded"],
+                                "summary": "Create worker retries",
+                                "issue_type": "Sub-task",
+                                "capability": "Worker retry safety",
+                                "delivery": "Build bounded worker retries so failed jobs can be retried safely.",
+                                "expected_outcome": "Failed worker jobs retry within controlled limits and remain observable.",
+                                "acceptance_criteria": [
+                                    "Retries are bounded and observable"
+                                ],
+                                "dependencies": [],
+                                "risks": [],
+                                "how_to_test": ["Run worker retry integration test"],
+                                "done_means": ["Retries are bounded and observable"],
+                                "labels": ["seeded"],
                             },
                         ],
                     }
@@ -228,7 +254,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=SimpleNamespace(
                     client=_FakeClient(),
                     access_token="token",
-                    connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+                    connection=SimpleNamespace(
+                        cloud_id="cloud-1", site_url="https://example-2.atlassian.net"
+                    ),
                 ),
             ),
         ):
@@ -261,7 +289,7 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                     account_id="acct-1",
                     account_email="dev@example.com",
                     cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
+                    site_url="https://example-2.atlassian.net",
                     scopes=["read:jira-work", "write:jira-work"],
                     access_token_encrypted="enc",
                     refresh_token_encrypted="enc",
@@ -279,7 +307,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                 self.replaced_label_keys: list[str] = []
                 self.create_called = False
 
-            def list_project_issue_types_for_create(self, **_kwargs: object) -> list[str]:
+            def list_project_issue_types_for_create(
+                self, **_kwargs: object
+            ) -> list[str]:
                 return ["Story", "Sub-task", "Task"]
 
             def search_issues_by_jql(
@@ -292,8 +322,14 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                 start_at: int = 0,
             ) -> list[JiraIssuePreview]:
                 return [
-                    JiraIssuePreview(key="TP-110", summary="Improve worker retry reliability", status="To Do"),
-                    JiraIssuePreview(key="TP-111", summary="Create worker retries", status="To Do"),
+                    JiraIssuePreview(
+                        key="TP-110",
+                        summary="Improve worker retry reliability",
+                        status="To Do",
+                    ),
+                    JiraIssuePreview(
+                        key="TP-111", summary="Create worker retries", status="To Do"
+                    ),
                 ]
 
             def get_issue_detail(
@@ -367,41 +403,48 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.runtime.issue_fanout.build_issue_seed_runtime", return_value=object()),
+            patch(
+                "orchestrator.runtime.issue_fanout.build_issue_seed_runtime",
+                return_value=object(),
+            ),
             patch(
                 "orchestrator.runtime.issue_fanout.plan_seed_issues_with_runtime",
                 return_value=EngineeringSeedPlan.from_payload(
                     {
                         "project_key": "TP",
                         "parent_issue": {
-                        "summary": "Improve worker retry reliability",
-                        "issue_type": "Story",
-                        "objective": "Improve reliability",
-                        "user_value": "Operators see fewer worker failures",
-                        "recommendation": "Ship bounded retries first",
-                        "scope_in": ["Worker retry strategy"],
-                        "scope_out": ["UI changes"],
-                        "acceptance_criteria": ["Retries are bounded and observable"],
-                        "ui_references": [],
-                        "dependencies": [],
-                        "risks": [],
-                        "open_questions": [],
-                        "success_outcomes": ["Lower worker retry failures"],
-                        "labels": ["seeded"],
+                            "summary": "Improve worker retry reliability",
+                            "issue_type": "Story",
+                            "objective": "Improve reliability",
+                            "user_value": "Operators see fewer worker failures",
+                            "recommendation": "Ship bounded retries first",
+                            "scope_in": ["Worker retry strategy"],
+                            "scope_out": ["UI changes"],
+                            "acceptance_criteria": [
+                                "Retries are bounded and observable"
+                            ],
+                            "ui_references": [],
+                            "dependencies": [],
+                            "risks": [],
+                            "open_questions": [],
+                            "success_outcomes": ["Lower worker retry failures"],
+                            "labels": ["seeded"],
                         },
                         "engineering_children": [
                             {
-                            "summary": "Create worker retries",
-                            "issue_type": "Sub-task",
-                            "capability": "Worker retry safety",
-                            "delivery": "Build bounded worker retries so failed jobs can be retried safely.",
-                            "expected_outcome": "Failed worker jobs retry within controlled limits and remain observable.",
-                            "acceptance_criteria": ["Retries are bounded and observable"],
-                            "dependencies": [],
-                            "risks": [],
-                            "how_to_test": ["Run worker retry integration test"],
-                            "done_means": ["Retries are bounded and observable"],
-                            "labels": ["seeded"],
+                                "summary": "Create worker retries",
+                                "issue_type": "Sub-task",
+                                "capability": "Worker retry safety",
+                                "delivery": "Build bounded worker retries so failed jobs can be retried safely.",
+                                "expected_outcome": "Failed worker jobs retry within controlled limits and remain observable.",
+                                "acceptance_criteria": [
+                                    "Retries are bounded and observable"
+                                ],
+                                "dependencies": [],
+                                "risks": [],
+                                "how_to_test": ["Run worker retry integration test"],
+                                "done_means": ["Retries are bounded and observable"],
+                                "labels": ["seeded"],
                             },
                         ],
                         "questions": [],
@@ -413,7 +456,9 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
                 return_value=SimpleNamespace(
                     client=fake_client,
                     access_token="token",
-                    connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+                    connection=SimpleNamespace(
+                        cloud_id="cloud-1", site_url="https://example-2.atlassian.net"
+                    ),
                 ),
             ),
         ):
@@ -452,7 +497,11 @@ class DiscordSeedCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(content[1]["type"], "bulletList")
         first_bullet = content[1]["content"][0]["content"][0]["content"][0]["text"]
         self.assertEqual(first_bullet, "Ship feature")
-        heading_texts = [node["content"][0]["text"] for node in content if node.get("type") == "heading"]
+        heading_texts = [
+            node["content"][0]["text"]
+            for node in content
+            if node.get("type") == "heading"
+        ]
         self.assertIn("What to Build", heading_texts)
         self.assertIn("How to Test", heading_texts)
         self.assertIn("Synced From Parent Revision", heading_texts)

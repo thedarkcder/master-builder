@@ -79,7 +79,9 @@ def _imported_modules(module_path: Path) -> set[str]:
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
-    def test_abstract_runtime_modules_do_not_use_vendor_runtime_function_names(self) -> None:
+    def test_abstract_runtime_modules_do_not_use_vendor_runtime_function_names(
+        self,
+    ) -> None:
         banned_token = "with_" + "codex"
         roots = [
             ORCHESTRATOR_ROOT / "core",
@@ -98,7 +100,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Runtime-abstracted modules must use domain/runtime names, not vendor names: {violations}",
         )
 
-    def test_specialist_planning_does_not_restore_pm_internal_resolution_contract(self) -> None:
+    def test_specialist_planning_does_not_restore_pm_internal_resolution_contract(
+        self,
+    ) -> None:
         banned_tokens = {
             "pm_" + "internal_resolution",
             "internal_" + "decisions",
@@ -117,7 +121,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 source = module_path.read_text(encoding="utf-8")
                 for token in banned_tokens:
                     if token in source:
-                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{token}")
+                        violations.append(
+                            f"{module_path.relative_to(ROOT).as_posix()}:{token}"
+                        )
 
         self.assertEqual(
             violations,
@@ -158,12 +164,19 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             jira_source,
             msg="Jira project discovery routes must not own Jira webhook lifecycle endpoints.",
         )
-        webhook_route = ORCHESTRATOR_ROOT / "api" / "routes" / "admin_atlassian_webhooks.py"
-        self.assertTrue(webhook_route.exists(), msg="Jira webhook lifecycle must have an explicit Atlassian webhook route module.")
+        webhook_route = (
+            ORCHESTRATOR_ROOT / "api" / "routes" / "admin_atlassian_webhooks.py"
+        )
+        self.assertTrue(
+            webhook_route.exists(),
+            msg="Jira webhook lifecycle must have an explicit Atlassian webhook route module.",
+        )
 
     def test_jira_http_ingress_does_not_plan_issue_runs_inline(self) -> None:
         module_path = ROOT / "orchestrator" / "api" / "webhooks" / "jira_application.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
 
         target_function = next(
             node
@@ -180,10 +193,18 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             func = node.func
             if isinstance(func, ast.Name) and func.id == "enqueue_webhook_job":
                 saw_enqueue_call = True
-            if isinstance(func, ast.Name) and func.id in {"plan_jira_run_flow", "evaluate_jira_trigger_state"}:
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}")
+            if isinstance(func, ast.Name) and func.id in {
+                "plan_jira_run_flow",
+                "evaluate_jira_trigger_state",
+            }:
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}"
+                )
 
-        self.assertTrue(saw_enqueue_call, msg="Jira HTTP ingress must enqueue issue events for worker reconciliation.")
+        self.assertTrue(
+            saw_enqueue_call,
+            msg="Jira HTTP ingress must enqueue issue events for worker reconciliation.",
+        )
         self.assertEqual(
             violations,
             [],
@@ -192,7 +213,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_github_http_ingress_does_not_plan_reviews_inline(self) -> None:
         module_path = ROOT / "orchestrator" / "api" / "webhooks" / "github_ingress.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
 
         target_function = next(
             node
@@ -214,9 +237,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 "plan_pull_request_targets",
                 "prepare_github_webhook_runtime",
             }:
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}"
+                )
 
-        self.assertTrue(saw_enqueue_call, msg="GitHub HTTP ingress must enqueue actionable events.")
+        self.assertTrue(
+            saw_enqueue_call, msg="GitHub HTTP ingress must enqueue actionable events."
+        )
         self.assertEqual(
             violations,
             [],
@@ -226,16 +253,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
     def test_discord_webhook_routes_do_not_spawn_route_level_tasks(self) -> None:
         modules = [
             ROOT / "orchestrator" / "api" / "routes" / "webhook_discord.py",
-            ROOT / "orchestrator" / "api" / "routes" / "webhook_discord_interactions.py",
+            ROOT
+            / "orchestrator"
+            / "api"
+            / "routes"
+            / "webhook_discord_interactions.py",
         ]
         violations: list[str] = []
         saw_enqueue = {module.name: False for module in modules}
         for module_path in modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute) and node.attr == "create_task":
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:create_task")
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "enqueue_webhook_job":
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:create_task"
+                    )
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "enqueue_webhook_job"
+                ):
                     saw_enqueue[module_path.name] = True
 
         self.assertEqual(
@@ -249,17 +288,26 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_run_controls_do_not_directly_reopen_decision_gate(self) -> None:
-        module_path = ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        module_path = (
+            ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py"
+        )
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
 
         violations: list[str] = []
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
                 and node.module == "orchestrator.core.decision.clarification_service"
-                and any(alias.name == "evaluate_issue_clarification_state" for alias in node.names)
+                and any(
+                    alias.name == "evaluate_issue_clarification_state"
+                    for alias in node.names
+                )
             ):
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                )
 
         self.assertEqual(
             violations,
@@ -269,18 +317,26 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_worker_decision_gate_does_not_use_runtime_decision_engine(self) -> None:
         module_path = ROOT / "orchestrator" / "core" / "worker" / "decision_gate.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
 
         violations: list[str] = []
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
                 and node.module == "orchestrator.core.decision.engine"
-                and any(alias.name == "evaluate_worker_decision" for alias in node.names)
+                and any(
+                    alias.name == "evaluate_worker_decision" for alias in node.names
+                )
             ):
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                )
             if isinstance(node, ast.Name) and node.id == "evaluate_worker_decision":
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                )
 
         self.assertEqual(
             violations,
@@ -290,7 +346,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_run_lifecycle_does_not_use_tenant_row_as_claim_mutex(self) -> None:
         module_path = ROOT / "orchestrator" / "core" / "worker" / "run_lifecycle.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
 
         violations: list[str] = []
         for node in ast.walk(tree):
@@ -299,11 +357,20 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 and node.module == "orchestrator.storage.models"
                 and any(alias.name == "Tenant" for alias in node.names)
             ):
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:Tenant import")
-            if isinstance(node, ast.FunctionDef) and node.name == "_lock_tenant_row_for_claim":
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:tenant claim helper")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:Tenant import"
+                )
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name == "_lock_tenant_row_for_claim"
+            ):
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:tenant claim helper"
+                )
             if isinstance(node, ast.Name) and node.id == "_lock_tenant_row_for_claim":
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:tenant claim reference")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:tenant claim reference"
+                )
 
         self.assertEqual(
             violations,
@@ -313,9 +380,15 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_discord_thread_actions_do_not_embed_runtime_objects(self) -> None:
         runtime_field_names = {"session", "settings", "tenant"}
-        for action_type in (DiscordThreadReplyAction, DiscordAskWithThreadAction, DiscordSeedWithThreadAction):
+        for action_type in (
+            DiscordThreadReplyAction,
+            DiscordAskWithThreadAction,
+            DiscordSeedWithThreadAction,
+        ):
             self.assertTrue(
-                runtime_field_names.isdisjoint({field.name for field in fields(action_type)}),
+                runtime_field_names.isdisjoint(
+                    {field.name for field in fields(action_type)}
+                ),
                 msg=f"{action_type.__name__} still embeds runtime objects in transport action fields",
             )
 
@@ -325,38 +398,56 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
         violations: list[str] = []
         for module_path in production_modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
                 func = node.func
                 if isinstance(func, ast.Name) and func.id == "TransportAction":
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"Raw TransportAction construction found; use typed transport actions instead: {violations}",
         )
 
-    def test_discord_command_handlers_do_not_import_provider_clients_directly(self) -> None:
-        command_modules = sorted((ROOT / "orchestrator" / "api" / "discord" / "commands").glob("*.py"))
+    def test_discord_command_handlers_do_not_import_provider_clients_directly(
+        self,
+    ) -> None:
+        command_modules = sorted(
+            (ROOT / "orchestrator" / "api" / "discord" / "commands").glob("*.py")
+        )
         self.assertTrue(command_modules)
 
         violations: list[str] = []
         for module_path in command_modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and node.module:
                     if node.module.startswith("orchestrator.tools"):
-                        violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
+                        violations.append(
+                            f"{module_path.name}:{node.lineno}:{node.module}"
+                        )
                     if node.module.startswith("orchestrator.api.routes."):
-                        violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
+                        violations.append(
+                            f"{module_path.name}:{node.lineno}:{node.module}"
+                        )
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.startswith("orchestrator.tools"):
-                            violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
+                            violations.append(
+                                f"{module_path.name}:{node.lineno}:{alias.name}"
+                            )
                         if alias.name.startswith("orchestrator.api.routes."):
-                            violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
+                            violations.append(
+                                f"{module_path.name}:{node.lineno}:{alias.name}"
+                            )
 
         self.assertEqual(
             violations,
@@ -364,29 +455,45 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Direct provider imports found in command handlers: {violations}",
         )
 
-    def test_webhook_classifier_and_planner_modules_do_not_import_provider_clients(self) -> None:
-        planner_modules = sorted((ROOT / "orchestrator" / "api" / "webhooks").glob("*_planner.py"))
-        classifier_modules = sorted((ROOT / "orchestrator" / "api" / "webhooks").glob("*_classifier.py"))
+    def test_webhook_classifier_and_planner_modules_do_not_import_provider_clients(
+        self,
+    ) -> None:
+        planner_modules = sorted(
+            (ROOT / "orchestrator" / "api" / "webhooks").glob("*_planner.py")
+        )
+        classifier_modules = sorted(
+            (ROOT / "orchestrator" / "api" / "webhooks").glob("*_classifier.py")
+        )
         modules = planner_modules + classifier_modules
         self.assertTrue(modules)
 
         violations: list[str] = []
         for module_path in modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("orchestrator.tools"):
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.module.startswith("orchestrator.tools")
+                ):
                     violations.append(f"{module_path.name}:{node.lineno}:{node.module}")
                 if isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.startswith("orchestrator.tools"):
-                            violations.append(f"{module_path.name}:{node.lineno}:{alias.name}")
+                            violations.append(
+                                f"{module_path.name}:{node.lineno}:{alias.name}"
+                            )
         self.assertEqual(
             violations,
             [],
             msg=f"Webhook planner/classifier modules importing provider clients directly: {violations}",
         )
 
-    def test_transport_and_worker_adapters_do_not_call_enqueue_reason_guidance_directly(self) -> None:
+    def test_transport_and_worker_adapters_do_not_call_enqueue_reason_guidance_directly(
+        self,
+    ) -> None:
         roots = [
             ROOT / "orchestrator" / "api" / "webhooks",
             ROOT / "orchestrator" / "api" / "discord" / "commands",
@@ -395,22 +502,36 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         violations: list[str] = []
         for root in roots:
             for module_path in sorted(root.rglob("*.py")):
-                tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+                tree = ast.parse(
+                    module_path.read_text(encoding="utf-8"), filename=str(module_path)
+                )
                 for node in ast.walk(tree):
                     if not isinstance(node, ast.Call):
                         continue
                     func = node.func
-                    if isinstance(func, ast.Name) and func.id == "enqueue_reason_guidance":
-                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
-                    if isinstance(func, ast.Attribute) and func.attr == "enqueue_reason_guidance":
-                        violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                    if (
+                        isinstance(func, ast.Name)
+                        and func.id == "enqueue_reason_guidance"
+                    ):
+                        violations.append(
+                            f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                        )
+                    if (
+                        isinstance(func, ast.Attribute)
+                        and func.attr == "enqueue_reason_guidance"
+                    ):
+                        violations.append(
+                            f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                        )
         self.assertEqual(
             violations,
             [],
             msg=f"Direct enqueue_reason_guidance calls found in transport/worker adapters: {violations}",
         )
 
-    def test_github_and_jira_application_roots_do_not_import_provider_helpers_directly(self) -> None:
+    def test_github_and_jira_application_roots_do_not_import_provider_helpers_directly(
+        self,
+    ) -> None:
         banned_imports = {
             "orchestrator.api.webhooks.pr_review_comment_service",
             "orchestrator.core.discord.notifications",
@@ -425,14 +546,18 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in modules:
             for module_name in _imported_modules(module_path):
                 if module_name in banned_imports:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"Application roots importing provider helpers directly: {violations}",
         )
 
-    def test_workflow_infrastructure_does_not_import_parent_feature_handlers_directly(self) -> None:
+    def test_workflow_infrastructure_does_not_import_parent_feature_handlers_directly(
+        self,
+    ) -> None:
         modules = [
             ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py",
             ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
@@ -451,7 +576,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in modules:
             for module_name in _imported_modules(module_path):
                 if module_name in banned_imports:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -459,9 +586,15 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
 
     def test_admin_workflows_service_is_route_facade_not_god_service(self) -> None:
-        module_path = ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py"
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
-        local_functions = [node.name for node in tree.body if isinstance(node, ast.FunctionDef)]
+        module_path = (
+            ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py"
+        )
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
+        local_functions = [
+            node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+        ]
         banned_local_helpers = {
             "_workflow_schema",
             "_workflow_operation_reads",
@@ -486,8 +619,12 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Admin workflows service must not own implementation helpers: {violations}",
         )
 
-    def test_temporal_handler_activity_does_not_import_workflow_provider_adapters(self) -> None:
-        module_path = ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py"
+    def test_temporal_handler_activity_does_not_import_workflow_provider_adapters(
+        self,
+    ) -> None:
+        module_path = (
+            ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py"
+        )
         banned_prefixes = {
             "orchestrator.api.atlassian_oauth",
             "orchestrator.api.discord",
@@ -497,7 +634,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         violations: list[str] = []
         for module_name in _imported_modules(module_path):
             if any(module_name.startswith(prefix) for prefix in banned_prefixes):
-                violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                violations.append(
+                    f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                )
         self.assertEqual(
             violations,
             [],
@@ -520,7 +659,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Workflow advance contract must not expose provider-specific fields: {field_names}",
         )
 
-    def test_workflow_runtime_and_engines_do_not_use_retry_callback_escape_hatch(self) -> None:
+    def test_workflow_runtime_and_engines_do_not_use_retry_callback_escape_hatch(
+        self,
+    ) -> None:
         modules = [
             ROOT / "orchestrator" / "core" / "workflow" / "runtime.py",
             ROOT / "orchestrator" / "core" / "workflow" / "engine.py",
@@ -528,13 +669,18 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ROOT / "orchestrator" / "core" / "workflow" / "legacy_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
-        banned_tokens = {"retry_" + "workflow_operation_fn", "resolve_" + "operation_retry_handler_fn"}
+        banned_tokens = {
+            "retry_" + "workflow_operation_fn",
+            "resolve_" + "operation_retry_handler_fn",
+        }
         violations = []
         for module_path in modules:
             source = module_path.read_text(encoding="utf-8")
             for banned_token in banned_tokens:
                 if banned_token in source:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{banned_token}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{banned_token}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -549,7 +695,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         class_methods: dict[str, set[str]] = {}
         class_modules: dict[str, str] = {}
         for module_path in module_paths:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if isinstance(node, ast.ClassDef) and node.name in {
                     "ParentFeatureWorkflowAdvanceHandler",
@@ -561,8 +709,12 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                         if isinstance(item, ast.FunctionDef)
                     }
                     class_modules[node.name] = module_path.name
-        self.assertEqual(class_modules.get("ParentFeatureWorkflowAdvanceHandler"), "handlers.py")
-        self.assertEqual(class_modules.get("ParentFeatureWorkflowOperationRetryHandler"), "retry.py")
+        self.assertEqual(
+            class_modules.get("ParentFeatureWorkflowAdvanceHandler"), "handlers.py"
+        )
+        self.assertEqual(
+            class_modules.get("ParentFeatureWorkflowOperationRetryHandler"), "retry.py"
+        )
         self.assertNotIn(
             "retry_operation",
             class_methods.get("ParentFeatureWorkflowAdvanceHandler", set()),
@@ -574,7 +726,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg="Parent feature retry handler must not own advance routing.",
         )
 
-    def test_parent_operation_names_do_not_leak_into_workflow_infrastructure(self) -> None:
+    def test_parent_operation_names_do_not_leak_into_workflow_infrastructure(
+        self,
+    ) -> None:
         modules = [
             ROOT / "orchestrator" / "api" / "admin" / "workflows" / "service.py",
             ROOT / "orchestrator" / "temporal" / "activities" / "handler_workflow.py",
@@ -585,13 +739,20 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ROOT / "orchestrator" / "core" / "workflow" / "legacy_engine.py",
             ROOT / "orchestrator" / "temporal" / "workflow_engine.py",
         ]
-        banned_values = {"backlog_planning", "jira_comment_projection", "jira_child_fanout", "jira_parent_update"}
+        banned_values = {
+            "backlog_planning",
+            "jira_comment_projection",
+            "jira_child_fanout",
+            "jira_parent_update",
+        }
         violations: list[str] = []
         for module_path in modules:
             source = module_path.read_text(encoding="utf-8")
             for value in banned_values:
                 if value in source:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{value}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{value}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -607,7 +768,11 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ROOT / "orchestrator" / "api" / "discord" / "seed" / "matching.py",
         ]
         self.assertEqual(
-            [path.relative_to(ROOT).as_posix() for path in stale_modules if path.exists()],
+            [
+                path.relative_to(ROOT).as_posix()
+                for path in stale_modules
+                if path.exists()
+            ],
             [],
             msg="Issue fanout must live in core/runtime, not Discord ingress/seed modules.",
         )
@@ -622,7 +787,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
             for module_name in _imported_modules(module_path):
                 if module_name in forbidden_prefixes:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -631,9 +798,24 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_product_event_streams_use_shared_stream_primitive(self) -> None:
         stream_modules = [
-            ROOT / "orchestrator" / "api" / "admin" / "workflows" / "live_stream_service.py",
-            ROOT / "orchestrator" / "api" / "admin" / "runs" / "logging_stream_service.py",
-            ROOT / "orchestrator" / "api" / "admin" / "runs" / "runtime_logs_service.py",
+            ROOT
+            / "orchestrator"
+            / "api"
+            / "admin"
+            / "workflows"
+            / "live_stream_service.py",
+            ROOT
+            / "orchestrator"
+            / "api"
+            / "admin"
+            / "runs"
+            / "logging_stream_service.py",
+            ROOT
+            / "orchestrator"
+            / "api"
+            / "admin"
+            / "runs"
+            / "runtime_logs_service.py",
         ]
         for module_path in stream_modules:
             source = module_path.read_text(encoding="utf-8")
@@ -641,8 +823,12 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             self.assertNotIn("wait_for_product_event_notification", source)
             self.assertNotIn("current_product_event_notification_marker", source)
 
-    def test_product_events_facade_does_not_own_storage_writer_or_streaming(self) -> None:
-        product_events_source = (ROOT / "orchestrator" / "core" / "observability" / "events.py").read_text(encoding="utf-8")
+    def test_product_events_facade_does_not_own_storage_writer_or_streaming(
+        self,
+    ) -> None:
+        product_events_source = (
+            ROOT / "orchestrator" / "core" / "observability" / "events.py"
+        ).read_text(encoding="utf-8")
         forbidden_tokens = [
             "urlopen",
             "Request(",
@@ -653,22 +839,32 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "current_product_event_notification_marker",
             "WorkflowOperationAttempt",
         ]
-        violations = [token for token in forbidden_tokens if token in product_events_source]
+        violations = [
+            token for token in forbidden_tokens if token in product_events_source
+        ]
         self.assertEqual(
             violations,
             [],
             msg=f"product_events.py must remain a thin facade over repository/writer/stream services: {violations}",
         )
-        repository_source = (ROOT / "orchestrator" / "core" / "observability" / "repository.py").read_text(encoding="utf-8")
-        writer_source = (ROOT / "orchestrator" / "core" / "observability" / "writer.py").read_text(encoding="utf-8")
-        stream_source = (ROOT / "orchestrator" / "core" / "observability" / "stream.py").read_text(encoding="utf-8")
+        repository_source = (
+            ROOT / "orchestrator" / "core" / "observability" / "repository.py"
+        ).read_text(encoding="utf-8")
+        writer_source = (
+            ROOT / "orchestrator" / "core" / "observability" / "writer.py"
+        ).read_text(encoding="utf-8")
+        stream_source = (
+            ROOT / "orchestrator" / "core" / "observability" / "stream.py"
+        ).read_text(encoding="utf-8")
         self.assertIn("class ProductEventRepository", repository_source)
         self.assertIn("class ClickHouseProductEventRepository", repository_source)
         self.assertIn("class ProductEventWriter", writer_source)
         self.assertIn("class ProductEventStream", stream_source)
 
     def test_admin_runs_route_is_not_the_composition_root(self) -> None:
-        source = (ROOT / "orchestrator" / "api" / "admin" / "runs" / "routes.py").read_text(encoding="utf-8")
+        source = (
+            ROOT / "orchestrator" / "api" / "admin" / "runs" / "routes.py"
+        ).read_text(encoding="utf-8")
         forbidden_imports = [
             "orchestrator.api.admin.runs.runtime_logs_service",
             "orchestrator.api.admin.workflows.live_stream_service",
@@ -692,7 +888,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         )
         self.assertIn("orchestrator.api.admin.runs import use_cases", source)
 
-    def test_project_shell_and_overview_do_not_eagerly_load_discord_allowlist_requests(self) -> None:
+    def test_project_shell_and_overview_do_not_eagerly_load_discord_allowlist_requests(
+        self,
+    ) -> None:
         eager_surfaces = [
             ROOT / "admin-ui" / "components" / "dashboard-shell.tsx",
             ROOT / "admin-ui" / "components" / "tenant-project-details-page.tsx",
@@ -709,20 +907,28 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Project shell/overview must not fan out Discord allowlist requests; notifications tab owns that fetch: {violations}",
         )
 
-    def test_dashboard_shell_uses_lightweight_project_navigation_read_model(self) -> None:
-        source = (ROOT / "admin-ui" / "components" / "dashboard-shell.tsx").read_text(encoding="utf-8")
+    def test_dashboard_shell_uses_lightweight_project_navigation_read_model(
+        self,
+    ) -> None:
+        source = (ROOT / "admin-ui" / "components" / "dashboard-shell.tsx").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("listProjectNavigation", source)
         self.assertNotIn("listProjects", source)
 
     def test_frontend_api_client_coalesces_in_flight_get_requests(self) -> None:
-        source = (ROOT / "admin-ui" / "lib" / "api" / "http.ts").read_text(encoding="utf-8")
+        source = (ROOT / "admin-ui" / "lib" / "api" / "http.ts").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("const inFlightGetRequests = new Map", source)
         self.assertIn('requestMethod(init) !== "GET"', source)
         self.assertIn("init?.body", source)
         self.assertIn("init?.signal", source)
         self.assertIn("inFlightGetRequests.delete(key)", source)
 
-    def test_run_human_input_resume_does_not_use_private_legacy_entrypoint(self) -> None:
+    def test_run_human_input_resume_does_not_use_private_legacy_entrypoint(
+        self,
+    ) -> None:
         banned_token = "_resume_workflow_from_human_input_answer_legacy"
         violations = []
         for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
@@ -743,7 +949,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             relative = module_path.relative_to(ROOT).as_posix()
             allowed = LEGACY_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not (module_name.startswith("orchestrator.api.routes.") or module_name.endswith(".routes")):
+                if not (
+                    module_name.startswith("orchestrator.api.routes.")
+                    or module_name.endswith(".routes")
+                ):
                     continue
                 if module_name in allowed:
                     observed_allowed.add((relative, module_name))
@@ -775,7 +984,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             relative = module_path.relative_to(ROOT).as_posix()
             allowed = LEGACY_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not (module_name.startswith("orchestrator.api.routes.") or module_name.endswith(".routes")):
+                if not (
+                    module_name.startswith("orchestrator.api.routes.")
+                    or module_name.endswith(".routes")
+                ):
                     continue
                 if module_name == relative.replace("/", ".")[:-3]:
                     continue
@@ -800,7 +1012,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg="Route import allowlist drifted; update list only with explicit architectural decision.",
         )
 
-    def test_non_route_api_modules_only_use_explicit_route_import_allowlist(self) -> None:
+    def test_non_route_api_modules_only_use_explicit_route_import_allowlist(
+        self,
+    ) -> None:
         api_modules = sorted(ORCHESTRATOR_ROOT.rglob("api/*.py"))
         self.assertTrue(api_modules)
         violations: list[str] = []
@@ -811,7 +1025,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 continue
             allowed = NON_ROUTE_API_ROUTE_IMPORT_ALLOWLIST.get(relative, set())
             for module_name in _imported_modules(module_path):
-                if not (module_name.startswith("orchestrator.api.routes.") or module_name.endswith(".routes")):
+                if not (
+                    module_name.startswith("orchestrator.api.routes.")
+                    or module_name.endswith(".routes")
+                ):
                     continue
                 if module_name in allowed:
                     observed_allowed.add((relative, module_name))
@@ -833,10 +1050,12 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg="Non-route API allowlist drifted; update list only with explicit architectural decision.",
         )
 
-    def test_http_transport_adapters_do_not_import_provider_executors_directly(self) -> None:
-        adapter_modules = sorted((ROOT / "orchestrator" / "api" / "routes").glob("webhook*.py")) + sorted(
-            (ROOT / "orchestrator" / "api" / "webhooks").glob("*_ingress.py")
-        )
+    def test_http_transport_adapters_do_not_import_provider_executors_directly(
+        self,
+    ) -> None:
+        adapter_modules = sorted(
+            (ROOT / "orchestrator" / "api" / "routes").glob("webhook*.py")
+        ) + sorted((ROOT / "orchestrator" / "api" / "webhooks").glob("*_ingress.py"))
         banned_imports = {
             "orchestrator.core.discord.transport_executor",
             "orchestrator.core.github.transport_executor",
@@ -845,46 +1064,72 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in adapter_modules:
             for module_name in _imported_modules(module_path):
                 if module_name in banned_imports:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"HTTP transport adapters should not import provider executors directly: {violations}",
         )
 
-    def test_gateway_and_followup_runtime_modules_do_not_construct_provider_executors_directly(self) -> None:
+    def test_gateway_and_followup_runtime_modules_do_not_construct_provider_executors_directly(
+        self,
+    ) -> None:
         modules = [
             ROOT / "orchestrator" / "core" / "discord" / "gateway_listener.py",
-            ROOT / "orchestrator" / "api" / "discord" / "interactions" / "followup_runtime.py",
+            ROOT
+            / "orchestrator"
+            / "api"
+            / "discord"
+            / "interactions"
+            / "followup_runtime.py",
         ]
         violations: list[str] = []
         for module_path in modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
                 func = node.func
-                if isinstance(func, ast.Name) and func.id in {"DiscordTransportExecutor", "GitHubTransportExecutor"}:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}")
+                if isinstance(func, ast.Name) and func.id in {
+                    "DiscordTransportExecutor",
+                    "GitHubTransportExecutor",
+                }:
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{func.id}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"Gateway/followup runtime should not construct provider executors directly: {violations}",
         )
 
-    def test_github_application_does_not_use_callback_executor_registration(self) -> None:
-        module_path = ROOT / "orchestrator" / "api" / "webhooks" / "github_application.py"
+    def test_github_application_does_not_use_callback_executor_registration(
+        self,
+    ) -> None:
+        module_path = (
+            ROOT / "orchestrator" / "api" / "webhooks" / "github_application.py"
+        )
         source = module_path.read_text(encoding="utf-8")
         self.assertNotIn("register_transport_executor", source)
 
-    def test_production_modules_do_not_reference_reply_transport_compatibility_shims(self) -> None:
+    def test_production_modules_do_not_reference_reply_transport_compatibility_shims(
+        self,
+    ) -> None:
         banned_names = {"InteractiveReplyTransport", "DiscordReplyTransport"}
         violations: list[str] = []
         for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if isinstance(node, ast.Name) and node.id in banned_names:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -893,17 +1138,23 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_workflow_core_modules_do_not_import_api_layer(self) -> None:
         violations: list[str] = []
-        for module_path in sorted((ORCHESTRATOR_ROOT / "core" / "workflow").rglob("*.py")):
+        for module_path in sorted(
+            (ORCHESTRATOR_ROOT / "core" / "workflow").rglob("*.py")
+        ):
             for module_name in _imported_modules(module_path):
                 if module_name.startswith("orchestrator.api"):
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"Workflow core modules must not import API-layer modules: {violations}",
         )
 
-    def test_transport_modules_do_not_branch_on_decision_classification_or_reason_strings(self) -> None:
+    def test_transport_modules_do_not_branch_on_decision_classification_or_reason_strings(
+        self,
+    ) -> None:
         modules = [
             ROOT / "orchestrator" / "api" / "discord" / "commands" / "run_controls.py",
             ROOT / "orchestrator" / "api" / "webhooks" / "jira_admission_flow.py",
@@ -922,7 +1173,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         banned_names = {"classification", "reason_code", "block_reason"}
         violations: list[str] = []
         for module_path in modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
                 if isinstance(node, ast.Compare):
                     compare_targets = [node.left, *node.comparators]
@@ -944,7 +1197,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                         value_node.value
                         for target in compare_targets
                         for value_node in ast.walk(target)
-                        if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str)
+                        if isinstance(value_node, ast.Constant)
+                        and isinstance(value_node.value, str)
                     }
                     if constants & banned_values:
                         violations.append(
@@ -956,7 +1210,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg=f"Transport modules must consume typed domain outcomes instead of branching on decision strings: {violations}",
         )
 
-    def test_transport_modules_do_not_import_split_decision_runtime_modules(self) -> None:
+    def test_transport_modules_do_not_import_split_decision_runtime_modules(
+        self,
+    ) -> None:
         modules = [
             ROOT / "orchestrator" / "api" / "webhooks" / "jira_admission_flow.py",
             ROOT / "orchestrator" / "api" / "webhooks" / "jira_webhook_comment_flow.py",
@@ -971,16 +1227,25 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in modules:
             for module_name in _imported_modules(module_path):
                 if module_name in forbidden_imports:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"Transport modules must import unified decision_state_machine boundary only: {violations}",
         )
 
-    def test_decision_transition_logic_lives_in_decision_state_machine_boundary(self) -> None:
-        state_machine_module = ROOT / "orchestrator" / "core" / "decision" / "state_machine.py"
-        self.assertTrue(state_machine_module.exists(), msg="decision_state_machine.py must exist as the canonical transition boundary")
+    def test_decision_transition_logic_lives_in_decision_state_machine_boundary(
+        self,
+    ) -> None:
+        state_machine_module = (
+            ROOT / "orchestrator" / "core" / "decision" / "state_machine.py"
+        )
+        self.assertTrue(
+            state_machine_module.exists(),
+            msg="decision_state_machine.py must exist as the canonical transition boundary",
+        )
 
         forbidden_modules = [
             ROOT / "orchestrator" / "core" / "decision" / "precheck_mapping.py",
@@ -1000,17 +1265,26 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         }
         violations: list[str] = []
         for module_path in forbidden_modules:
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in forbidden_symbols:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{node.name}")
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.ClassDef))
+                    and node.name in forbidden_symbols
+                ):
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{node.name}"
+                    )
         self.assertEqual(
             violations,
             [],
             msg=f"Canonical decision/readiness semantics must only live in decision_state_machine: {violations}",
         )
 
-    def test_decision_engine_uses_state_machine_boundary_for_transition_semantics(self) -> None:
+    def test_decision_engine_uses_state_machine_boundary_for_transition_semantics(
+        self,
+    ) -> None:
         module_path = ROOT / "orchestrator" / "core" / "decision" / "engine.py"
         imports = _imported_modules(module_path)
         self.assertIn(
@@ -1019,7 +1293,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg="decision_engine must import transition semantics from decision_state_machine",
         )
 
-        tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+        tree = ast.parse(
+            module_path.read_text(encoding="utf-8"), filename=str(module_path)
+        )
         violations: list[str] = []
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom):
@@ -1028,11 +1304,19 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 if node.module == "orchestrator.core.decision.precheck_mapping":
                     for alias in node.names:
                         if alias.name == "decision_from_snapshot":
-                            violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
+                            violations.append(
+                                f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}"
+                            )
                 continue
             for alias in node.names:
-                if alias.name in {"DecisionStateTransition", "DecisionStateReducerInput", "reduce_decision_state_transition"}:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}")
+                if alias.name in {
+                    "DecisionStateTransition",
+                    "DecisionStateReducerInput",
+                    "reduce_decision_state_transition",
+                }:
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{node.lineno}:{alias.name}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -1053,7 +1337,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         for module_path in modules:
             for module_name in _imported_modules(module_path):
                 if module_name in forbidden_imports:
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],
@@ -1066,28 +1352,41 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ROOT / "orchestrator" / "core" / "decision_state_reducer.py",
             ROOT / "orchestrator" / "core" / "precheck_decision.py",
         ]
-        violations = [module_path.relative_to(ROOT).as_posix() for module_path in removed_modules if module_path.exists()]
+        violations = [
+            module_path.relative_to(ROOT).as_posix()
+            for module_path in removed_modules
+            if module_path.exists()
+        ]
         self.assertEqual(
             violations,
             [],
             msg=f"Decision compatibility facades should be removed once callers are migrated: {violations}",
         )
 
-    def test_api_and_worker_bootstrap_execution_snapshot_startup_migration(self) -> None:
+    def test_api_and_worker_bootstrap_execution_snapshot_startup_migration(
+        self,
+    ) -> None:
         api_path = ROOT / "orchestrator" / "api" / "main.py"
         worker_path = ROOT / "orchestrator" / "worker.py"
         expected_module = "orchestrator.core.workflow.execution_snapshot_startup"
         expected_symbol = "ensure_execution_snapshot_startup_bootstrap"
 
         for module_path in (api_path, worker_path):
-            tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+            tree = ast.parse(
+                module_path.read_text(encoding="utf-8"), filename=str(module_path)
+            )
             imports_ok = False
             call_ok = False
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom) and node.module == expected_module:
-                    imports_ok = any(alias.name == expected_symbol for alias in node.names)
+                    imports_ok = any(
+                        alias.name == expected_symbol for alias in node.names
+                    )
                 if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Name) and node.func.id == expected_symbol:
+                    if (
+                        isinstance(node.func, ast.Name)
+                        and node.func.id == expected_symbol
+                    ):
                         call_ok = True
             self.assertTrue(
                 imports_ok,
@@ -1099,7 +1398,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             )
 
     def test_legacy_execution_snapshot_migration_module_is_removed(self) -> None:
-        legacy_module = ROOT / "orchestrator" / "core" / "workflow" / "execution_snapshot_migration.py"
+        legacy_module = (
+            ROOT
+            / "orchestrator"
+            / "core"
+            / "workflow"
+            / "execution_snapshot_migration.py"
+        )
         self.assertFalse(
             legacy_module.exists(),
             msg="Legacy execution snapshot runtime conversion module should be removed after cutover.",
@@ -1112,12 +1417,16 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             msg="Legacy decision_snapshot_codec module should be removed after state-machine cutover.",
         )
 
-    def test_runtime_modules_do_not_import_decision_snapshot_codec_directly(self) -> None:
+    def test_runtime_modules_do_not_import_decision_snapshot_codec_directly(
+        self,
+    ) -> None:
         violations: list[str] = []
         for module_path in sorted(ORCHESTRATOR_ROOT.rglob("*.py")):
             for module_name in _imported_modules(module_path):
                 if module_name == "orchestrator.core.decision_snapshot_codec":
-                    violations.append(f"{module_path.relative_to(ROOT).as_posix()}:{module_name}")
+                    violations.append(
+                        f"{module_path.relative_to(ROOT).as_posix()}:{module_name}"
+                    )
         self.assertEqual(
             violations,
             [],

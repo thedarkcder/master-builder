@@ -17,8 +17,7 @@ on:
         default: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: release-train-close-${{ github.ref }}
@@ -27,7 +26,10 @@ concurrency:
 jobs:
   close-released-issues:
     if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true'
-    runs-on: self-hosted
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Creating a reviewed release requires contents write access.
+      pull-requests: read
 
     steps:
       - uses: actions/checkout@v5
@@ -37,29 +39,29 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: pip
 
-      - name: Install package
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
+
+      - name: Install frozen runtime dependencies
+        run: uv sync --frozen --no-dev --no-default-groups
 
       - name: Resolve release version
         id: release
         shell: bash
         env:
           WORKFLOW_RELEASE_VERSION: ${{ inputs.release_version }}
+          GITHUB_RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "release" ]; then
-            release_version="${{ github.event.release.tag_name }}"
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            release_version="${GITHUB_RELEASE_TAG}"
           elif [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
             release_version="${WORKFLOW_RELEASE_VERSION}"
           else
-            release_version="$(python -c "from orchestrator.core.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
+            release_version="$(uv run --frozen python -c "from orchestrator.core.projects.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
           fi
 
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
@@ -76,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          python scripts/release_train_sync.py \
+          uv run --frozen python scripts/release_train_sync.py \
             keys \
             --jira-base-url "${JIRA_BASE_URL}" \
             --jira-email "${JIRA_EMAIL}" \
@@ -88,62 +90,23 @@ jobs:
           issue_count="$(wc -l < /tmp/release_issue_keys.txt | tr -d '[:space:]')"
           echo "issue_count=${issue_count}" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for checks and merge release issue PRs to main
-        if: steps.issue-keys.outputs.issue_count != '0' && inputs.dry_run != true
+      - name: Verify release PRs were merged by maintainers
+        if: steps.issue-keys.outputs.issue_count != '0'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          pr_issue_pairs="$(mktemp)"
-
           while IFS= read -r issue_key; do
             [ -z "${issue_key}" ] && continue
-
-            while IFS= read -r pr_number; do
-              [ -z "${pr_number}" ] && continue
-              printf '%s\t%s\n' "${pr_number}" "${issue_key}" >> "${pr_issue_pairs}"
-            done < <(
-              gh pr list \
-                --state open \
-                --base main \
-                --search "${issue_key} in:title repo:${GITHUB_REPOSITORY}" \
-                --json number \
-                -q '.[].number'
-            )
+            open_pr_count="$(gh pr list --state open --base main \
+              --search "${issue_key} in:title repo:${GITHUB_REPOSITORY}" \
+              --json number -q 'length')"
+            if [ "${open_pr_count}" -ne 0 ]; then
+              echo "Release issue ${issue_key} still has open PRs. A maintainer must review required checks and merge them before closing this release."
+              exit 1
+            fi
           done < /tmp/release_issue_keys.txt
-
-          if [ ! -s "${pr_issue_pairs}" ]; then
-            echo "No open PRs found for release issues."
-            exit 0
-          fi
-
-          pr_issue_pairs_unique="${pr_issue_pairs}.uniq"
-          sort -t $'\t' -k1,1n -u "${pr_issue_pairs}" > "${pr_issue_pairs_unique}"
-
-          merge_failures=()
-
-          while IFS=$'\t' read -r pr_number issue_key; do
-            [ -z "${pr_number}" ] && continue
-
-            if ! gh pr checks "${pr_number}" --required --watch --interval 20; then
-              merge_failures+=("${pr_number}:${issue_key}:checks")
-              continue
-            fi
-
-            if gh pr merge "${pr_number}" --merge --delete-branch; then
-              echo "Merged PR #${pr_number} for ${issue_key}"
-            else
-              merge_failures+=("${pr_number}:${issue_key}:merge")
-            fi
-          done < "${pr_issue_pairs_unique}"
-
-          rm -f "${pr_issue_pairs}" "${pr_issue_pairs_unique}"
-
-          if [ "${#merge_failures[@]}" -gt 0 ]; then
-            printf 'Failed merge/check operations: %s\n' "${merge_failures[*]}"
-            exit 1
-          fi
 
       - name: Ensure GitHub release exists
         if: github.event_name != 'release' && inputs.dry_run != true && steps.issue-keys.outputs.issue_count != '0'
@@ -258,7 +221,7 @@ jobs:
             args+=(--dry-run)
           fi
 
-          python "${args[@]}"
+          uv run --frozen python "${args[@]}"
       - name: Transition release-train Jira issues to Done
         if: steps.issue-keys.outputs.issue_count != '0'
         shell: bash
@@ -309,4 +272,4 @@ jobs:
             args+=(--dry-run)
           fi
 
-          python "${args[@]}"
+          uv run --frozen python "${args[@]}"

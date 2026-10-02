@@ -29,7 +29,9 @@ def ensure_postgres_database_url(
     backend_name = database_backend_name(database_url)
     if backend_name == "postgresql":
         return
-    if backend_name == "sqlite" and sqlite_allowed_for_tests(allow_sqlite_for_tests=allow_sqlite_for_tests):
+    if backend_name == "sqlite" and sqlite_allowed_for_tests(
+        allow_sqlite_for_tests=allow_sqlite_for_tests
+    ):
         return
     raise RuntimeError(
         f"{context} requires PostgreSQL; set ORCHESTRATOR_DATABASE_URL to a postgresql URL."

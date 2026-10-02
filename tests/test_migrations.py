@@ -56,18 +56,28 @@ class MigrationTests(unittest.TestCase):
         script = ScriptDirectory.from_config(config)
 
         revision_ids: list[str] = []
-        for path in sorted((root / "orchestrator" / "storage" / "migrations" / "versions").glob("*.py")):
+        for path in sorted(
+            (root / "orchestrator" / "storage" / "migrations" / "versions").glob("*.py")
+        ):
             contents = path.read_text(encoding="utf-8")
             for line in contents.splitlines():
                 if line.startswith("revision = "):
-                    revision_ids.append(line.split("=", maxsplit=1)[1].strip().strip('"'))
+                    revision_ids.append(
+                        line.split("=", maxsplit=1)[1].strip().strip('"')
+                    )
                     break
 
-        duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
+        duplicates = {
+            revision_id: count
+            for revision_id, count in Counter(revision_ids).items()
+            if count > 1
+        }
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260616_0133"])
+        self.assertEqual(script.get_heads(), ["20261002_0136"])
 
-    def test_project_app_deployment_config_migration_removes_qa_capture_metadata(self) -> None:
+    def test_project_app_deployment_config_migration_removes_qa_capture_metadata(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260615_0119_remove_qa_capture_metadata_from_project_app_deployment_config.py",
             "migration_20260615_0119",
@@ -83,7 +93,9 @@ class MigrationTests(unittest.TestCase):
         )
 
         self.assertTrue(changed)
-        self.assertEqual(updated, {"source_strategy": "nixpacks", "services": [{"kind": "website"}]})
+        self.assertEqual(
+            updated, {"source_strategy": "nixpacks", "services": [{"kind": "website"}]}
+        )
 
     def test_qa_checkpoint_stage_repair_detects_snapshot_qa_stage(self) -> None:
         migration = self._load_migration_module(
@@ -111,13 +123,18 @@ class MigrationTests(unittest.TestCase):
             "migration_20260615_0121",
         )
 
-        updated_start_command, changed = migration.canonical_legacy_expo_web_start_command(
-            detected_runtime="react_native_web",
-            start_command="npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006",
+        updated_start_command, changed = (
+            migration.canonical_legacy_expo_web_start_command(
+                detected_runtime="react_native_web",
+                start_command="npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006",
+            )
         )
 
         self.assertTrue(changed)
-        self.assertEqual(updated_start_command, "npx expo-cli start --web --non-interactive --host 0.0.0.0")
+        self.assertEqual(
+            updated_start_command,
+            "npx expo-cli start --web --non-interactive --host 0.0.0.0",
+        )
 
     def test_invalid_legacy_expo_web_host_repair_uses_legacy_host_mode(self) -> None:
         migration = self._load_migration_module(
@@ -131,7 +148,10 @@ class MigrationTests(unittest.TestCase):
         )
 
         self.assertTrue(changed)
-        self.assertEqual(updated_start_command, "npx expo-cli start --web --non-interactive --host lan")
+        self.assertEqual(
+            updated_start_command,
+            "npx expo-cli start --web --non-interactive --host lan",
+        )
 
     def test_legacy_expo_web_openssl_repair_adds_legacy_provider_option(self) -> None:
         migration = self._load_migration_module(
@@ -139,9 +159,11 @@ class MigrationTests(unittest.TestCase):
             "migration_20260615_0123",
         )
 
-        updated_start_command, changed = migration.canonical_legacy_expo_openssl_start_command(
-            detected_runtime="react_native_web",
-            start_command="npx expo-cli start --web --non-interactive --host lan",
+        updated_start_command, changed = (
+            migration.canonical_legacy_expo_openssl_start_command(
+                detected_runtime="react_native_web",
+                start_command="npx expo-cli start --web --non-interactive --host lan",
+            )
         )
 
         self.assertTrue(changed)
@@ -173,7 +195,9 @@ class MigrationTests(unittest.TestCase):
             "expo-cli@3.28.6 websocket@1.0.35",
         )
 
-    def test_legacy_expo_native_build_tools_repair_installs_python_for_node_gyp(self) -> None:
+    def test_legacy_expo_native_build_tools_repair_installs_python_for_node_gyp(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260615_0125_repair_legacy_expo_native_build_tools.py",
             "migration_20260615_0125",
@@ -197,21 +221,25 @@ class MigrationTests(unittest.TestCase):
             "expo-cli@3.28.6 websocket@1.0.35",
         )
 
-    def test_legacy_expo_project_dependency_install_repair_installs_app_dependencies(self) -> None:
+    def test_legacy_expo_project_dependency_install_repair_installs_app_dependencies(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260616_0126_repair_legacy_expo_project_dependency_install.py",
             "migration_20260616_0126",
         )
 
-        updated_config, changed = migration.canonical_legacy_expo_project_dependency_install(
-            {
-                "source_strategy": "nixpacks",
-                "install_command": (
-                    "sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++ && "
-                    "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
-                    "expo-cli@3.28.6 websocket@1.0.35"
-                ),
-            }
+        updated_config, changed = (
+            migration.canonical_legacy_expo_project_dependency_install(
+                {
+                    "source_strategy": "nixpacks",
+                    "install_command": (
+                        "sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++ && "
+                        "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+                        "expo-cli@3.28.6 websocket@1.0.35"
+                    ),
+                }
+            )
         )
 
         self.assertTrue(changed)
@@ -223,7 +251,9 @@ class MigrationTests(unittest.TestCase):
             "expo-cli@3.28.6 websocket@1.0.35",
         )
 
-    def test_legacy_expo_install_command_repair_fits_coolify_command_limit(self) -> None:
+    def test_legacy_expo_install_command_repair_fits_coolify_command_limit(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260616_0127_shorten_legacy_expo_install_command_for_coolify.py",
             "migration_20260616_0127",
@@ -276,7 +306,9 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertLessEqual(len(updated_config["install_command"]), 255)
 
-    def test_legacy_expo_install_command_repair_removes_yarn_lock_before_npm_install(self) -> None:
+    def test_legacy_expo_install_command_repair_removes_yarn_lock_before_npm_install(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260616_0130_remove_stale_yarn_lock_before_legacy_expo_npm_install.py",
             "migration_20260616_0130",
@@ -303,7 +335,9 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertLessEqual(len(updated_config["install_command"]), 255)
 
-    def test_legacy_expo_native_build_environment_repair_points_node_gyp_to_python(self) -> None:
+    def test_legacy_expo_native_build_environment_repair_points_node_gyp_to_python(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260616_0128_repair_legacy_expo_native_build_environment.py",
             "migration_20260616_0128",
@@ -323,10 +357,16 @@ class MigrationTests(unittest.TestCase):
 
         self.assertTrue(changed)
         self.assertEqual(updated_config["environment"]["PYTHON"], "/usr/bin/python3")
-        self.assertEqual(updated_config["environment"]["NPM_CONFIG_PYTHON"], "/usr/bin/python3")
-        self.assertEqual(updated_config["environment"]["NPM_CONFIG_PRODUCTION"], "false")
+        self.assertEqual(
+            updated_config["environment"]["NPM_CONFIG_PYTHON"], "/usr/bin/python3"
+        )
+        self.assertEqual(
+            updated_config["environment"]["NPM_CONFIG_PRODUCTION"], "false"
+        )
 
-    def test_legacy_expo_nixpacks_node_version_repair_removes_invalid_node_14_pin(self) -> None:
+    def test_legacy_expo_nixpacks_node_version_repair_removes_invalid_node_14_pin(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260616_0132_remove_invalid_legacy_expo_nixpacks_node_version.py",
             "migration_20260616_0132",
@@ -375,12 +415,22 @@ class MigrationTests(unittest.TestCase):
 
         self.assertTrue(changed)
         self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRIES"], "5")
-        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_FACTOR"], "2")
-        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT"], "120000")
-        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_MINTIMEOUT"], "10000")
-        self.assertEqual(updated_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"], "120000")
+        self.assertEqual(
+            updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_FACTOR"], "2"
+        )
+        self.assertEqual(
+            updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT"], "120000"
+        )
+        self.assertEqual(
+            updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_MINTIMEOUT"], "10000"
+        )
+        self.assertEqual(
+            updated_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"], "120000"
+        )
 
-    def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
+    def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(
+        self,
+    ) -> None:
         module = self._load_migration_module(
             "20260526_0111_normalize_project_install_request_labels.py",
             "migration_20260526_0111_project_install_request_labels",
@@ -408,7 +458,9 @@ class MigrationTests(unittest.TestCase):
             "iOS Beta Lane",
         )
 
-    def test_run_migrations_repairs_orphaned_database_stamp_when_schema_is_at_head(self) -> None:
+    def test_run_migrations_repairs_orphaned_database_stamp_when_schema_is_at_head(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'orphaned-stamp.sqlite'}"
             run_migrations(database_url=database_url)
@@ -416,16 +468,26 @@ class MigrationTests(unittest.TestCase):
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(text("DELETE FROM alembic_version"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260509_0122')"))
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260509_0122')"
+                    )
+                )
 
             run_migrations(database_url=database_url)
 
             with engine.connect() as connection:
-                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+                versions = (
+                    connection.execute(text("SELECT version_num FROM alembic_version"))
+                    .scalars()
+                    .all()
+                )
 
-            self.assertEqual(versions, ["20260616_0133"])
+            self.assertEqual(versions, ["20261002_0136"])
 
-    def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(self) -> None:
+    def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260527_0114_repair_requeue_snapshot_reasons.py",
             "migration_20260527_0114",
@@ -443,14 +505,21 @@ class MigrationTests(unittest.TestCase):
                     "requeue_target": None,
                     "requeue_reason": None,
                 },
-                "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+                "events": {
+                    "stage_updates": [],
+                    "live_stage_updates": [],
+                    "stage_trace": [],
+                    "workstream_trace": [],
+                },
                 "stages": {},
             }
         )
 
         self.assertIsNotNone(repaired)
         assert repaired is not None
-        self.assertEqual(repaired["workflow"]["requeue_reason"], "Workflow requested requeue.")
+        self.assertEqual(
+            repaired["workflow"]["requeue_reason"], "Workflow requested requeue."
+        )
 
     def test_terminal_workflow_active_attempt_repair_maps_statuses(self) -> None:
         migration = self._load_migration_module(
@@ -460,8 +529,16 @@ class MigrationTests(unittest.TestCase):
 
         repaired = migration.repair_active_terminal_workflow_attempt_rows(
             [
-                {"workflow_status": "succeeded", "attempt_status": "running", "operation_status": "running"},
-                {"workflow_status": "failed", "attempt_status": "running", "operation_status": "running"},
+                {
+                    "workflow_status": "succeeded",
+                    "attempt_status": "running",
+                    "operation_status": "running",
+                },
+                {
+                    "workflow_status": "failed",
+                    "attempt_status": "running",
+                    "operation_status": "running",
+                },
             ]
         )
 
@@ -484,12 +561,22 @@ class MigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [(row["workflow_status"], row["operation_status"], row["attempt_status"]) for row in repaired],
+            [
+                (row["workflow_status"], row["operation_status"], row["attempt_status"])
+                for row in repaired
+            ],
             [("failed", "failed", "failed")],
         )
 
-    def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
-        expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+    def test_workflow_execution_source_external_id_index_is_composite_in_metadata(
+        self,
+    ) -> None:
+        expected_columns = [
+            "tenant_id",
+            "source_system",
+            "source_external_id",
+            "dedupe_scope",
+        ]
         matching_indexes = [
             index
             for index in WorkflowExecution.__table__.indexes
@@ -497,17 +584,28 @@ class MigrationTests(unittest.TestCase):
         ]
 
         self.assertEqual(len(matching_indexes), 1)
-        self.assertEqual([column.name for column in matching_indexes[0].columns], expected_columns)
+        self.assertEqual(
+            [column.name for column in matching_indexes[0].columns], expected_columns
+        )
 
-    def test_source_external_id_migration_recreates_same_named_single_column_index(self) -> None:
+    def test_source_external_id_migration_recreates_same_named_single_column_index(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260505_0106_workflow_execution_source_external_id.py",
             "migration_20260505_0106",
         )
-        expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+        expected_columns = [
+            "tenant_id",
+            "source_system",
+            "source_external_id",
+            "dedupe_scope",
+        ]
 
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'source-external-id-index.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'source-external-id-index.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -544,7 +642,10 @@ class MigrationTests(unittest.TestCase):
             for index in indexes
             if index["name"] == "ix_workflow_executions_source_external_id"
         }
-        self.assertEqual(index_columns, {"ix_workflow_executions_source_external_id": expected_columns})
+        self.assertEqual(
+            index_columns,
+            {"ix_workflow_executions_source_external_id": expected_columns},
+        )
 
     def test_deployment_config_secret_redaction_migration(self) -> None:
         migration = self._load_migration_module(
@@ -553,7 +654,9 @@ class MigrationTests(unittest.TestCase):
         )
 
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'deployment-secret-redaction.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'deployment-secret-redaction.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -632,27 +735,41 @@ class MigrationTests(unittest.TestCase):
                     migration.upgrade()
 
                 app_config = connection.execute(
-                    text("SELECT deployment_config FROM project_apps WHERE app_id = 'app-1'")
+                    text(
+                        "SELECT deployment_config FROM project_apps WHERE app_id = 'app-1'"
+                    )
                 ).scalar_one()
                 release_snapshot = connection.execute(
-                    text("SELECT deployment_snapshot FROM project_deployment_releases WHERE release_id = 'release-1'")
+                    text(
+                        "SELECT deployment_snapshot FROM project_deployment_releases WHERE release_id = 'release-1'"
+                    )
                 ).scalar_one()
 
         app_payload = json.loads(app_config)
         release_payload = json.loads(release_snapshot)
         self.assertNotIn("postgres_password", app_payload["resources"][0]["config"])
-        self.assertEqual(app_payload["resources"][0]["config"]["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD")
+        self.assertEqual(
+            app_payload["resources"][0]["config"]["postgres_password_secret_ref"],
+            "RESTORE_DB_PASSWORD",
+        )
         self.assertNotIn("mysql_password", release_payload["resources"][0]["config"])
-        self.assertEqual(release_payload["resources"][0]["config"]["mysql_password_secret_ref"], "RESTORE_DB_PASSWORD")
+        self.assertEqual(
+            release_payload["resources"][0]["config"]["mysql_password_secret_ref"],
+            "RESTORE_DB_PASSWORD",
+        )
 
-    def test_executable_work_items_migration_marks_completed_parents_startable_for_self_execution(self) -> None:
+    def test_executable_work_items_migration_marks_completed_parents_startable_for_self_execution(
+        self,
+    ) -> None:
         migration = self._load_migration_module(
             "20260523_0107_executable_work_items.py",
             "migration_20260523_0107",
         )
 
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'executable-work-items-backfill.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'executable-work-items-backfill.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -694,8 +811,14 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("INSERT INTO tenants (tenant_id) VALUES ('tenant-a')"))
-                connection.execute(text("INSERT INTO projects (project_id, tenant_id) VALUES ('tenant-a-default', 'tenant-a')"))
+                connection.execute(
+                    text("INSERT INTO tenants (tenant_id) VALUES ('tenant-a')")
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO projects (project_id, tenant_id) VALUES ('tenant-a-default', 'tenant-a')"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -716,14 +839,18 @@ class MigrationTests(unittest.TestCase):
                 with patch.object(migration, "op", operations):
                     migration.upgrade()
 
-                row = connection.execute(
-                    text(
-                        """
+                row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT work_item_id, item_kind, issue_key, mb_work_state
                         FROM workflow_executable_work_items
                         """
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
 
         self.assertEqual(row["work_item_id"], "parent:exec-parent-255")
         self.assertEqual(row["item_kind"], "parent")
@@ -777,7 +904,9 @@ class MigrationTests(unittest.TestCase):
                     )
                 )
                 connection.execute(
-                    text("INSERT INTO tenants (tenant_id, discord_config) VALUES ('tenant-a', :discord_config)"),
+                    text(
+                        "INSERT INTO tenants (tenant_id, discord_config) VALUES ('tenant-a', :discord_config)"
+                    ),
                     {"discord_config": json.dumps({"channel_id": "tenant-channel"})},
                 )
                 connection.execute(
@@ -858,7 +987,11 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("INSERT INTO tenant_users (user_id, is_active) VALUES ('user-1', 1)"))
+                connection.execute(
+                    text(
+                        "INSERT INTO tenant_users (user_id, is_active) VALUES ('user-1', 1)"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -902,7 +1035,9 @@ class MigrationTests(unittest.TestCase):
                                 },
                             ]
                         ),
-                        "unresolved_question_ids_json": json.dumps(["decision_owner", "rollout_constraints"]),
+                        "unresolved_question_ids_json": json.dumps(
+                            ["decision_owner", "rollout_constraints"]
+                        ),
                     },
                 )
                 context = MigrationContext.configure(connection)
@@ -910,19 +1045,25 @@ class MigrationTests(unittest.TestCase):
                 with patch.object(migration, "op", operations):
                     migration.upgrade()
 
-                row = connection.execute(
-                    text(
-                        """
+                row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT question_set_json, unresolved_question_ids_json
                         FROM decision_cycles
                         WHERE cycle_id = 'cycle-1'
                         """
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
 
         question_set = json.loads(row["question_set_json"])
         unresolved_ids = json.loads(row["unresolved_question_ids_json"])
-        owner_question = next(item for item in question_set if item["id"] == "decision_owner")
+        owner_question = next(
+            item for item in question_set if item["id"] == "decision_owner"
+        )
         self.assertEqual(owner_question["status"], "accepted")
         self.assertFalse(owner_question["unresolved"])
         self.assertEqual(unresolved_ids, ["rollout_constraints"])
@@ -970,7 +1111,11 @@ class MigrationTests(unittest.TestCase):
                             [
                                 {"id": "accepted_topic", "status": "accepted"},
                                 {"id": "partial_topic", "status": "answered"},
-                                {"id": "resolved_answered_topic", "status": "answered", "unresolved": False},
+                                {
+                                    "id": "resolved_answered_topic",
+                                    "status": "answered",
+                                    "unresolved": False,
+                                },
                                 {"id": "open_topic", "status": "open"},
                             ]
                         ),
@@ -984,15 +1129,19 @@ class MigrationTests(unittest.TestCase):
                 with patch.object(migration, "op", operations):
                     migration.upgrade()
 
-                row = connection.execute(
-                    text(
-                        """
+                row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT question_set_json, unresolved_question_ids_json
                         FROM decision_cycles
                         WHERE cycle_id = 'cycle-1'
                         """
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
 
         question_set = json.loads(row["question_set_json"])
         by_id = {item["id"]: item for item in question_set}
@@ -1005,11 +1154,21 @@ class MigrationTests(unittest.TestCase):
 
     def test_failed_attempt_retryability_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'failed-attempt-retryability.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'failed-attempt-retryability.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0099')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260430_0099')"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -1081,30 +1240,51 @@ class MigrationTests(unittest.TestCase):
             self._alembic_upgrade(database_url, "20260430_0100")
 
             with engine.connect() as connection:
-                rows = connection.execute(
-                    text(
-                        """
+                rows = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT attempt_id, error_category, retryable, status_detail
                         FROM workflow_operation_attempts
                         ORDER BY attempt_id
                         """
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
 
             attempts = {row["attempt_id"]: row for row in rows}
-            self.assertEqual(attempts["attempt-hierarchy"]["error_category"], "transient_external_failure")
+            self.assertEqual(
+                attempts["attempt-hierarchy"]["error_category"],
+                "transient_external_failure",
+            )
             self.assertTrue(bool(attempts["attempt-hierarchy"]["retryable"]))
-            self.assertEqual(attempts["attempt-hierarchy"]["status_detail"], "diagnostic only")
-            self.assertEqual(attempts["attempt-runtime"]["error_category"], "external_failure")
+            self.assertEqual(
+                attempts["attempt-hierarchy"]["status_detail"], "diagnostic only"
+            )
+            self.assertEqual(
+                attempts["attempt-runtime"]["error_category"], "external_failure"
+            )
             self.assertTrue(bool(attempts["attempt-runtime"]["retryable"]))
 
-    def test_single_active_operation_attempt_migration_repairs_and_enforces(self) -> None:
+    def test_single_active_operation_attempt_migration_repairs_and_enforces(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'active-attempts.sqlite'}"
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0098')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260430_0098')"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -1149,7 +1329,9 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 ).all()
-                self.assertEqual(rows, [("attempt-1", "superseded"), ("attempt-2", "running")])
+                self.assertEqual(
+                    rows, [("attempt-1", "superseded"), ("attempt-2", "running")]
+                )
                 with self.assertRaises(Exception):
                     connection.execute(
                         text(
@@ -1166,13 +1348,23 @@ class MigrationTests(unittest.TestCase):
                         )
                     )
 
-    def test_stale_active_operation_attempt_migration_repairs_older_active_attempts(self) -> None:
+    def test_stale_active_operation_attempt_migration_repairs_older_active_attempts(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'stale-active-attempts.sqlite'}"
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0100')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260430_0100')"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -1229,13 +1421,23 @@ class MigrationTests(unittest.TestCase):
 
     def test_planning_decision_record_identity_is_stage_scoped(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'planning-decision-identity.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'planning-decision-identity.sqlite'}"
+            )
             engine = create_engine(database_url)
             now = "2026-05-04 21:00:00"
             later = "2026-05-04 21:01:00"
             with engine.begin() as connection:
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260504_0104')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260504_0104')"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -1266,10 +1468,10 @@ class MigrationTests(unittest.TestCase):
                             source_stage, external_key, payload_json, created_at, updated_at
                         )
                         VALUES
-                            ('engineering-old', 'example', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :now),
-                            ('engineering-new', 'example', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :later),
-                            ('testing', 'example', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now),
-                            ('missing-stage', 'example', 'parent_planning:MAB-243', 'MAB-243', 'pm', 'requested', NULL, 'PM-001', '{}', :now, :now)
+                            ('engineering-old', 'example-workspace', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :now),
+                            ('engineering-new', 'example-workspace', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :later),
+                            ('testing', 'example-workspace', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now),
+                            ('missing-stage', 'example-workspace', 'parent_planning:MAB-243', 'MAB-243', 'pm', 'requested', NULL, 'PM-001', '{}', :now, :now)
                         """
                     ),
                     {"now": now, "later": later},
@@ -1304,7 +1506,7 @@ class MigrationTests(unittest.TestCase):
                                 source_stage, external_key, payload_json, created_at, updated_at
                             )
                             VALUES (
-                                'duplicate', 'example', 'parent_planning:MAB-243', 'MAB-243',
+                                'duplicate', 'example-workspace', 'parent_planning:MAB-243', 'MAB-243',
                                 'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now
                             )
                             """
@@ -1314,11 +1516,21 @@ class MigrationTests(unittest.TestCase):
 
     def test_optional_discord_projection_status_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'discord-projection-repair.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'discord-projection-repair.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260428_0097')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260428_0097')"
+                    )
+                )
                 connection.execute(
                     text(
                         """
@@ -1385,7 +1597,9 @@ class MigrationTests(unittest.TestCase):
 
             with engine.connect() as connection:
                 operation = connection.execute(
-                    text("SELECT status, summary FROM workflow_operations WHERE operation_id = 'operation-discord'")
+                    text(
+                        "SELECT status, summary FROM workflow_operations WHERE operation_id = 'operation-discord'"
+                    )
                 ).one()
                 attempt = connection.execute(
                     text(
@@ -1398,14 +1612,19 @@ class MigrationTests(unittest.TestCase):
                 ).one()
 
             self.assertEqual(operation.status, "completed")
-            self.assertEqual(operation.summary, "Optional Discord clarification follow-up was not created.")
+            self.assertEqual(
+                operation.summary,
+                "Optional Discord clarification follow-up was not created.",
+            )
             self.assertEqual(attempt.status, "completed")
             self.assertIsNone(attempt.error_category)
             self.assertIsNone(attempt.error_message)
             self.assertIsNone(attempt.status_detail)
             self.assertFalse(attempt.retryable)
 
-    def test_code_inferred_workflow_graph_migration_removes_db_authored_definitions(self) -> None:
+    def test_code_inferred_workflow_graph_migration_removes_db_authored_definitions(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'workflow-code-graph.sqlite'}"
             engine = create_engine(database_url)
@@ -1480,13 +1699,19 @@ class MigrationTests(unittest.TestCase):
             self.assertNotIn("workflow_type_operations", inspector.get_table_names())
             with engine.connect() as connection:
                 row = connection.execute(
-                    text("SELECT workflow_type_key FROM workflow_executions WHERE workflow_id = 'parent_planning:MAB-233'")
+                    text(
+                        "SELECT workflow_type_key FROM workflow_executions WHERE workflow_id = 'parent_planning:MAB-233'"
+                    )
                 ).scalar_one()
             self.assertEqual(row, "parent_planning")
 
-    def test_projection_attempt_history_cleanup_removes_projection_only_attempt_rows(self) -> None:
+    def test_projection_attempt_history_cleanup_removes_projection_only_attempt_rows(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'projection-attempt-cleanup.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'projection-attempt-cleanup.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -1570,27 +1795,53 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260422_0089')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260422_0089')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260422_0090")
 
             with engine.begin() as connection:
-                attempts = connection.execute(
-                    text("SELECT attempt_id FROM workflow_operation_attempts ORDER BY attempt_id")
-                ).scalars().all()
-                audit_ids = connection.execute(
-                    text("SELECT event_id FROM audit_events ORDER BY event_id")
-                ).scalars().all()
-                stream_ids = connection.execute(
-                    text("SELECT event_id FROM observability_stream_events ORDER BY event_id")
-                ).scalars().all()
+                attempts = (
+                    connection.execute(
+                        text(
+                            "SELECT attempt_id FROM workflow_operation_attempts ORDER BY attempt_id"
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                audit_ids = (
+                    connection.execute(
+                        text("SELECT event_id FROM audit_events ORDER BY event_id")
+                    )
+                    .scalars()
+                    .all()
+                )
+                stream_ids = (
+                    connection.execute(
+                        text(
+                            "SELECT event_id FROM observability_stream_events ORDER BY event_id"
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
 
             self.assertEqual(attempts, ["attempt-fanout"])
             self.assertEqual(audit_ids, ["audit-fanout"])
             self.assertEqual(stream_ids, ["stream-fanout"])
 
-    def test_attempt_scoped_observability_migration_backfills_deletes_and_constrains_rows(self) -> None:
+    def test_attempt_scoped_observability_migration_backfills_deletes_and_constrains_rows(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'attempt-observability.sqlite'}"
             engine = create_engine(database_url)
@@ -1659,19 +1910,34 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260424_0091')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260424_0091')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260424_0092")
 
             with engine.begin() as connection:
                 audit_rows = connection.execute(
-                    text("SELECT event_id, attempt_id FROM audit_events ORDER BY event_id")
+                    text(
+                        "SELECT event_id, attempt_id FROM audit_events ORDER BY event_id"
+                    )
                 ).all()
                 stream_rows = connection.execute(
-                    text("SELECT operation_id, attempt_id FROM observability_stream_events ORDER BY stream_offset")
+                    text(
+                        "SELECT operation_id, attempt_id FROM observability_stream_events ORDER BY stream_offset"
+                    )
                 ).all()
-                self.assertEqual(audit_rows, [("audit-backfill", "attempt-1"), ("audit-workflow", None)])
+                self.assertEqual(
+                    audit_rows,
+                    [("audit-backfill", "attempt-1"), ("audit-workflow", None)],
+                )
                 self.assertEqual(stream_rows, [("op-1", "attempt-1"), (None, None)])
                 with self.assertRaises(Exception):
                     connection.execute(
@@ -1683,9 +1949,13 @@ class MigrationTests(unittest.TestCase):
                         )
                     )
 
-    def test_rename_jira_oauth_platform_secrets_migration_updates_managed_secret_refs(self) -> None:
+    def test_rename_jira_oauth_platform_secrets_migration_updates_managed_secret_refs(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'atlassian-secret-rename.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'atlassian-secret-rename.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -1712,15 +1982,29 @@ class MigrationTests(unittest.TestCase):
                     ),
                     {"now": now},
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260422_0088')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260422_0088')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260422_0089")
 
             with engine.begin() as connection:
-                refs = connection.execute(
-                    text("SELECT secret_ref FROM managed_secrets ORDER BY secret_ref")
-                ).scalars().all()
+                refs = (
+                    connection.execute(
+                        text(
+                            "SELECT secret_ref FROM managed_secrets ORDER BY secret_ref"
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
 
             self.assertEqual(
                 refs,
@@ -1789,13 +2073,23 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0083')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260420_0083')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260420_0084")
 
             inspector = inspect(engine)
-            columns = {column["name"] for column in inspector.get_columns("audit_events")}
+            columns = {
+                column["name"] for column in inspector.get_columns("audit_events")
+            }
             self.assertTrue(
                 {
                     "event_id",
@@ -1810,9 +2104,13 @@ class MigrationTests(unittest.TestCase):
                 }.issubset(columns)
             )
 
-    def test_failed_attempt_retryability_backfill_marks_failed_attempts_retryable(self) -> None:
+    def test_failed_attempt_retryability_backfill_marks_failed_attempts_retryable(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-attempt-retryable.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'workflow-attempt-retryable.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -1845,29 +2143,45 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0082')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260420_0082')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260420_0083")
 
             with engine.connect() as connection:
-                rows = connection.execute(
-                    text(
-                        """
+                rows = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT attempt_id, retryable
                         FROM workflow_operation_attempts
                         ORDER BY attempt_id
                         """
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
 
-            retryable_by_attempt = {row["attempt_id"]: bool(row["retryable"]) for row in rows}
+            retryable_by_attempt = {
+                row["attempt_id"]: bool(row["retryable"]) for row in rows
+            }
             self.assertTrue(retryable_by_attempt["attempt-failed"])
             self.assertTrue(retryable_by_attempt["attempt-retrying"])
             self.assertFalse(retryable_by_attempt["attempt-running"])
             self.assertFalse(retryable_by_attempt["attempt-waiting"])
 
-    def test_workflow_execution_public_id_migration_backfills_unique_execution_ids(self) -> None:
+    def test_workflow_execution_public_id_migration_backfills_unique_execution_ids(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'workflow-execution-id.sqlite'}"
             engine = create_engine(database_url)
@@ -1904,38 +2218,60 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260420_0081")
 
             inspector = inspect(engine)
-            columns = {column["name"]: column for column in inspector.get_columns("workflow_executions")}
+            columns = {
+                column["name"]: column
+                for column in inspector.get_columns("workflow_executions")
+            }
             self.assertIn("execution_id", columns)
             self.assertFalse(columns["execution_id"]["nullable"])
 
-            indexes = {index["name"]: index for index in inspector.get_indexes("workflow_executions")}
+            indexes = {
+                index["name"]: index
+                for index in inspector.get_indexes("workflow_executions")
+            }
             self.assertIn("ix_workflow_executions_execution_id", indexes)
             self.assertTrue(indexes["ix_workflow_executions_execution_id"]["unique"])
 
             with engine.connect() as connection:
-                rows = connection.execute(
-                    text(
-                        """
+                rows = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT workflow_id, execution_id
                         FROM workflow_executions
                         ORDER BY workflow_id
                         """
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
             execution_ids = [str(row["execution_id"] or "").strip() for row in rows]
             self.assertEqual(len(execution_ids), 2)
             self.assertEqual(len(set(execution_ids)), 2)
             self.assertTrue(all(execution_ids))
 
-    def test_workflow_execution_public_id_migration_replaces_ids_copied_from_workflow_keys(self) -> None:
+    def test_workflow_execution_public_id_migration_replaces_ids_copied_from_workflow_keys(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
-            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-execution-id-fix.sqlite'}"
+            database_url = (
+                f"sqlite:///{Path(tmpdir) / 'workflow-execution-id-fix.sqlite'}"
+            )
             engine = create_engine(database_url)
             with engine.begin() as connection:
                 connection.execute(
@@ -1972,27 +2308,41 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"))
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260420_0081")
 
             with engine.connect() as connection:
-                rows = connection.execute(
-                    text(
-                        """
+                rows = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT workflow_id, execution_id
                         FROM workflow_executions
                         ORDER BY workflow_id
                         """
+                        )
                     )
-                ).mappings().all()
+                    .mappings()
+                    .all()
+                )
 
             self.assertEqual(rows[0]["workflow_id"], "parent_planning:MAB-215")
             self.assertNotEqual(rows[0]["execution_id"], "parent_planning:MAB-215")
             self.assertEqual(rows[1]["execution_id"], "public-2")
 
-    def test_workflow_execution_backend_backfill_migration_aligns_execution_rows(self) -> None:
+    def test_workflow_execution_backend_backfill_migration_aligns_execution_rows(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'workflow-backfill.sqlite'}"
             engine = create_engine(database_url)
@@ -2036,23 +2386,34 @@ class MigrationTests(unittest.TestCase):
                 "migration_20260420_0078_backfill_workflow_execution_backends",
             )
 
-            with engine.begin() as connection, patch.object(module.op, "get_bind", return_value=connection):
+            with (
+                engine.begin() as connection,
+                patch.object(module.op, "get_bind", return_value=connection),
+            ):
                 module.upgrade()
 
             with engine.connect() as connection:
-                row = connection.execute(
-                    text(
-                        "SELECT orchestration_backend FROM workflow_executions WHERE workflow_id = 'workflow-1'"
+                row = (
+                    connection.execute(
+                        text(
+                            "SELECT orchestration_backend FROM workflow_executions WHERE workflow_id = 'workflow-1'"
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
             self.assertEqual(row["orchestration_backend"], "temporal")
 
-    def test_architecture_documents_migration_tolerates_preexisting_project_config_column(self) -> None:
+    def test_architecture_documents_migration_tolerates_preexisting_project_config_column(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmpdir:
             database_url = f"sqlite:///{Path(tmpdir) / 'architecture-documents.sqlite'}"
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("CREATE TABLE tenants (tenant_id VARCHAR PRIMARY KEY)"))
+                connection.execute(
+                    text("CREATE TABLE tenants (tenant_id VARCHAR PRIMARY KEY)")
+                )
                 connection.execute(
                     text(
                         """
@@ -2063,16 +2424,31 @@ class MigrationTests(unittest.TestCase):
                         """
                     )
                 )
-                connection.execute(text("CREATE TABLE knowledge_assets (asset_id VARCHAR PRIMARY KEY)"))
-                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260421_0086')"))
+                connection.execute(
+                    text("CREATE TABLE knowledge_assets (asset_id VARCHAR PRIMARY KEY)")
+                )
+                connection.execute(
+                    text(
+                        "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260421_0086')"
+                    )
+                )
 
             self._alembic_upgrade(database_url, "20260421_0087")
 
             inspector = inspect(engine)
-            project_columns = {column["name"] for column in inspector.get_columns("projects")}
+            project_columns = {
+                column["name"] for column in inspector.get_columns("projects")
+            }
             self.assertIn("architecture_docs_config", project_columns)
-            architecture_columns = {column["name"] for column in inspector.get_columns("architecture_documents")}
+            architecture_columns = {
+                column["name"]
+                for column in inspector.get_columns("architecture_documents")
+            }
             self.assertTrue(
                 {
                     "document_id",
@@ -2085,11 +2461,16 @@ class MigrationTests(unittest.TestCase):
                     "canonical_url",
                 }.issubset(architecture_columns)
             )
-            indexes = {index["name"] for index in inspector.get_indexes("architecture_documents")}
+            indexes = {
+                index["name"]
+                for index in inspector.get_indexes("architecture_documents")
+            }
             self.assertIn("ix_architecture_documents_scope", indexes)
             self.assertIn("ix_architecture_documents_project_status", indexes)
 
-    def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(self) -> None:
+    def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(
+        self,
+    ) -> None:
         module = self._load_migration_module(
             "20260417_0071_parent_planning_type_rename_and_promotion.py",
             "migration_20260417_0071_drop_fks",
@@ -2100,7 +2481,12 @@ class MigrationTests(unittest.TestCase):
 
         class FakeInspector:
             def get_table_names(self):
-                return ["runs", "workflow_operations", "workflow_executions", "other_table"]
+                return [
+                    "runs",
+                    "workflow_operations",
+                    "workflow_executions",
+                    "other_table",
+                ]
 
             def get_foreign_keys(self, table_name):
                 mapping = {
@@ -2140,7 +2526,10 @@ class MigrationTests(unittest.TestCase):
                 return mapping.get(table_name, [])
 
         op_mock = MagicMock()
-        with patch.object(module, "op", op_mock), patch.object(module.sa, "inspect", return_value=FakeInspector()):
+        with (
+            patch.object(module, "op", op_mock),
+            patch.object(module.sa, "inspect", return_value=FakeInspector()),
+        ):
             module._drop_workflow_id_foreign_keys(bind)
 
         dropped = [call.args[:2] for call in op_mock.drop_constraint.call_args_list]
@@ -2153,7 +2542,9 @@ class MigrationTests(unittest.TestCase):
             ],
         )
 
-    def test_parent_planning_rename_migration_recreates_missing_canonical_workflow_foreign_keys(self) -> None:
+    def test_parent_planning_rename_migration_recreates_missing_canonical_workflow_foreign_keys(
+        self,
+    ) -> None:
         module = self._load_migration_module(
             "20260417_0071_parent_planning_type_rename_and_promotion.py",
             "migration_20260417_0071_create_fks",
@@ -2198,18 +2589,37 @@ class MigrationTests(unittest.TestCase):
 
         op_mock = MagicMock()
         op_mock.get_bind.return_value = bind
-        with patch.object(module, "op", op_mock), patch.object(module.sa, "inspect", return_value=FakeInspector()):
+        with (
+            patch.object(module, "op", op_mock),
+            patch.object(module.sa, "inspect", return_value=FakeInspector()),
+        ):
             module._create_workflow_id_foreign_keys(bind)
 
         created = [call.args[:3] for call in op_mock.create_foreign_key.call_args_list]
         self.assertEqual(
             created,
             [
-                ("project_install_requests_workflow_id_fkey", "project_install_requests", "workflow_executions"),
-                ("workflow_executions_source_workflow_id_fkey", "workflow_executions", "workflow_executions"),
-                ("workflow_checkpoints_workflow_id_fkey", "workflow_checkpoints", "workflow_executions"),
+                (
+                    "project_install_requests_workflow_id_fkey",
+                    "project_install_requests",
+                    "workflow_executions",
+                ),
+                (
+                    "workflow_executions_source_workflow_id_fkey",
+                    "workflow_executions",
+                    "workflow_executions",
+                ),
+                (
+                    "workflow_checkpoints_workflow_id_fkey",
+                    "workflow_checkpoints",
+                    "workflow_executions",
+                ),
                 ("runs_workflow_id_fkey", "runs", "workflow_executions"),
-                ("run_human_input_requests_workflow_id_fkey", "run_human_input_requests", "workflow_executions"),
+                (
+                    "run_human_input_requests_workflow_id_fkey",
+                    "run_human_input_requests",
+                    "workflow_executions",
+                ),
             ],
         )
 
@@ -2306,19 +2716,27 @@ class MigrationTests(unittest.TestCase):
             for expected_line in expected_lines:
                 self.assertIn(expected_line, contents)
 
-    def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
+    def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
             self._alembic_upgrade(database_url, "20260328_0045")
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0044'"))
+                connection.execute(
+                    text("UPDATE alembic_version SET version_num = '20260328_0044'")
+                )
 
             run_migrations(database_url=database_url)
 
             with engine.begin() as connection:
-                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-        self.assertEqual(versions, ["20260616_0133"])
+                versions = (
+                    connection.execute(text("SELECT version_num FROM alembic_version"))
+                    .scalars()
+                    .all()
+                )
+        self.assertEqual(versions, ["20261002_0136"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -2326,9 +2744,15 @@ class MigrationTests(unittest.TestCase):
         fake_script_directory = MagicMock()
         fake_script_directory.get_heads.return_value = ["20260526_0110"]
         with (
-            patch("orchestrator.storage.migrations._normalize_repaired_top_revisions") as normalize_mock,
-            patch("orchestrator.storage.migrations._repair_stamp_if_schema_ahead_of_version") as repair_mock,
-            patch("orchestrator.storage.migrations._repair_orphaned_revision_stamp") as orphaned_repair_mock,
+            patch(
+                "orchestrator.storage.migrations._normalize_repaired_top_revisions"
+            ) as normalize_mock,
+            patch(
+                "orchestrator.storage.migrations._repair_stamp_if_schema_ahead_of_version"
+            ) as repair_mock,
+            patch(
+                "orchestrator.storage.migrations._repair_orphaned_revision_stamp"
+            ) as orphaned_repair_mock,
             patch("orchestrator.storage.migrations.Config", return_value=fake_config),
             patch(
                 "orchestrator.storage.migrations.ScriptDirectory.from_config",
@@ -2340,7 +2764,9 @@ class MigrationTests(unittest.TestCase):
 
         normalize_mock.assert_called_once_with("sqlite:///tmp/test.db")
         repair_mock.assert_called_once_with("sqlite:///tmp/test.db")
-        orphaned_repair_mock.assert_called_once_with("sqlite:///tmp/test.db", "20260526_0110")
+        orphaned_repair_mock.assert_called_once_with(
+            "sqlite:///tmp/test.db", "20260526_0110"
+        )
         self.assertEqual(fake_config.attributes.get("configure_logger"), False)
         upgrade_mock.assert_called_once_with(fake_config, "head")
 
@@ -2363,9 +2789,15 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())
             self.assertIn("managed_secrets", inspector.get_table_names())
             self.assertIn("agent_lifecycle_events", inspector.get_table_names())
-            self.assertIn("knowledge_jira_sync_runtime_states", inspector.get_table_names())
-            self.assertIn("knowledge_jira_sync_project_states", inspector.get_table_names())
-            self.assertIn("discord_command_sync_runtime_states", inspector.get_table_names())
+            self.assertIn(
+                "knowledge_jira_sync_runtime_states", inspector.get_table_names()
+            )
+            self.assertIn(
+                "knowledge_jira_sync_project_states", inspector.get_table_names()
+            )
+            self.assertIn(
+                "discord_command_sync_runtime_states", inspector.get_table_names()
+            )
             self.assertIn("project_automations", inspector.get_table_names())
             self.assertIn("project_automation_executions", inspector.get_table_names())
             self.assertNotIn("run_locks", inspector.get_table_names())
@@ -2381,7 +2813,10 @@ class MigrationTests(unittest.TestCase):
             self.assertNotIn("pm_session_id", run_columns)
             self.assertNotIn("orchestrated_session_id", run_columns)
 
-            workflow_columns = {column["name"] for column in inspector.get_columns("workflow_executions")}
+            workflow_columns = {
+                column["name"]
+                for column in inspector.get_columns("workflow_executions")
+            }
             self.assertIn("workflow_id", workflow_columns)
             self.assertIn("last_error", workflow_columns)
             self.assertIn("active_run_id", workflow_columns)
@@ -2391,14 +2826,20 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("source_external_id", workflow_columns)
             self.assertIn("updated_at", workflow_columns)
 
-            checkpoint_columns = {column["name"] for column in inspector.get_columns("workflow_checkpoints")}
+            checkpoint_columns = {
+                column["name"]
+                for column in inspector.get_columns("workflow_checkpoints")
+            }
             self.assertIn("workflow_id", checkpoint_columns)
             self.assertIn("checkpoint_kind", checkpoint_columns)
             self.assertIn("stage", checkpoint_columns)
             self.assertIn("payload_json", checkpoint_columns)
             self.assertIn("codex_session_id", checkpoint_columns)
 
-            human_input_columns = {column["name"] for column in inspector.get_columns("run_human_input_requests")}
+            human_input_columns = {
+                column["name"]
+                for column in inspector.get_columns("run_human_input_requests")
+            }
             self.assertIn("workflow_id", human_input_columns)
             self.assertIn("checkpoint_id", human_input_columns)
             self.assertIn("consumed_by_run_id", human_input_columns)
@@ -2406,17 +2847,35 @@ class MigrationTests(unittest.TestCase):
             self.assertNotIn("resume_stage", human_input_columns)
             self.assertNotIn("resume_session_id", human_input_columns)
 
-            automation_indexes = {index["name"] for index in inspector.get_indexes("project_automations")}
-            execution_indexes = {index["name"] for index in inspector.get_indexes("project_automation_executions")}
+            automation_indexes = {
+                index["name"] for index in inspector.get_indexes("project_automations")
+            }
+            execution_indexes = {
+                index["name"]
+                for index in inspector.get_indexes("project_automation_executions")
+            }
 
             self.assertIn("ix_project_automations_due_scan", automation_indexes)
-            self.assertIn("ix_project_automation_executions_due_scan", execution_indexes)
-            self.assertIn("ix_project_automation_executions_automation_history", execution_indexes)
-            automation_columns = {column["name"]: column for column in inspector.get_columns("project_automations")}
+            self.assertIn(
+                "ix_project_automation_executions_due_scan", execution_indexes
+            )
+            self.assertIn(
+                "ix_project_automation_executions_automation_history", execution_indexes
+            )
+            automation_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("project_automations")
+            }
             self.assertNotIn("delivery_text_channel_id", automation_columns)
             self.assertIn("worker_runtime_states", inspector.get_table_names())
-            knowledge_fact_columns = {column["name"]: column for column in inspector.get_columns("knowledge_facts")}
-            self.assertEqual(getattr(knowledge_fact_columns["slot_name"]["type"], "length", None), 128)
+            knowledge_fact_columns = {
+                column["name"]: column
+                for column in inspector.get_columns("knowledge_facts")
+            }
+            self.assertEqual(
+                getattr(knowledge_fact_columns["slot_name"]["type"], "length", None),
+                128,
+            )
 
     def test_initial_migration_uses_boolean_default_for_tenants_enabled(self) -> None:
         migration_file = (
@@ -2435,7 +2894,9 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertNotIn('server_default=sa.text("1")', contents)
 
-    def test_followup_context_identity_migration_adds_explicit_routing_columns(self) -> None:
+    def test_followup_context_identity_migration_adds_explicit_routing_columns(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
             run_migrations(database_url=database_url)
@@ -2443,8 +2904,12 @@ class MigrationTests(unittest.TestCase):
             engine = create_engine(database_url)
             inspector = inspect(engine)
 
-            followup_columns = {column["name"] for column in inspector.get_columns("followup_contexts")}
-            followup_indexes = {index["name"] for index in inspector.get_indexes("followup_contexts")}
+            followup_columns = {
+                column["name"] for column in inspector.get_columns("followup_contexts")
+            }
+            followup_indexes = {
+                index["name"] for index in inspector.get_indexes("followup_contexts")
+            }
 
             self.assertIn("owner_user_id", followup_columns)
             self.assertIn("origin_command", followup_columns)
@@ -2472,7 +2937,9 @@ class MigrationTests(unittest.TestCase):
         self.assertNotIn('server_default=sa.text("1")', contents)
         self.assertNotIn('server_default=sa.text("0")', contents)
 
-    def test_worker_runtime_state_migration_handles_postgres_duplicate_table_errors(self) -> None:
+    def test_worker_runtime_state_migration_handles_postgres_duplicate_table_errors(
+        self,
+    ) -> None:
         migration_file = (
             Path(__file__).resolve().parents[1]
             / "orchestrator"
@@ -2488,14 +2955,18 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("except (IntegrityError, ProgrammingError) as exc:", contents)
         self.assertIn("_is_duplicate_table_error(exc)", contents)
 
-    def test_decision_state_migration_is_idempotent_when_tables_already_exist(self) -> None:
+    def test_decision_state_migration_is_idempotent_when_tables_already_exist(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
             run_migrations(database_url=database_url)
 
             engine = create_engine(database_url)
             with engine.begin() as connection:
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260309_0021'"))
+                connection.execute(
+                    text("UPDATE alembic_version SET version_num = '20260309_0021'")
+                )
 
             run_migrations(database_url=database_url)
 
@@ -2519,7 +2990,9 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("pg_advisory_xact_lock", contents)
         self.assertIn("CREATE EXTENSION IF NOT EXISTS vector", contents)
 
-    def test_live_voice_room_links_migration_rewrites_legacy_discord_config(self) -> None:
+    def test_live_voice_room_links_migration_rewrites_legacy_discord_config(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
             run_migrations(database_url=database_url)
@@ -2595,19 +3068,25 @@ class MigrationTests(unittest.TestCase):
                         "updated_at": now,
                     },
                 )
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260322_0033'"))
+                connection.execute(
+                    text("UPDATE alembic_version SET version_num = '20260322_0033'")
+                )
 
             run_migrations(database_url=database_url)
 
             with engine.begin() as connection:
                 tenant_config = json.loads(
                     connection.execute(
-                        text("SELECT discord_config FROM tenants WHERE tenant_id = 'tenant-a'")
+                        text(
+                            "SELECT discord_config FROM tenants WHERE tenant_id = 'tenant-a'"
+                        )
                     ).scalar_one()
                 )
                 project_config = json.loads(
                     connection.execute(
-                        text("SELECT discord_config FROM projects WHERE project_id = 'project-a'")
+                        text(
+                            "SELECT discord_config FROM projects WHERE project_id = 'project-a'"
+                        )
                     ).scalar_one()
                 )
 
@@ -2662,7 +3141,9 @@ class MigrationTests(unittest.TestCase):
                 os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = previous
             get_settings.cache_clear()
 
-    def test_workflow_execution_migration_backfills_existing_runs_and_scrubs_resume_metadata(self) -> None:
+    def test_workflow_execution_migration_backfills_existing_runs_and_scrubs_resume_metadata(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
             self._alembic_upgrade(database_url, "20260330_0052")
@@ -2730,8 +3211,12 @@ class MigrationTests(unittest.TestCase):
                                     "resume_stage": "dev",
                                     "resume_session_id": "dev-session-1",
                                     "resume_source_run_id": "run-legacy-0",
-                                    "resume_source_plan": {"plan_steps": ["restore auth flow"]},
-                                    "resume_source_state": {"review_feedback": "check it"},
+                                    "resume_source_plan": {
+                                        "plan_steps": ["restore auth flow"]
+                                    },
+                                    "resume_source_state": {
+                                        "review_feedback": "check it"
+                                    },
                                     "human_input_request_ids": ["request-1"],
                                     "source": "manual",
                                 },
@@ -2776,7 +3261,9 @@ class MigrationTests(unittest.TestCase):
                         "status": "pending",
                         "request_context_json": json.dumps(
                             {
-                                "resume_source_plan": {"plan_steps": ["restore auth flow"]},
+                                "resume_source_plan": {
+                                    "plan_steps": ["restore auth flow"]
+                                },
                                 "resume_source_state": {"review_feedback": "check it"},
                                 "human_input_request_ids": ["request-1"],
                             }
@@ -2795,53 +3282,75 @@ class MigrationTests(unittest.TestCase):
             run_migrations(database_url=database_url)
 
             with engine.begin() as connection:
-                workflow_row = connection.execute(
-                    text(
-                        """
+                workflow_row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT workflow_id, status, active_run_id, latest_checkpoint_id
                         FROM workflow_executions
                         WHERE source_ref = 'GP-184'
                         """
+                        )
                     )
-                ).mappings().one()
-                run_row = connection.execute(
-                    text(
-                        """
+                    .mappings()
+                    .one()
+                )
+                run_row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT workflow_id, attempt_number, parent_run_id, entry_mode, entry_stage, entry_checkpoint_id, plan
                         FROM runs
                         WHERE run_id = 'run-legacy-1'
                         """
+                        )
                     )
-                ).mappings().one()
-                request_row = connection.execute(
-                    text(
-                        """
+                    .mappings()
+                    .one()
+                )
+                request_row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT workflow_id, checkpoint_id, consumed_by_run_id, status, request_context_json
                         FROM run_human_input_requests
                         WHERE request_id = 'request-1'
                         """
+                        )
                     )
-                ).mappings().one()
-                checkpoint_row = connection.execute(
-                    text(
-                        """
+                    .mappings()
+                    .one()
+                )
+                checkpoint_row = (
+                    connection.execute(
+                        text(
+                            """
                         SELECT checkpoint_id, workflow_id, checkpoint_kind, stage, payload_json, codex_session_id
                         FROM workflow_checkpoints
                         WHERE run_id = 'run-legacy-1'
                         """
+                        )
                     )
-                ).mappings().one()
+                    .mappings()
+                    .one()
+                )
 
             self.assertEqual(workflow_row["workflow_id"], run_row["workflow_id"])
             self.assertIsNone(workflow_row["active_run_id"])
-            self.assertEqual(workflow_row["latest_checkpoint_id"], run_row["entry_checkpoint_id"])
+            self.assertEqual(
+                workflow_row["latest_checkpoint_id"], run_row["entry_checkpoint_id"]
+            )
             self.assertEqual(run_row["attempt_number"], 1)
             self.assertIsNone(run_row["parent_run_id"])
             self.assertEqual(run_row["entry_mode"], "fresh")
             self.assertEqual(run_row["entry_stage"], "orchestrated")
-            self.assertEqual(run_row["entry_checkpoint_id"], checkpoint_row["checkpoint_id"])
+            self.assertEqual(
+                run_row["entry_checkpoint_id"], checkpoint_row["checkpoint_id"]
+            )
             self.assertEqual(request_row["workflow_id"], workflow_row["workflow_id"])
-            self.assertEqual(request_row["checkpoint_id"], checkpoint_row["checkpoint_id"])
+            self.assertEqual(
+                request_row["checkpoint_id"], checkpoint_row["checkpoint_id"]
+            )
             self.assertIsNone(request_row["consumed_by_run_id"])
             self.assertEqual(request_row["status"], "pending")
             self.assertEqual(checkpoint_row["workflow_id"], workflow_row["workflow_id"])
@@ -2849,7 +3358,11 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(checkpoint_row["stage"], "orchestrated")
             self.assertIsNone(checkpoint_row["codex_session_id"])
 
-            run_plan = json.loads(run_row["plan"]) if isinstance(run_row["plan"], str) else run_row["plan"]
+            run_plan = (
+                json.loads(run_row["plan"])
+                if isinstance(run_row["plan"], str)
+                else run_row["plan"]
+            )
             request_context = (
                 json.loads(request_row["request_context_json"])
                 if isinstance(request_row["request_context_json"], str)
@@ -2860,13 +3373,22 @@ class MigrationTests(unittest.TestCase):
                 if isinstance(checkpoint_row["payload_json"], str)
                 else checkpoint_row["payload_json"]
             )
-            self.assertEqual(run_plan["context"]["trigger_context"], {"source": "manual"})
+            self.assertEqual(
+                run_plan["context"]["trigger_context"], {"source": "manual"}
+            )
             self.assertEqual(request_context, {})
-            self.assertEqual(checkpoint_payload.get("context", {}).get("trigger_context"), {"source": "manual"})
+            self.assertEqual(
+                checkpoint_payload.get("context", {}).get("trigger_context"),
+                {"source": "manual"},
+            )
 
-    def test_project_secret_migration_moves_existing_refs_to_project_managed_secrets(self) -> None:
+    def test_project_secret_migration_moves_existing_refs_to_project_managed_secrets(
+        self,
+    ) -> None:
         previous_key = os.environ.get("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY")
-        encryption_key = urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("ascii")
+        encryption_key = urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode(
+            "ascii"
+        )
         try:
             os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = encryption_key
             get_settings.cache_clear()
@@ -2947,7 +3469,7 @@ class MigrationTests(unittest.TestCase):
                         {
                             "secret_ref": "tenant/tenant-a/SUPABASE_APPLE_SERVICE_ID",
                             "value_encrypted": encrypt_value(
-                                plaintext="com.example.app",
+                                plaintext="com.example-workspace.app",
                                 encryption_key=encryption_key,
                             ),
                             "created_at": now,
@@ -2964,7 +3486,7 @@ class MigrationTests(unittest.TestCase):
                         {
                             "secret_ref": "tenant/tenant-a/SUPABASE_APPLE_CALLBACK_URL",
                             "value_encrypted": encrypt_value(
-                                plaintext="https://example.example.com/auth/callback",
+                                plaintext="https://example-workspace.example.com/auth/callback",
                                 encryption_key=encryption_key,
                             ),
                             "created_at": now,
@@ -2975,18 +3497,23 @@ class MigrationTests(unittest.TestCase):
                 run_migrations(database_url=database_url)
 
                 with engine.begin() as connection:
-                    project_row = connection.execute(
-                        text(
-                            """
+                    project_row = (
+                        connection.execute(
+                            text(
+                                """
                             SELECT secret_refs
                             FROM projects
                             WHERE project_id = 'project-1'
                             """
+                            )
                         )
-                    ).mappings().one()
-                    managed_rows = connection.execute(
-                        text(
-                            """
+                        .mappings()
+                        .one()
+                    )
+                    managed_rows = (
+                        connection.execute(
+                            text(
+                                """
                             SELECT secret_ref
                             FROM managed_secrets
                             WHERE secret_ref IN (
@@ -2996,8 +3523,11 @@ class MigrationTests(unittest.TestCase):
                             )
                             ORDER BY secret_ref
                             """
+                            )
                         )
-                    ).scalars().all()
+                        .scalars()
+                        .all()
+                    )
 
                 self.assertEqual(
                     json.loads(project_row["secret_refs"]),

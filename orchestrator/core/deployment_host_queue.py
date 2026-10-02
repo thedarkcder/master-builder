@@ -93,7 +93,10 @@ def claim_next_deployment_host_command(
                 ),
             ),
         )
-        .order_by(DeploymentHostCommand.available_at.asc(), DeploymentHostCommand.created_at.asc())
+        .order_by(
+            DeploymentHostCommand.available_at.asc(),
+            DeploymentHostCommand.created_at.asc(),
+        )
         .limit(1)
     )
     if _is_postgres(session):
@@ -130,7 +133,9 @@ def start_deployment_host_command(
     if str(command.claim_id or "").strip() != str(claim_id or "").strip():
         raise RuntimeError("Deployment host command claim is invalid")
     if command.status not in {"claimed", "running"}:
-        raise RuntimeError(f"Deployment host command cannot start from status '{command.status}'")
+        raise RuntimeError(
+            f"Deployment host command cannot start from status '{command.status}'"
+        )
     if command.status != "running":
         command.status = "running"
         command.started_at = timestamp
@@ -156,9 +161,13 @@ def fail_stale_running_deployment_host_commands(
     ]
     if host_id is not None:
         predicates.append(DeploymentHostCommand.host_id == host_id)
-    query = select(DeploymentHostCommand).where(*predicates).order_by(
-        DeploymentHostCommand.lease_expires_at.asc(),
-        DeploymentHostCommand.created_at.asc(),
+    query = (
+        select(DeploymentHostCommand)
+        .where(*predicates)
+        .order_by(
+            DeploymentHostCommand.lease_expires_at.asc(),
+            DeploymentHostCommand.created_at.asc(),
+        )
     )
     if _is_postgres(session):
         query = query.with_for_update(skip_locked=True)
@@ -194,7 +203,9 @@ def complete_deployment_host_command(
     if str(command.claim_id or "").strip() != str(claim_id or "").strip():
         raise RuntimeError("Deployment host command claim is invalid")
     if command.status not in {"claimed", "running"}:
-        raise RuntimeError(f"Deployment host command cannot complete from status '{command.status}'")
+        raise RuntimeError(
+            f"Deployment host command cannot complete from status '{command.status}'"
+        )
     normalized_status = str(status or "").strip().lower()
     if normalized_status not in {"succeeded", "failed"}:
         raise RuntimeError("Deployment host command completion status is invalid")

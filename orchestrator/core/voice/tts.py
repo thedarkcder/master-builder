@@ -11,7 +11,10 @@ from typing import Any
 from typing import Sequence
 
 from orchestrator.core.config import Settings
-from orchestrator.core.discord.personas import get_voice_room_persona_definition, list_voice_room_personas
+from orchestrator.core.discord.personas import (
+    get_voice_room_persona_definition,
+    list_voice_room_personas,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -93,14 +96,18 @@ def ensure_voice_reply_provider_ready(
     with _MODEL_LOCK:
         model = _get_pocket_tts_model()
         for voice in normalized_voices:
-            _get_pocket_tts_voice_state(model=model, voice=voice, allow_download=allow_download)
+            _get_pocket_tts_voice_state(
+                model=model, voice=voice, allow_download=allow_download
+            )
     return normalized_voices
 
 
 def list_predefined_pocket_tts_voices() -> tuple[str, ...]:
     predefined = getattr(_load_pocket_tts_utils_module(), "PREDEFINED_VOICES", None)
     if not isinstance(predefined, dict):
-        raise VoiceReplyError("Pocket TTS predefined voices are unavailable at runtime.")
+        raise VoiceReplyError(
+            "Pocket TTS predefined voices are unavailable at runtime."
+        )
 
     voice_ids = {
         str(voice_id or "").strip().lower()
@@ -189,16 +196,22 @@ def _get_pocket_tts_model() -> Any:
     return _POCKET_TTS_MODEL
 
 
-def _get_pocket_tts_voice_state(*, model: Any, voice: str, allow_download: bool = False) -> Any:
+def _get_pocket_tts_voice_state(
+    *, model: Any, voice: str, allow_download: bool = False
+) -> Any:
     cached_state = _POCKET_TTS_VOICE_STATES.get(voice)
     if cached_state is not None:
         return cached_state
     try:
         cached_state = model.get_state_for_audio_prompt(
-            _resolve_pocket_tts_audio_prompt_source(voice, allow_download=allow_download)
+            _resolve_pocket_tts_audio_prompt_source(
+                voice, allow_download=allow_download
+            )
         )
     except Exception as exc:  # noqa: BLE001
-        raise VoiceReplyError(f"Pocket TTS voice '{voice}' failed to load: {exc}") from exc
+        raise VoiceReplyError(
+            f"Pocket TTS voice '{voice}' failed to load: {exc}"
+        ) from exc
     _POCKET_TTS_VOICE_STATES[voice] = cached_state
     return cached_state
 
@@ -237,18 +250,24 @@ def _load_pocket_tts_utils_module() -> Any:
         ) from exc
 
 
-def _resolve_pocket_tts_audio_prompt_source(voice: str, *, allow_download: bool = False) -> str | Path:
+def _resolve_pocket_tts_audio_prompt_source(
+    voice: str, *, allow_download: bool = False
+) -> str | Path:
     normalized_voice = str(voice or "").strip().lower()
     pocket_tts_utils = _load_pocket_tts_utils_module()
     predefined = getattr(pocket_tts_utils, "PREDEFINED_VOICES", None)
     if isinstance(predefined, dict):
         predefined_source = predefined.get(normalized_voice)
         if predefined_source:
-            return _resolve_cached_audio_prompt_path(str(predefined_source), allow_download=allow_download)
+            return _resolve_cached_audio_prompt_path(
+                str(predefined_source), allow_download=allow_download
+            )
     return normalized_voice
 
 
-def _resolve_cached_audio_prompt_path(source: str, *, allow_download: bool = False) -> Path:
+def _resolve_cached_audio_prompt_path(
+    source: str, *, allow_download: bool = False
+) -> Path:
     normalized_source = str(source or "").strip()
     if not normalized_source:
         raise VoiceReplyError("Pocket TTS audio prompt source is missing")
@@ -275,7 +294,9 @@ def _download_hf_hub_file(source: str, *, allow_download: bool = False) -> Path:
     try:
         huggingface_hub = import_module("huggingface_hub")
     except ModuleNotFoundError as exc:
-        raise VoiceReplyError("Pocket TTS requires huggingface_hub at runtime.") from exc
+        raise VoiceReplyError(
+            "Pocket TTS requires huggingface_hub at runtime."
+        ) from exc
 
     try:
         cached_path = huggingface_hub.hf_hub_download(
@@ -286,7 +307,9 @@ def _download_hf_hub_file(source: str, *, allow_download: bool = False) -> Path:
         )
     except Exception:  # noqa: BLE001
         if not allow_download:
-            raise VoiceReplyError(f"Pocket TTS voice asset '{source}' is not cached locally.") from None
+            raise VoiceReplyError(
+                f"Pocket TTS voice asset '{source}' is not cached locally."
+            ) from None
         try:
             cached_path = huggingface_hub.hf_hub_download(
                 repo_id=repo_id,
@@ -295,11 +318,15 @@ def _download_hf_hub_file(source: str, *, allow_download: bool = False) -> Path:
                 local_files_only=False,
             )
         except Exception as exc:  # noqa: BLE001
-            raise VoiceReplyError(f"Pocket TTS voice asset '{source}' failed to cache: {exc}") from exc
+            raise VoiceReplyError(
+                f"Pocket TTS voice asset '{source}' failed to cache: {exc}"
+            ) from exc
     return Path(cached_path)
 
 
-def _resolve_prewarm_voice_ids(*, settings: Settings, voices: Sequence[str] | None) -> list[str]:
+def _resolve_prewarm_voice_ids(
+    *, settings: Settings, voices: Sequence[str] | None
+) -> list[str]:
     requested_voices: list[str] = []
     if voices is not None:
         requested_voices.extend(_normalize_voice_ids(voices))
@@ -426,5 +453,7 @@ def _default_persona_voice(persona_id: str | None) -> str:
 
 def _default_voice_reply_voice_ids() -> list[str]:
     return _unique_preserving_order(
-        _normalize_voice_ids(persona.get("voice_id") for persona in list_voice_room_personas())
+        _normalize_voice_ids(
+            persona.get("voice_id") for persona in list_voice_room_personas()
+        )
     )

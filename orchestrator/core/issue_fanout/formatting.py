@@ -13,22 +13,33 @@ def build_jira_issue_url(*, issue_key: str, browse_base_url: str | None) -> str 
 
 
 def format_issue_markdown_link(*, issue_key: str, browse_base_url: str | None) -> str:
-    issue_url = build_jira_issue_url(issue_key=issue_key, browse_base_url=browse_base_url)
+    issue_url = build_jira_issue_url(
+        issue_key=issue_key, browse_base_url=browse_base_url
+    )
     if not issue_url:
         return issue_key
     return f"[{issue_key}]({issue_url})"
 
 
-def format_issue_markdown_list(*, issue_keys: list[str], browse_base_url: str | None) -> str:
+def format_issue_markdown_list(
+    *, issue_keys: list[str], browse_base_url: str | None
+) -> str:
     if not issue_keys:
         return "none"
-    return ", ".join(format_issue_markdown_link(issue_key=issue_key, browse_base_url=browse_base_url) for issue_key in issue_keys)
+    return ", ".join(
+        format_issue_markdown_link(issue_key=issue_key, browse_base_url=browse_base_url)
+        for issue_key in issue_keys
+    )
 
 
-def build_issue_url_list(*, issue_keys: list[str], browse_base_url: str | None) -> list[str]:
+def build_issue_url_list(
+    *, issue_keys: list[str], browse_base_url: str | None
+) -> list[str]:
     issue_urls: list[str] = []
     for issue_key in issue_keys:
-        issue_url = build_jira_issue_url(issue_key=issue_key, browse_base_url=browse_base_url)
+        issue_url = build_jira_issue_url(
+            issue_key=issue_key, browse_base_url=browse_base_url
+        )
         if issue_url:
             issue_urls.append(issue_url)
     return issue_urls

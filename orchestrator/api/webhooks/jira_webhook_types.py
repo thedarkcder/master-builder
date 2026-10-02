@@ -50,7 +50,9 @@ class JiraWebhookContextSnapshot:
     project_id: str | None
 
 
-def snapshot_jira_webhook_context(*, context: JiraWebhookContext) -> JiraWebhookContextSnapshot:
+def snapshot_jira_webhook_context(
+    *, context: JiraWebhookContext
+) -> JiraWebhookContextSnapshot:
     return JiraWebhookContextSnapshot(
         request_id=context.request_id,
         tenant_id=context.tenant_id,
@@ -77,7 +79,9 @@ def hydrate_jira_webhook_context(
 ) -> JiraWebhookContext:
     tenant = session.get(Tenant, snapshot.tenant_id)
     if tenant is None:
-        raise RuntimeError(f"Jira webhook tenant '{snapshot.tenant_id}' no longer exists.")
+        raise RuntimeError(
+            f"Jira webhook tenant '{snapshot.tenant_id}' no longer exists."
+        )
     project = session.get(Project, snapshot.project_id) if snapshot.project_id else None
     return JiraWebhookContext(
         request_id=snapshot.request_id,
@@ -109,7 +113,9 @@ def jira_webhook_response(
     payload: dict[str, object] = {
         "request_id": context.request_id,
         "tenant_id": context.tenant_id,
-        "project_id": context.project.project_id if context.project is not None else None,
+        "project_id": context.project.project_id
+        if context.project is not None
+        else None,
         "issue_key": context.issue_key,
         "enqueued": enqueued,
     }

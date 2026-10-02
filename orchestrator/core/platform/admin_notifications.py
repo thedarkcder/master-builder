@@ -107,15 +107,21 @@ def emit_admin_notification(
 ) -> AdminNotification:
     template = _template_for(notification.kind)
     scope = notification.scope
-    severity = str(notification.severity or (template.severity if template else "")).strip()
+    severity = str(
+        notification.severity or (template.severity if template else "")
+    ).strip()
     title = str(notification.title or (template.title if template else "")).strip()
     if not severity or not title:
         raise ValueError("notification severity and title are required")
     return upsert_admin_notification(
         session=session,
         notification=AdminNotificationInput(
-            tenant_id=notification.tenant_id if notification.tenant_id is not None else scope.tenant_id,
-            project_id=notification.project_id if notification.project_id is not None else scope.project_id,
+            tenant_id=notification.tenant_id
+            if notification.tenant_id is not None
+            else scope.tenant_id,
+            project_id=notification.project_id
+            if notification.project_id is not None
+            else scope.project_id,
             scope_type=str(scope.scope_type or "").strip(),
             scope_id=str(scope.scope_id or "").strip() or None,
             source=str(notification.source or "").strip(),
@@ -128,8 +134,12 @@ def emit_admin_notification(
                 kind=notification.kind,
                 dedupe_key=notification.dedupe_key,
             ),
-            action_label=notification.action_label if notification.action_label is not None else (template.action_label if template else None),
-            action_path=notification.action_path if notification.action_path is not None else (template.action_path if template else None),
+            action_label=notification.action_label
+            if notification.action_label is not None
+            else (template.action_label if template else None),
+            action_path=notification.action_path
+            if notification.action_path is not None
+            else (template.action_path if template else None),
             context=dict(notification.context or {}),
         ),
         now_fn=now_fn,
@@ -147,7 +157,9 @@ def upsert_admin_notification(
     if not normalized_tenant_id:
         raise ValueError("admin notifications require tenant_id")
     existing = session.execute(
-        select(AdminNotification).where(AdminNotification.fingerprint == notification.fingerprint)
+        select(AdminNotification).where(
+            AdminNotification.fingerprint == notification.fingerprint
+        )
     ).scalar_one_or_none()
     if existing is None:
         row = AdminNotification(
@@ -226,7 +238,9 @@ def resolve_admin_notification_state(
 ) -> AdminNotification | None:
     return resolve_admin_notification(
         session=session,
-        fingerprint=notification_fingerprint_for(scope=scope, kind=kind, dedupe_key=dedupe_key),
+        fingerprint=notification_fingerprint_for(
+            scope=scope, kind=kind, dedupe_key=dedupe_key
+        ),
         now_fn=now_fn,
     )
 
@@ -240,7 +254,9 @@ def list_tenant_admin_notifications(
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         return []
-    atlassian_connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip() or None
+    atlassian_connection_id = (
+        str((tenant.jira_config or {}).get("connection_id") or "").strip() or None
+    )
     where_clauses = [AdminNotification.tenant_id == tenant_id]
     if atlassian_connection_id:
         where_clauses.append(
@@ -252,5 +268,7 @@ def list_tenant_admin_notifications(
     query = select(AdminNotification).where(or_(*where_clauses))
     if status_filter:
         query = query.where(AdminNotification.status == status_filter)
-    query = query.order_by(AdminNotification.last_emitted_at.desc(), AdminNotification.created_at.desc())
+    query = query.order_by(
+        AdminNotification.last_emitted_at.desc(), AdminNotification.created_at.desc()
+    )
     return list(session.execute(query).scalars().all())

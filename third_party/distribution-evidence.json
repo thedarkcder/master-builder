@@ -1,0 +1,490 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-02",
+  "status": "observed-evidence-not-distribution-clearance",
+  "notices": [
+    {
+      "component": "codex-0.160.0",
+      "revision": "a956835d020762cb2b570053af06f643a11c0ecc",
+      "path": "third_party/licenses/codex-0.160.0/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/openai/codex/a956835d020762cb2b570053af06f643a11c0ecc/LICENSE",
+      "sha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc"
+    },
+    {
+      "component": "codex-0.160.0",
+      "revision": "a956835d020762cb2b570053af06f643a11c0ecc",
+      "path": "third_party/licenses/codex-0.160.0/NOTICE",
+      "source_url": "https://raw.githubusercontent.com/openai/codex/a956835d020762cb2b570053af06f643a11c0ecc/NOTICE",
+      "sha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+    },
+    {
+      "component": "uv-0.9.24",
+      "revision": "0fda1525ebe299786a732b8f9560b10f28f6ad2d",
+      "path": "third_party/licenses/uv-0.9.24/LICENSE-MIT",
+      "source_url": "https://raw.githubusercontent.com/astral-sh/uv/0fda1525ebe299786a732b8f9560b10f28f6ad2d/LICENSE-MIT",
+      "sha256": "860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c"
+    },
+    {
+      "component": "uv-0.9.24",
+      "revision": "0fda1525ebe299786a732b8f9560b10f28f6ad2d",
+      "path": "third_party/licenses/uv-0.9.24/LICENSE-APACHE",
+      "source_url": "https://raw.githubusercontent.com/astral-sh/uv/0fda1525ebe299786a732b8f9560b10f28f6ad2d/LICENSE-APACHE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "component": "libdave-1.1.0-native",
+      "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+      "path": "third_party/licenses/libdave-1.1.0/boringssl",
+      "source_archive_tag": "v1.1.0/cpp",
+      "sha256": "a78d37138db9a43843736b2973284b61af19cd5384cf3c752e922171b0d4fc56",
+      "licensing_status": "Historical BoringSSL archive notice retained; not part of current OpenSSL3 build selection."
+    },
+    {
+      "component": "libdave-1.1.0-native",
+      "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+      "path": "third_party/licenses/libdave-1.1.0/libdave",
+      "source_archive_tag": "v1.1.0/cpp",
+      "sha256": "e486c73c9d08cef71a3c589aada4e31a68ddee0e26a13e54ddecc9499092d57e",
+      "licensing_status": "Historical BoringSSL archive notice retained; not part of current OpenSSL3 build selection."
+    },
+    {
+      "component": "libdave-1.1.0-native",
+      "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+      "path": "third_party/licenses/libdave-1.1.0/mlspp",
+      "source_archive_tag": "v1.1.0/cpp",
+      "sha256": "6da663ef2cde7e9db9cbe8f182e8d1d8e65b9735297dae2bee2ccf82d9488076",
+      "licensing_status": "Historical BoringSSL archive notice retained; not part of current OpenSSL3 build selection."
+    },
+    {
+      "component": "libdave-1.1.0-native",
+      "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+      "path": "third_party/licenses/libdave-1.1.0/nlohmann-json",
+      "source_archive_tag": "v1.1.0/cpp",
+      "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14",
+      "licensing_status": "Historical BoringSSL archive notice retained; not part of current OpenSSL3 build selection."
+    },
+    {
+      "component": "libdave-openssl3-source",
+      "revision": "1cc50a124a3bc4e143a787ec934280dc70c1034d",
+      "path": "third_party/licenses/libdave-openssl3/BSL-1.0.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "scope": "Official Boost 1.0 text; revision records the pinned MLSPP consumer containing MPark.Variant, not an invented Boost source revision.",
+      "source_url": "https://www.boost.org/LICENSE_1_0.txt"
+    },
+    {
+      "component": "libdave-openssl3-source",
+      "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+      "path": "third_party/licenses/libdave-openssl3/libdave",
+      "sha256": "e486c73c9d08cef71a3c589aada4e31a68ddee0e26a13e54ddecc9499092d57e",
+      "scope": "Exact pinned source/variant license material; OpenSSL package copyright is retained from actual Debian builder.",
+      "source_url": "https://raw.githubusercontent.com/discord/libdave/d6874165b9a7c8d2cc59712c7aceaa8dffb189b4/LICENSE"
+    },
+    {
+      "component": "libdave-openssl3-source",
+      "revision": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+      "path": "third_party/licenses/libdave-openssl3/nlohmann-json",
+      "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14",
+      "scope": "Exact pinned source/variant license material; OpenSSL package copyright is retained from actual Debian builder.",
+      "source_url": "https://raw.githubusercontent.com/nlohmann/json/9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03/LICENSE.MIT"
+    },
+    {
+      "component": "libdave-openssl3-source",
+      "revision": "1cc50a124a3bc4e143a787ec934280dc70c1034d",
+      "path": "third_party/licenses/libdave-openssl3/MPark-variant-NOTICE",
+      "sha256": "e75ffc6db6775e9cc7f2c23cb46f6472be63986452a6896908e0007c600965ce",
+      "scope": "Exact pinned source/variant license material; OpenSSL package copyright is retained from actual Debian builder.",
+      "source_url": "https://raw.githubusercontent.com/cisco/mlspp/1cc50a124a3bc4e143a787ec934280dc70c1034d/third_party/variant.hpp"
+    },
+    {
+      "component": "libdave-openssl3-source",
+      "revision": "1cc50a124a3bc4e143a787ec934280dc70c1034d",
+      "path": "third_party/licenses/libdave-openssl3/mlspp",
+      "sha256": "6da663ef2cde7e9db9cbe8f182e8d1d8e65b9735297dae2bee2ccf82d9488076",
+      "scope": "Exact pinned source/variant license material; OpenSSL package copyright is retained from actual Debian builder.",
+      "source_url": "https://raw.githubusercontent.com/cisco/mlspp/1cc50a124a3bc4e143a787ec934280dc70c1034d/LICENSE"
+    },
+    {
+      "component": "seaweedfs-4.48",
+      "revision": "530be3e37337488ecc34d58441e0bc476e121c93",
+      "path": "third_party/licenses/seaweedfs-4.48/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/seaweedfs/seaweedfs/530be3e37337488ecc34d58441e0bc476e121c93/LICENSE",
+      "sha256": "d789d433cc11da163273d1e39be2e8fa67642f9a58ef220d3f258fa9c14ef613",
+      "scope": "Exact upstream root license; does not clear all constituents of the published OCI image."
+    }
+  ],
+  "libdave_release": {
+    "assets": [
+      {
+        "name": "libdave-Linux-ARM64-boringssl.zip",
+        "size": 3523472,
+        "digest": "sha256:fc119512aefac9cb7652634c16ecb0833a3c4bf91d87b9ec8d6acda03d454349",
+        "browser_download_url": "https://github.com/discord/libdave/releases/download/v1.1.0/cpp/libdave-Linux-ARM64-boringssl.zip"
+      },
+      {
+        "name": "libdave-Linux-X64-boringssl.zip",
+        "size": 3828413,
+        "digest": "sha256:33157b8cbadcdd3c6cb4df3be18e8bbe7b86e3c65d57d0f1bc9dadc62a768d6a",
+        "browser_download_url": "https://github.com/discord/libdave/releases/download/v1.1.0/cpp/libdave-Linux-X64-boringssl.zip"
+      }
+    ],
+    "x64_sha256": "33157b8cbadcdd3c6cb4df3be18e8bbe7b86e3c65d57d0f1bc9dadc62a768d6a",
+    "notice_members": [
+      "licenses/boringssl",
+      "licenses/libdave",
+      "licenses/mlspp",
+      "licenses/nlohmann-json"
+    ],
+    "arm64_sha256": "fc119512aefac9cb7652634c16ecb0833a3c4bf91d87b9ec8d6acda03d454349",
+    "license_sha256": {
+      "licenses/boringssl": "a78d37138db9a43843736b2973284b61af19cd5384cf3c752e922171b0d4fc56",
+      "licenses/libdave": "e486c73c9d08cef71a3c589aada4e31a68ddee0e26a13e54ddecc9499092d57e",
+      "licenses/mlspp": "6da663ef2cde7e9db9cbe8f182e8d1d8e65b9735297dae2bee2ccf82d9488076",
+      "licenses/nlohmann-json": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+    },
+    "status": "historical BoringSSL prebuilt review only; not selected by current source build"
+  },
+  "codex_ratatui_sources": [
+    {
+      "crate": "ratatui",
+      "version": "0.30.2",
+      "crate_url": "https://static.crates.io/crates/ratatui/ratatui-0.30.2.crate",
+      "crate_sha256": "3274ba0a2c5e1bcad2a2005d20f4dc59dad26b2eb0940fb094500dba4099d57d",
+      "notices": [
+        {
+          "path": "ratatui-0.30.2/LICENSE",
+          "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+        }
+      ]
+    },
+    {
+      "crate": "ratatui-core",
+      "version": "0.1.2",
+      "crate_url": "https://static.crates.io/crates/ratatui-core/ratatui-core-0.1.2.crate",
+      "crate_sha256": "cbb175c433c8e28a809d1f5773a2ae96e68c0ce40db865cbab1020bf33ae479c",
+      "notices": [
+        {
+          "path": "ratatui-core-0.1.2/LICENSE",
+          "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+        }
+      ]
+    },
+    {
+      "crate": "ratatui-crossterm",
+      "version": "0.1.2",
+      "crate_url": "https://static.crates.io/crates/ratatui-crossterm/ratatui-crossterm-0.1.2.crate",
+      "crate_sha256": "567584a3b0e6a8203c23de40b4861497266725eb5363dbfd18a1edd603cca9f0",
+      "notices": [
+        {
+          "path": "ratatui-crossterm-0.1.2/LICENSE",
+          "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+        }
+      ]
+    },
+    {
+      "crate": "ratatui-macros",
+      "version": "0.7.2",
+      "crate_url": "https://static.crates.io/crates/ratatui-macros/ratatui-macros-0.7.2.crate",
+      "crate_sha256": "ed7dc68daa7498a43e4d68e0eb078427e10c38fbcfbb1e42d955f1fa2140d814",
+      "notices": [
+        {
+          "path": "ratatui-macros-0.7.2/LICENSE",
+          "sha256": "e43659b17e780ed7dab2636dd9e0d6ca272faad9d116b575e25e346b0b0206e3"
+        }
+      ]
+    },
+    {
+      "crate": "ratatui-termina",
+      "version": "0.1.0",
+      "crate_url": "https://static.crates.io/crates/ratatui-termina/ratatui-termina-0.1.0.crate",
+      "crate_sha256": "c0bf912d9e66f057a759d92e386a280ea886b352ab757d6ac4d653c7ed2c43c2",
+      "notices": []
+    },
+    {
+      "crate": "ratatui-termion",
+      "version": "0.1.2",
+      "crate_url": "https://static.crates.io/crates/ratatui-termion/ratatui-termion-0.1.2.crate",
+      "crate_sha256": "87c732202fa5a71a9da0991013f0853e53f87048f45198e3a1ca3ee722accc2f",
+      "notices": [
+        {
+          "path": "ratatui-termion-0.1.2/LICENSE",
+          "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+        }
+      ]
+    },
+    {
+      "crate": "ratatui-termwiz",
+      "version": "0.1.2",
+      "crate_url": "https://static.crates.io/crates/ratatui-termwiz/ratatui-termwiz-0.1.2.crate",
+      "crate_sha256": "faf03e0380b7744054d6cb74224fe3adf062a029754933f575ca1e3b4c2ce977",
+      "notices": [
+        {
+          "path": "ratatui-termwiz-0.1.2/LICENSE",
+          "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+        }
+      ]
+    },
+    {
+      "crate": "ratatui-widgets",
+      "version": "0.3.2",
+      "crate_url": "https://static.crates.io/crates/ratatui-widgets/ratatui-widgets-0.3.2.crate",
+      "crate_sha256": "66e3d19bcc9130ca376277d93b60767ff121ace3be06f5f95f81dd68956407d1",
+      "notices": [
+        {
+          "path": "ratatui-widgets-0.3.2/LICENSE",
+          "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+        }
+      ]
+    }
+  ],
+  "codex_cargo_lock": {
+    "revision": "a956835d020762cb2b570053af06f643a11c0ecc",
+    "sha256": "5553f06583159ed64666b6eb4beea3154e06b612e6312528131bdc226a6a860c",
+    "source_url": "https://raw.githubusercontent.com/openai/codex/a956835d020762cb2b570053af06f643a11c0ecc/codex-rs/Cargo.lock",
+    "limitation": "Ratatui notices do not cover all Rust/native crates or vendored resources."
+  },
+  "libdave_build_source_references": {
+    "libdave_revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+    "vcpkg_submodule_revision": "16c71a39e5a0fc0bdb3fad03beef8f38ee00ee3b",
+    "boringssl_baseline": "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3",
+    "records": [
+      {
+        "component": "libdave",
+        "path": ".gitmodules",
+        "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "source_url": "https://raw.githubusercontent.com/discord/libdave/d6874165b9a7c8d2cc59712c7aceaa8dffb189b4/.gitmodules",
+        "sha256": "849b72be0997ca466858cf1f0f1f9c218f385637160feb7d0c685f79a474f192"
+      },
+      {
+        "component": "libdave",
+        "path": "cpp/vcpkg-alts/boringssl/vcpkg.json",
+        "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "source_url": "https://raw.githubusercontent.com/discord/libdave/d6874165b9a7c8d2cc59712c7aceaa8dffb189b4/cpp/vcpkg-alts/boringssl/vcpkg.json",
+        "sha256": "7620ae5035d66c054508f6b62b9ab8895528078ae4b7b276545f02cbd2f23470",
+        "declared_metadata": {
+          "name": "libdave",
+          "license": "MIT",
+          "dependencies": [
+            {
+              "name": "boringssl",
+              "version>=": "2023-10-13"
+            },
+            "gtest",
+            "mlspp"
+          ],
+          "builtin-baseline": "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3",
+          "vcpkg-configuration": {
+            "overlay-ports": [
+              "./overlay-ports"
+            ]
+          }
+        }
+      },
+      {
+        "component": "libdave",
+        "path": "cpp/vcpkg-alts/boringssl/overlay-ports/mlspp/vcpkg.json",
+        "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "source_url": "https://raw.githubusercontent.com/discord/libdave/d6874165b9a7c8d2cc59712c7aceaa8dffb189b4/cpp/vcpkg-alts/boringssl/overlay-ports/mlspp/vcpkg.json",
+        "sha256": "6d9a5e4d5dbdf8c0c344bdd6e46dc1f9245fc209a492ab96dd34660a3f35d78a",
+        "declared_metadata": {
+          "name": "mlspp",
+          "version-string": "1cc50a124a3bc4e143a787ec934280dc70c1034d",
+          "description": "Cisco MLS C++ library",
+          "dependencies": [
+            {
+              "name": "boringssl",
+              "version>=": "2023-10-13"
+            },
+            "nlohmann-json",
+            {
+              "name": "vcpkg-cmake",
+              "host": true
+            },
+            {
+              "name": "vcpkg-cmake-config",
+              "host": true
+            }
+          ],
+          "builtin-baseline": "eb33d2f7583405fca184bcdf7fdd5828ec88ac05"
+        }
+      },
+      {
+        "component": "libdave",
+        "path": "cpp/vcpkg-alts/boringssl/overlay-ports/mlspp/portfile.cmake",
+        "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "source_url": "https://raw.githubusercontent.com/discord/libdave/d6874165b9a7c8d2cc59712c7aceaa8dffb189b4/cpp/vcpkg-alts/boringssl/overlay-ports/mlspp/portfile.cmake",
+        "sha256": "7da27afb24de612956f684953c9f64318735b3b104ee87da0b9dab2fa9f7249d",
+        "upstream_archive_declared_sha512": "5d37631e2c47daae1133ef074e60cc09ca2d395f9e11c416f829060e374051cf219d2d7fe98dae49d1d045292e07d6a09f4814a5f16e6cc05e67e7cd96f146c4"
+      },
+      {
+        "component": "vcpkg",
+        "path": "ports/boringssl/vcpkg.json",
+        "revision": "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3",
+        "source_url": "https://raw.githubusercontent.com/microsoft/vcpkg/7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3/ports/boringssl/vcpkg.json",
+        "sha256": "a370cfd12ce8d275160414a72bfc3dddca6de894d50f8eb3c02d2a8dc200ef5d",
+        "declared_metadata": {
+          "name": "boringssl",
+          "version-date": "2024-09-13",
+          "description": "BoringSSL is a fork of OpenSSL developed by Google",
+          "homepage": "https://boringssl.googlesource.com/boringssl",
+          "supports": "!uwp",
+          "dependencies": [
+            {
+              "name": "vcpkg-cmake",
+              "host": true
+            },
+            {
+              "name": "vcpkg-cmake-config",
+              "host": true
+            }
+          ]
+        }
+      },
+      {
+        "component": "vcpkg",
+        "path": "ports/boringssl/portfile.cmake",
+        "revision": "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3",
+        "source_url": "https://raw.githubusercontent.com/microsoft/vcpkg/7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3/ports/boringssl/portfile.cmake",
+        "sha256": "14bd4cf5af4e555f2c90d9e0091aee260f39d9df852f9e5eb50714a32acce0e2",
+        "upstream_archive_declared_sha512": "bfb36d7d0a90bbede3f77967525cd9377e7488114c3d0fb576015d0361e7f4460801aab8ef8a470908541bc9d7f76cdbdd823af4fd6aaebb4cac711ee5b5b9fa",
+        "declared_upstream_ref": "0.20240913.0"
+      },
+      {
+        "component": "vcpkg",
+        "path": "ports/nlohmann-json/vcpkg.json",
+        "revision": "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3",
+        "source_url": "https://raw.githubusercontent.com/microsoft/vcpkg/7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3/ports/nlohmann-json/vcpkg.json",
+        "sha256": "a0e818e4d0ca516126f28fcf647670ff93b6bc6342767533fbb2201ce48de9cf",
+        "declared_metadata": {
+          "name": "nlohmann-json",
+          "version-semver": "3.11.3",
+          "port-version": 1,
+          "description": "JSON for Modern C++",
+          "homepage": "https://github.com/nlohmann/json",
+          "license": "MIT",
+          "dependencies": [
+            {
+              "name": "vcpkg-cmake",
+              "host": true
+            },
+            {
+              "name": "vcpkg-cmake-config",
+              "host": true
+            }
+          ],
+          "features": {
+            "diagnostics": {
+              "description": "Build json_diagnostics"
+            }
+          }
+        }
+      },
+      {
+        "component": "vcpkg",
+        "path": "ports/nlohmann-json/portfile.cmake",
+        "revision": "7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3",
+        "source_url": "https://raw.githubusercontent.com/microsoft/vcpkg/7adc2e4d49e8d0efc07a369079faa6bc3dbb90f3/ports/nlohmann-json/portfile.cmake",
+        "sha256": "cb2fc174d9a02003edc788b53286b21e25f29515c77e8f49a3f6df64594d1592",
+        "upstream_archive_declared_sha512": "7df19b621de34f08d5d5c0a25e8225975980841ef2e48536abcf22526ed7fb99f88ad954a2cb823115db59ccc88d1dbe74fe6c281b5644b976b33fb78db9d717",
+        "declared_upstream_ref": "\"v${VERSION}\""
+      }
+    ],
+    "limitation": "These source declarations are not exact installed prebuilt constituent receipts or a complete corresponding-source bundle.",
+    "status": "historical BoringSSL port declarations; not current dependency resolution"
+  },
+  "libdave_openssl3_source_build": {
+    "status": "Linux arm64 native library/CGo linkage and transient-key smoke verified; final Docker build-time Go gate/export remains unverified",
+    "crypto": "OpenSSL3-only",
+    "system_dependency": "Debian trixie libssl-dev/libssl3t64 major3; exact package/source versions retained in each build",
+    "sources": [
+      {
+        "component": "libdave",
+        "repository": "discord/libdave",
+        "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "source_url": "https://codeload.github.com/discord/libdave/tar.gz/d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "archive_sha256": "0185d417fdaec74efa5d6cf7f06192bed8309a227050c0aba94f50c2311fb6db"
+      },
+      {
+        "component": "mlspp",
+        "repository": "cisco/mlspp",
+        "revision": "1cc50a124a3bc4e143a787ec934280dc70c1034d",
+        "source_url": "https://codeload.github.com/cisco/mlspp/tar.gz/1cc50a124a3bc4e143a787ec934280dc70c1034d",
+        "archive_sha256": "7a9d6318627e548903bc65c3dc5a4de4a90290983efea9a49af8561ed3f999f5"
+      },
+      {
+        "component": "nlohmann-json",
+        "repository": "nlohmann/json",
+        "revision": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+        "source_url": "https://codeload.github.com/nlohmann/json/tar.gz/9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+        "archive_sha256": "0dbc5e40a01ff142e7e68c03e85247a4dcede2f592d12d3677dee3664d17975a"
+      }
+    ],
+    "observed_build": {
+      "platform": "linux/arm64",
+      "image_id": "sha256:1c9172295677ba014e8e979dd531b4e96cd52b38b7745062b7cb7e74d47afd2d",
+      "openssl_version": "3.5.7",
+      "openssl_package_source_versions": [
+        "libssl-dev\t3.5.7-1~deb13u3\topenssl\t3.5.7-1~deb13u3",
+        "libssl3t64\t3.5.7-1~deb13u3\topenssl\t3.5.7-1~deb13u3"
+      ],
+      "go_version": "go version go1.25.14 linux/arm64",
+      "native_receipt": {
+        "version": "v1.1.0",
+        "source_revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+        "architecture": "arm64",
+        "crypto": "OpenSSL3",
+        "openssl_version": "3.5.7",
+        "sources": {
+          "libdave": {
+            "repository": "discord/libdave",
+            "revision": "d6874165b9a7c8d2cc59712c7aceaa8dffb189b4",
+            "archive_sha256": "0185d417fdaec74efa5d6cf7f06192bed8309a227050c0aba94f50c2311fb6db"
+          },
+          "mlspp": {
+            "repository": "cisco/mlspp",
+            "revision": "1cc50a124a3bc4e143a787ec934280dc70c1034d",
+            "archive_sha256": "7a9d6318627e548903bc65c3dc5a4de4a90290983efea9a49af8561ed3f999f5"
+          },
+          "nlohmann-json": {
+            "repository": "nlohmann/json",
+            "revision": "9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03",
+            "archive_sha256": "0dbc5e40a01ff142e7e68c03e85247a4dcede2f592d12d3677dee3664d17975a"
+          }
+        },
+        "files": {
+          "lib/libdave.so": "6e8b20d901bb4b0275c880461bd3d5299f055bf383601229ac297180ed57fa5d",
+          "include/dave/dave.h": "3ea59ae36b7cf71ddd106400f0c93b1c12f383b79e123bc28e4923af70fd5743",
+          "licenses/BSL-1.0.txt": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+          "licenses/MPark-variant-NOTICE": "e75ffc6db6775e9cc7f2c23cb46f6472be63986452a6896908e0007c600965ce",
+          "licenses/libdave": "e486c73c9d08cef71a3c589aada4e31a68ddee0e26a13e54ddecc9499092d57e",
+          "licenses/mlspp": "6da663ef2cde7e9db9cbe8f182e8d1d8e65b9735297dae2bee2ccf82d9488076",
+          "licenses/nlohmann-json": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14",
+          "licenses/openssl-debian-copyright": "6a7da622fe0637a334d2a8fc470852d2ffb77d9a2b2f930f854e32a41ad6ef35"
+        }
+      },
+      "verified_source_archive_count": 3,
+      "verified_current_go_source_lock_files": 19,
+      "native_go_tests_passed": 18,
+      "native_go_test_source_sha256": "3b01a9255602e46247ea84e9679005ab8d33ad4b418bc76fb883c9a391ef48ba",
+      "linked_crypto_sonames": [
+        "libcrypto.so.3"
+      ],
+      "transport_eof": "transport_ready; exit0; network disabled",
+      "crypto_smoke_scope": "Actual primary transient-key CGo session initialization and independent nonempty signed MLS key packages; no generated bytes logged.",
+      "final_docker_gate_export": "Final recipe now requires native Go tests before building; that final Docker gate/export was not executed successfully. Earlier native/CGo stage built with exit0; later export encountered snapshot-lease I/O error. Equivalent full18 Go suite passed with current test source mounted read-only in the observed image.",
+      "remaining_gates": [
+        "amd64 native build/link/test",
+        "complete final voice runtime image and component-level redistribution/source/relinking review",
+        "live Discord negotiation/audio interoperability",
+        "crypto provider/FIPS/certification claims not assessed"
+      ]
+    }
+  },
+  "seaweedfs_published_image": {
+    "image": "chrislusf/seaweedfs:4.48",
+    "index_digest": "sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d",
+    "source_revision": "530be3e37337488ecc34d58441e0bc476e121c93",
+    "upstream_license": "Apache-2.0",
+    "binary_platform_observed": "linux/arm64",
+    "status": "Upstream license/source identity recorded; complete image component inventory and redistribution rights remain unverified."
+  }
+}

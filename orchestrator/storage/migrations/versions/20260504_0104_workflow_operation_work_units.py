@@ -36,7 +36,9 @@ def upgrade() -> None:
             sa.Column(
                 "parent_attempt_id",
                 sa.String(length=64),
-                sa.ForeignKey("workflow_operation_attempts.attempt_id", ondelete="CASCADE"),
+                sa.ForeignKey(
+                    "workflow_operation_attempts.attempt_id", ondelete="CASCADE"
+                ),
                 nullable=False,
             ),
             sa.Column("unit_key", sa.String(length=128), nullable=False),
@@ -58,14 +60,26 @@ def upgrade() -> None:
                 name="uq_workflow_operation_work_unit_identity",
             ),
         )
-        op.create_index("ix_workflow_operation_work_units_operation_id", "workflow_operation_work_units", ["operation_id"])
+        op.create_index(
+            "ix_workflow_operation_work_units_operation_id",
+            "workflow_operation_work_units",
+            ["operation_id"],
+        )
         op.create_index(
             "ix_workflow_operation_work_units_parent_attempt_id",
             "workflow_operation_work_units",
             ["parent_attempt_id"],
         )
-        op.create_index("ix_workflow_operation_work_units_unit_key", "workflow_operation_work_units", ["unit_key"])
-        op.create_index("ix_workflow_operation_work_units_status", "workflow_operation_work_units", ["status"])
+        op.create_index(
+            "ix_workflow_operation_work_units_unit_key",
+            "workflow_operation_work_units",
+            ["unit_key"],
+        )
+        op.create_index(
+            "ix_workflow_operation_work_units_status",
+            "workflow_operation_work_units",
+            ["status"],
+        )
     if not _table_exists(bind, "workflow_operation_work_unit_attempts"):
         op.create_table(
             "workflow_operation_work_unit_attempts",
@@ -73,13 +87,17 @@ def upgrade() -> None:
             sa.Column(
                 "work_unit_id",
                 sa.String(length=64),
-                sa.ForeignKey("workflow_operation_work_units.work_unit_id", ondelete="CASCADE"),
+                sa.ForeignKey(
+                    "workflow_operation_work_units.work_unit_id", ondelete="CASCADE"
+                ),
                 nullable=False,
             ),
             sa.Column(
                 "operation_attempt_id",
                 sa.String(length=64),
-                sa.ForeignKey("workflow_operation_attempts.attempt_id", ondelete="CASCADE"),
+                sa.ForeignKey(
+                    "workflow_operation_attempts.attempt_id", ondelete="CASCADE"
+                ),
                 nullable=False,
             ),
             sa.Column("attempt_number", sa.Integer(), nullable=False),
@@ -90,7 +108,11 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-            sa.UniqueConstraint("work_unit_id", "attempt_number", name="uq_workflow_operation_work_unit_attempt_number"),
+            sa.UniqueConstraint(
+                "work_unit_id",
+                "attempt_number",
+                name="uq_workflow_operation_work_unit_attempt_number",
+            ),
         )
         op.create_index(
             "ix_workflow_operation_work_unit_attempts_work_unit_id",

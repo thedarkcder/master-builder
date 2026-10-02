@@ -24,7 +24,9 @@ class ResendEmailDeliveryTests(unittest.TestCase):
         self.assertIsNone(_parse_resend_success_id("not-json"))
 
     def test_format_resend_error_body(self) -> None:
-        self.assertIn("validation", _format_resend_error_body('{"message":"validation failed"}'))
+        self.assertIn(
+            "validation", _format_resend_error_body('{"message":"validation failed"}')
+        )
         self.assertEqual(_format_resend_error_body(""), "(empty response body)")
         raw = '{"message": ["a", "b"]}'
         out = _format_resend_error_body(raw)
@@ -47,11 +49,16 @@ class ResendEmailDeliveryTests(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__.return_value.read.return_value = b'{"id":"em_abc123"}'
         mock_cm.__exit__.return_value = None
-        with patch("orchestrator.core.platform.email_delivery.urlopen", return_value=mock_cm) as mock_urlopen:
+        with patch(
+            "orchestrator.core.platform.email_delivery.urlopen", return_value=mock_cm
+        ) as mock_urlopen:
             ResendEmailDeliveryProvider(settings=settings).send(payload)
         self.assertTrue(mock_urlopen.called)
         req = mock_urlopen.call_args[0][0]
-        self.assertEqual(getattr(req, "full_url", req.get_full_url()), "https://api.resend.com/emails")
+        self.assertEqual(
+            getattr(req, "full_url", req.get_full_url()),
+            "https://api.resend.com/emails",
+        )
 
     def test_resend_missing_api_key(self) -> None:
         settings = SimpleNamespace(
@@ -75,7 +82,9 @@ class ResendEmailDeliveryTests(unittest.TestCase):
         )
         body = BytesIO(b'{"message":"from domain not verified"}')
         err = HTTPError("https://api.resend.com/emails", 403, "Forbidden", {}, body)
-        with patch("orchestrator.core.platform.email_delivery.urlopen", side_effect=err):
+        with patch(
+            "orchestrator.core.platform.email_delivery.urlopen", side_effect=err
+        ):
             with self.assertRaises(EmailDeliveryError) as ctx:
                 ResendEmailDeliveryProvider(settings=settings).send(
                     EmailMessagePayload(to_email="a@b.com", subject="s", text_body="t"),
@@ -135,7 +144,9 @@ class DeliverEmailIntegrationTests(unittest.TestCase):
         mock_cm = MagicMock()
         mock_cm.__enter__.return_value.read.return_value = b'{"id":"em_z"}'
         mock_cm.__exit__.return_value = None
-        with patch("orchestrator.core.platform.email_delivery.urlopen", return_value=mock_cm):
+        with patch(
+            "orchestrator.core.platform.email_delivery.urlopen", return_value=mock_cm
+        ):
             deliver_email(
                 EmailMessagePayload(to_email="a@b.com", subject="s", text_body="t"),
                 settings=settings,

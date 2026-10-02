@@ -26,7 +26,9 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -54,7 +56,9 @@ def upgrade() -> None:
     if not stale_app_ids:
         return
 
-    if _table_exists("project_deployment_releases") and _column_exists("project_deployment_releases", "app_id"):
+    if _table_exists("project_deployment_releases") and _column_exists(
+        "project_deployment_releases", "app_id"
+    ):
         releases = sa.table(
             "project_deployment_releases",
             sa.column("app_id", sa.String()),
@@ -64,7 +68,9 @@ def upgrade() -> None:
             .where(releases.c.app_id.in_(stale_app_ids))
             .values(app_id=None)
         )
-    if _table_exists("deployment_host_commands") and _column_exists("deployment_host_commands", "app_id"):
+    if _table_exists("deployment_host_commands") and _column_exists(
+        "deployment_host_commands", "app_id"
+    ):
         commands = sa.table(
             "deployment_host_commands",
             sa.column("app_id", sa.String()),
@@ -74,12 +80,16 @@ def upgrade() -> None:
             .where(commands.c.app_id.in_(stale_app_ids))
             .values(app_id=None)
         )
-    if _table_exists("project_deployment_restore_runs") and _column_exists("project_deployment_restore_runs", "app_id"):
+    if _table_exists("project_deployment_restore_runs") and _column_exists(
+        "project_deployment_restore_runs", "app_id"
+    ):
         restore_runs = sa.table(
             "project_deployment_restore_runs",
             sa.column("app_id", sa.String()),
         )
-        bind.execute(restore_runs.delete().where(restore_runs.c.app_id.in_(stale_app_ids)))
+        bind.execute(
+            restore_runs.delete().where(restore_runs.c.app_id.in_(stale_app_ids))
+        )
     apps = sa.table(
         "project_apps",
         sa.column("app_id", sa.String()),

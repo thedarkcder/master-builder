@@ -7,15 +7,21 @@ from orchestrator.core.worker.capabilities import (
     required_worker_capability_for_run,
 )
 
+
 def test_parse_worker_capabilities_defaults_and_requires_canonical_values() -> None:
     assert parse_worker_capabilities("") == {WorkerCapability.LINUX}
-    assert parse_worker_capabilities("linux,macos,invalid") == {WorkerCapability.LINUX, WorkerCapability.MACOS}
+    assert parse_worker_capabilities("linux,macos,invalid") == {
+        WorkerCapability.LINUX,
+        WorkerCapability.MACOS,
+    }
     assert parse_worker_capabilities("linux,mac") == {WorkerCapability.LINUX}
 
 
 def test_parse_worker_capabilities_strict_rejects_invalid_tokens() -> None:
     try:
-        parse_worker_capabilities_strict("linux,invalid", source="ORCHESTRATOR_WORKER_CAPABILITIES")
+        parse_worker_capabilities_strict(
+            "linux,invalid", source="ORCHESTRATOR_WORKER_CAPABILITIES"
+        )
         raise AssertionError("expected strict parser to reject invalid token")
     except ValueError as exc:
         assert "Invalid worker capability token(s)" in str(exc)
@@ -32,7 +38,10 @@ def test_parse_worker_capability_labels_reports_conflicting_labels() -> None:
     parsed = parse_worker_capability_labels(["worker:linux", "worker:macos"])
     assert parsed.selected_capability is None
     assert parsed.invalid_labels == ()
-    assert parsed.conflicting_capabilities == (WorkerCapability.LINUX, WorkerCapability.MACOS)
+    assert parsed.conflicting_capabilities == (
+        WorkerCapability.LINUX,
+        WorkerCapability.MACOS,
+    )
 
 
 def test_parse_worker_capability_labels_collects_all_invalid_labels() -> None:
@@ -61,7 +70,9 @@ def test_infer_required_worker_capability_uses_project_default_when_present() ->
     assert inferred == "macos"
 
 
-def test_infer_required_worker_capability_uses_apple_native_keywords_without_label() -> None:
+def test_infer_required_worker_capability_uses_apple_native_keywords_without_label() -> (
+    None
+):
     inferred = infer_required_worker_capability(
         issue_summary="Implement SwiftUI onboarding",
         issue_description="Use Xcode and XCTest on the iOS simulator",
@@ -90,7 +101,9 @@ def test_required_worker_capability_for_run_reads_persisted_queue_contract() -> 
     assert required_worker_capability_for_run(run) == WorkerCapability.MACOS
 
 
-def test_required_worker_capability_for_run_is_none_without_persisted_requirement() -> None:
+def test_required_worker_capability_for_run_is_none_without_persisted_requirement() -> (
+    None
+):
     run = type(
         "RunStub",
         (),

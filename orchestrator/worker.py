@@ -36,8 +36,12 @@ from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_RUNTIME_FAI
 from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_TRANSIENT_FAILURE
 from orchestrator.core.worker.child_process import WorkerChildProcessHandle
 from orchestrator.core.worker.child_process import WorkerChildProcessResult
-from orchestrator.core.worker.child_process import spawn_worker_child_process as _spawn_worker_child_process
-from orchestrator.core.worker.child_process import terminate_worker_child_processes as _terminate_worker_child_processes
+from orchestrator.core.worker.child_process import (
+    spawn_worker_child_process as _spawn_worker_child_process,
+)
+from orchestrator.core.worker.child_process import (
+    terminate_worker_child_processes as _terminate_worker_child_processes,
+)
 from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     worker_service_instance_id_for_mode,
@@ -57,14 +61,28 @@ from orchestrator.core.worker.runtime_dependencies import (
     worker_runtime_dependency_snapshot,
 )
 from orchestrator.core.worker.run_dispatch import WorkerDependencyFailure
-from orchestrator.core.worker.run_dispatch import claim_next_run_once as _claim_next_run_once
-from orchestrator.core.worker.run_dispatch import has_available_webhook_job_once as _has_available_webhook_job_once
-from orchestrator.core.worker.run_dispatch import probe_claimable_run_once as _probe_claimable_run_once
-from orchestrator.core.worker.run_dispatch import process_next_run_once as _process_next_run_once
-from orchestrator.core.worker.run_dispatch import reconcile_claimed_run_after_child_exit as _reconcile_claimed_run_after_child_exit
+from orchestrator.core.worker.run_dispatch import (
+    claim_next_run_once as _claim_next_run_once,
+)
+from orchestrator.core.worker.run_dispatch import (
+    has_available_webhook_job_once as _has_available_webhook_job_once,
+)
+from orchestrator.core.worker.run_dispatch import (
+    probe_claimable_run_once as _probe_claimable_run_once,
+)
+from orchestrator.core.worker.run_dispatch import (
+    process_next_run_once as _process_next_run_once,
+)
+from orchestrator.core.worker.run_dispatch import (
+    reconcile_claimed_run_after_child_exit as _reconcile_claimed_run_after_child_exit,
+)
 from orchestrator.core.worker.capabilities import resolve_worker_capability_context
-from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
-from orchestrator.core.workflow.type_catalog import validate_persisted_workflow_definitions
+from orchestrator.core.workflow.execution_snapshot_startup import (
+    ensure_execution_snapshot_startup_bootstrap,
+)
+from orchestrator.core.workflow.type_catalog import (
+    validate_persisted_workflow_definitions,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.database_recovery import (
     database_recovery_retry_delay_seconds,
@@ -100,6 +118,8 @@ _VALID_POST_CHILD_RUN_STATUSES = {
     RUN_STATUS_FAILED,
     RUN_STATUS_CANCELLED,
 }
+
+
 def _coerce_parallel_slots(raw_value: object) -> int:
     try:
         parsed = int(raw_value)
@@ -213,10 +233,20 @@ def _refresh_worker_runtime_once(
     worker_mode: str,
 ) -> None:
     with session_factory() as session:
-        active_run_count = _worker_runtime_active_run_count(session=session, service_instance_id=service_instance_id)
+        active_run_count = _worker_runtime_active_run_count(
+            session=session, service_instance_id=service_instance_id
+        )
         row = session.get(WorkerRuntimeState, service_instance_id)
-        existing_state = str(getattr(row, "state", "") or "").strip().lower() if row is not None else ""
-        runtime_dependencies_json = dict(getattr(row, "runtime_dependencies_json", {}) or {}) if row is not None else {}
+        existing_state = (
+            str(getattr(row, "state", "") or "").strip().lower()
+            if row is not None
+            else ""
+        )
+        runtime_dependencies_json = (
+            dict(getattr(row, "runtime_dependencies_json", {}) or {})
+            if row is not None
+            else {}
+        )
     if active_run_count > 0:
         state = "busy"
     elif existing_state == "degraded":
@@ -276,17 +306,23 @@ def _stop_worker_runtime_once(
     )
 
 
-def _resolve_parallel_slots_from_policy(*, session_factory: sessionmaker[Session]) -> int:
+def _resolve_parallel_slots_from_policy(
+    *, session_factory: sessionmaker[Session]
+) -> int:
     try:
         with session_factory() as session:
-            tenants = session.execute(
-                select(Tenant).where(Tenant.is_enabled.is_(True))
-            ).scalars().all()
+            tenants = (
+                session.execute(select(Tenant).where(Tenant.is_enabled.is_(True)))
+                .scalars()
+                .all()
+            )
             if not tenants:
                 return 1
-            projects = session.execute(
-                select(Project).where(Project.is_archived.is_(False))
-            ).scalars().all()
+            projects = (
+                session.execute(select(Project).where(Project.is_archived.is_(False)))
+                .scalars()
+                .all()
+            )
     except Exception as exc:
         logger.exception("worker_parallel_slot_resolution_failed error=%s", exc)
         return 1
@@ -297,16 +333,24 @@ def _resolve_parallel_slots_from_policy(*, session_factory: sessionmaker[Session
 
     max_slots = 1
     for tenant in tenants:
-        tenant_policy = tenant.policy_config if isinstance(tenant.policy_config, dict) else {}
+        tenant_policy = (
+            tenant.policy_config if isinstance(tenant.policy_config, dict) else {}
+        )
         tenant_slots = _coerce_parallel_slots(tenant_policy.get("max_concurrent_runs"))
         max_slots = max(max_slots, tenant_slots)
         for project in projects_by_tenant.get(tenant.tenant_id, []):
-            project_overrides = project.policy_overrides if isinstance(project.policy_overrides, dict) else {}
+            project_overrides = (
+                project.policy_overrides
+                if isinstance(project.policy_overrides, dict)
+                else {}
+            )
             effective_policy = resolve_effective_policy(
                 tenant_policy=tenant_policy,
                 project_overrides=project_overrides,
             )
-            project_slots = _coerce_parallel_slots(effective_policy.get("max_concurrent_runs"))
+            project_slots = _coerce_parallel_slots(
+                effective_policy.get("max_concurrent_runs")
+            )
             max_slots = max(max_slots, project_slots)
     return max_slots
 
@@ -323,7 +367,9 @@ def _process_next_webhook_job_once(
 
 
 def _resolve_webhook_owner_id(*, settings: Settings) -> str:
-    service_instance_id = worker_service_instance_id_for_mode(settings=settings, mode=WORKER_MODE_WEBHOOKS)
+    service_instance_id = worker_service_instance_id_for_mode(
+        settings=settings, mode=WORKER_MODE_WEBHOOKS
+    )
     return f"worker:{service_instance_id}:child:{uuid4().hex}"
 
 
@@ -333,7 +379,9 @@ def _resolve_worker_child_capacity(
     session_factory: sessionmaker[Session],
 ) -> int:
     policy_slots = _resolve_parallel_slots_from_policy(session_factory=session_factory)
-    configured_cap = _coerce_parallel_slots(getattr(settings, "worker_max_child_processes", 5))
+    configured_cap = _coerce_parallel_slots(
+        getattr(settings, "worker_max_child_processes", 5)
+    )
     return max(1, min(policy_slots, configured_cap))
 
 
@@ -371,7 +419,11 @@ async def _run_worker_database_operation(
     while not stop_event.is_set():
         try:
             result = await asyncio.to_thread(operation)
-            return result, startup_db_access_verified or mark_startup_db_access_verified, 0
+            return (
+                result,
+                startup_db_access_verified or mark_startup_db_access_verified,
+                0,
+            )
         except Exception as exc:
             if not _is_retryable_worker_database_error(exc):
                 raise
@@ -415,7 +467,9 @@ async def _run_worker_database_operation(
                 stop_event=stop_event,
                 timeout_seconds=retry_delay_seconds,
             )
-    raise RuntimeError(f"Worker stopped before database operation completed: {operation_name}")
+    raise RuntimeError(
+        f"Worker stopped before database operation completed: {operation_name}"
+    )
 
 
 def _recover_worker_run_health_once(
@@ -441,7 +495,9 @@ def _recover_worker_run_health_once(
             item.tenant_id,
             item.issue_key,
             item.previous_owner,
-            item.last_heartbeat_at.isoformat() if item.last_heartbeat_at is not None else None,
+            item.last_heartbeat_at.isoformat()
+            if item.last_heartbeat_at is not None
+            else None,
         )
 
 
@@ -465,7 +521,9 @@ async def _run_stale_recovery_loop(
     service_instance_id: str,
     active_run_ids_fn,
 ) -> None:
-    interval_seconds = max(15, int(getattr(settings, "worker_stale_sweep_interval_seconds", 60)))
+    interval_seconds = max(
+        15, int(getattr(settings, "worker_stale_sweep_interval_seconds", 60))
+    )
     db_recovery_attempts = 0
     while not stop_event.is_set():
         try:
@@ -482,7 +540,9 @@ async def _run_stale_recovery_loop(
         except Exception as exc:
             if retryable_database_recovery_error(exc):
                 db_recovery_attempts += 1
-                retry_delay_seconds = database_recovery_retry_delay_seconds(attempt=db_recovery_attempts)
+                retry_delay_seconds = database_recovery_retry_delay_seconds(
+                    attempt=db_recovery_attempts
+                )
                 logger.warning(
                     "worker_stale_recovery_database_unavailable attempt=%s retry_in_seconds=%.1f error=%s",
                     db_recovery_attempts,
@@ -490,7 +550,9 @@ async def _run_stale_recovery_loop(
                     exc,
                 )
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=retry_delay_seconds)
+                    await asyncio.wait_for(
+                        stop_event.wait(), timeout=retry_delay_seconds
+                    )
                 except asyncio.TimeoutError:
                     continue
                 continue
@@ -507,7 +569,9 @@ async def _run_archived_tenant_purge_loop(
     settings: Settings,
     stop_event: asyncio.Event,
 ) -> None:
-    interval_seconds = max(60, int(getattr(settings, "tenant_archive_sweep_interval_seconds", 3600)))
+    interval_seconds = max(
+        60, int(getattr(settings, "tenant_archive_sweep_interval_seconds", 3600))
+    )
     while not stop_event.is_set():
         try:
             await asyncio.to_thread(
@@ -533,7 +597,13 @@ async def _run_worker_runtime_heartbeat_loop(
 ) -> None:
     interval_seconds = max(
         10,
-        int(getattr(settings, "worker_runtime_heartbeat_interval_seconds", WORKER_RUNTIME_HEARTBEAT_INTERVAL_SECONDS)),
+        int(
+            getattr(
+                settings,
+                "worker_runtime_heartbeat_interval_seconds",
+                WORKER_RUNTIME_HEARTBEAT_INTERVAL_SECONDS,
+            )
+        ),
     )
     while not stop_event.is_set():
         try:
@@ -563,7 +633,9 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
     )
     initialize_telemetry(
         settings=settings,
-        service_name="run-worker-child" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker-child",
+        service_name="run-worker-child"
+        if str(mode or "").strip().lower() == WORKER_MODE_RUNS
+        else "webhook-worker-child",
     )
     try:
         session_factory = create_session_factory()
@@ -576,10 +648,14 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
             validate_persisted_workflow_definitions(session=session)
         normalized_mode = str(mode or "").strip().lower()
         if normalized_mode == WORKER_MODE_RUNS:
-            claimed_run_id = str(os.environ.get("ORCHESTRATOR_WORKER_CLAIMED_RUN_ID") or "").strip()
+            claimed_run_id = str(
+                os.environ.get("ORCHESTRATOR_WORKER_CLAIMED_RUN_ID") or ""
+            ).strip()
             claim_id = str(os.environ.get("ORCHESTRATOR_WORKER_CLAIM_ID") or "").strip()
             if not claimed_run_id or not claim_id:
-                raise RuntimeError("Run worker child started without claimed run metadata")
+                raise RuntimeError(
+                    "Run worker child started without claimed run metadata"
+                )
             processed = _process_next_run_once(
                 session_factory=session_factory,
                 claimed_run_id=claimed_run_id,
@@ -598,12 +674,16 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
     except Exception as exc:
         if _is_retryable_worker_database_error(exc):
             platform_metrics.record_worker_failure(kind="database_unavailable")
-            logger.warning("worker_child_database_unavailable mode=%s error=%s", mode, exc)
+            logger.warning(
+                "worker_child_database_unavailable mode=%s error=%s", mode, exc
+            )
             return WORKER_CHILD_EXIT_TRANSIENT_FAILURE
         platform_metrics.record_worker_failure(kind="child_crash")
         logger.exception("worker_child_failed mode=%s", mode)
         return WORKER_CHILD_EXIT_RUNTIME_FAILURE
-    return WORKER_CHILD_EXIT_PROCESSED if processed is not None else WORKER_CHILD_EXIT_IDLE
+    return (
+        WORKER_CHILD_EXIT_PROCESSED if processed is not None else WORKER_CHILD_EXIT_IDLE
+    )
 
 
 async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
@@ -616,7 +696,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     )
     initialize_telemetry(
         settings=settings,
-        service_name="run-worker" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker",
+        service_name="run-worker"
+        if str(mode or "").strip().lower() == WORKER_MODE_RUNS
+        else "webhook-worker",
     )
     session_factory = create_session_factory()
 
@@ -635,7 +717,11 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
 
     startup_db_access_verified = False
     startup_db_retry_attempts = 0
-    _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+    (
+        _,
+        startup_db_access_verified,
+        startup_db_retry_attempts,
+    ) = await _run_worker_database_operation(
         lambda: ensure_execution_snapshot_startup_bootstrap(
             session_factory=session_factory,
             database_url=settings.database_url,
@@ -660,21 +746,33 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     stale_recovery_task: asyncio.Task[None] | None = None
     archived_tenant_purge_task: asyncio.Task[None] | None = None
     worker_runtime_heartbeat_task: asyncio.Task[None] | None = None
-    service_instance_id = worker_service_instance_id_for_mode(settings=settings, mode=mode)
+    service_instance_id = worker_service_instance_id_for_mode(
+        settings=settings, mode=mode
+    )
     agent_id = str(settings.agent_id or "").strip() or "worker"
-    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle] = {}
+    active_children: dict[
+        asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle
+    ] = {}
     drain_requested = True
-    poll_interval_seconds = max(1, int(getattr(settings, "worker_poll_interval_seconds", 5)))
+    poll_interval_seconds = max(
+        1, int(getattr(settings, "worker_poll_interval_seconds", 5))
+    )
     child_timeout_seconds = _resolve_worker_child_timeout_seconds(settings=settings)
     runtime_dependency_snapshot = WorkerRuntimeDependencySnapshot(dependencies={})
-    readiness_refresh_seconds = max(5, int(getattr(settings, "worker_runtime_readiness_refresh_seconds", 30)))
+    readiness_refresh_seconds = max(
+        5, int(getattr(settings, "worker_runtime_readiness_refresh_seconds", 30))
+    )
     auth_request_refresh_seconds = 1
     next_readiness_refresh_at: datetime | None = None
     next_auth_request_refresh_at: datetime | None = None
     runtime_block_logged_keys: tuple[str, ...] = ()
     try:
         listener.start()
-        _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+        (
+            _,
+            startup_db_access_verified,
+            startup_db_retry_attempts,
+        ) = await _run_worker_database_operation(
             lambda: _register_worker_runtime_once(
                 session_factory=session_factory,
                 settings=settings,
@@ -704,7 +802,11 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 prewarm_knowledge_dependencies,
                 settings=settings,
             )
-            _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+            (
+                _,
+                startup_db_access_verified,
+                startup_db_retry_attempts,
+            ) = await _run_worker_database_operation(
                 lambda: _recover_worker_run_health_once(
                     session_factory=session_factory,
                     settings=settings,
@@ -718,7 +820,11 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 startup_db_access_verified=startup_db_access_verified,
                 startup_db_retry_attempts=startup_db_retry_attempts,
             )
-            _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+            (
+                _,
+                startup_db_access_verified,
+                startup_db_retry_attempts,
+            ) = await _run_worker_database_operation(
                 lambda: _purge_archived_tenants_once(session_factory=session_factory),
                 mode=mode,
                 operation_name="purge_archived_tenants",
@@ -734,7 +840,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     stop_event=stop_event,
                     agent_id=agent_id,
                     service_instance_id=service_instance_id,
-                    active_run_ids_fn=lambda: _active_child_claimed_run_ids(active_children),
+                    active_run_ids_fn=lambda: _active_child_claimed_run_ids(
+                        active_children
+                    ),
                 )
             )
             archived_tenant_purge_task = asyncio.create_task(
@@ -769,8 +877,15 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         while not stop_event.is_set():
             if mode == WORKER_MODE_RUNS:
                 now = datetime.now(timezone.utc)
-                if next_auth_request_refresh_at is None or now >= next_auth_request_refresh_at:
-                    _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+                if (
+                    next_auth_request_refresh_at is None
+                    or now >= next_auth_request_refresh_at
+                ):
+                    (
+                        _,
+                        startup_db_access_verified,
+                        startup_db_retry_attempts,
+                    ) = await _run_worker_database_operation(
                         lambda: sync_worker_runtime_auth_requests(
                             session_factory=session_factory,
                             settings=settings,
@@ -783,8 +898,13 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                         startup_db_access_verified=startup_db_access_verified,
                         startup_db_retry_attempts=startup_db_retry_attempts,
                     )
-                    next_auth_request_refresh_at = now + timedelta(seconds=auth_request_refresh_seconds)
-                if next_readiness_refresh_at is None or now >= next_readiness_refresh_at:
+                    next_auth_request_refresh_at = now + timedelta(
+                        seconds=auth_request_refresh_seconds
+                    )
+                if (
+                    next_readiness_refresh_at is None
+                    or now >= next_readiness_refresh_at
+                ):
                     (
                         runtime_dependency_snapshot,
                         startup_db_access_verified,
@@ -803,8 +923,12 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                         startup_db_access_verified=startup_db_access_verified,
                         startup_db_retry_attempts=startup_db_retry_attempts,
                     )
-                    next_readiness_refresh_at = now + timedelta(seconds=readiness_refresh_seconds)
-                blocked_runtime_kinds = tuple(sorted(runtime_dependency_snapshot.blocked_runtime_kinds))
+                    next_readiness_refresh_at = now + timedelta(
+                        seconds=readiness_refresh_seconds
+                    )
+                blocked_runtime_kinds = tuple(
+                    sorted(runtime_dependency_snapshot.blocked_runtime_kinds)
+                )
                 if blocked_runtime_kinds != runtime_block_logged_keys:
                     if blocked_runtime_kinds:
                         logger.error(
@@ -826,7 +950,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     child_result = task.result()
                 except Exception as exc:  # noqa: BLE001
                     platform_metrics.record_worker_failure(kind="child_crash")
-                    logger.exception("worker_child_task_failed mode=%s error=%s", mode, exc)
+                    logger.exception(
+                        "worker_child_task_failed mode=%s error=%s", mode, exc
+                    )
                     drain_requested = True
                     continue
                 logger.info(
@@ -839,7 +965,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     child_result.timed_out,
                 )
                 if child_result.dependency_failure:
-                    raise WorkerDependencyFailure("Worker runtime unavailable in child process")
+                    raise WorkerDependencyFailure(
+                        "Worker runtime unavailable in child process"
+                    )
                 if child_result.return_code == WORKER_CHILD_EXIT_RUNTIME_FAILURE:
                     platform_metrics.record_worker_failure(kind="child_crash")
                     logger.error(
@@ -861,7 +989,10 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     )
                     drain_requested = True
                     continue
-                if child_result.return_code not in {WORKER_CHILD_EXIT_PROCESSED, WORKER_CHILD_EXIT_IDLE}:
+                if child_result.return_code not in {
+                    WORKER_CHILD_EXIT_PROCESSED,
+                    WORKER_CHILD_EXIT_IDLE,
+                }:
                     platform_metrics.record_worker_failure(kind="child_crash")
                     logger.error(
                         "worker_child_unexpected_exit mode=%s return_code=%s pid=%s",
@@ -900,7 +1031,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
 
             if any_processed:
                 drain_requested = True
-            elif completed_count > 0 and not active_children and not wake_event.is_set():
+            elif (
+                completed_count > 0 and not active_children and not wake_event.is_set()
+            ):
                 drain_requested = False
 
             if wake_event.is_set():
@@ -914,7 +1047,11 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 settings=settings,
                 session_factory=session_factory,
             )
-            while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
+            while (
+                drain_requested
+                and len(active_children) < parallel_slots
+                and not stop_event.is_set()
+            ):
                 if mode == WORKER_MODE_RUNS:
                     (
                         claimed_run,
@@ -977,7 +1114,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                         startup_db_access_verified,
                         startup_db_retry_attempts,
                     ) = await _run_worker_database_operation(
-                        lambda: _has_available_webhook_job_once(session_factory=session_factory),
+                        lambda: _has_available_webhook_job_once(
+                            session_factory=session_factory
+                        ),
                         mode=mode,
                         operation_name="has_available_webhook_job",
                         wake_event=wake_event,
@@ -993,10 +1132,14 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     mode=mode,
                     wake_event=wake_event,
                     child_timeout_seconds=child_timeout_seconds,
-                    claimed_run_id=claimed_run.run_id if mode == WORKER_MODE_RUNS else None,
+                    claimed_run_id=claimed_run.run_id
+                    if mode == WORKER_MODE_RUNS
+                    else None,
                     claim_id=claimed_run.claim_id if mode == WORKER_MODE_RUNS else None,
                     worker_service_instance_id=(
-                        claimed_run.worker_service_instance_id if mode == WORKER_MODE_RUNS else None
+                        claimed_run.worker_service_instance_id
+                        if mode == WORKER_MODE_RUNS
+                        else None
                     ),
                 )
                 active_children[child.wait_task] = child
@@ -1070,7 +1213,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
 
 
 def _active_child_claimed_run_ids(
-    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle],
+    active_children: dict[
+        asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle
+    ],
 ) -> set[str]:
     return {
         run_id

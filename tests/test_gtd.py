@@ -10,7 +10,9 @@ class GoodToDoValidationTests(unittest.TestCase):
     def test_valid_gtd_payload_passes(self) -> None:
         with patch(
             "orchestrator.core.gtd._validate_good_to_do_with_runtime",
-            return_value=GoodToDoValidationResult(valid=True, missing_criteria=(), clarification_questions=()),
+            return_value=GoodToDoValidationResult(
+                valid=True, missing_criteria=(), clarification_questions=()
+            ),
         ):
             result = validate_good_to_do(
                 issue_summary="Objective: improve webhook dispatch reliability",

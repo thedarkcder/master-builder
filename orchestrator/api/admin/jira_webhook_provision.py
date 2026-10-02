@@ -39,7 +39,9 @@ def provision_jira_webhook(
             session.commit()
 
     jira_config = dict(tenant.jira_config)
-    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = jira_config_text(
+        jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         return JiraWebhookActionResult(
             ok=False,
@@ -65,8 +67,12 @@ def provision_jira_webhook(
         settings=settings,
         tenant_id=tenant.tenant_id,
     )
-    client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant.tenant_id)
-    callback_url = jira_webhook_callback_url_fn(settings=settings, tenant_id=tenant.tenant_id)
+    client = atlassian_oauth_client_fn(
+        session=session, settings=settings, tenant_id=tenant.tenant_id
+    )
+    callback_url = jira_webhook_callback_url_fn(
+        settings=settings, tenant_id=tenant.tenant_id
+    )
     jql_filter = jira_webhook_filter_jql_fn(jira_config)
     webhook_ids: list[int] | None = None
     cleanup_note: str | None = None
@@ -81,11 +87,13 @@ def provision_jira_webhook(
     except (ValueError, AtlassianOAuthError) as exc:
         if is_jira_webhook_limit_error_fn(exc):
             try:
-                deleted_count, cleanup_details = cleanup_unmanaged_jira_webhooks_for_connection_fn(
-                    session=session,
-                    client=client,
-                    access_token=access_token,
-                    cloud_id=connection.cloud_id,
+                deleted_count, cleanup_details = (
+                    cleanup_unmanaged_jira_webhooks_for_connection_fn(
+                        session=session,
+                        client=client,
+                        access_token=access_token,
+                        cloud_id=connection.cloud_id,
+                    )
                 )
                 cleanup_note = cleanup_details
                 if deleted_count == 0:
@@ -97,11 +105,11 @@ def provision_jira_webhook(
                             webhook_ids=current_tenant_ids,
                         )
                         deleted_count = len(current_tenant_ids)
-                        cleanup_note = (
-                            f"{cleanup_details} Deleted {deleted_count} existing tenant Jira webhook(s)."
-                        )
+                        cleanup_note = f"{cleanup_details} Deleted {deleted_count} existing tenant Jira webhook(s)."
                 if deleted_count == 0:
-                    all_webhooks = client.list_webhooks(access_token=access_token, cloud_id=connection.cloud_id)
+                    all_webhooks = client.list_webhooks(
+                        access_token=access_token, cloud_id=connection.cloud_id
+                    )
                     rollover_id: int | None = None
                     for item in all_webhooks:
                         parsed = parse_jira_webhook_id_fn(item.get("id"))
@@ -152,13 +160,15 @@ def provision_jira_webhook(
             if is_jira_webhook_single_url_error_fn(exc):
                 try:
                     conflicting_url = extract_jira_webhook_conflict_url_fn(exc)
-                    deleted_count, cleanup_details = cleanup_conflicting_jira_webhook_url_fn(
-                        session=session,
-                        client=client,
-                        access_token=access_token,
-                        cloud_id=connection.cloud_id,
-                        callback_url=callback_url,
-                        conflicting_url=conflicting_url,
+                    deleted_count, cleanup_details = (
+                        cleanup_conflicting_jira_webhook_url_fn(
+                            session=session,
+                            client=client,
+                            access_token=access_token,
+                            cloud_id=connection.cloud_id,
+                            callback_url=callback_url,
+                            conflicting_url=conflicting_url,
+                        )
                     )
                     if deleted_count > 0:
                         cleanup_note = cleanup_details
@@ -182,7 +192,9 @@ def provision_jira_webhook(
                         webhook_ids=parse_managed_webhook_ids_fn(jira_config),
                     )
         if webhook_ids is None:
-            jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
+            jira_config["webhook_last_error"] = (
+                f"Failed to provision Jira webhook: {exc}"
+            )
             _persist_tenant_jira_config(jira_config)
             return JiraWebhookActionResult(
                 ok=False,
@@ -196,7 +208,11 @@ def provision_jira_webhook(
     jira_config["webhook_last_provisioned_at"] = now_iso
     jira_config["webhook_last_error"] = None
     if replace_existing:
-        stale_webhook_ids = [webhook_id for webhook_id in prior_managed_webhook_ids if webhook_id not in webhook_ids]
+        stale_webhook_ids = [
+            webhook_id
+            for webhook_id in prior_managed_webhook_ids
+            if webhook_id not in webhook_ids
+        ]
         if stale_webhook_ids:
             try:
                 client.delete_webhooks(
@@ -205,13 +221,21 @@ def provision_jira_webhook(
                     webhook_ids=stale_webhook_ids,
                 )
                 stale_cleanup_note = f"Deleted {len(stale_webhook_ids)} previous managed Jira webhook(s)."
-                cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
+                cleanup_note = (
+                    f"{cleanup_note} {stale_cleanup_note}".strip()
+                    if cleanup_note
+                    else stale_cleanup_note
+                )
             except (ValueError, AtlassianOAuthError) as exc:
                 stale_cleanup_note = (
                     f"Registered new webhook(s) but could not delete {len(stale_webhook_ids)} previous managed "
                     f"webhook(s): {exc}"
                 )
-                cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
+                cleanup_note = (
+                    f"{cleanup_note} {stale_cleanup_note}".strip()
+                    if cleanup_note
+                    else stale_cleanup_note
+                )
     _persist_tenant_jira_config(jira_config)
     details = f"Provisioned {len(webhook_ids)} Jira webhook(s)."
     if cleanup_note:

@@ -14,18 +14,24 @@ DEMO_PROOF_STATE_RELEASE_LIVE = "release_live"
 DEMO_PROOF_STATE_SERVICES_VERIFYING = "services_verifying"
 DEMO_PROOF_STATE_SERVICES_VERIFIED = "services_verified"
 DEMO_PROOF_STATE_RECORDING = "recording"
-DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED = "recording_failed_cleanup_scheduled"
+DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED = (
+    "recording_failed_cleanup_scheduled"
+)
 DEMO_PROOF_STATE_RECORDING_DEFERRED = "recording_deferred"
 DEMO_PROOF_STATE_EVIDENCE_UPLOADING = "evidence_uploading"
 DEMO_PROOF_STATE_EVIDENCE_UPLOADED = "evidence_uploaded"
 DEMO_PROOF_STATE_PR_ATTACHING = "pr_attaching"
-DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED = "pr_attach_failed_cleanup_scheduled"
+DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED = (
+    "pr_attach_failed_cleanup_scheduled"
+)
 DEMO_PROOF_STATE_PR_ATTACHED = "pr_attached"
 DEMO_PROOF_STATE_CLEANUP_SCHEDULED = "cleanup_scheduled"
 DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING = "failure_evidence_uploading"
 DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED = "failure_evidence_uploaded"
 DEMO_PROOF_STATE_FAILURE_PR_ATTACHING = "failure_pr_attaching"
-DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED = "failure_pr_attach_failed_cleanup_scheduled"
+DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED = (
+    "failure_pr_attach_failed_cleanup_scheduled"
+)
 DEMO_PROOF_STATE_FAILURE_PR_ATTACHED = "failure_pr_attached"
 DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED = "failure_cleanup_scheduled"
 DEMO_PROOF_STATE_COMPLETE = "complete"
@@ -166,7 +172,9 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
         DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
     ),
     "RecordingStarted": _EventTransition(
-        frozenset({DEMO_PROOF_STATE_SERVICES_VERIFIED, DEMO_PROOF_STATE_RECORDING_DEFERRED}),
+        frozenset(
+            {DEMO_PROOF_STATE_SERVICES_VERIFIED, DEMO_PROOF_STATE_RECORDING_DEFERRED}
+        ),
         DEMO_PROOF_STATE_RECORDING,
     ),
     "RecordingDeferred": _EventTransition(

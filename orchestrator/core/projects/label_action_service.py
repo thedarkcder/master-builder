@@ -34,7 +34,9 @@ def apply_issue_label_actions(
         project_overrides=project_policy_overrides or {},
     )
     if not bool(effective_policy.get("allow_label_mutations", True)):
-        return LabelActionApplyResult(applied_labels=(), skipped_reason="label_mutations_disabled")
+        return LabelActionApplyResult(
+            applied_labels=(), skipped_reason="label_mutations_disabled"
+        )
 
     normalized_existing = {
         str(label).strip().casefold()
@@ -62,7 +64,11 @@ def apply_issue_label_actions(
         oauth_connection = _oauth_context_value(oauth, "connection")
         oauth_access_token = _oauth_context_value(oauth, "access_token")
         cloud_id = getattr(oauth_connection, "cloud_id", None)
-        if oauth_client is None or oauth_access_token is None or not str(cloud_id or "").strip():
+        if (
+            oauth_client is None
+            or oauth_access_token is None
+            or not str(cloud_id or "").strip()
+        ):
             raise RuntimeError("Tenant Atlassian context is incomplete")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -71,7 +77,9 @@ def apply_issue_label_actions(
             issue_key,
             exc,
         )
-        return LabelActionApplyResult(applied_labels=(), skipped_reason="oauth_context_failed")
+        return LabelActionApplyResult(
+            applied_labels=(), skipped_reason="oauth_context_failed"
+        )
 
     applied_labels: list[str] = []
     for label in labels_to_apply:
@@ -91,11 +99,12 @@ def apply_issue_label_actions(
                 label,
                 exc,
             )
-    return LabelActionApplyResult(applied_labels=tuple(applied_labels), skipped_reason=None)
+    return LabelActionApplyResult(
+        applied_labels=tuple(applied_labels), skipped_reason=None
+    )
 
 
 def _oauth_context_value(oauth_context: Any, field: str) -> Any:
     if isinstance(oauth_context, dict):
         return oauth_context.get(field)
     return getattr(oauth_context, field, None)
-

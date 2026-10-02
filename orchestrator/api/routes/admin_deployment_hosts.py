@@ -9,7 +9,11 @@ from orchestrator.api.admin.deployment_host_service import (
     list_deployment_hosts as list_deployment_hosts_impl,
 )
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.schemas import DeploymentHostBootstrapRead, DeploymentHostCreate, DeploymentHostRead
+from orchestrator.api.schemas import (
+    DeploymentHostBootstrapRead,
+    DeploymentHostCreate,
+    DeploymentHostRead,
+)
 from orchestrator.core.security import require_admin
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -23,7 +27,11 @@ def list_deployment_hosts(
     return list_deployment_hosts_impl(session=session)
 
 
-@router.post("/deployment-hosts", response_model=DeploymentHostBootstrapRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/deployment-hosts",
+    response_model=DeploymentHostBootstrapRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_deployment_host(
     payload: DeploymentHostCreate,
     _: str = Depends(require_admin),

@@ -14,16 +14,30 @@ from orchestrator.api.webhooks.github_webhook_context import (
     build_github_review_runtime,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
+from orchestrator.core.review.pr_review_findings import (
+    PrReviewFindingsResult,
+    ReviewFinding,
+)
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.core.workflow.runner import QaRecording, QaResult, QaScenario, QaStep, WorkflowStageCheckpoint
+from orchestrator.core.workflow.runner import (
+    QaRecording,
+    QaResult,
+    QaScenario,
+    QaStep,
+    WorkflowStageCheckpoint,
+)
 from orchestrator.storage.models import Project, Run, WorkflowExecution
 from tests.production_path_support import (
     load_json_fixture,
     ProductionPathApiTestCase,
     seed_core_runtime_state,
     session_factory_for,
+)
+
+from tests.test_support.webhook_sender import (
+    configure_github_webhook_sender,
+    post_signed_github_webhook,
 )
 
 pytestmark = pytest.mark.production_path
@@ -59,19 +73,37 @@ class _FakeGitHubClient:
     def list_pull_request_files(self, *, repo_full_name: str, pr_number: int):  # noqa: ARG002
         return []
 
-    def add_pull_request_review_comment_reaction(self, *, repo_full_name: str, comment_id: int, content: str) -> None:
+    def add_pull_request_review_comment_reaction(
+        self, *, repo_full_name: str, comment_id: int, content: str
+    ) -> None:
         self.review_comment_reactions.append(
-            {"repo_full_name": repo_full_name, "comment_id": comment_id, "content": content}
+            {
+                "repo_full_name": repo_full_name,
+                "comment_id": comment_id,
+                "content": content,
+            }
         )
 
-    def add_issue_comment_reaction(self, *, repo_full_name: str, comment_id: int, content: str) -> None:
+    def add_issue_comment_reaction(
+        self, *, repo_full_name: str, comment_id: int, content: str
+    ) -> None:
         self.issue_comment_reactions.append(
-            {"repo_full_name": repo_full_name, "comment_id": comment_id, "content": content}
+            {
+                "repo_full_name": repo_full_name,
+                "comment_id": comment_id,
+                "content": content,
+            }
         )
 
-    def sync_pull_request_reaction(self, *, repo_full_name: str, pr_number: int, content: str) -> None:
+    def sync_pull_request_reaction(
+        self, *, repo_full_name: str, pr_number: int, content: str
+    ) -> None:
         self.pull_request_reactions.append(
-            {"repo_full_name": repo_full_name, "pr_number": pr_number, "content": content}
+            {
+                "repo_full_name": repo_full_name,
+                "pr_number": pr_number,
+                "content": content,
+            }
         )
 
     def list_pull_request_review_comments(self, *, repo_full_name: str, pr_number: int):  # noqa: ARG002
@@ -89,14 +121,18 @@ class _FakeGitHubClient:
         self.review_thread_replies.append(
             {
                 "repo_full_name": repo_full_name,
-                "pull_request_number": pull_request_number if pull_request_number is not None else pr_number,
+                "pull_request_number": pull_request_number
+                if pull_request_number is not None
+                else pr_number,
                 "in_reply_to": in_reply_to,
                 "body": body,
             }
         )
         return SimpleNamespace(comment_id=300 + len(self.review_thread_replies))
 
-    def update_pull_request_review_comment(self, *, repo_full_name: str, comment_id: int, body: str):
+    def update_pull_request_review_comment(
+        self, *, repo_full_name: str, comment_id: int, body: str
+    ):
         self.review_thread_replies.append(
             {
                 "repo_full_name": repo_full_name,
@@ -110,7 +146,9 @@ class _FakeGitHubClient:
     def list_pull_request_issue_comments(self, *, repo_full_name: str, pr_number: int):  # noqa: ARG002
         return []
 
-    def create_pull_request_issue_comment(self, *, repo_full_name: str, pr_number: int, body: str):
+    def create_pull_request_issue_comment(
+        self, *, repo_full_name: str, pr_number: int, body: str
+    ):
         self.issue_comments.append(
             {"repo_full_name": repo_full_name, "pr_number": pr_number, "body": body}
         )
@@ -142,7 +180,12 @@ class _FakeGitHubClient:
 
     def update_issue_comment(self, *, repo_full_name: str, comment_id: int, body: str):
         self.issue_comments.append(
-            {"repo_full_name": repo_full_name, "comment_id": comment_id, "body": body, "updated": True}
+            {
+                "repo_full_name": repo_full_name,
+                "comment_id": comment_id,
+                "body": body,
+                "updated": True,
+            }
         )
         return SimpleNamespace(comment_id=comment_id)
 
@@ -162,14 +205,16 @@ def _qa_demo_recording_snapshot() -> ExecutionSnapshot:
                         name="Browser happy path",
                         objective="Show browser feature",
                         capture_target="browser",
-                        steps=[QaStep(action="assert_visible", selector="text=Feature")],
+                        steps=[
+                            QaStep(action="assert_visible", selector="text=Feature")
+                        ],
                     )
                 ],
                 recordings=[
                     QaRecording(
                         name="Browser happy path",
-                        artifact_url="https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
-                        object_key="example/example-default/run-1/qa-demo-1.webm",
+                        artifact_url="https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
+                        object_key="example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
                         capture_target="browser",
                         capture_reference="https://preview.example",
                         content_sha256=f"{1:064x}",
@@ -190,6 +235,18 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
 
     def setUp(self) -> None:
         self._start_test_runtime(name_prefix="github-webhook-production")
+        self.webhook_token = configure_github_webhook_sender(
+            session_factory=self.session_factory
+        )
+
+    def _post_github(self, url: str, *, json: dict, headers: dict):
+        return post_signed_github_webhook(
+            client=self.client,
+            token=self.webhook_token,
+            url=url,
+            json_payload=json,
+            headers=headers,
+        )
 
     def tearDown(self) -> None:
         self._stop_test_runtime()
@@ -202,15 +259,17 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 owner_id="worker:test",
             )
 
-    def test_qa_demo_review_runtime_passes_artifact_public_base_to_reviewer_gate(self) -> None:
+    def test_qa_demo_review_runtime_passes_artifact_public_base_to_reviewer_gate(
+        self,
+    ) -> None:
         fake_client = _FakeGitHubClient()
         tenant = SimpleNamespace(
-            tenant_id="example",
+            tenant_id="example-workspace",
             github_config={},
             policy_config={"qa_demo_recording_enabled": True},
         )
         project = SimpleNamespace(
-            project_id="example-default",
+            project_id="example-workspace-default",
             policy_overrides={},
         )
         settings = SimpleNamespace(
@@ -225,7 +284,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
                 return_value=fake_client,
             ),
-            patch("orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate") as gate_cls,
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate"
+            ) as gate_cls,
         ):
             github_client, _reviewer_gate = build_github_review_runtime(
                 session=SimpleNamespace(),
@@ -242,15 +303,17 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertIn("demo_evidence_recordings_resolver", gate_cls.call_args.kwargs)
         self.assertIn("demo_proof_status_resolver", gate_cls.call_args.kwargs)
 
-    def test_qa_demo_review_runtime_resolves_persisted_qa_recordings_for_run(self) -> None:
+    def test_qa_demo_review_runtime_resolves_persisted_qa_recordings_for_run(
+        self,
+    ) -> None:
         snapshot = _qa_demo_recording_snapshot()
         with self.session_factory() as session:
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-qa-demo-proof",
                     workflow_type_key="issue_execution",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="jira",
                     source_ref="GP-123",
                     repo_url="https://github.com/org/repo",
@@ -267,8 +330,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 Run(
                     run_id="run-qa-demo-proof",
                     workflow_id="workflow-qa-demo-proof",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     issue_key="GP-123",
                     repo_url="https://github.com/org/repo",
                     branch="feature/GP-123",
@@ -285,8 +348,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
 
             recordings = _qa_demo_recordings_for_run(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 run_id="run-qa-demo-proof",
             )
 
@@ -295,8 +358,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             (
                 {
                     "name": "Browser happy path",
-                    "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
-                    "object_key": "example/example-default/run-1/qa-demo-1.webm",
+                    "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
+                    "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
                     "capture_target": "browser",
                     "capture_reference": "https://preview.example",
                     "content_sha256": f"{1:064x}",
@@ -306,15 +369,17 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             ),
         )
 
-    def test_qa_demo_review_runtime_resolves_completed_demo_proof_status_for_pr_url(self) -> None:
-        artifact_url = "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm"
+    def test_qa_demo_review_runtime_resolves_completed_demo_proof_status_for_pr_url(
+        self,
+    ) -> None:
+        artifact_url = "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm"
         with self.session_factory() as session:
             session.add(
                 WorkflowExecution(
                     workflow_id="demo-proof-pr-17",
                     workflow_type_key="demo_proof",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="demo_proof",
                     source_ref="run-1-main-abcdef1",
                     repo_url="https://github.com/org/repo",
@@ -346,7 +411,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                                         "artifact_url_check_status": "passed",
                                         "checked_artifact_urls": [artifact_url],
                                     },
-                                }
+                                },
                             ],
                         },
                         sort_keys=True,
@@ -359,8 +424,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
 
             proof_status = _qa_demo_proof_status_for_pr_url(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 pr_url="https://github.com/org/repo/pull/17",
             )
 
@@ -372,15 +437,17 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(proof_status["artifact_url_check_status"], "passed")
         self.assertEqual(proof_status["checked_artifact_urls"], (artifact_url,))
 
-    def test_qa_demo_review_runtime_ignores_persisted_qa_recordings_from_blocked_run(self) -> None:
+    def test_qa_demo_review_runtime_ignores_persisted_qa_recordings_from_blocked_run(
+        self,
+    ) -> None:
         snapshot = _qa_demo_recording_snapshot()
         with self.session_factory() as session:
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-qa-demo-blocked",
                     workflow_type_key="issue_execution",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="jira",
                     source_ref="GP-123",
                     repo_url="https://github.com/org/repo",
@@ -397,8 +464,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 Run(
                     run_id="run-qa-demo-blocked",
                     workflow_id="workflow-qa-demo-blocked",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     issue_key="GP-123",
                     repo_url="https://github.com/org/repo",
                     branch="feature/GP-123",
@@ -415,8 +482,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
 
             recordings = _qa_demo_recordings_for_run(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 run_id="run-qa-demo-blocked",
             )
 
@@ -429,8 +496,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             old_workflow = WorkflowExecution(
                 workflow_id="workflow-old-demo",
                 workflow_type_key="issue_execution",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 source_system="jira",
                 source_ref="GP-123",
                 repo_url="https://github.com/org/repo",
@@ -445,8 +512,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             latest_workflow = WorkflowExecution(
                 workflow_id="workflow-latest-demo",
                 workflow_type_key="issue_execution",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 source_system="jira",
                 source_ref="GP-123",
                 repo_url="https://github.com/org/repo",
@@ -464,8 +531,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                     Run(
                         run_id="run-old-demo",
                         workflow_id="workflow-old-demo",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="GP-123",
                         repo_url="https://github.com/org/repo",
                         branch="feature/GP-123",
@@ -479,8 +546,8 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                     Run(
                         run_id="run-latest-demo",
                         workflow_id="workflow-latest-demo",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="GP-123",
                         repo_url="https://github.com/org/repo",
                         branch="feature/GP-123",
@@ -497,15 +564,15 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
 
             resolved = _latest_run_id_for_pr_url(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 pr_url=pr_url,
             )
 
         self.assertEqual(resolved, "run-latest-demo")
 
     def test_ignored_event_runs_through_real_route(self) -> None:
-        response = self.client.post(
+        response = self._post_github(
             "/github/webhook",
             json=load_json_fixture("github", "webhooks", "issues_opened.json"),
             headers={"X-GitHub-Event": "issues", "X-GitHub-Delivery": "delivery-1"},
@@ -534,7 +601,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="pending_checks", message="pending")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="pending_checks", message="pending"
+                    )
                 ),
             ),
             patch(
@@ -546,9 +615,11 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 return_value="https://jira.example.com/browse/GP-900",
             ),
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
-                json=load_json_fixture("github", "webhooks", "pull_request_review_comment_created.json"),
+                json=load_json_fixture(
+                    "github", "webhooks", "pull_request_review_comment_created.json"
+                ),
                 headers={
                     "X-GitHub-Event": "pull_request_review_comment",
                     "X-GitHub-Delivery": "delivery-2",
@@ -565,13 +636,17 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(fake_client.review_comment_reactions[0]["comment_id"], 901)
         self.assertEqual(fake_client.review_comment_reactions[0]["content"], "eyes")
         self.assertTrue(fake_client.review_thread_replies)
-        reply_bodies = [str(reply["body"]) for reply in fake_client.review_thread_replies]
+        reply_bodies = [
+            str(reply["body"]) for reply in fake_client.review_thread_replies
+        ]
         self.assertTrue(any("Codex Manual Fix" in body for body in reply_bodies))
         self.assertFalse(any("Codex PR Remediation" in body for body in reply_bodies))
 
     def test_untagged_review_comment_is_ignored_by_real_route(self) -> None:
         fake_client = _FakeGitHubClient()
-        payload = load_json_fixture("github", "webhooks", "pull_request_review_comment_created.json")
+        payload = load_json_fixture(
+            "github", "webhooks", "pull_request_review_comment_created.json"
+        )
         payload["comment"]["body"] = "fix this"
 
         with (
@@ -582,14 +657,16 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="pending_checks", message="pending")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="pending_checks", message="pending"
+                    )
                 ),
             ),
             patch(
                 "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
             ) as enqueue_mock,
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -607,7 +684,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertFalse(fake_client.review_comment_reactions)
         self.assertFalse(fake_client.review_thread_replies)
 
-    def test_pull_request_opened_syncs_pr_reaction_and_posts_review_comment(self) -> None:
+    def test_pull_request_opened_syncs_pr_reaction_and_posts_review_comment(
+        self,
+    ) -> None:
         fake_client = _FakeGitHubClient()
         payload = {
             "action": "opened",
@@ -632,7 +711,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="needs_changes", message="needs changes"
+                    )
                 ),
             ),
             patch(
@@ -640,7 +721,11 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 return_value=PrReviewFindingsResult(
                     state="blocked",
                     summary="Found issues",
-                    findings=(ReviewFinding(severity="high", message="Fix this", path=None, line=None),),
+                    findings=(
+                        ReviewFinding(
+                            severity="high", message="Fix this", path=None, line=None
+                        ),
+                    ),
                 ),
             ),
             patch(
@@ -656,7 +741,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 ),
             ),
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -675,7 +760,12 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             [{"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"}],
         )
         self.assertTrue(fake_client.issue_comments)
-        self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))
+        self.assertTrue(
+            any(
+                "Codex PR Review" in str(comment["body"])
+                for comment in fake_client.issue_comments
+            )
+        )
 
     def test_pull_request_reaction_404_does_not_fail_webhook_job(self) -> None:
         fake_client = _FakeGitHubClient()
@@ -707,7 +797,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="needs_changes", message="needs changes"
+                    )
                 ),
             ),
             patch(
@@ -715,7 +807,11 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 return_value=PrReviewFindingsResult(
                     state="blocked",
                     summary="Found issues",
-                    findings=(ReviewFinding(severity="high", message="Fix this", path=None, line=None),),
+                    findings=(
+                        ReviewFinding(
+                            severity="high", message="Fix this", path=None, line=None
+                        ),
+                    ),
                 ),
             ),
             patch(
@@ -731,7 +827,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 ),
             ),
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -772,14 +868,16 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="needs_changes", message="needs changes"
+                    )
                 ),
             ),
             patch(
                 "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
             ) as remediation_mock,
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -797,7 +895,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertFalse(fake_client.pull_request_reactions)
         self.assertFalse(fake_client.issue_comments)
 
-    def test_pull_request_opened_with_no_findings_publishes_single_success_reaction(self) -> None:
+    def test_pull_request_opened_with_no_findings_publishes_single_success_reaction(
+        self,
+    ) -> None:
         fake_client = _FakeGitHubClient()
         payload = {
             "action": "ready_for_review",
@@ -831,7 +931,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             ),
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
-                return_value=SimpleNamespace(evaluate_pr=lambda **kwargs: missing_checks_signal),
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: missing_checks_signal
+                ),
             ),
             patch(
                 "orchestrator.api.webhooks.github_application.evaluate_pr_review_findings",
@@ -841,7 +943,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
             ) as remediation_mock,
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -898,7 +1000,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="needs_changes", message="needs changes"
+                    )
                 ),
             ),
             patch(
@@ -915,7 +1019,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             ),
         ):
             with self.session_factory() as session:
-                project = session.get(Project, "example-default")
+                project = session.get(Project, "example-workspace-default")
                 assert project is not None
                 project.policy_overrides = {
                     **dict(project.policy_overrides or {}),
@@ -923,7 +1027,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                     "staging_branch": "staging",
                 }
                 session.commit()
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -961,7 +1065,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             patch(
                 "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
                 return_value=SimpleNamespace(
-                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="pending_checks", message="pending")
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(
+                        ready=False, state="pending_checks", message="pending"
+                    )
                 ),
             ),
             patch(
@@ -977,7 +1083,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 ),
             ),
         ):
-            response = self.client.post(
+            response = self._post_github(
                 "/github/webhook",
                 json=payload,
                 headers={
@@ -996,4 +1102,9 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             [{"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"}],
         )
         self.assertTrue(fake_client.issue_comments)
-        self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))
+        self.assertTrue(
+            any(
+                "Codex PR Review" in str(comment["body"])
+                for comment in fake_client.issue_comments
+            )
+        )

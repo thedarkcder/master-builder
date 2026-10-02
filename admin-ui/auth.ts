@@ -2,7 +2,8 @@ import NextAuth, { type Session, type User } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import type { JWT } from "next-auth/jwt";
 
-import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { SERVER_API_BASE_URL } from "@/lib/server-api";
+import { requireAuthSecret } from "@/lib/auth-secret";
 
 type PrincipalPayload = {
   principal_type: "platform_super_admin" | "tenant_user";
@@ -35,7 +36,7 @@ type AuthorizedUser = {
 };
 
 async function loginAgainstBackend(identifier: string, password: string): Promise<AuthorizedUser | null> {
-  const base = DEFAULT_API_BASE_URL.replace(/\/$/, "");
+  const base = SERVER_API_BASE_URL.replace(/\/$/, "");
   if (identifier.includes("@")) {
     const response = await fetch(`${base}/api/app/auth/login`, {
       method: "POST",
@@ -90,7 +91,7 @@ async function loginAgainstBackend(identifier: string, password: string): Promis
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret",
+  secret: requireAuthSecret(),
   pages: {
     signIn: "/login",
   },

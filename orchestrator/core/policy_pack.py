@@ -46,9 +46,13 @@ def _policy_pack_path(*, language_key: str, policy_pack_dir: Path) -> Path:
     return policy_pack_dir / f"policy_pack.{language_key}.json"
 
 
-def load_policy_pack(*, language_key: str, policy_pack_dir: str | Path = ".codex") -> PolicyPack:
+def load_policy_pack(
+    *, language_key: str, policy_pack_dir: str | Path = ".codex"
+) -> PolicyPack:
     directory = Path(policy_pack_dir)
-    source_path = _policy_pack_path(language_key=language_key, policy_pack_dir=directory)
+    source_path = _policy_pack_path(
+        language_key=language_key, policy_pack_dir=directory
+    )
     if not source_path.exists():
         raise FileNotFoundError(f"Policy pack not found: {source_path}")
 
@@ -74,16 +78,22 @@ def load_policy_pack(*, language_key: str, policy_pack_dir: str | Path = ".codex
         reviewer_quality_gates = []
 
     normalized_banned_patterns = tuple(
-        pattern for pattern in banned_patterns if isinstance(pattern, str) and pattern.strip()
+        pattern
+        for pattern in banned_patterns
+        if isinstance(pattern, str) and pattern.strip()
     )
     if not normalized_banned_patterns:
         raise ValueError(f"Policy pack has no banned patterns: {source_path}")
 
     normalized_preferred_patterns = tuple(
-        pattern for pattern in preferred_patterns if isinstance(pattern, str) and pattern.strip()
+        pattern
+        for pattern in preferred_patterns
+        if isinstance(pattern, str) and pattern.strip()
     )
     normalized_quality_gates = tuple(
-        gate for gate in reviewer_quality_gates if isinstance(gate, str) and gate.strip()
+        gate
+        for gate in reviewer_quality_gates
+        if isinstance(gate, str) and gate.strip()
     )
 
     return PolicyPack(
@@ -102,7 +112,11 @@ def _detect_language_key_for_filename(filename: str) -> str | None:
     suffix = Path(normalized).suffix
     language_key = _EXTENSION_LANGUAGE_MAP.get(suffix)
     if language_key == "node":
-        if "/react/" in normalized or "/frontend/" in normalized or "/ui/" in normalized:
+        if (
+            "/react/" in normalized
+            or "/frontend/" in normalized
+            or "/ui/" in normalized
+        ):
             return "react"
     return language_key
 
@@ -124,7 +138,9 @@ def select_policy_pack_for_files(
     for key in _LANGUAGE_PRIORITY:
         if key not in detected_keys:
             continue
-        source_path = _policy_pack_path(language_key=key, policy_pack_dir=Path(policy_pack_dir))
+        source_path = _policy_pack_path(
+            language_key=key, policy_pack_dir=Path(policy_pack_dir)
+        )
         if source_path.exists():
             return load_policy_pack(language_key=key, policy_pack_dir=policy_pack_dir)
     return None

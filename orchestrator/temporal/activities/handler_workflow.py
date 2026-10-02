@@ -4,7 +4,9 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.planning.specialist import RetryableSpecialistPlanningContractError
+from orchestrator.core.planning.specialist import (
+    RetryableSpecialistPlanningContractError,
+)
 from orchestrator.core.workflow.advance import (
     InvalidWorkflowOperationRetryError,
     UnsupportedWorkflowOperationRetryError,
@@ -12,11 +14,20 @@ from orchestrator.core.workflow.advance import (
     WorkflowTrigger,
     execute_workflow_advance,
 )
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
-from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
+from orchestrator.core.workflow.operation_retry_use_case import (
+    retry_workflow_operation_with_registered_handler,
+)
+from orchestrator.core.workflow.operation_service import (
+    WorkflowOperationAttemptAlreadyRunningError,
+)
 from orchestrator.core.workflow.type_catalog import get_workflow_type_by_handler_key
-from orchestrator.runtime.installed_workflow_handlers import build_runtime_workflow_handler_registry
+from orchestrator.runtime.installed_workflow_handlers import (
+    build_runtime_workflow_handler_registry,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.payloads import (
@@ -46,7 +57,9 @@ def process_handler_workflow_advance_activity(
     with session_factory() as session:
         tenant = session.get(Tenant, str(payload.tenant_id or "").strip())
         if tenant is None:
-            raise RuntimeError(f"Workflow advance is missing tenant {payload.tenant_id}")
+            raise RuntimeError(
+                f"Workflow advance is missing tenant {payload.tenant_id}"
+            )
         workflow_type = get_workflow_type_by_handler_key(
             session,
             handler_key=str(payload.workflow_handler_key or "").strip(),
@@ -92,7 +105,9 @@ def process_handler_workflow_advance_activity(
             session.rollback()
             workflow = session.get(WorkflowExecution, workflow_id)
             if workflow is None:
-                raise RuntimeError(f"Workflow advance lost workflow execution {workflow_id}")
+                raise RuntimeError(
+                    f"Workflow advance lost workflow execution {workflow_id}"
+                )
             status_payload = _workflow_status_payload(workflow=workflow)
             return HandlerWorkflowAdvanceResult(
                 handled=True,
@@ -118,7 +133,9 @@ def process_handler_workflow_advance_activity(
                     active_run_id=None,
                     last_error=None,
                 )
-            raise RuntimeError(f"Workflow advance did not persist workflow execution {workflow_id}")
+            raise RuntimeError(
+                f"Workflow advance did not persist workflow execution {workflow_id}"
+            )
         status_payload = _workflow_status_payload(workflow=workflow)
         return HandlerWorkflowAdvanceResult(
             handled=result.handled,
@@ -130,16 +147,26 @@ def process_handler_workflow_advance_activity(
 
 
 @activity.defn(name="retry_handler_workflow_operation_activity")
-def retry_handler_workflow_operation_activity(payload: WorkflowOperationRetryInput) -> WorkflowOperationRetryResult:
+def retry_handler_workflow_operation_activity(
+    payload: WorkflowOperationRetryInput,
+) -> WorkflowOperationRetryResult:
     settings = get_settings()
     session_factory = create_session_factory()
     with session_factory() as session:
-        workflow = session.get(WorkflowExecution, str(payload.workflow_id or "").strip())
+        workflow = session.get(
+            WorkflowExecution, str(payload.workflow_id or "").strip()
+        )
         if workflow is None:
-            raise RuntimeError(f"Workflow retry is missing workflow {payload.workflow_id}")
-        operation = session.get(WorkflowOperation, str(payload.operation_id or "").strip())
+            raise RuntimeError(
+                f"Workflow retry is missing workflow {payload.workflow_id}"
+            )
+        operation = session.get(
+            WorkflowOperation, str(payload.operation_id or "").strip()
+        )
         if operation is None or operation.workflow_id != workflow.workflow_id:
-            raise RuntimeError(f"Workflow retry is missing operation {payload.operation_id}")
+            raise RuntimeError(
+                f"Workflow retry is missing operation {payload.operation_id}"
+            )
         handler_registry = build_runtime_workflow_handler_registry()
         try:
             handle = retry_workflow_operation_with_registered_handler(

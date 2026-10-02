@@ -1,0 +1,9 @@
+FROM python:3.11.17-slim-trixie@sha256:bab1b7ef4b450c81002278d035eff85ebe394ae94df904f7a3ba14f7e16e487b
+WORKDIR /app
+COPY ops/seaweedfs/requirements.txt /app/requirements.txt
+RUN python -m pip install --no-cache-dir --require-hashes --only-binary=:all: --requirement /app/requirements.txt
+COPY orchestrator/core/qa/storage_setup.py orchestrator/core/qa/artifact_storage.py /app/orchestrator/core/qa/
+COPY scripts/bootstrap_qa_storage.py /app/bootstrap_qa_storage.py
+COPY LICENSE /usr/share/licenses/master-builder/LICENSE
+USER 1000:1000
+ENTRYPOINT ["python", "/app/bootstrap_qa_storage.py"]

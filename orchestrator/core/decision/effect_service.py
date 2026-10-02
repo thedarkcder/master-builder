@@ -8,7 +8,13 @@ from sqlalchemy import select
 
 from orchestrator.core.decision.presentation import build_cycle_comment
 from orchestrator.core.knowledge.base import create_knowledge_asset
-from orchestrator.storage.models import DecisionAnswer, DecisionCase, DecisionCycle, DecisionEffectOutbox, KnowledgeAsset
+from orchestrator.storage.models import (
+    DecisionAnswer,
+    DecisionCase,
+    DecisionCycle,
+    DecisionEffectOutbox,
+    KnowledgeAsset,
+)
 
 DECISION_KNOWLEDGE_SOURCE_TYPE = "decision_answer"
 DECISION_KNOWLEDGE_PENDING_STATUS = "pending_review"
@@ -73,7 +79,9 @@ def enqueue_cycle_comment_effect(
         cycle=cycle,
         effect_type="jira_comment",
         dedupe_key=f"jira-comment:{case.tenant_id}:{case.issue_key}:{cycle.cycle_id}",
-        payload={"comment": build_cycle_comment(session=session, case=case, cycle=cycle)},
+        payload={
+            "comment": build_cycle_comment(session=session, case=case, cycle=cycle)
+        },
         now=now,
     )
     return effect.effect_id
@@ -119,8 +127,12 @@ def enqueue_decision_answer_kb_effects(
     return tuple(effect_ids)
 
 
-def _stage_decision_answer_knowledge_effect(*, session, effect: DecisionEffectOutbox, occurred_at: datetime) -> tuple[bool, str | None]:
-    payload = dict(effect.payload_json or {}) if isinstance(effect.payload_json, dict) else {}
+def _stage_decision_answer_knowledge_effect(
+    *, session, effect: DecisionEffectOutbox, occurred_at: datetime
+) -> tuple[bool, str | None]:
+    payload = (
+        dict(effect.payload_json or {}) if isinstance(effect.payload_json, dict) else {}
+    )
     tenant_id = str(payload.get("tenant_id") or "").strip()
     project_id = str(payload.get("project_id") or "").strip()
     issue_key = str(payload.get("issue_key") or "").strip()
@@ -128,7 +140,14 @@ def _stage_decision_answer_knowledge_effect(*, session, effect: DecisionEffectOu
     question_text = str(payload.get("question_text") or "").strip()
     answer_text = str(payload.get("answer") or "").strip()
     evidence_id = str(payload.get("evidence_id") or "").strip()
-    if not tenant_id or not project_id or not issue_key or not question_id or not question_text or not answer_text:
+    if (
+        not tenant_id
+        or not project_id
+        or not issue_key
+        or not question_id
+        or not question_text
+        or not answer_text
+    ):
         return False, "KB effect payload is incomplete"
     source_ref = f"{issue_key}:{question_id}"
     existing = session.execute(
@@ -141,7 +160,11 @@ def _stage_decision_answer_knowledge_effect(*, session, effect: DecisionEffectOu
         )
     ).scalar_one_or_none()
     if existing is not None:
-        existing_metadata = dict(existing.metadata_json or {}) if isinstance(existing.metadata_json, dict) else {}
+        existing_metadata = (
+            dict(existing.metadata_json or {})
+            if isinstance(existing.metadata_json, dict)
+            else {}
+        )
         existing_evidence_ids = [
             str(value).strip()
             for value in existing_metadata.get("evidence_ids", [])
@@ -206,7 +229,9 @@ def publish_decision_effects(
         if effect.effect_type == "jira_comment":
             if publish_jira_comment_fn is None:
                 continue
-            posted, error = publish_jira_comment_fn(str(effect.payload_json.get("comment") or ""))
+            posted, error = publish_jira_comment_fn(
+                str(effect.payload_json.get("comment") or "")
+            )
         elif effect.effect_type == "kb_stage_decision_answer":
             posted, error = _stage_decision_answer_knowledge_effect(
                 session=session,

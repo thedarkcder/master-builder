@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.clarification.questions import (
+    ClarificationQuestion,
+    ClarificationQuestionSet,
+)
 
 
 @dataclass(frozen=True)
@@ -52,7 +55,9 @@ class ClarificationWaitingState:
 
 
 class ParentPlanningClarificationService:
-    def normalize_questions(self, values: tuple[object, ...] | list[object] | None) -> ClarificationQuestionSet:
+    def normalize_questions(
+        self, values: tuple[object, ...] | list[object] | None
+    ) -> ClarificationQuestionSet:
         return ClarificationQuestionSet.from_values(values)
 
     def require_questions_for_waiting_state(
@@ -64,7 +69,9 @@ class ParentPlanningClarificationService:
         question_set = self.normalize_questions(questions)
         if not question_set:
             normalized_context = str(context or "").strip() or "clarification"
-            raise ValueError(f"{normalized_context} requires at least one clarification question")
+            raise ValueError(
+                f"{normalized_context} requires at least one clarification question"
+            )
         return question_set.questions
 
     def ensure_waiting_clarification(
@@ -147,7 +154,9 @@ class ParentPlanningClarificationService:
         normalized_issue_key = str(issue_key or "").strip().upper()
         question_set = self.normalize_questions(questions)
         if not question_set:
-            raise ValueError("Clarification waiting message requires at least one question")
+            raise ValueError(
+                "Clarification waiting message requires at least one question"
+            )
         header = (
             f"Answer the product clarification on Jira issue {normalized_issue_key}, "
             "then retry engineering child fanout."

@@ -73,7 +73,11 @@ def dispatch_issues_command(
                 channel_ids=[payload.channel_id.strip()],
                 project_id=scoped_project_id or "",
                 project_key=str(data.get("project_key") or ""),
-                issue_keys=[str(value) for value in data.get("all_parent_issue_keys", []) if str(value).strip()],
+                issue_keys=[
+                    str(value)
+                    for value in data.get("all_parent_issue_keys", [])
+                    if str(value).strip()
+                ],
                 questions=list(data.get("questions", []) or []),
                 prompt_markdown=str(data.get("prompt_markdown") or prompt_markdown),
             )
@@ -102,7 +106,9 @@ def dispatch_issues_command(
             tenant=tenant,
             channel_id=payload.channel_id,
             user_id=normalized_user_id,
-            project_key=scoped_project_keys[0] if len(scoped_project_keys) == 1 else None,
+            project_key=scoped_project_keys[0]
+            if len(scoped_project_keys) == 1
+            else None,
         )
         if context is None:
             raise HTTPException(
@@ -137,7 +143,9 @@ def dispatch_issues_command(
             )
         original_prompt = str(context.get("prompt_markdown") or "").strip()
         context_questions = ClarificationQuestionSet.from_values(
-            context.get("questions", []) if isinstance(context.get("questions"), list) else ()
+            context.get("questions", [])
+            if isinstance(context.get("questions"), list)
+            else ()
         )
         question_block = (
             "\n".join(context_questions.render_lines(include_reasons=True))
@@ -153,7 +161,9 @@ def dispatch_issues_command(
             "Update existing PM parent Jira issues where possible. Do not create duplicates or engineering child tickets."
         )
         forced_issue_keys = [
-            str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()
+            str(value).strip().upper()
+            for value in context.get("issue_keys", [])
+            if str(value).strip()
         ]
         message, data = seed_parent_issues_with_runtime(
             session=session,
@@ -161,7 +171,8 @@ def dispatch_issues_command(
             prompt_markdown=followup_prompt,
             force_issue_keys=forced_issue_keys,
             allow_create=False,
-            scoped_project_id=str(context.get("project_id") or "").strip() or scoped_project_id,
+            scoped_project_id=str(context.get("project_id") or "").strip()
+            or scoped_project_id,
             scoped_project_keys=[str(context.get("project_key") or "").strip().upper()]
             if str(context.get("project_key") or "").strip()
             else scoped_project_keys,
@@ -179,9 +190,17 @@ def dispatch_issues_command(
                         payload.channel_id,
                     }
                 ),
-                project_id=str(context.get("project_id") or "").strip() or scoped_project_id or "",
-                project_key=str(data.get("project_key") or context.get("project_key") or ""),
-                issue_keys=[str(value) for value in data.get("all_parent_issue_keys", []) if str(value).strip()],
+                project_id=str(context.get("project_id") or "").strip()
+                or scoped_project_id
+                or "",
+                project_key=str(
+                    data.get("project_key") or context.get("project_key") or ""
+                ),
+                issue_keys=[
+                    str(value)
+                    for value in data.get("all_parent_issue_keys", [])
+                    if str(value).strip()
+                ],
                 questions=list(data.get("questions", []) or []),
                 prompt_markdown=str(data.get("prompt_markdown") or followup_prompt),
             )

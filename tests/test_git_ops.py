@@ -26,10 +26,14 @@ class GitOpsTests(unittest.TestCase):
         enforce_repo_match("git@github.com:Example/Repo.git", github_repository)
 
         with self.assertRaises(PermissionError):
-            enforce_repo_match("https://github.com/example/other-repo", github_repository)
+            enforce_repo_match(
+                "https://github.com/example/other-repo", github_repository
+            )
 
     def test_build_branch_name_uses_expected_template(self) -> None:
-        branch = build_branch_name("MAB-8", "GitHub App auth, git isolation, and PR creation")
+        branch = build_branch_name(
+            "MAB-8", "GitHub App auth, git isolation, and PR creation"
+        )
         self.assertTrue(branch.startswith("jira/MAB-8-"))
         self.assertNotIn(" ", branch)
 
@@ -63,7 +67,10 @@ class GitOpsTests(unittest.TestCase):
                 workspace=workspace,
             )
 
-            _run(["git", "config", "user.email", "agent@example.test"], cwd=workspace.repo_dir)
+            _run(
+                ["git", "config", "user.email", "agent@example.test"],
+                cwd=workspace.repo_dir,
+            )
             _run(["git", "config", "user.name", "Agent Test"], cwd=workspace.repo_dir)
 
             branch_name = manager.create_issue_branch(
@@ -217,14 +224,19 @@ class GitOpsTests(unittest.TestCase):
                 github_repository=str(source_repo),
                 workspace=workspace,
             )
-            _run(["git", "config", "user.email", "agent@example.test"], cwd=workspace.repo_dir)
+            _run(
+                ["git", "config", "user.email", "agent@example.test"],
+                cwd=workspace.repo_dir,
+            )
             _run(["git", "config", "user.name", "Agent Test"], cwd=workspace.repo_dir)
             branch_name = manager.create_issue_branch(
                 repo_dir=workspace.repo_dir,
                 issue_key="MAB-11",
                 summary="Guardrail checks",
             )
-            (workspace.repo_dir / "README.md").write_text("seed\nguardrails\n", encoding="utf-8")
+            (workspace.repo_dir / "README.md").write_text(
+                "seed\nguardrails\n", encoding="utf-8"
+            )
             manager.commit_all(
                 repo_dir=workspace.repo_dir,
                 issue_key="MAB-11",

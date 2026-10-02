@@ -52,14 +52,18 @@ class IssueExecutionWorkflow:
         step_key=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Prepare repository",
         kind=WorkflowWorkUnitKind.EXTERNAL_API,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_work_unit(
         key="run_attempt_execution.runtime_invocation",
         step_key=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Runtime invocation",
         kind=WorkflowWorkUnitKind.MODEL_CALL,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_work_unit(
         key="run_attempt_execution.finalize",
@@ -82,7 +86,9 @@ class IssueExecutionWorkflow:
         step_key=ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
         label="Resume human input",
         kind=WorkflowWorkUnitKind.SIDE_EFFECT,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
@@ -100,7 +106,9 @@ class IssueExecutionWorkflow:
         step_key=ISSUE_EXECUTION_STEP_JIRA_COMMENT_PROJECTION,
         label="Publish Jira comment",
         kind=WorkflowWorkUnitKind.EXTERNAL_API,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=ISSUE_EXECUTION_STEP_JIRA_COMMENT_PROJECTION,
@@ -118,7 +126,9 @@ class IssueExecutionWorkflow:
         step_key=ISSUE_EXECUTION_STEP_DISCORD_FOLLOWUP_PROJECTION,
         label="Publish Discord follow-up",
         kind=WorkflowWorkUnitKind.EXTERNAL_API,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=ISSUE_EXECUTION_STEP_DISCORD_FOLLOWUP_PROJECTION,
@@ -136,7 +146,9 @@ class IssueExecutionWorkflow:
         step_key=ISSUE_EXECUTION_STEP_NOTIFICATION_EMIT,
         label="Emit notification",
         kind=WorkflowWorkUnitKind.SIDE_EFFECT,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=ISSUE_EXECUTION_STEP_NOTIFICATION_EMIT,
@@ -156,21 +168,27 @@ class PrRemediationWorkflow:
         step_key=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Load PR context",
         kind=WorkflowWorkUnitKind.EXTERNAL_API,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_work_unit(
         key="run_attempt_execution.runtime_invocation",
         step_key=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Runtime invocation",
         kind=WorkflowWorkUnitKind.MODEL_CALL,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_work_unit(
         key="run_attempt_execution.github_update",
         step_key=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
         label="Publish GitHub update",
         kind=WorkflowWorkUnitKind.EXTERNAL_API,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION,
@@ -186,7 +204,9 @@ class PrRemediationWorkflow:
         step_key=PR_REMEDIATION_STEP_HUMAN_INPUT_RESUME,
         label="Resume human input",
         kind=WorkflowWorkUnitKind.SIDE_EFFECT,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=PR_REMEDIATION_STEP_HUMAN_INPUT_RESUME,
@@ -204,7 +224,9 @@ class PrRemediationWorkflow:
         step_key=PR_REMEDIATION_STEP_NOTIFICATION_EMIT,
         label="Emit notification",
         kind=WorkflowWorkUnitKind.SIDE_EFFECT,
-        retry_policy=WorkflowWorkUnitRetryPolicy(max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300),
+        retry_policy=WorkflowWorkUnitRetryPolicy(
+            max_attempts=3, initial_interval_seconds=30, max_interval_seconds=300
+        ),
     )
     @workflow_step(
         key=PR_REMEDIATION_STEP_NOTIFICATION_EMIT,
@@ -378,9 +400,13 @@ def normalize_workflow_retry_policy_config(raw: dict | None) -> dict[str, object
     return {
         "manual_retry_enabled": bool(config.get("manual_retry_enabled", True)),
         "max_attempts": max(1, int(config.get("max_attempts") or 1)),
-        "initial_interval_seconds": max(0, int(config.get("initial_interval_seconds") or 0)),
+        "initial_interval_seconds": max(
+            0, int(config.get("initial_interval_seconds") or 0)
+        ),
         "max_interval_seconds": max(0, int(config.get("max_interval_seconds") or 0)),
-        "backoff_coefficient": max(1.0, float(config.get("backoff_coefficient") or 1.0)),
+        "backoff_coefficient": max(
+            1.0, float(config.get("backoff_coefficient") or 1.0)
+        ),
     }
 
 
@@ -396,9 +422,15 @@ def _register_builtin_workflows() -> None:
     global _builtin_workflows_registered
     if _builtin_workflows_registered:
         return
-    from orchestrator.core.deployment_setup.workflow import ProjectDeploymentSetupWorkflowDefinition
-    from orchestrator.core.jira_project_reconciliation.workflow import JiraProjectReconciliationWorkflow
-    from orchestrator.core.parent_feature_workflow.planning import ParentFeaturePlanningWorkflow
+    from orchestrator.core.deployment_setup.workflow import (
+        ProjectDeploymentSetupWorkflowDefinition,
+    )
+    from orchestrator.core.jira_project_reconciliation.workflow import (
+        JiraProjectReconciliationWorkflow,
+    )
+    from orchestrator.core.parent_feature_workflow.planning import (
+        ParentFeaturePlanningWorkflow,
+    )
 
     workflow_definition_registry.register(
         WorkflowDefinition(
@@ -454,7 +486,9 @@ def _register_builtin_workflows() -> None:
                 backoff_coefficient=2.0,
             ),
             steps=infer_workflow_steps(ProjectDeploymentSetupWorkflowDefinition),
-            work_units=infer_workflow_work_units(ProjectDeploymentSetupWorkflowDefinition),
+            work_units=infer_workflow_work_units(
+                ProjectDeploymentSetupWorkflowDefinition
+            ),
         )
     )
     workflow_definition_registry.register(
@@ -539,12 +573,16 @@ def get_workflow_type(_session=None, *, workflow_type_key: str) -> WorkflowDefin
     return workflow_definition_registry.get(workflow_type_key)
 
 
-def get_workflow_type_by_system_key(_session=None, *, system_key: str) -> WorkflowDefinition:
+def get_workflow_type_by_system_key(
+    _session=None, *, system_key: str
+) -> WorkflowDefinition:
     _ensure_builtin_workflows_registered()
     return workflow_definition_registry.get_by_system_key(system_key)
 
 
-def get_workflow_type_by_handler_key(_session=None, *, handler_key: str) -> WorkflowDefinition:
+def get_workflow_type_by_handler_key(
+    _session=None, *, handler_key: str
+) -> WorkflowDefinition:
     _ensure_builtin_workflows_registered()
     return workflow_definition_registry.get_by_handler(handler_key)
 
@@ -568,15 +606,25 @@ def validate_persisted_workflow_definitions(*, session) -> None:  # noqa: ANN001
     from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 
     if _LEGACY_WORKFLOW_TYPES_TO_PURGE:
-        legacy_workflows = session.execute(
-            select(WorkflowExecution).where(
-                WorkflowExecution.workflow_type_key.in_(tuple(_LEGACY_WORKFLOW_TYPES_TO_PURGE)),
-                WorkflowExecution.status.in_(_VALIDATED_WORKFLOW_STATUSES),
+        legacy_workflows = (
+            session.execute(
+                select(WorkflowExecution).where(
+                    WorkflowExecution.workflow_type_key.in_(
+                        tuple(_LEGACY_WORKFLOW_TYPES_TO_PURGE)
+                    ),
+                    WorkflowExecution.status.in_(_VALIDATED_WORKFLOW_STATUSES),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if legacy_workflows:
             legacy_ids = [workflow.workflow_id for workflow in legacy_workflows]
-            session.execute(delete(WorkflowExecution).where(WorkflowExecution.workflow_id.in_(legacy_ids)))
+            session.execute(
+                delete(WorkflowExecution).where(
+                    WorkflowExecution.workflow_id.in_(legacy_ids)
+                )
+            )
             session.commit()
             logger.warning(
                 "purged_legacy_workflow_executions workflow_type_keys=%s workflow_ids=%s",
@@ -591,20 +639,35 @@ def validate_persisted_workflow_definitions(*, session) -> None:  # noqa: ANN001
                 },
             )
 
-    active_workflows = session.execute(
-        select(WorkflowExecution).where(WorkflowExecution.status.in_(_VALIDATED_WORKFLOW_STATUSES))
-    ).scalars().all()
+    active_workflows = (
+        session.execute(
+            select(WorkflowExecution).where(
+                WorkflowExecution.status.in_(_VALIDATED_WORKFLOW_STATUSES)
+            )
+        )
+        .scalars()
+        .all()
+    )
     for workflow in active_workflows:
-        definition = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+        definition = get_workflow_type(
+            session, workflow_type_key=workflow.workflow_type_key
+        )
         valid_step_keys = {step.key for step in definition.steps}
-        operation_types = session.execute(
-            select(WorkflowOperation.operation_type).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-        ).scalars().all()
+        operation_types = (
+            session.execute(
+                select(WorkflowOperation.operation_type).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id
+                )
+            )
+            .scalars()
+            .all()
+        )
         unknown = sorted(
             {
                 str(operation_type or "").strip()
                 for operation_type in operation_types
-                if str(operation_type or "").strip() and str(operation_type or "").strip() not in valid_step_keys
+                if str(operation_type or "").strip()
+                and str(operation_type or "").strip() not in valid_step_keys
             }
         )
         if unknown:

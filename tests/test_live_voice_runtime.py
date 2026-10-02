@@ -38,11 +38,17 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
             ),
             clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
         )
-        binding = LiveVoiceRoomBinding(guild_id="guild-1", voice_channel_id="voice-1", text_channel_id="text-1")
+        binding = LiveVoiceRoomBinding(
+            guild_id="guild-1", voice_channel_id="voice-1", text_channel_id="text-1"
+        )
 
         session = runtime.register_room(binding=binding, bot_user_id="bot-1")
         self.assertEqual(session.state, LiveVoiceSessionState.DISCONNECTED)
-        runtime.join_room(binding=binding, human_member_count=1, now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        runtime.join_room(
+            binding=binding,
+            human_member_count=1,
+            now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        )
 
         runtime.ingest_audio(
             binding=binding,
@@ -57,26 +63,57 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
             received_at=datetime(2026, 3, 19, 10, 1, 1, tzinfo=timezone.utc),
         )
 
-        self.assertEqual(runtime.get_session(binding=binding).state, LiveVoiceSessionState.PROCESSING)
+        self.assertEqual(
+            runtime.get_session(binding=binding).state, LiveVoiceSessionState.PROCESSING
+        )
         turns = runtime.poll(now=datetime(2026, 3, 19, 10, 1, 3, tzinfo=timezone.utc))
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0].audio_bytes, b"ab")
         self.assertEqual(turns[0].finalization_reason, "silence")
-        self.assertEqual(runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING)
+        self.assertEqual(
+            runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING
+        )
         self.assertEqual(runtime.get_session(binding=binding).turn_index, 1)
-        self.assertTrue(any(change == ("disconnected", "joining") for change in recorder.state_changes))
-        self.assertTrue(any(change == ("joining", "listening") for change in recorder.state_changes))
-        self.assertTrue(any(change == ("listening", "processing") for change in recorder.state_changes))
-        self.assertTrue(any(change == ("processing", "listening") for change in recorder.state_changes))
+        self.assertTrue(
+            any(
+                change == ("disconnected", "joining")
+                for change in recorder.state_changes
+            )
+        )
+        self.assertTrue(
+            any(change == ("joining", "listening") for change in recorder.state_changes)
+        )
+        self.assertTrue(
+            any(
+                change == ("listening", "processing")
+                for change in recorder.state_changes
+            )
+        )
+        self.assertTrue(
+            any(
+                change == ("processing", "listening")
+                for change in recorder.state_changes
+            )
+        )
         self.assertEqual(recorder.turns, [(1, b"ab", "listening")])
 
     def test_runtime_blocks_bot_audio_and_supports_speaking_guard(self) -> None:
-        runtime = LiveVoiceRuntimeService(clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        runtime = LiveVoiceRuntimeService(
+            clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
+        )
         binding = LiveVoiceRoomBinding(guild_id="guild-1", voice_channel_id="voice-1")
         runtime.register_room(binding=binding, bot_user_id="bot-1")
-        runtime.join_room(binding=binding, human_member_count=1, now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        runtime.join_room(
+            binding=binding,
+            human_member_count=1,
+            now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        )
 
-        runtime.mark_bot_speaking(binding=binding, speaking=True, now=datetime(2026, 3, 19, 10, 0, 1, tzinfo=timezone.utc))
+        runtime.mark_bot_speaking(
+            binding=binding,
+            speaking=True,
+            now=datetime(2026, 3, 19, 10, 0, 1, tzinfo=timezone.utc),
+        )
         self.assertIsNone(
             runtime.ingest_audio(
                 binding=binding,
@@ -94,20 +131,34 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
                 received_at=datetime(2026, 3, 19, 10, 0, 2, tzinfo=timezone.utc),
             )
         )
-        self.assertEqual(runtime.get_session(binding=binding).state, LiveVoiceSessionState.SPEAKING)
+        self.assertEqual(
+            runtime.get_session(binding=binding).state, LiveVoiceSessionState.SPEAKING
+        )
 
-        runtime.mark_bot_speaking(binding=binding, speaking=False, now=datetime(2026, 3, 19, 10, 0, 3, tzinfo=timezone.utc))
-        self.assertEqual(runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING)
+        runtime.mark_bot_speaking(
+            binding=binding,
+            speaking=False,
+            now=datetime(2026, 3, 19, 10, 0, 3, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING
+        )
 
     def test_runtime_evaluates_join_and_leave_decisions(self) -> None:
-        runtime = LiveVoiceRuntimeService(clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        runtime = LiveVoiceRuntimeService(
+            clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc)
+        )
         binding = LiveVoiceRoomBinding(guild_id="guild-1", voice_channel_id="voice-1")
         runtime.register_room(binding=binding, bot_user_id="bot-1")
 
         join_decision = runtime.evaluate_join(binding=binding, human_member_count=0)
         self.assertFalse(join_decision.should_transition)
 
-        runtime.join_room(binding=binding, human_member_count=1, now=datetime(2026, 3, 19, 10, 0, 1, tzinfo=timezone.utc))
+        runtime.join_room(
+            binding=binding,
+            human_member_count=1,
+            now=datetime(2026, 3, 19, 10, 0, 1, tzinfo=timezone.utc),
+        )
         leave_decision = runtime.evaluate_leave(binding=binding, human_member_count=0)
         self.assertTrue(leave_decision.should_transition)
 
@@ -117,7 +168,11 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
             audio_bytes=b"a",
             received_at=datetime(2026, 3, 19, 10, 0, 2, tzinfo=timezone.utc),
         )
-        self.assertFalse(runtime.evaluate_leave(binding=binding, human_member_count=0).should_transition)
+        self.assertFalse(
+            runtime.evaluate_leave(
+                binding=binding, human_member_count=0
+            ).should_transition
+        )
 
     def test_runtime_accepts_completed_audio_turn_without_polling(self) -> None:
         recorder = _Recorder()
@@ -129,9 +184,15 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
             ),
             clock=lambda: datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
         )
-        binding = LiveVoiceRoomBinding(guild_id="guild-1", voice_channel_id="voice-1", text_channel_id="text-1")
+        binding = LiveVoiceRoomBinding(
+            guild_id="guild-1", voice_channel_id="voice-1", text_channel_id="text-1"
+        )
         runtime.register_room(binding=binding, bot_user_id="bot-1")
-        runtime.join_room(binding=binding, human_member_count=1, now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc))
+        runtime.join_room(
+            binding=binding,
+            human_member_count=1,
+            now=datetime(2026, 3, 19, 10, 0, tzinfo=timezone.utc),
+        )
 
         turn = runtime.submit_completed_audio_turn(
             binding=binding,
@@ -146,7 +207,9 @@ class LiveVoiceRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(turn)
         self.assertEqual(turn.audio_bytes, b"pcm")
         self.assertEqual(turn.finalization_reason, "speech_event")
-        self.assertEqual(runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING)
+        self.assertEqual(
+            runtime.get_session(binding=binding).state, LiveVoiceSessionState.LISTENING
+        )
         self.assertEqual(runtime.get_session(binding=binding).turn_index, 1)
 
 

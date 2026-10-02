@@ -27,7 +27,14 @@ from orchestrator.core.worker.webhook_job_service import process_next_webhook_jo
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisRun, Run, Tenant, WebhookJob
+from orchestrator.storage.models import (
+    Project,
+    ProjectApp,
+    ProjectAppAnalysisRun,
+    Run,
+    Tenant,
+    WebhookJob,
+)
 from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
 from orchestrator.core.communications import IngressResult
 from tests.workflow_test_support import add_run_with_workflow, make_run
@@ -36,7 +43,9 @@ from tests.workflow_test_support import add_run_with_workflow, make_run
 class WorkerWebhookJobServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_webhook_job_service.db"
+        self.database_url = (
+            f"sqlite:///{self.temp_dir.name}/worker_webhook_job_service.db"
+        )
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         reset_db_engine_cache()
@@ -45,7 +54,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
 
         now = datetime.now(timezone.utc)
         ready_snapshot = ExecutionSnapshot.empty()
-        ready_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+        ready_snapshot.context.execution_context["pre_check_outcome"] = (
+            "ready_for_agent"
+        )
         with self.session_factory() as session:
             session.add(
                 Tenant(
@@ -161,7 +172,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _github_request(*, request_id: str, dedupe_key: str, subject_key: str) -> WebhookJobEnqueueRequest:
+    def _github_request(
+        *, request_id: str, dedupe_key: str, subject_key: str
+    ) -> WebhookJobEnqueueRequest:
         return WebhookJobEnqueueRequest(
             transport=WEBHOOK_TRANSPORT_GITHUB,
             request_id=request_id,
@@ -185,7 +198,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _project_app_analysis_request(*, run_id: str, checkout_path: str) -> WebhookJobEnqueueRequest:
+    def _project_app_analysis_request(
+        *, run_id: str, checkout_path: str
+    ) -> WebhookJobEnqueueRequest:
         return WebhookJobEnqueueRequest(
             transport=WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS,
             request_id=run_id,
@@ -263,7 +278,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             with patch(
                 "orchestrator.core.worker.webhook_job_service.execute_tenant_discord_ingress_command"
             ) as execute_command:
-                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+                processed = process_next_webhook_job(
+                    session=session, settings=self._settings(), owner_id="worker-1"
+                )
 
             self.assertIsNotNone(processed)
             execute_command.assert_called_once()
@@ -271,7 +288,12 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
 
     def test_project_automation_jobs_dispatch_and_mark_success(self) -> None:
         with self.session_factory() as session:
-            enqueue_webhook_job(session, request=self._project_automation_request(request_id="request-automation-1", execution_id="automation-exec-1"))
+            enqueue_webhook_job(
+                session,
+                request=self._project_automation_request(
+                    request_id="request-automation-1", execution_id="automation-exec-1"
+                ),
+            )
             session.commit()
 
         with self.session_factory() as session:
@@ -293,21 +315,35 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 ),
                 patch(
                     "orchestrator.core.worker.webhook_job_service.execute_side_effect_action",
-                    return_value={"message_id": "discord-msg-1", "channel_id": "channel-automation"},
+                    return_value={
+                        "message_id": "discord-msg-1",
+                        "channel_id": "channel-automation",
+                    },
                 ) as execute_side_effect,
-                patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_success") as mark_success,
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_success"
+                ) as mark_success,
             ):
-                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+                processed = process_next_webhook_job(
+                    session=session, settings=self._settings(), owner_id="worker-1"
+                )
 
             self.assertIsNotNone(processed)
             execute_side_effect.assert_called_once()
             mark_success.assert_called_once()
-            self.assertEqual(mark_success.call_args.kwargs["discord_message_id"], "discord-msg-1")
+            self.assertEqual(
+                mark_success.call_args.kwargs["discord_message_id"], "discord-msg-1"
+            )
             self.assertEqual(session.get(WebhookJob, processed.job_id).status, "done")
 
     def test_project_automation_jobs_mark_failure_when_send_fails(self) -> None:
         with self.session_factory() as session:
-            enqueue_webhook_job(session, request=self._project_automation_request(request_id="request-automation-2", execution_id="automation-exec-2"))
+            enqueue_webhook_job(
+                session,
+                request=self._project_automation_request(
+                    request_id="request-automation-2", execution_id="automation-exec-2"
+                ),
+            )
             session.commit()
 
         with self.session_factory() as session:
@@ -331,9 +367,13 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     "orchestrator.core.worker.webhook_job_service.execute_side_effect_ingress_result",
                     side_effect=RuntimeError("send failed"),
                 ),
-                patch("orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_failure") as mark_failed,
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.mark_project_automation_execution_failure"
+                ) as mark_failed,
             ):
-                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+                processed = process_next_webhook_job(
+                    session=session, settings=self._settings(), owner_id="worker-1"
+                )
 
             self.assertIsNotNone(processed)
             mark_failed.assert_called_once()
@@ -361,7 +401,12 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     updated_at=now,
                 )
             )
-            enqueue_webhook_job(session, request=self._project_app_analysis_request(run_id=run_id, checkout_path=checkout_path))
+            enqueue_webhook_job(
+                session,
+                request=self._project_app_analysis_request(
+                    run_id=run_id, checkout_path=checkout_path
+                ),
+            )
             session.commit()
 
         analysis_result = ProjectAppAnalysisResult(
@@ -407,18 +452,23 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                     return_value=None,
                 ) as create_artifact_pr,
             ):
-                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+                processed = process_next_webhook_job(
+                    session=session, settings=self._settings(), owner_id="worker-1"
+                )
 
             self.assertIsNotNone(processed)
             run_analysis.assert_called_once()
             create_artifact_pr.assert_called_once()
             job = session.get(WebhookJob, processed.job_id)
             run = session.get(ProjectAppAnalysisRun, run_id)
-            app = session.get(ProjectApp, ProjectAppNormalizedCandidate._app_id(
-                tenant_id="tenant-1",
-                project_id="project-1",
-                source_path=".",
-            ))
+            app = session.get(
+                ProjectApp,
+                ProjectAppNormalizedCandidate._app_id(
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    source_path=".",
+                ),
+            )
             self.assertEqual(job.status, "done")
             self.assertEqual(run.status, "completed")
             self.assertIsNotNone(run.completed_at)
@@ -515,9 +565,13 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertIsNone(first_persisted.owner_id)
             self.assertIsNone(second_persisted.owner_id)
 
-    def test_subject_batch_failure_stores_root_cause_for_wrapped_workflow_update(self) -> None:
+    def test_subject_batch_failure_stores_root_cause_for_wrapped_workflow_update(
+        self,
+    ) -> None:
         root = ValueError("Event attempt_id must belong to the supplied operation_id")
-        terminal = RuntimeError("terminal_workflow_advance_error: Event attempt_id must belong to the supplied operation_id")
+        terminal = RuntimeError(
+            "terminal_workflow_advance_error: Event attempt_id must belong to the supplied operation_id"
+        )
         terminal.__cause__ = root
         wrapper = RuntimeError("Workflow update failed")
         wrapper.__cause__ = terminal
@@ -541,9 +595,14 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertIsNotNone(persisted)
             assert persisted is not None
             self.assertEqual(persisted.status, "failed")
-            self.assertEqual(persisted.last_error, "Event attempt_id must belong to the supplied operation_id")
+            self.assertEqual(
+                persisted.last_error,
+                "Event attempt_id must belong to the supplied operation_id",
+            )
 
-    def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
+    def test_process_next_webhook_job_snapshots_job_context_before_rollback(
+        self,
+    ) -> None:
         class _BrokenJob:
             def __init__(self) -> None:
                 self._broken = False
@@ -573,8 +632,14 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             raise RuntimeError("flush failed")
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_subject_batch", return_value=claim),
-            patch("orchestrator.core.worker.webhook_job_service._process_github_subject_jobs", side_effect=_fail_processing),
+            patch(
+                "orchestrator.core.worker.webhook_job_service.claim_next_webhook_subject_batch",
+                return_value=claim,
+            ),
+            patch(
+                "orchestrator.core.worker.webhook_job_service._process_github_subject_jobs",
+                side_effect=_fail_processing,
+            ),
             patch(
                 "orchestrator.core.worker.webhook_job_service.mark_webhook_job_ids_failed",
                 return_value=("failed-job",),
@@ -598,7 +663,9 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             with patch(
                 "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
-                side_effect=RetryableWebhookJobError("runtime temporarily unavailable", retry_after_seconds=45),
+                side_effect=RetryableWebhookJobError(
+                    "runtime temporarily unavailable", retry_after_seconds=45
+                ),
             ):
                 processed = process_next_webhook_job(
                     session=session,

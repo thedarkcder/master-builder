@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.platform.secrets import decrypt_value, encrypt_value
 from orchestrator.storage.models import ManagedSecret
-from orchestrator.storage.tenant_rls import set_platform_system_rls_context, set_tenant_system_rls_context
+from orchestrator.storage.tenant_rls import (
+    set_platform_system_rls_context,
+    set_tenant_system_rls_context,
+)
 
 _SECRET_REF_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
 _SECRET_SCOPE_ALL = "all"
@@ -46,7 +49,11 @@ def list_managed_secret_refs(
     tenant_id: str | None = None,
 ) -> list[SecretRefMetadata]:
     _apply_secret_scope_context(session=session, scope=scope, tenant_id=tenant_id)
-    rows = session.execute(select(ManagedSecret).order_by(ManagedSecret.secret_ref.asc())).scalars().all()
+    rows = (
+        session.execute(select(ManagedSecret).order_by(ManagedSecret.secret_ref.asc()))
+        .scalars()
+        .all()
+    )
     metadata = [
         SecretRefMetadata(
             secret_ref=row.secret_ref,
@@ -80,7 +87,9 @@ def upsert_managed_secret(
         raise ValueError("Secret value is required")
 
     now = datetime.now(timezone.utc)
-    encrypted_value = encrypt_value(plaintext=normalized_value, encryption_key=encryption_key)
+    encrypted_value = encrypt_value(
+        plaintext=normalized_value, encryption_key=encryption_key
+    )
     row = session.get(ManagedSecret, normalized_ref)
     if row is None:
         row = ManagedSecret(
@@ -94,7 +103,9 @@ def upsert_managed_secret(
         row.value_encrypted = encrypted_value
         row.updated_at = now
     session.commit()
-    return SecretRefMetadata(secret_ref=normalized_ref, source="managed", updated_at=row.updated_at)
+    return SecretRefMetadata(
+        secret_ref=normalized_ref, source="managed", updated_at=row.updated_at
+    )
 
 
 def resolve_secret_ref(
@@ -110,7 +121,9 @@ def resolve_secret_ref(
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
-        return decrypt_value(ciphertext=row.value_encrypted, encryption_key=encryption_key)
+        return decrypt_value(
+            ciphertext=row.value_encrypted, encryption_key=encryption_key
+        )
     if allow_environment_fallback:
         return os.environ.get(normalized_ref)
     return None
@@ -129,11 +142,17 @@ def scoped_secret_ref_candidates(
         if value not in candidates:
             candidates.append(value)
 
-    normalized_tenant_id = tenant_id.strip() if tenant_id and tenant_id.strip() else None
-    normalized_project_id = project_id.strip() if project_id and project_id.strip() else None
+    normalized_tenant_id = (
+        tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    )
+    normalized_project_id = (
+        project_id.strip() if project_id and project_id.strip() else None
+    )
 
     if normalized_tenant_id and normalized_project_id:
-        _append(f"project/{normalized_tenant_id}/{normalized_project_id}/{normalized_ref}")
+        _append(
+            f"project/{normalized_tenant_id}/{normalized_project_id}/{normalized_ref}"
+        )
     if normalized_tenant_id:
         _append(f"tenant/{normalized_tenant_id}/{normalized_ref}")
     elif normalized_tenant_id is None:
@@ -151,8 +170,12 @@ def resolve_scoped_secret_ref(
     project_id: str | None = None,
 ) -> str | None:
     normalized_ref = normalize_secret_ref(secret_ref)
-    normalized_tenant_id = tenant_id.strip() if tenant_id and tenant_id.strip() else None
-    normalized_project_id = project_id.strip() if project_id and project_id.strip() else None
+    normalized_tenant_id = (
+        tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    )
+    normalized_project_id = (
+        project_id.strip() if project_id and project_id.strip() else None
+    )
 
     candidates: list[str] = []
     scopes: list[str] = []
@@ -168,7 +191,10 @@ def resolve_scoped_secret_ref(
         if len(parts) == 4:
             candidate_tenant_id, secret_suffix = parts[1], parts[3]
             if candidate_tenant_id and secret_suffix:
-                _append(f"tenant/{candidate_tenant_id}/{secret_suffix}", _SECRET_SCOPE_TENANT)
+                _append(
+                    f"tenant/{candidate_tenant_id}/{secret_suffix}",
+                    _SECRET_SCOPE_TENANT,
+                )
     elif normalized_ref.startswith("tenant/"):
         _append(normalized_ref, _SECRET_SCOPE_TENANT)
     elif normalized_ref.startswith("platform/"):
@@ -229,7 +255,9 @@ def resolve_tenant_secret_ref(
     allow_environment_fallback: bool = False,
 ) -> str | None:
     normalized_ref = normalize_secret_ref(secret_ref)
-    normalized_tenant_id = tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    normalized_tenant_id = (
+        tenant_id.strip() if tenant_id and tenant_id.strip() else None
+    )
     if normalized_tenant_id is None:
         raise ValueError("tenant_id is required for tenant secret resolution")
 
@@ -268,11 +296,17 @@ def resolve_secret_ref_metadata(
     normalized_ref = normalize_secret_ref(secret_ref)
     row = session.get(ManagedSecret, normalized_ref)
     if row is not None:
-        return SecretRefMetadata(secret_ref=normalized_ref, source="managed", updated_at=row.updated_at)
+        return SecretRefMetadata(
+            secret_ref=normalized_ref, source="managed", updated_at=row.updated_at
+        )
 
     if os.environ.get(normalized_ref):
-        return SecretRefMetadata(secret_ref=normalized_ref, source="environment", updated_at=None)
-    return SecretRefMetadata(secret_ref=normalized_ref, source="missing", updated_at=None)
+        return SecretRefMetadata(
+            secret_ref=normalized_ref, source="environment", updated_at=None
+        )
+    return SecretRefMetadata(
+        secret_ref=normalized_ref, source="missing", updated_at=None
+    )
 
 
 def _apply_secret_scope_context(

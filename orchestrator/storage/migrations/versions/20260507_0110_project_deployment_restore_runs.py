@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
-revision = '20260507_0110'
-down_revision = '20260507_0109'
+revision = "20260507_0110"
+down_revision = "20260507_0109"
 branch_labels = None
 depends_on = None
 
@@ -37,25 +37,49 @@ def upgrade() -> None:
             sa.Column("execution_uuid", sa.String(length=128), nullable=False),
             sa.Column("database_type", sa.String(length=32), nullable=False),
             sa.Column("database_uuid", sa.String(length=128), nullable=False),
-            sa.Column("restore_mode", sa.String(length=32), nullable=False, server_default=sa.text("'replace'")),
+            sa.Column(
+                "restore_mode",
+                sa.String(length=32),
+                nullable=False,
+                server_default=sa.text("'replace'"),
+            ),
             sa.Column("requested_by_user_id", sa.String(length=64), nullable=True),
             sa.Column("confirmation_value", sa.String(length=255), nullable=False),
-            sa.Column("execution_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-            sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'queued'")),
+            sa.Column(
+                "execution_payload",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            ),
+            sa.Column(
+                "status",
+                sa.String(length=32),
+                nullable=False,
+                server_default=sa.text("'queued'"),
+            ),
             sa.Column("last_error", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["app_id"], ["project_apps.app_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["app_id"], ["project_apps.app_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("restore_run_id"),
         )
         inspector = inspect(bind)
 
     existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
-    if "ix_project_deployment_restore_runs_tenant_project_created_at" not in existing_indexes:
+    if (
+        "ix_project_deployment_restore_runs_tenant_project_created_at"
+        not in existing_indexes
+    ):
         op.create_index(
             "ix_project_deployment_restore_runs_tenant_project_created_at",
             table_name,
@@ -108,15 +132,31 @@ def downgrade() -> None:
 
     existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
     if "ix_project_deployment_restore_runs_app_id" in existing_indexes:
-        op.drop_index("ix_project_deployment_restore_runs_app_id", table_name=table_name)
+        op.drop_index(
+            "ix_project_deployment_restore_runs_app_id", table_name=table_name
+        )
     if "ix_project_deployment_restore_runs_project_id" in existing_indexes:
-        op.drop_index("ix_project_deployment_restore_runs_project_id", table_name=table_name)
+        op.drop_index(
+            "ix_project_deployment_restore_runs_project_id", table_name=table_name
+        )
     if "ix_project_deployment_restore_runs_tenant_id" in existing_indexes:
-        op.drop_index("ix_project_deployment_restore_runs_tenant_id", table_name=table_name)
+        op.drop_index(
+            "ix_project_deployment_restore_runs_tenant_id", table_name=table_name
+        )
     if "ix_project_deployment_restore_runs_tenant_status" in existing_indexes:
-        op.drop_index("ix_project_deployment_restore_runs_tenant_status", table_name=table_name)
+        op.drop_index(
+            "ix_project_deployment_restore_runs_tenant_status", table_name=table_name
+        )
     if "ix_project_deployment_restore_runs_app_status" in existing_indexes:
-        op.drop_index("ix_project_deployment_restore_runs_app_status", table_name=table_name)
-    if "ix_project_deployment_restore_runs_tenant_project_created_at" in existing_indexes:
-        op.drop_index("ix_project_deployment_restore_runs_tenant_project_created_at", table_name=table_name)
+        op.drop_index(
+            "ix_project_deployment_restore_runs_app_status", table_name=table_name
+        )
+    if (
+        "ix_project_deployment_restore_runs_tenant_project_created_at"
+        in existing_indexes
+    ):
+        op.drop_index(
+            "ix_project_deployment_restore_runs_tenant_project_created_at",
+            table_name=table_name,
+        )
     op.drop_table(table_name)

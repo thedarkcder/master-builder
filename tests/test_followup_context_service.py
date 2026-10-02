@@ -22,6 +22,7 @@ from orchestrator.core.pm.followup_context_service import (
     upsert_followup_context,
 )
 from orchestrator.storage.models import FollowupContext
+
 try:
     from tests.production_path_support import (
         clear_runtime_environment,
@@ -59,8 +60,8 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="decision_gate",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -73,7 +74,7 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             context = resolve_followup_context(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="thread-1",
             )
 
@@ -86,8 +87,8 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="decision_gate",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -98,7 +99,7 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             closed = close_followup_contexts(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 context_type="decision_gate",
                 issue_key="GP-124",
             )
@@ -106,29 +107,37 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertEqual(closed, 1)
 
         with self.session_factory() as session:
-            context = session.query(FollowupContext).filter_by(tenant_id="example").one()
+            context = (
+                session.query(FollowupContext)
+                .filter_by(tenant_id="example-workspace")
+                .one()
+            )
             self.assertEqual(context.status, "closed")
             self.assertIsNotNone(context.closed_at)
             self.assertIsNone(
                 resolve_followup_context(
                     session=session,
-                    tenant_id="example",
+                    tenant_id="example-workspace",
                     channel_id="thread-1",
                 )
             )
 
-    def test_clarification_projection_drops_stale_jira_comment_id_when_question_set_changes(self) -> None:
+    def test_clarification_projection_drops_stale_jira_comment_id_when_question_set_changes(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_clarification_projection(
                 session=session,
                 spec=ClarificationProjectionSpec(
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
                     issue_key="MAB-243",
                     request_id="parent-planning-clarification:MAB-243",
                     origin_command="clarify",
-                    questions=ClarificationQuestionSet.from_values(["What is the audit window?"]).questions,
+                    questions=ClarificationQuestionSet.from_values(
+                        ["What is the audit window?"]
+                    ).questions,
                     metadata={
                         "questions": [{"question": "What is the audit window?"}],
                         "jira_comment_id": "comment-old",
@@ -138,14 +147,22 @@ class FollowupContextServiceTests(unittest.TestCase):
             projection = upsert_clarification_projection(
                 session=session,
                 spec=ClarificationProjectionSpec(
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
                     issue_key="MAB-243",
                     request_id="parent-planning-clarification:MAB-243",
                     origin_command="clarify",
-                    questions=ClarificationQuestionSet.from_values(["What email verification policy should v1 use?"]).questions,
-                    metadata={"questions": [{"question": "What email verification policy should v1 use?"}]},
+                    questions=ClarificationQuestionSet.from_values(
+                        ["What email verification policy should v1 use?"]
+                    ).questions,
+                    metadata={
+                        "questions": [
+                            {
+                                "question": "What email verification policy should v1 use?"
+                            }
+                        ]
+                    },
                 ),
             )
 
@@ -153,12 +170,14 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertNotIn("jira_comment_id", projection.metadata)
             self.assertNotIn("created_comment_id", projection.metadata)
 
-    def test_resolve_followup_context_prefers_root_message_over_parent_channel(self) -> None:
+    def test_resolve_followup_context_prefers_root_message_over_parent_channel(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="ask_thread",
                 channel_id="discord-channel-1",
                 root_message_id="message-1",
@@ -166,8 +185,8 @@ class FollowupContextServiceTests(unittest.TestCase):
             )
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="decision_gate",
                 channel_id="discord-channel-1",
                 root_message_id="message-2",
@@ -178,7 +197,7 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             context = resolve_followup_context(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="discord-channel-1",
                 root_message_id="message-2",
             )
@@ -191,8 +210,8 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="engineering_clarification",
                 issue_key="TP-42",
                 request_id="engineering-clarification:TP-42",
@@ -203,7 +222,7 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             context = resolve_issue_followup_context(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 issue_key="TP-42",
                 context_type="engineering_clarification",
             )
@@ -213,15 +232,21 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertEqual(context.issue_key, "TP-42")
             self.assertEqual(context.context_type, "engineering_clarification")
 
-    def test_clarification_projection_detects_changed_questions_before_metadata_update(self) -> None:
-        first_questions = ClarificationQuestionSet.from_values([{"question": "What should happen first?"}])
-        changed_questions = ClarificationQuestionSet.from_values([{"question": "What should happen second?"}])
+    def test_clarification_projection_detects_changed_questions_before_metadata_update(
+        self,
+    ) -> None:
+        first_questions = ClarificationQuestionSet.from_values(
+            [{"question": "What should happen first?"}]
+        )
+        changed_questions = ClarificationQuestionSet.from_values(
+            [{"question": "What should happen second?"}]
+        )
         with self.session_factory() as session:
             first = upsert_clarification_projection(
                 session=session,
                 spec=ClarificationProjectionSpec(
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     context_type="engineering_clarification",
                     issue_key="TP-42",
                     request_id="engineering-clarification:TP-42",
@@ -232,8 +257,8 @@ class FollowupContextServiceTests(unittest.TestCase):
             changed = upsert_clarification_projection(
                 session=session,
                 spec=ClarificationProjectionSpec(
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     context_type="engineering_clarification",
                     issue_key="TP-42",
                     request_id="engineering-clarification:TP-42",
@@ -245,12 +270,14 @@ class FollowupContextServiceTests(unittest.TestCase):
         self.assertFalse(first.already_projected)
         self.assertFalse(changed.already_projected)
 
-    def test_resolve_followup_context_match_requires_explicit_thread_or_message_identity(self) -> None:
+    def test_resolve_followup_context_match_requires_explicit_thread_or_message_identity(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="ask_thread",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -262,7 +289,7 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             root_channel_only = resolve_followup_context_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="discord-channel-1",
             )
             self.assertEqual(root_channel_only.status, "no_match")
@@ -270,7 +297,7 @@ class FollowupContextServiceTests(unittest.TestCase):
 
             thread_match = resolve_followup_context_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="thread-1",
             )
             self.assertEqual(thread_match.status, "matched")
@@ -279,7 +306,7 @@ class FollowupContextServiceTests(unittest.TestCase):
 
             message_match = resolve_followup_context_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="discord-channel-1",
                 root_message_id="message-1",
             )
@@ -287,12 +314,14 @@ class FollowupContextServiceTests(unittest.TestCase):
             assert message_match.context is not None
             self.assertEqual(message_match.context.root_message_id, "message-1")
 
-    def test_resolve_followup_context_match_returns_ambiguous_instead_of_raising(self) -> None:
+    def test_resolve_followup_context_match_returns_ambiguous_instead_of_raising(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="decision_gate",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -301,8 +330,8 @@ class FollowupContextServiceTests(unittest.TestCase):
             )
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="ask_thread",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-2",
@@ -314,7 +343,7 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             resolution = resolve_followup_context_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="discord-channel-1",
                 root_message_id="message-1",
             )
@@ -323,12 +352,14 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertIsNone(resolution.context)
             self.assertEqual(len(resolution.matches), 2)
 
-    def test_resolve_discord_command_subject_key_ignores_existing_followup_contexts(self) -> None:
+    def test_resolve_discord_command_subject_key_ignores_existing_followup_contexts(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="decision_gate",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -339,19 +370,23 @@ class FollowupContextServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             subject_key = resolve_discord_command_subject_key(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="discord-channel-1",
                 user_id="u-1",
             )
 
-            self.assertEqual(subject_key, "discord_channel:example:discord-channel-1")
+            self.assertEqual(
+                subject_key, "discord_channel:example-workspace:discord-channel-1"
+            )
 
-    def test_resolve_followup_reaction_routes_pm_interview_replies_with_request_id(self) -> None:
+    def test_resolve_followup_reaction_routes_pm_interview_replies_with_request_id(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             context = upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -374,12 +409,14 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertEqual(reaction.command_text, "!pm simple share link only")
             self.assertEqual(reaction.command_params, {"request_id": "pm-req-1"})
 
-    def test_resolve_interaction_subject_scope_fresh_application_command_ignores_active_followups(self) -> None:
+    def test_resolve_interaction_subject_scope_fresh_application_command_ignores_active_followups(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="ask_thread",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -388,8 +425,8 @@ class FollowupContextServiceTests(unittest.TestCase):
             )
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="seed_followup",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-2",
@@ -400,31 +437,37 @@ class FollowupContextServiceTests(unittest.TestCase):
 
         def _find_tenant_for_discord_channel(*, session, channel_id: str):  # noqa: ANN001
             if channel_id == "discord-channel-1":
-                return type("TenantRef", (), {"tenant_id": "example"})()
+                return type("TenantRef", (), {"tenant_id": "example-workspace"})()
             return None
 
         with self.session_factory() as session:
-            tenant_id, project_id, subject_key = resolve_discord_interaction_subject_scope(
-                session=session,
-                payload={
-                    "type": 2,
-                    "channel_id": "discord-channel-1",
-                    "data": {"name": "pm"},
-                    "member": {"user": {"id": "u-1"}},
-                },
-                find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+            tenant_id, project_id, subject_key = (
+                resolve_discord_interaction_subject_scope(
+                    session=session,
+                    payload={
+                        "type": 2,
+                        "channel_id": "discord-channel-1",
+                        "data": {"name": "pm"},
+                        "member": {"user": {"id": "u-1"}},
+                    },
+                    find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+                )
             )
 
-            self.assertEqual(tenant_id, "example")
+            self.assertEqual(tenant_id, "example-workspace")
             self.assertIsNone(project_id)
-            self.assertEqual(subject_key, "discord_channel:example:discord-channel-1")
+            self.assertEqual(
+                subject_key, "discord_channel:example-workspace:discord-channel-1"
+            )
 
-    def test_resolve_interaction_subject_scope_matches_active_thread_for_application_command(self) -> None:
+    def test_resolve_interaction_subject_scope_matches_active_thread_for_application_command(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             context = upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="ask_thread",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -436,49 +479,61 @@ class FollowupContextServiceTests(unittest.TestCase):
 
         def _find_tenant_for_discord_channel(*, session, channel_id: str):  # noqa: ANN001
             if channel_id == "thread-1":
-                return type("TenantRef", (), {"tenant_id": "example"})()
+                return type("TenantRef", (), {"tenant_id": "example-workspace"})()
             return None
 
         with self.session_factory() as session:
-            tenant_id, project_id, subject_key = resolve_discord_interaction_subject_scope(
-                session=session,
-                payload={
-                    "type": 2,
-                    "channel_id": "thread-1",
-                    "data": {"name": "run"},
-                    "member": {"user": {"id": "u-1"}},
-                },
-                find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+            tenant_id, project_id, subject_key = (
+                resolve_discord_interaction_subject_scope(
+                    session=session,
+                    payload={
+                        "type": 2,
+                        "channel_id": "thread-1",
+                        "data": {"name": "run"},
+                        "member": {"user": {"id": "u-1"}},
+                    },
+                    find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+                )
             )
 
-            self.assertEqual(tenant_id, "example")
-            self.assertEqual(project_id, "example-default")
+            self.assertEqual(tenant_id, "example-workspace")
+            self.assertEqual(project_id, "example-workspace-default")
             self.assertEqual(subject_key, f"discord_followup:{context_id}")
 
-    def test_resolve_interaction_subject_scope_sets_project_for_project_channel(self) -> None:
+    def test_resolve_interaction_subject_scope_sets_project_for_project_channel(
+        self,
+    ) -> None:
         def _find_tenant_for_discord_channel(*, session, channel_id: str):  # noqa: ANN001
             if channel_id == "discord-channel-1":
-                return type("TenantRef", (), {"tenant_id": "example"})()
+                return type("TenantRef", (), {"tenant_id": "example-workspace"})()
             return None
 
-        def _resolve_project_for_discord_channel(*, session, tenant_id: str, channel_id: str):  # noqa: ANN001
-            if tenant_id == "example" and channel_id == "discord-channel-1":
-                return type("ProjectRef", (), {"project_id": "example-default"})()
+        def _resolve_project_for_discord_channel(
+            *, session, tenant_id: str, channel_id: str
+        ):  # noqa: ANN001
+            if tenant_id == "example-workspace" and channel_id == "discord-channel-1":
+                return type(
+                    "ProjectRef", (), {"project_id": "example-workspace-default"}
+                )()
             return None
 
         with self.session_factory() as session:
-            tenant_id, project_id, subject_key = resolve_discord_interaction_subject_scope(
-                session=session,
-                payload={
-                    "type": 2,
-                    "channel_id": "discord-channel-1",
-                    "data": {"name": "run"},
-                    "member": {"user": {"id": "u-1"}},
-                },
-                find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
-                resolve_project_for_discord_channel=_resolve_project_for_discord_channel,
+            tenant_id, project_id, subject_key = (
+                resolve_discord_interaction_subject_scope(
+                    session=session,
+                    payload={
+                        "type": 2,
+                        "channel_id": "discord-channel-1",
+                        "data": {"name": "run"},
+                        "member": {"user": {"id": "u-1"}},
+                    },
+                    find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+                    resolve_project_for_discord_channel=_resolve_project_for_discord_channel,
+                )
             )
 
-            self.assertEqual(tenant_id, "example")
-            self.assertEqual(project_id, "example-default")
-            self.assertEqual(subject_key, "discord_channel:example:discord-channel-1")
+            self.assertEqual(tenant_id, "example-workspace")
+            self.assertEqual(project_id, "example-workspace-default")
+            self.assertEqual(
+                subject_key, "discord_channel:example-workspace:discord-channel-1"
+            )

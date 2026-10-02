@@ -19,7 +19,12 @@ from orchestrator.core.node_release_contracts import (
     NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
     legacy_expo_web_release_contract,
 )
-from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisRun, Tenant
+from orchestrator.storage.models import (
+    Project,
+    ProjectApp,
+    ProjectAppAnalysisRun,
+    Tenant,
+)
 
 _IGNORE_DIR_NAMES = {
     ".git",
@@ -34,8 +39,18 @@ _IGNORE_DIR_NAMES = {
     "target",
     "vendor",
 }
-_COMPOSE_FILENAMES = {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
-_ANDROID_GRADLE_FILENAMES = {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}
+_COMPOSE_FILENAMES = {
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "compose.yml",
+    "compose.yaml",
+}
+_ANDROID_GRADLE_FILENAMES = {
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+}
 _PYTHON_DEFAULT_PORTS = {
     "django": 8000,
     "fastapi": 8000,
@@ -73,7 +88,9 @@ def _deployment_config_with_source_strategy(
     normalized = dict(deployment_config or {})
     source_strategy = str(build_strategy or "").strip().lower()
     if source_strategy not in _DEPLOYMENT_SOURCE_STRATEGIES:
-        raise ValueError("build_strategy must be dockerfile, docker_compose, or nixpacks")
+        raise ValueError(
+            "build_strategy must be dockerfile, docker_compose, or nixpacks"
+        )
     normalized.setdefault("source_strategy", source_strategy)
     return normalized
 
@@ -120,9 +137,13 @@ class ProjectAppPlannerRuntimeApp(BaseModel):
                 continue
             kind = str(resource.get("kind") or "").strip().lower()
             if kind == "service":
-                raise ValueError(f"apps.resources[{index}] is a service; use apps.services instead")
+                raise ValueError(
+                    f"apps.resources[{index}] is a service; use apps.services instead"
+                )
             if kind in {"file", "persistent", "persistent_volume", "volume"}:
-                raise ValueError(f"apps.resources[{index}] is a volume; use apps.volumes instead")
+                raise ValueError(
+                    f"apps.resources[{index}] is a volume; use apps.volumes instead"
+                )
         return self
 
     @field_validator("build_strategy")
@@ -130,7 +151,9 @@ class ProjectAppPlannerRuntimeApp(BaseModel):
     def normalize_build_strategy(cls, value: str | None) -> str:
         normalized = str(value or "").strip().lower()
         if normalized not in {"dockerfile", "docker_compose", "nixpacks"}:
-            raise ValueError("build_strategy must be dockerfile, docker_compose, or nixpacks")
+            raise ValueError(
+                "build_strategy must be dockerfile, docker_compose, or nixpacks"
+            )
         return normalized
 
 
@@ -186,10 +209,14 @@ class ProjectAppPreScanCandidate:
 class ProjectAppNormalizedCandidate(ProjectAppPreScanCandidate):
     slug: str = ""
 
-    def to_project_app_kwargs(self, *, tenant_id: str, project_id: str, now: datetime | None = None) -> dict[str, object]:
+    def to_project_app_kwargs(
+        self, *, tenant_id: str, project_id: str, now: datetime | None = None
+    ) -> dict[str, object]:
         timestamp = now or datetime.now(timezone.utc)
         return {
-            "app_id": self._app_id(tenant_id=tenant_id, project_id=project_id, source_path=self.source_path),
+            "app_id": self._app_id(
+                tenant_id=tenant_id, project_id=project_id, source_path=self.source_path
+            ),
             "tenant_id": tenant_id,
             "project_id": project_id,
             "name": self.name,
@@ -271,17 +298,26 @@ def _source_path_suffix(source_path: str) -> str:
     return hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:8]
 
 
-def _deployment_candidate_name(*, repo_root: Path, directory: Path, evidence: dict[str, object]) -> str:
+def _deployment_candidate_name(
+    *, repo_root: Path, directory: Path, evidence: dict[str, object]
+) -> str:
     explicit_name = _normalize_optional_string(evidence.get("name"))
     if explicit_name is not None:
         return explicit_name
-    package_name = evidence.get("package_name") if isinstance(evidence.get("package_name"), str) else None
+    package_name = (
+        evidence.get("package_name")
+        if isinstance(evidence.get("package_name"), str)
+        else None
+    )
     normalized_package_name = _normalize_optional_string(package_name)
     if normalized_package_name is not None:
         return normalized_package_name
     if directory == repo_root:
         return repo_root.name
-    if directory.name.lower() in {"docker", "compose", "deployment", "deploy"} and directory.parent != repo_root.parent:
+    if (
+        directory.name.lower() in {"docker", "compose", "deployment", "deploy"}
+        and directory.parent != repo_root.parent
+    ):
         return directory.parent.name
     return directory.name or repo_root.name
 
@@ -308,7 +344,9 @@ def _iter_repo_files(repo_root: Path) -> Sequence[Path]:
     files: list[Path] = []
     for current_root, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = sorted(
-            dirname for dirname in dirnames if dirname not in _IGNORE_DIR_NAMES and not dirname.startswith(".")
+            dirname
+            for dirname in dirnames
+            if dirname not in _IGNORE_DIR_NAMES and not dirname.startswith(".")
         )
         current_path = Path(current_root)
         for filename in sorted(filenames):
@@ -326,7 +364,9 @@ def _extract_port_from_text(text: str) -> int | None:
     return port
 
 
-def _extract_compose_port_mappings(service: dict[str, object]) -> tuple[dict[str, object], ...]:
+def _extract_compose_port_mappings(
+    service: dict[str, object],
+) -> tuple[dict[str, object], ...]:
     ports = service.get("ports")
     if not isinstance(ports, list):
         return ()
@@ -368,10 +408,22 @@ def _extract_compose_port(service: dict[str, object]) -> int | None:
 
 
 def _compose_public_port(compose_payload: dict[str, object]) -> int | None:
-    services = compose_payload.get("services") if isinstance(compose_payload.get("services"), dict) else {}
+    services = (
+        compose_payload.get("services")
+        if isinstance(compose_payload.get("services"), dict)
+        else {}
+    )
     if not isinstance(services, dict):
         return None
-    preferred_markers = ("web", "ui", "frontend", "app", "admin", "temporal-ui", "console")
+    preferred_markers = (
+        "web",
+        "ui",
+        "frontend",
+        "app",
+        "admin",
+        "temporal-ui",
+        "console",
+    )
     candidates: list[tuple[int, int]] = []
     for service_name, raw_service in services.items():
         if not isinstance(raw_service, dict):
@@ -388,7 +440,12 @@ def _compose_public_port(compose_payload: dict[str, object]) -> int | None:
             container_port = mapping.get("container_port")
             if not isinstance(host_port, int) or not isinstance(container_port, int):
                 continue
-            http_rank = 0 if container_port in {80, 3000, 4200, 4173, 5000, 8000, 8080, 8088, 9001, 1358} else 50
+            http_rank = (
+                0
+                if container_port
+                in {80, 3000, 4200, 4173, 5000, 8000, 8080, 8088, 9001, 1358}
+                else 50
+            )
             candidates.append((marker_rank + http_rank, host_port))
     if not candidates:
         return None
@@ -401,7 +458,9 @@ def _normalize_resource_key(value: object) -> str:
     return normalized or "resource"
 
 
-def _infer_compose_service_resource(service_name: object, service: dict[str, object]) -> tuple[str | None, str | None]:
+def _infer_compose_service_resource(
+    service_name: object, service: dict[str, object]
+) -> tuple[str | None, str | None]:
     normalized_service_name = str(service_name or "").strip().lower()
     image = str(service.get("image") or "").strip().lower()
     admin_helper_markers = {
@@ -413,7 +472,10 @@ def _infer_compose_service_resource(service_name: object, service: dict[str, obj
         "kibana",
         "swagger-ui",
     }
-    if any(marker in image or marker in normalized_service_name for marker in admin_helper_markers):
+    if any(
+        marker in image or marker in normalized_service_name
+        for marker in admin_helper_markers
+    ):
         return None, None
     if "postgres" in image or "postgis" in image:
         return "postgres", None
@@ -449,7 +511,9 @@ def _infer_compose_service_resource(service_name: object, service: dict[str, obj
     return "service", None
 
 
-def _compose_volume_mount_path(service: dict[str, object], volume_name: str) -> str | None:
+def _compose_volume_mount_path(
+    service: dict[str, object], volume_name: str
+) -> str | None:
     volumes = service.get("volumes")
     if not isinstance(volumes, list):
         return None
@@ -464,23 +528,32 @@ def _compose_volume_mount_path(service: dict[str, object], volume_name: str) -> 
     return None
 
 
-def _extract_compose_resources(compose_payload: dict[str, object]) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
+def _extract_compose_resources(
+    compose_payload: dict[str, object],
+) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
     resources: list[dict[str, object]] = []
     volumes_json: list[dict[str, object]] = []
     resource_keys: set[str] = set()
     volume_keys: set[str] = set()
-    services = compose_payload.get("services") if isinstance(compose_payload.get("services"), dict) else {}
+    services = (
+        compose_payload.get("services")
+        if isinstance(compose_payload.get("services"), dict)
+        else {}
+    )
     if isinstance(services, dict):
         for service_name, raw_service in sorted(services.items()):
             if not isinstance(raw_service, dict):
                 continue
-            kind, service_type = _infer_compose_service_resource(service_name, raw_service)
+            kind, service_type = _infer_compose_service_resource(
+                service_name, raw_service
+            )
             if kind is None:
                 continue
             port_mappings = _extract_compose_port_mappings(raw_service)
             if kind == "service" and service_type is None:
                 has_http_port = any(
-                    mapping.get("container_port") in {80, 3000, 4200, 4173, 5000, 8000, 8080, 8088, 9001, 1358}
+                    mapping.get("container_port")
+                    in {80, 3000, 4200, 4173, 5000, 8000, 8080, 8088, 9001, 1358}
                     for mapping in port_mappings
                 )
                 if not has_http_port:
@@ -509,7 +582,11 @@ def _extract_compose_resources(compose_payload: dict[str, object]) -> tuple[tupl
                     "config": config,
                 }
             )
-    volumes = compose_payload.get("volumes") if isinstance(compose_payload.get("volumes"), dict) else {}
+    volumes = (
+        compose_payload.get("volumes")
+        if isinstance(compose_payload.get("volumes"), dict)
+        else {}
+    )
     if isinstance(volumes, dict):
         for volume_name in sorted(volumes):
             key = _normalize_resource_key(volume_name)
@@ -520,7 +597,9 @@ def _extract_compose_resources(compose_payload: dict[str, object]) -> tuple[tupl
             if isinstance(services, dict):
                 for raw_service in services.values():
                     if isinstance(raw_service, dict):
-                        mount_path = _compose_volume_mount_path(raw_service, str(volume_name))
+                        mount_path = _compose_volume_mount_path(
+                            raw_service, str(volume_name)
+                        )
                         if mount_path:
                             break
             config: dict[str, object] = {
@@ -541,7 +620,9 @@ def _extract_compose_resources(compose_payload: dict[str, object]) -> tuple[tupl
 
 
 def _service_record_from_resource(resource: dict[str, object]) -> dict[str, object]:
-    config = dict(resource.get("config")) if isinstance(resource.get("config"), dict) else {}
+    config = (
+        dict(resource.get("config")) if isinstance(resource.get("config"), dict) else {}
+    )
     raw_service_type = str(config.get("service_type") or "").strip().lower()
     service_kind = "api" if raw_service_type == "api" else "website"
     service_record: dict[str, object] = {
@@ -576,19 +657,45 @@ def _service_record_from_resource(resource: dict[str, object]) -> dict[str, obje
     return {key: value for key, value in service_record.items() if value is not None}
 
 
-def _framework_hint_from_text(text: str) -> tuple[str | None, str | None, int | None, str | None, float]:
+def _framework_hint_from_text(
+    text: str,
+) -> tuple[str | None, str | None, int | None, str | None, float]:
     lowered = text.lower()
     for marker, runtime, language, port, start_command in _NODE_HINTS:
         if marker in lowered:
             return runtime, language, port, start_command, 0.85
     if "django" in lowered:
-        return "python", "python", _PYTHON_DEFAULT_PORTS["django"], "python manage.py runserver 0.0.0.0:8000", 0.8
+        return (
+            "python",
+            "python",
+            _PYTHON_DEFAULT_PORTS["django"],
+            "python manage.py runserver 0.0.0.0:8000",
+            0.8,
+        )
     if "fastapi" in lowered:
-        return "python", "python", _PYTHON_DEFAULT_PORTS["fastapi"], "uvicorn app.main:app --host 0.0.0.0 --port 8000", 0.8
+        return (
+            "python",
+            "python",
+            _PYTHON_DEFAULT_PORTS["fastapi"],
+            "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+            0.8,
+        )
     if "flask" in lowered:
-        return "python", "python", _PYTHON_DEFAULT_PORTS["flask"], "flask run --host 0.0.0.0 --port 5000", 0.8
+        return (
+            "python",
+            "python",
+            _PYTHON_DEFAULT_PORTS["flask"],
+            "flask run --host 0.0.0.0 --port 5000",
+            0.8,
+        )
     if "streamlit" in lowered:
-        return "python", "python", _PYTHON_DEFAULT_PORTS["streamlit"], "streamlit run app.py --server.address 0.0.0.0", 0.8
+        return (
+            "python",
+            "python",
+            _PYTHON_DEFAULT_PORTS["streamlit"],
+            "streamlit run app.py --server.address 0.0.0.0",
+            0.8,
+        )
     if "go.mod" in lowered or "package main" in lowered:
         return "go", "go", 8080, "go run .", 0.7
     if "cargo" in lowered or "[package]" in lowered:
@@ -598,7 +705,9 @@ def _framework_hint_from_text(text: str) -> tuple[str | None, str | None, int | 
     return None, None, None, None, 0.0
 
 
-def _normalize_package_json(text: str) -> tuple[str | None, str | None, int | None, str | None, str | None, float]:
+def _normalize_package_json(
+    text: str,
+) -> tuple[str | None, str | None, int | None, str | None, str | None, float]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
@@ -621,11 +730,29 @@ def _normalize_package_json(text: str) -> tuple[str | None, str | None, int | No
     lowered_dependencies = {str(key).lower() for key in dependencies}
     for marker, runtime, language, port, default_start in _NODE_HINTS:
         if any(marker in dependency for dependency in lowered_dependencies):
-            if runtime == "react_native_web" and isinstance(scripts, dict) and "web" in scripts:
+            if (
+                runtime == "react_native_web"
+                and isinstance(scripts, dict)
+                and "web" in scripts
+            ):
                 start_command = "npm run web"
-            return package_name, runtime, language, port, start_command or default_start, 0.85
+            return (
+                package_name,
+                runtime,
+                language,
+                port,
+                start_command or default_start,
+                0.85,
+            )
     if "react-scripts" in lowered_dependencies:
-        return package_name, "react", "javascript", 3000, start_command or "npm start", 0.75
+        return (
+            package_name,
+            "react",
+            "javascript",
+            3000,
+            start_command or "npm start",
+            0.75,
+        )
     return package_name, None, None, None, start_command, 0.25 if package_name else 0.0
 
 
@@ -635,22 +762,50 @@ def _has_stale_taobao_yarn_lock(text: object) -> bool:
     return any(marker in text for marker in _STALE_TAOBAO_YARN_REGISTRY_MARKERS)
 
 
-def _normalize_requirements_text(text: str) -> tuple[str | None, str | None, int | None, str | None, float]:
+def _normalize_requirements_text(
+    text: str,
+) -> tuple[str | None, str | None, int | None, str | None, float]:
     lowered = text.lower()
     for framework, port in _PYTHON_DEFAULT_PORTS.items():
         if framework in lowered:
             if framework == "django":
-                return "python", "python", port, "python manage.py runserver 0.0.0.0:8000", 0.75
+                return (
+                    "python",
+                    "python",
+                    port,
+                    "python manage.py runserver 0.0.0.0:8000",
+                    0.75,
+                )
             if framework == "fastapi":
-                return "python", "python", port, "uvicorn app.main:app --host 0.0.0.0 --port 8000", 0.75
+                return (
+                    "python",
+                    "python",
+                    port,
+                    "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+                    0.75,
+                )
             if framework == "flask":
-                return "python", "python", port, "flask run --host 0.0.0.0 --port 5000", 0.7
+                return (
+                    "python",
+                    "python",
+                    port,
+                    "flask run --host 0.0.0.0 --port 5000",
+                    0.7,
+                )
             if framework == "streamlit":
-                return "python", "python", port, "streamlit run app.py --server.address 0.0.0.0", 0.7
+                return (
+                    "python",
+                    "python",
+                    port,
+                    "streamlit run app.py --server.address 0.0.0.0",
+                    0.7,
+                )
     return None, None, None, None, 0.0
 
 
-def _normalize_pom_text(text: str) -> tuple[str | None, str | None, int | None, str | None, float]:
+def _normalize_pom_text(
+    text: str,
+) -> tuple[str | None, str | None, int | None, str | None, float]:
     lowered = text.lower()
     if "<project" not in lowered:
         return None, None, None, None, 0.0
@@ -685,7 +840,9 @@ def _build_env_schema_from_env_file(content: str) -> dict[str, object]:
     return schema
 
 
-def _merge_schema(target: dict[str, object], source: dict[str, object]) -> dict[str, object]:
+def _merge_schema(
+    target: dict[str, object], source: dict[str, object]
+) -> dict[str, object]:
     merged = dict(target)
     for key, value in source.items():
         if key not in merged:
@@ -693,10 +850,16 @@ def _merge_schema(target: dict[str, object], source: dict[str, object]) -> dict[
     return merged
 
 
-def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidence: dict[str, object]) -> ProjectAppPreScanCandidate | None:
-    rel_dir = directory.relative_to(repo_root).as_posix() if directory != repo_root else "."
+def _build_candidate_from_directory(
+    *, repo_root: Path, directory: Path, evidence: dict[str, object]
+) -> ProjectAppPreScanCandidate | None:
+    rel_dir = (
+        directory.relative_to(repo_root).as_posix() if directory != repo_root else "."
+    )
     rel_dir = _normalize_repo_relative_path(rel_dir)
-    name = _deployment_candidate_name(repo_root=repo_root, directory=directory, evidence=evidence)
+    name = _deployment_candidate_name(
+        repo_root=repo_root, directory=directory, evidence=evidence
+    )
 
     build_strategy = "nixpacks"
     detected_runtime = None
@@ -720,24 +883,42 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
     if isinstance(dockerfile_text, str):
         has_deployable_evidence = True
         build_strategy = "dockerfile"
-        detected_runtime, detected_language, default_port, default_start, confidence = _framework_hint_from_text(dockerfile_text)
+        detected_runtime, detected_language, default_port, default_start, confidence = (
+            _framework_hint_from_text(dockerfile_text)
+        )
         detection_confidence = max(detection_confidence, 0.9)
         exposed_port = _extract_port_from_text(dockerfile_text) or default_port
-        healthcheck = _compose_healthcheck(_extract_healthcheck_from_dockerfile(dockerfile_text))
+        healthcheck = _compose_healthcheck(
+            _extract_healthcheck_from_dockerfile(dockerfile_text)
+        )
         start_command = _extract_cmd_from_dockerfile(dockerfile_text) or default_start
-        env_schema_json = _merge_schema(env_schema_json, _extract_env_schema_from_dockerfile(dockerfile_text))
+        env_schema_json = _merge_schema(
+            env_schema_json, _extract_env_schema_from_dockerfile(dockerfile_text)
+        )
         needs_generated_files = False
     compose_payload = evidence.get("compose_payload")
     if isinstance(compose_payload, dict):
         has_deployable_evidence = True
         build_strategy = "docker_compose"
-        services = compose_payload.get("services") if isinstance(compose_payload.get("services"), dict) else {}
-        first_service = next(iter(services.values()), {}) if isinstance(services, dict) else {}
+        services = (
+            compose_payload.get("services")
+            if isinstance(compose_payload.get("services"), dict)
+            else {}
+        )
+        first_service = (
+            next(iter(services.values()), {}) if isinstance(services, dict) else {}
+        )
         if isinstance(first_service, dict):
             exposed_port = exposed_port or _extract_compose_port(first_service)
-            healthcheck = healthcheck or _compose_healthcheck(first_service.get("healthcheck"))
-            start_command = start_command or _normalize_optional_string(first_service.get("command"))
-            env_schema_json = _merge_schema(env_schema_json, _extract_env_schema_from_compose(first_service))
+            healthcheck = healthcheck or _compose_healthcheck(
+                first_service.get("healthcheck")
+            )
+            start_command = start_command or _normalize_optional_string(
+                first_service.get("command")
+            )
+            env_schema_json = _merge_schema(
+                env_schema_json, _extract_env_schema_from_compose(first_service)
+            )
         exposed_port = _compose_public_port(compose_payload) or exposed_port
         compose_resources, volumes_json = _extract_compose_resources(compose_payload)
         services_json = tuple(
@@ -763,7 +944,9 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
 
     package_json_text = evidence.get("package_json_text")
     if isinstance(package_json_text, str):
-        package_name, runtime, language, default_port, default_start, confidence = _normalize_package_json(package_json_text)
+        package_name, runtime, language, default_port, default_start, confidence = (
+            _normalize_package_json(package_json_text)
+        )
         if runtime is not None or default_start is not None:
             has_deployable_evidence = True
         if package_name:
@@ -780,18 +963,26 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
             legacy_expo_contract = legacy_expo_web_release_contract(package_json_text)
             if legacy_expo_contract:
                 start_command = str(legacy_expo_contract["start_command"])
-                deployment_config["install_command"] = legacy_expo_contract["install_command"]
+                deployment_config["install_command"] = legacy_expo_contract[
+                    "install_command"
+                ]
                 if isinstance(legacy_expo_contract.get("environment"), dict):
                     deployment_config["environment"] = {
                         **dict(deployment_config.get("environment") or {}),
                         **dict(legacy_expo_contract["environment"]),
                     }
-        if runtime == "react_native_web" and _has_stale_taobao_yarn_lock(evidence.get("yarn_lock_text")):
-            deployment_config.setdefault("install_command", NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND)
+        if runtime == "react_native_web" and _has_stale_taobao_yarn_lock(
+            evidence.get("yarn_lock_text")
+        ):
+            deployment_config.setdefault(
+                "install_command", NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND
+            )
         detection_confidence = max(detection_confidence, confidence)
     pyproject_text = evidence.get("pyproject_text")
     if isinstance(pyproject_text, str):
-        runtime, language, default_port, default_start, confidence = _normalize_requirements_text(pyproject_text)
+        runtime, language, default_port, default_start, confidence = (
+            _normalize_requirements_text(pyproject_text)
+        )
         if runtime is not None or default_start is not None:
             has_deployable_evidence = True
         if runtime is not None:
@@ -805,7 +996,9 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         detection_confidence = max(detection_confidence, confidence)
     requirements_text = evidence.get("requirements_text")
     if isinstance(requirements_text, str):
-        runtime, language, default_port, default_start, confidence = _normalize_requirements_text(requirements_text)
+        runtime, language, default_port, default_start, confidence = (
+            _normalize_requirements_text(requirements_text)
+        )
         if runtime is not None or default_start is not None:
             has_deployable_evidence = True
         if runtime is not None:
@@ -843,7 +1036,9 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         detection_confidence = max(detection_confidence, 0.7)
     pom_text = evidence.get("pom_text")
     if isinstance(pom_text, str):
-        runtime, language, default_port, default_start, confidence = _normalize_pom_text(pom_text)
+        runtime, language, default_port, default_start, confidence = (
+            _normalize_pom_text(pom_text)
+        )
         if runtime is not None or default_start is not None:
             has_deployable_evidence = True
         if runtime is not None:
@@ -873,8 +1068,12 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
 
     env_example_text = evidence.get("env_example_text")
     if isinstance(env_example_text, str):
-        env_schema_json = _merge_schema(env_schema_json, _build_env_schema_from_env_file(env_example_text))
-        secret_schema_json = _merge_schema(secret_schema_json, _build_secret_schema_from_env_file(env_example_text))
+        env_schema_json = _merge_schema(
+            env_schema_json, _build_env_schema_from_env_file(env_example_text)
+        )
+        secret_schema_json = _merge_schema(
+            secret_schema_json, _build_secret_schema_from_env_file(env_example_text)
+        )
         detection_confidence = max(detection_confidence, 0.55)
 
     if not has_deployable_evidence:
@@ -932,7 +1131,10 @@ def _extract_env_schema_from_compose(service: dict[str, object]) -> dict[str, ob
     environment = service.get("environment")
     if isinstance(environment, dict):
         for key, value in environment.items():
-            schema[str(key)] = {"required": value is not None, "source": "docker_compose"}
+            schema[str(key)] = {
+                "required": value is not None,
+                "source": "docker_compose",
+            }
     elif isinstance(environment, list):
         for item in environment:
             key = str(item or "").split("=", 1)[0].strip()
@@ -951,7 +1153,10 @@ def _build_secret_schema_from_env_file(content: str) -> dict[str, object]:
         if not key:
             continue
         upper = key.upper()
-        if any(token in upper for token in ("SECRET", "TOKEN", "PASSWORD", "KEY", "PRIVATE", "CREDENTIAL")):
+        if any(
+            token in upper
+            for token in ("SECRET", "TOKEN", "PASSWORD", "KEY", "PRIVATE", "CREDENTIAL")
+        ):
             schema[key] = {"required": True, "source": ".env.example"}
     return schema
 
@@ -962,7 +1167,9 @@ def _evidence_for_directory(
     repo_root: Path,
     directory: Path,
 ) -> dict[str, object]:
-    rel_dir = directory.relative_to(repo_root).as_posix() if directory != repo_root else "."
+    rel_dir = (
+        directory.relative_to(repo_root).as_posix() if directory != repo_root else "."
+    )
     rel_dir = _normalize_repo_relative_path(rel_dir)
     return evidence_by_dir.setdefault(rel_dir, {})
 
@@ -972,7 +1179,11 @@ def _android_manifest_source_dir(*, repo_root: Path, file_path: Path) -> Path:
         relative_parts = file_path.relative_to(repo_root).parts
     except ValueError:
         return file_path.parent
-    if len(relative_parts) >= 4 and relative_parts[-3:] == ("src", "main", "AndroidManifest.xml"):
+    if len(relative_parts) >= 4 and relative_parts[-3:] == (
+        "src",
+        "main",
+        "AndroidManifest.xml",
+    ):
         return repo_root.joinpath(*relative_parts[:-3])
     return file_path.parent
 
@@ -980,7 +1191,9 @@ def _android_manifest_source_dir(*, repo_root: Path, file_path: Path) -> Path:
 def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
     evidence_by_dir: dict[str, dict[str, object]] = {}
     for file_path in _iter_repo_files(repo_root):
-        evidence = _evidence_for_directory(evidence_by_dir, repo_root=repo_root, directory=file_path.parent)
+        evidence = _evidence_for_directory(
+            evidence_by_dir, repo_root=repo_root, directory=file_path.parent
+        )
         filename = file_path.name
         lowered = filename.lower()
         try:
@@ -988,7 +1201,10 @@ def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
         except (OSError, UnicodeDecodeError):
             content = ""
 
-        if lowered == "project.pbxproj" and file_path.parent.suffix.lower() == ".xcodeproj":
+        if (
+            lowered == "project.pbxproj"
+            and file_path.parent.suffix.lower() == ".xcodeproj"
+        ):
             ios_evidence = _evidence_for_directory(
                 evidence_by_dir,
                 repo_root=repo_root,
@@ -1002,25 +1218,41 @@ def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
                 "com.android.application" in lowered_content
                 or "com.android.library" in lowered_content
                 or "com.android.test" in lowered_content
-                or (lowered.startswith("settings.gradle") and "include ':app'" in lowered_content)
+                or (
+                    lowered.startswith("settings.gradle")
+                    and "include ':app'" in lowered_content
+                )
             ):
                 evidence["android_project"] = True
-                if "kotlin" in lowered_content or "org.jetbrains.kotlin.android" in lowered_content:
+                if (
+                    "kotlin" in lowered_content
+                    or "org.jetbrains.kotlin.android" in lowered_content
+                ):
                     evidence["android_language"] = "kotlin"
                 elif "com.android" in lowered_content:
-                    evidence["android_language"] = evidence.get("android_language") or "java"
+                    evidence["android_language"] = (
+                        evidence.get("android_language") or "java"
+                    )
                 if not evidence.get("name"):
                     evidence["name"] = file_path.parent.name or repo_root.name
         elif lowered == "androidmanifest.xml":
             android_evidence = _evidence_for_directory(
                 evidence_by_dir,
                 repo_root=repo_root,
-                directory=_android_manifest_source_dir(repo_root=repo_root, file_path=file_path),
+                directory=_android_manifest_source_dir(
+                    repo_root=repo_root, file_path=file_path
+                ),
             )
             android_evidence["android_project"] = True
-            android_evidence["android_language"] = android_evidence.get("android_language") or "kotlin"
+            android_evidence["android_language"] = (
+                android_evidence.get("android_language") or "kotlin"
+            )
             if not android_evidence.get("name"):
-                android_evidence["name"] = file_path.parent.parent.parent.name if len(file_path.parts) >= 4 else file_path.parent.name
+                android_evidence["name"] = (
+                    file_path.parent.parent.parent.name
+                    if len(file_path.parts) >= 4
+                    else file_path.parent.name
+                )
         elif lowered == "dockerfile":
             evidence["dockerfile_text"] = content
             if not evidence.get("name"):
@@ -1038,7 +1270,11 @@ def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
                 payload = json.loads(content)
             except json.JSONDecodeError:
                 payload = {}
-            if isinstance(payload, dict) and payload.get("name") and not evidence.get("name"):
+            if (
+                isinstance(payload, dict)
+                and payload.get("name")
+                and not evidence.get("name")
+            ):
                 evidence["name"] = str(payload.get("name"))
             if isinstance(payload, dict):
                 evidence["package_name"] = payload.get("name")
@@ -1082,7 +1318,9 @@ def scan_repo_for_project_apps(
 ) -> tuple[ProjectAppPreScanCandidate, ...]:
     repo_root = Path(str(checkout_path or "")).resolve()
     if not repo_root.exists() or not repo_root.is_dir():
-        raise ValueError(f"Checkout path does not exist or is not a directory: {repo_root}")
+        raise ValueError(
+            f"Checkout path does not exist or is not a directory: {repo_root}"
+        )
 
     evidence_by_dir = _scan_repo_for_evidence(repo_root)
     candidates: list[ProjectAppPreScanCandidate] = []
@@ -1127,8 +1365,12 @@ def normalize_project_app_planner_output(
     analysis_source: str | None,
 ) -> tuple[ProjectAppNormalizedCandidate, ...]:
     contract = ProjectAppPlannerResponse.model_validate(runtime_payload or {})
-    pre_scan_by_source = {candidate.source_path: candidate for candidate in pre_scan_candidates}
-    _validate_runtime_app_sources(contract=contract, pre_scan_by_source=pre_scan_by_source)
+    pre_scan_by_source = {
+        candidate.source_path: candidate for candidate in pre_scan_candidates
+    }
+    _validate_runtime_app_sources(
+        contract=contract, pre_scan_by_source=pre_scan_by_source
+    )
     merged: dict[str, ProjectAppNormalizedCandidate] = {}
 
     for runtime_app in contract.apps:
@@ -1159,7 +1401,11 @@ def normalize_project_app_planner_output(
     for source_path in sorted(merged):
         candidate = merged[source_path]
         base_slug = _slugify(candidate.name or candidate.source_path)
-        slug = _unique_slug(base_slug=base_slug, source_path=candidate.source_path, used_slugs=used_slugs)
+        slug = _unique_slug(
+            base_slug=base_slug,
+            source_path=candidate.source_path,
+            used_slugs=used_slugs,
+        )
         candidate_data = dict(candidate.__dict__)
         candidate_data["slug"] = slug
         normalized.append(
@@ -1176,7 +1422,11 @@ def _validate_runtime_app_sources(
     pre_scan_by_source: dict[str, ProjectAppPreScanCandidate],
 ) -> None:
     unknown_sources = sorted(
-        {runtime_app.source_path for runtime_app in contract.apps if runtime_app.source_path not in pre_scan_by_source}
+        {
+            runtime_app.source_path
+            for runtime_app in contract.apps
+            if runtime_app.source_path not in pre_scan_by_source
+        }
     )
     if not unknown_sources:
         return
@@ -1194,20 +1444,42 @@ def _merge_candidate(
     pre_scan: ProjectAppPreScanCandidate | None,
     analysis_source: str | None,
 ) -> ProjectAppNormalizedCandidate:
-    name = runtime_app.name or (pre_scan.name if pre_scan is not None else runtime_app.source_path)
-    build_strategy = runtime_app.build_strategy or (pre_scan.build_strategy if pre_scan is not None else "nixpacks")
-    exposed_port = runtime_app.port if runtime_app.port is not None else (pre_scan.exposed_port if pre_scan is not None else None)
-    healthcheck = runtime_app.healthcheck or (pre_scan.healthcheck if pre_scan is not None else None)
+    name = runtime_app.name or (
+        pre_scan.name if pre_scan is not None else runtime_app.source_path
+    )
+    build_strategy = runtime_app.build_strategy or (
+        pre_scan.build_strategy if pre_scan is not None else "nixpacks"
+    )
+    exposed_port = (
+        runtime_app.port
+        if runtime_app.port is not None
+        else (pre_scan.exposed_port if pre_scan is not None else None)
+    )
+    healthcheck = runtime_app.healthcheck or (
+        pre_scan.healthcheck if pre_scan is not None else None
+    )
     start_command = pre_scan.start_command if pre_scan is not None else None
     env_schema_json = dict(pre_scan.env_schema_json if pre_scan is not None else {})
-    secret_schema_json = dict(pre_scan.secret_schema_json if pre_scan is not None else {})
+    secret_schema_json = dict(
+        pre_scan.secret_schema_json if pre_scan is not None else {}
+    )
     deployment_config = dict(pre_scan.deployment_config if pre_scan is not None else {})
     detected_runtime = pre_scan.detected_runtime if pre_scan is not None else None
     detected_language = pre_scan.detected_language if pre_scan is not None else None
-    detection_confidence = pre_scan.detection_confidence if pre_scan is not None else 0.5
-    needs_generated_files = runtime_app.needs_generated_files or (pre_scan.needs_generated_files if pre_scan is not None else False)
-    runtime_resources = tuple(dict(resource) for resource in runtime_app.resources if isinstance(resource, dict))
-    runtime_volumes = tuple(dict(volume) for volume in runtime_app.volumes if isinstance(volume, dict))
+    detection_confidence = (
+        pre_scan.detection_confidence if pre_scan is not None else 0.5
+    )
+    needs_generated_files = runtime_app.needs_generated_files or (
+        pre_scan.needs_generated_files if pre_scan is not None else False
+    )
+    runtime_resources = tuple(
+        dict(resource)
+        for resource in runtime_app.resources
+        if isinstance(resource, dict)
+    )
+    runtime_volumes = tuple(
+        dict(volume) for volume in runtime_app.volumes if isinstance(volume, dict)
+    )
     if runtime_resources:
         runtime_services = tuple(
             _service_record_from_resource(resource)
@@ -1227,9 +1499,13 @@ def _merge_candidate(
         resources_json = ()
         volumes_json = runtime_volumes
     elif pre_scan is not None:
-        services_json = tuple(dict(service) for service in getattr(pre_scan, "services_json", ()))
+        services_json = tuple(
+            dict(service) for service in getattr(pre_scan, "services_json", ())
+        )
         resources_json = tuple(dict(resource) for resource in pre_scan.resources_json)
-        volumes_json = tuple(dict(volume) for volume in getattr(pre_scan, "volumes_json", ()))
+        volumes_json = tuple(
+            dict(volume) for volume in getattr(pre_scan, "volumes_json", ())
+        )
     else:
         services_json = ()
         resources_json = ()
@@ -1246,9 +1522,14 @@ def _merge_candidate(
     secret_json = {str(key): value for key, value in runtime_app.secrets.items()}
 
     if runtime_app.env:
-        env_schema_json = _merge_schema(env_schema_json, {str(key): value for key, value in runtime_app.env.items()})
+        env_schema_json = _merge_schema(
+            env_schema_json, {str(key): value for key, value in runtime_app.env.items()}
+        )
     if runtime_app.secrets:
-        secret_schema_json = _merge_schema(secret_schema_json, {str(key): value for key, value in runtime_app.secrets.items()})
+        secret_schema_json = _merge_schema(
+            secret_schema_json,
+            {str(key): value for key, value in runtime_app.secrets.items()},
+        )
 
     return ProjectAppNormalizedCandidate(
         name=name,
@@ -1266,7 +1547,8 @@ def _merge_candidate(
             deployment_config,
             build_strategy=str(build_strategy),
         ),
-        analysis_source=analysis_source or (pre_scan.analysis_source if pre_scan is not None else None),
+        analysis_source=analysis_source
+        or (pre_scan.analysis_source if pre_scan is not None else None),
         needs_generated_files=needs_generated_files,
         services_json=services_json,
         resources_json=resources_json,
@@ -1282,21 +1564,33 @@ def _coerce_dict(value: object) -> dict[str, object]:
     return {}
 
 
-def get_project_app_analysis_run(*, session: Session, analysis_run_id: str) -> ProjectAppAnalysisRun | None:
+def get_project_app_analysis_run(
+    *, session: Session, analysis_run_id: str
+) -> ProjectAppAnalysisRun | None:
     normalized = str(analysis_run_id or "").strip()
     if not normalized:
         return None
     return session.get(ProjectAppAnalysisRun, normalized)
 
 
-def ensure_project_app(session: Session, *, tenant_id: str, project_id: str, candidate: ProjectAppNormalizedCandidate) -> ProjectApp:
-    existing = session.execute(
-        select(ProjectApp).where(
-            ProjectApp.tenant_id == tenant_id,
-            ProjectApp.project_id == project_id,
-            ProjectApp.source_path == candidate.source_path,
+def ensure_project_app(
+    session: Session,
+    *,
+    tenant_id: str,
+    project_id: str,
+    candidate: ProjectAppNormalizedCandidate,
+) -> ProjectApp:
+    existing = (
+        session.execute(
+            select(ProjectApp).where(
+                ProjectApp.tenant_id == tenant_id,
+                ProjectApp.project_id == project_id,
+                ProjectApp.source_path == candidate.source_path,
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     now = datetime.now(timezone.utc)
     if existing is None:
         app = ProjectApp(
@@ -1419,20 +1713,29 @@ def persist_project_app_analysis_result(
 ) -> ProjectAppAnalysisRun:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     run = get_project_app_analysis_run(session=session, analysis_run_id=analysis_run_id)
     if run is None or run.tenant_id != tenant_id or run.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app analysis run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project app analysis run not found",
+        )
     timestamp = now or datetime.now(timezone.utc)
     normalized_apps = [app.to_result_json() for app in apps]
     run.planner_version = planner_version or run.planner_version
     run.request_payload = {
         **dict(run.request_payload or {}),
         "analysis_source": analysis_source,
-        "checkout_path": run.request_payload.get("checkout_path") if isinstance(run.request_payload, dict) else None,
+        "checkout_path": run.request_payload.get("checkout_path")
+        if isinstance(run.request_payload, dict)
+        else None,
         "planner_version": planner_version or run.planner_version,
     }
     run.result_payload = {
@@ -1443,6 +1746,8 @@ def persist_project_app_analysis_result(
     }
     run.updated_at = timestamp
     for candidate in apps:
-        ensure_project_app(session, tenant_id=tenant_id, project_id=project_id, candidate=candidate)
+        ensure_project_app(
+            session, tenant_id=tenant_id, project_id=project_id, candidate=candidate
+        )
     session.flush()
     return run

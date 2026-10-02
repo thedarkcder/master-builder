@@ -7,10 +7,21 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.route_helpers import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.api.admin.route_helpers import (
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.core.knowledge.base import KnowledgeSyncResult, sync_project_knowledge_from_jira
-from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeSource, Project, Tenant
+from orchestrator.core.knowledge.base import (
+    KnowledgeSyncResult,
+    sync_project_knowledge_from_jira,
+)
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    KnowledgeSource,
+    Project,
+    Tenant,
+)
 
 SUPPORTED_KNOWLEDGE_CONNECTORS = frozenset({"jira", "google_drive", "discord"})
 SYNCABLE_KNOWLEDGE_CONNECTORS = frozenset({"jira"})
@@ -49,7 +60,11 @@ def list_project_knowledge_sources(
                 KnowledgeSource.tenant_id == tenant_id,
                 KnowledgeSource.project_id == project_id,
             )
-            .order_by(KnowledgeSource.connector_type.asc(), KnowledgeSource.display_name.asc(), KnowledgeSource.created_at.asc())
+            .order_by(
+                KnowledgeSource.connector_type.asc(),
+                KnowledgeSource.display_name.asc(),
+                KnowledgeSource.created_at.asc(),
+            )
         ).scalars()
     )
 
@@ -62,7 +77,11 @@ def get_project_knowledge_source(
     source_id: str,
 ) -> KnowledgeSource | None:
     source = session.get(KnowledgeSource, source_id)
-    if source is None or source.tenant_id != tenant_id or source.project_id != project_id:
+    if (
+        source is None
+        or source.tenant_id != tenant_id
+        or source.project_id != project_id
+    ):
         return None
     return source
 
@@ -129,7 +148,9 @@ def update_project_knowledge_source(
         display_name=display_name if display_name is not None else source.display_name,
         status=status if status is not None else source.status,
         sync_mode=sync_mode if sync_mode is not None else source.sync_mode,
-        config_json=config_json if config_json is not None else dict(source.config_json or {}),
+        config_json=config_json
+        if config_json is not None
+        else dict(source.config_json or {}),
         existing_source=source,
     )
     source.display_name = normalized.display_name
@@ -142,7 +163,9 @@ def update_project_knowledge_source(
     return source
 
 
-def delete_project_knowledge_source(*, session: Session, source: KnowledgeSource) -> None:
+def delete_project_knowledge_source(
+    *, session: Session, source: KnowledgeSource
+) -> None:
     session.delete(source)
     session.commit()
 
@@ -160,13 +183,25 @@ def sync_project_knowledge_source(
         raise KnowledgeSourceSyncUnsupportedError(
             f"Connector '{connector_type}' does not provide a live sync adapter in this environment."
         )
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
-        raise KnowledgeSourceValidationError("Tenant Atlassian connection is not configured")
+        raise KnowledgeSourceValidationError(
+            "Tenant Atlassian connection is not configured"
+        )
     connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         raise KnowledgeSourceValidationError("Atlassian connection was not found")
-    project_key = str((source.config_json or {}).get("project_key") or project.jira_project_key or "").strip().upper()
+    project_key = (
+        str(
+            (source.config_json or {}).get("project_key")
+            or project.jira_project_key
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     if not project_key:
         raise KnowledgeSourceValidationError("Jira source requires a project key")
 
@@ -191,7 +226,9 @@ def sync_project_knowledge_source(
             jira_client=client,
             access_token=access_token,
             cloud_id=connection.cloud_id,
-            max_issues=max(1, int(getattr(settings, "knowledge_jira_sync_max_issues", 500))),
+            max_issues=max(
+                1, int(getattr(settings, "knowledge_jira_sync_max_issues", 500))
+            ),
         )
     except Exception as exc:
         source.last_error = str(exc)
@@ -221,11 +258,19 @@ def normalize_knowledge_source_config(
 ) -> KnowledgeSourceConfig:
     normalized_type = _normalize_connector_type(connector_type)
     normalized_status = _normalize_status(status)
-    normalized_sync_mode = _normalize_sync_mode(sync_mode, connector_type=normalized_type)
-    normalized_config = _normalize_config(connector_type=normalized_type, project=project, config_json=config_json or {})
-    normalized_display_name = (display_name or _default_display_name(normalized_type, normalized_config)).strip()
+    normalized_sync_mode = _normalize_sync_mode(
+        sync_mode, connector_type=normalized_type
+    )
+    normalized_config = _normalize_config(
+        connector_type=normalized_type, project=project, config_json=config_json or {}
+    )
+    normalized_display_name = (
+        display_name or _default_display_name(normalized_type, normalized_config)
+    ).strip()
     if not normalized_display_name:
-        raise KnowledgeSourceValidationError("Knowledge source display_name is required")
+        raise KnowledgeSourceValidationError(
+            "Knowledge source display_name is required"
+        )
 
     if normalized_type == "jira":
         existing_jira = session.execute(
@@ -235,8 +280,13 @@ def normalize_knowledge_source_config(
                 KnowledgeSource.connector_type == "jira",
             )
         ).scalar_one_or_none()
-        if existing_jira is not None and (existing_source is None or existing_jira.source_id != existing_source.source_id):
-            raise KnowledgeSourceValidationError("Only one Jira knowledge source may be configured per project")
+        if existing_jira is not None and (
+            existing_source is None
+            or existing_jira.source_id != existing_source.source_id
+        ):
+            raise KnowledgeSourceValidationError(
+                "Only one Jira knowledge source may be configured per project"
+            )
 
     return KnowledgeSourceConfig(
         connector_type=normalized_type,
@@ -252,10 +302,18 @@ def build_knowledge_source_summary(*, source: KnowledgeSource) -> str:
     connector_type = str(source.connector_type or "").strip().lower()
     if connector_type == "jira":
         project_key = str(config_json.get("project_key") or "").strip()
-        return f"Project key {project_key}" if project_key else "Project key not configured"
+        return (
+            f"Project key {project_key}"
+            if project_key
+            else "Project key not configured"
+        )
     if connector_type == "google_drive":
         targets = _normalized_string_list(config_json.get("targets"))
-        return f"{len(targets)} target{'s' if len(targets) != 1 else ''}" if targets else "No targets configured"
+        return (
+            f"{len(targets)} target{'s' if len(targets) != 1 else ''}"
+            if targets
+            else "No targets configured"
+        )
     if connector_type == "discord":
         channels = _normalized_string_list(config_json.get("channel_ids"))
         threads = _normalized_string_list(config_json.get("thread_ids"))
@@ -288,39 +346,64 @@ def _normalize_connector_type(value: str) -> str:
 def _normalize_status(value: str | None) -> str:
     normalized = str(value or "active").strip().lower()
     if normalized not in SOURCE_STATUSES:
-        raise KnowledgeSourceValidationError("Knowledge source status must be 'active' or 'disabled'")
+        raise KnowledgeSourceValidationError(
+            "Knowledge source status must be 'active' or 'disabled'"
+        )
     return normalized
 
 
 def _normalize_sync_mode(value: str | None, *, connector_type: str) -> str:
-    normalized = str(value or ("scheduled" if connector_type == "jira" else "manual")).strip().lower()
+    normalized = (
+        str(value or ("scheduled" if connector_type == "jira" else "manual"))
+        .strip()
+        .lower()
+    )
     if normalized not in SOURCE_SYNC_MODES:
-        raise KnowledgeSourceValidationError("Knowledge source sync_mode must be 'manual' or 'scheduled'")
-    if normalized == "scheduled" and connector_type not in SCHEDULED_KNOWLEDGE_CONNECTORS:
+        raise KnowledgeSourceValidationError(
+            "Knowledge source sync_mode must be 'manual' or 'scheduled'"
+        )
+    if (
+        normalized == "scheduled"
+        and connector_type not in SCHEDULED_KNOWLEDGE_CONNECTORS
+    ):
         raise KnowledgeSourceValidationError(
             f"Connector '{connector_type}' does not support scheduled sync"
         )
     return normalized
 
 
-def _normalize_config(*, connector_type: str, project: Project, config_json: dict) -> dict:
+def _normalize_config(
+    *, connector_type: str, project: Project, config_json: dict
+) -> dict:
     if connector_type == "jira":
-        project_key = str(config_json.get("project_key") or project.jira_project_key or "").strip().upper()
+        project_key = (
+            str(config_json.get("project_key") or project.jira_project_key or "")
+            .strip()
+            .upper()
+        )
         if not project_key:
-            raise KnowledgeSourceValidationError("Jira knowledge source requires a project key")
+            raise KnowledgeSourceValidationError(
+                "Jira knowledge source requires a project key"
+            )
         return {"project_key": project_key}
     if connector_type == "google_drive":
         targets = _normalized_string_list(config_json.get("targets"))
         if not targets:
-            raise KnowledgeSourceValidationError("Google Drive source requires at least one document, file, or folder target")
+            raise KnowledgeSourceValidationError(
+                "Google Drive source requires at least one document, file, or folder target"
+            )
         return {"targets": targets}
     if connector_type == "discord":
         channel_ids = _normalized_string_list(config_json.get("channel_ids"))
         thread_ids = _normalized_string_list(config_json.get("thread_ids"))
         if not channel_ids and not thread_ids:
-            raise KnowledgeSourceValidationError("Discord source requires at least one channel_id or thread_id")
+            raise KnowledgeSourceValidationError(
+                "Discord source requires at least one channel_id or thread_id"
+            )
         return {"channel_ids": channel_ids, "thread_ids": thread_ids}
-    raise KnowledgeSourceValidationError(f"Unsupported knowledge connector '{connector_type}'")
+    raise KnowledgeSourceValidationError(
+        f"Unsupported knowledge connector '{connector_type}'"
+    )
 
 
 def _default_display_name(connector_type: str, config_json: dict) -> str:

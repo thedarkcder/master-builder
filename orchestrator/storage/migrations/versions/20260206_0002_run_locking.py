@@ -28,7 +28,9 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("tenant_id", "issue_key"),
     )
     op.create_index("ix_run_locks_run_id", "run_locks", ["run_id"], unique=True)
@@ -45,10 +47,14 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("tenant_id", "delivery_id"),
     )
-    op.create_index("ix_webhook_deliveries_run_id", "webhook_deliveries", ["run_id"], unique=False)
+    op.create_index(
+        "ix_webhook_deliveries_run_id", "webhook_deliveries", ["run_id"], unique=False
+    )
 
 
 def downgrade() -> None:

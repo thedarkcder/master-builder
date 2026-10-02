@@ -33,7 +33,9 @@ def resolve_slots_before_block(
         mode = "aggressive"
 
     resolved: dict[str, SlotResolution] = {
-        slot_name: answer for slot_name, answer in persisted_slot_answers.items() if slot_name in missing_slots
+        slot_name: answer
+        for slot_name, answer in persisted_slot_answers.items()
+        if slot_name in missing_slots
     }
     remaining = [slot for slot in missing_slots if slot not in resolved]
     if knowledge_enabled and remaining:
@@ -116,7 +118,7 @@ def resolve_slots_with_runtime(
             ),
             system_prompt=(
                 "You resolve missing decision slots from issue/Jira context and repository evidence. "
-                "Return strict JSON object only: {\"answers\": {\"<slot_name>\": \"<value>\"}}. "
+                'Return strict JSON object only: {"answers": {"<slot_name>": "<value>"}}. '
                 "Only include slots with explicit evidence."
             ),
             user_prompt="\n".join(
@@ -170,7 +172,9 @@ def collect_repo_evidence(
 ) -> str:
     if not base_dir.strip():
         return ""
-    repo_dir = project_repo_dir_fn(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
+    repo_dir = project_repo_dir_fn(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id
+    )
     if not (repo_dir / ".git").exists():
         return ""
     slot_tokens: dict[str, tuple[str, ...]] = {
@@ -179,14 +183,24 @@ def collect_repo_evidence(
         "acceptance_criteria": ("acceptance", "done when"),
         "how_to_test": ("how to test", "test"),
         "nfr_intent": ("mvp", "scale-ready", "nfr"),
-        "reliability_security_constraints": ("security", "reliability", "token", "session"),
+        "reliability_security_constraints": (
+            "security",
+            "reliability",
+            "token",
+            "session",
+        ),
         "out_of_scope": ("out of scope", "non-goal"),
         "rollout_constraints": ("rollout", "migration"),
         "decision_owner": ("owner", "approver"),
         "dependencies_and_risks": ("risk", "dependency"),
     }
     candidate_files: list[Path] = []
-    for pattern in ("README*", "docs/**/*.md", "**/*architecture*.md", "**/*decision*.md"):
+    for pattern in (
+        "README*",
+        "docs/**/*.md",
+        "**/*architecture*.md",
+        "**/*decision*.md",
+    ):
         candidate_files.extend(repo_dir.glob(pattern))
     lines: list[str] = []
     seen_paths: set[str] = set()
@@ -232,13 +246,19 @@ def extract_first_matching_line(*, content: str, terms: tuple[str, ...]) -> str 
     return None
 
 
-def append_auto_resolved_block(*, issue_description: str | None, slot_answers: dict[str, SlotResolution]) -> str:
+def append_auto_resolved_block(
+    *, issue_description: str | None, slot_answers: dict[str, SlotResolution]
+) -> str:
     lines = ["", "Auto-resolved context for precheck:"]
     for slot_name in sorted(slot_answers.keys()):
         answer = slot_answers[slot_name]
-        citation_title = str(answer.citation.get("title") or answer.citation.get("source_type") or "").strip()
+        citation_title = str(
+            answer.citation.get("title") or answer.citation.get("source_type") or ""
+        ).strip()
         if citation_title:
-            lines.append(f"- {slot_name}: {answer.slot_value} (source: {citation_title})")
+            lines.append(
+                f"- {slot_name}: {answer.slot_value} (source: {citation_title})"
+            )
         else:
             lines.append(f"- {slot_name}: {answer.slot_value}")
     base = str(issue_description or "").strip()
@@ -248,7 +268,9 @@ def append_auto_resolved_block(*, issue_description: str | None, slot_answers: d
     return f"{base}\n\n{extra}"
 
 
-def deserialize_slot_resolution(*, slot_name: str, value: object) -> SlotResolution | None:
+def deserialize_slot_resolution(
+    *, slot_name: str, value: object
+) -> SlotResolution | None:
     if not isinstance(value, dict):
         return None
     slot_value = str(value.get("slot_value") or "").strip()
@@ -268,7 +290,9 @@ def deserialize_slot_resolution(*, slot_name: str, value: object) -> SlotResolut
 def serialize_slot_resolution(answer: SlotResolution) -> dict[str, object]:
     return {
         "slot_value": answer.slot_value,
-        "source_timestamp": answer.source_timestamp.isoformat() if answer.source_timestamp else None,
+        "source_timestamp": answer.source_timestamp.isoformat()
+        if answer.source_timestamp
+        else None,
         "confidence": answer.confidence,
         "citation": dict(answer.citation),
         "inferred": answer.inferred,

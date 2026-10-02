@@ -12,8 +12,12 @@ from unittest.mock import patch
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "verify_coolify_contract.py"
-    spec = importlib.util.spec_from_file_location("verify_coolify_contract", module_path)
+    module_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "verify_coolify_contract.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "verify_coolify_contract", module_path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("Failed to load verify_coolify_contract module")
     module = importlib.util.module_from_spec(spec)
@@ -46,7 +50,9 @@ class FakeCoolifyClient:
         self.calls.append(("get_project", (project_uuid,), {}))
         return dict(self.project_payload)
 
-    def get_environment(self, project_uuid: str, environment_name: str) -> dict[str, Any]:
+    def get_environment(
+        self, project_uuid: str, environment_name: str
+    ) -> dict[str, Any]:
         self.calls.append(("get_environment", (project_uuid, environment_name), {}))
         return dict(self.environment_payload)
 
@@ -62,29 +68,47 @@ class FakeCoolifyClient:
         self.calls.append(("get_application", (application_uuid,), {}))
         return dict(self.application_payload)
 
-    def update_application(self, *, application_uuid: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_application(
+        self, *, application_uuid: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         self.calls.append(("update_application", (application_uuid,), payload))
         self.application_payload = {**self.application_payload, **payload}
         return dict(self.application_payload)
 
-    def bulk_update_application_envs(self, *, application_uuid: str, envs: list[dict[str, Any]]) -> dict[str, Any]:
-        self.calls.append(("bulk_update_application_envs", (application_uuid,), {"data": envs}))
+    def bulk_update_application_envs(
+        self, *, application_uuid: str, envs: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        self.calls.append(
+            ("bulk_update_application_envs", (application_uuid,), {"data": envs})
+        )
         return {"message": "ok"}
 
     def list_application_envs(self, application_uuid: str) -> list[dict[str, Any]]:
         self.calls.append(("list_application_envs", (application_uuid,), {}))
         return list(self.env_rows)
 
-    def start_application(self, application_uuid: str, *, force: bool, instant_deploy: bool) -> str:
-        self.calls.append(("start_application", (application_uuid,), {"force": force, "instant_deploy": instant_deploy}))
+    def start_application(
+        self, application_uuid: str, *, force: bool, instant_deploy: bool
+    ) -> str:
+        self.calls.append(
+            (
+                "start_application",
+                (application_uuid,),
+                {"force": force, "instant_deploy": instant_deploy},
+            )
+        )
         return self.deployment_uuid
 
     def get_deployment(self, deployment_uuid: str) -> dict[str, Any]:
         self.calls.append(("get_deployment", (deployment_uuid,), {}))
-        status = self.deployment_statuses.pop(0) if self.deployment_statuses else "success"
+        status = (
+            self.deployment_statuses.pop(0) if self.deployment_statuses else "success"
+        )
         return {"deployment_uuid": deployment_uuid, "status": status}
 
-    def list_application_deployments(self, application_uuid: str) -> list[dict[str, Any]]:
+    def list_application_deployments(
+        self, application_uuid: str
+    ) -> list[dict[str, Any]]:
         self.calls.append(("list_application_deployments", (application_uuid,), {}))
         return list(self.deployment_history)
 
@@ -173,7 +197,9 @@ class CoolifyContractVerifierTests(unittest.TestCase):
                 "COOLIFY_VERIFY_POLL_INTERVAL_SECONDS": "1",
             },
         )
-        fake_client = FakeCoolifyClient(module, deployment_statuses=["running", "failed"])
+        fake_client = FakeCoolifyClient(
+            module, deployment_statuses=["running", "failed"]
+        )
 
         exit_code, checks, summary = module.verify_contract(
             config=config,
@@ -183,7 +209,9 @@ class CoolifyContractVerifierTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertFalse(summary["ok"])
-        self.assertTrue(any(check.name == "deployment status" and not check.ok for check in checks))
+        self.assertTrue(
+            any(check.name == "deployment status" and not check.ok for check in checks)
+        )
 
     def test_main_prints_refusal_without_execute(self) -> None:
         module = _load_module()

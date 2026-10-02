@@ -6,8 +6,13 @@ from sqlalchemy import desc, select
 from fastapi import HTTPException, status
 
 from orchestrator.core.deployment_previews import create_run_preview_deployment
-from orchestrator.core.observability.logging_pane import list_run_logging_pane_events as list_run_logging_pane_events_core
-from orchestrator.core.runs.service import RunStateTransitionError, cancel_run as cancel_run_execution
+from orchestrator.core.observability.logging_pane import (
+    list_run_logging_pane_events as list_run_logging_pane_events_core,
+)
+from orchestrator.core.runs.service import (
+    RunStateTransitionError,
+    cancel_run as cancel_run_execution,
+)
 from orchestrator.storage.models import AgentLifecycleEvent, WorkflowExecution
 
 
@@ -75,10 +80,20 @@ def list_runs(
     return payloads
 
 
-def get_run(*, session, run_id: str, run_model, run_to_schema_fn, tenant_model, tenant_jira_issue_url_fn):  # noqa: ANN001
+def get_run(
+    *,
+    session,
+    run_id: str,
+    run_model,
+    run_to_schema_fn,
+    tenant_model,
+    tenant_jira_issue_url_fn,
+):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     workflow_execution_id = _workflow_execution_id_for_run(session=session, run=run)
     payload = run_to_schema_fn(run, workflow_execution_id=workflow_execution_id)
     tenant = session.get(tenant_model, run.tenant_id)
@@ -116,7 +131,9 @@ def cancel_run_admin(
 ):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     if run.status in {"succeeded", "failed", "cancelled"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -128,10 +145,16 @@ def cancel_run_admin(
             run_id=run_id,
             cancelled_by=cancelled_by,
         )
-        workflow_execution_id = _workflow_execution_id_for_run(session=session, run=cancelled_run)
-        return run_to_schema_fn(cancelled_run, workflow_execution_id=workflow_execution_id)
+        workflow_execution_id = _workflow_execution_id_for_run(
+            session=session, run=cancelled_run
+        )
+        return run_to_schema_fn(
+            cancelled_run, workflow_execution_id=workflow_execution_id
+        )
     except RunStateTransitionError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
 
 
 def create_run_preview_admin(
@@ -146,7 +169,9 @@ def create_run_preview_admin(
 ):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     if str(getattr(run, "status", "") or "").strip() != "succeeded":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -160,10 +185,16 @@ def create_run_preview_admin(
         )
     tenant = session.get(tenant_model, run.tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(project_model, project_id)
-    if project is None or str(getattr(project, "tenant_id", "") or "").strip() != str(run.tenant_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    if project is None or str(getattr(project, "tenant_id", "") or "").strip() != str(
+        run.tenant_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
 
     try:
         preview_result = create_run_preview_deployment(
@@ -176,7 +207,9 @@ def create_run_preview_admin(
             force=force,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     if preview_result.release is None:
         detail_by_reason = {
             "deployments_disabled": "Project deployments are disabled",
@@ -184,21 +217,35 @@ def create_run_preview_admin(
         }
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=detail_by_reason.get(preview_result.reason, f"Preview was not created: {preview_result.reason}"),
+            detail=detail_by_reason.get(
+                preview_result.reason,
+                f"Preview was not created: {preview_result.reason}",
+            ),
         )
     return preview_result.release
 
 
-def list_run_events(*, session, run_id: str, run_model, run_event_schema_cls, limit: int = 200):  # noqa: ANN001
+def list_run_events(
+    *, session, run_id: str, run_model, run_event_schema_cls, limit: int = 200
+):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-    event_rows = session.execute(
-        select(AgentLifecycleEvent)
-        .where(AgentLifecycleEvent.run_id == run_id)
-        .order_by(desc(AgentLifecycleEvent.recorded_at), desc(AgentLifecycleEvent.event_id))
-        .limit(max(1, min(limit, 500)))
-    ).scalars().all()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
+    event_rows = (
+        session.execute(
+            select(AgentLifecycleEvent)
+            .where(AgentLifecycleEvent.run_id == run_id)
+            .order_by(
+                desc(AgentLifecycleEvent.recorded_at),
+                desc(AgentLifecycleEvent.event_id),
+            )
+            .limit(max(1, min(limit, 500)))
+        )
+        .scalars()
+        .all()
+    )
     return [
         run_event_schema_cls(
             event_type=row.event_type,
@@ -224,7 +271,9 @@ def list_run_logging_pane_events(
 ):  # noqa: ANN001
     run = session.get(run_model, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     return list_run_logging_pane_events_core(
         session=session,
         run_id=run_id,

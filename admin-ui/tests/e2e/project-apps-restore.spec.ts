@@ -13,8 +13,8 @@ import {
 test.setTimeout(60000);
 
 test("gates managed restore until an execution is selected and queues an async restore run", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "example" });
-  const project = makeProject({ tenant_id: "example", project_id: "example-default" });
+  const tenant = makeTenant({ tenant_id: "example-workspace" });
+  const project = makeProject({ tenant_id: "example-workspace", project_id: "example-workspace-default" });
   const app = makeProjectAppRecord({
     app_id: "app-1",
     tenant_id: tenant.tenant_id,
@@ -22,7 +22,7 @@ test("gates managed restore until an execution is selected and queues an async r
     name: "Payments API",
     slug: "payments-api",
     status: "ready",
-    source_path: "apps/payments",
+    source_path: ".",
   });
   const restoreRuns: Array<Record<string, unknown>> = [];
   let restoreRequestBody: Record<string, unknown> | null = null;
@@ -34,22 +34,22 @@ test("gates managed restore until an execution is selected and queues an async r
     if (pathname === "/api/bff/api/app/auth/me") {
       return fulfillJson(route, makePlatformAdminPrincipal());
     }
-    if (pathname === "/api/bff/api/admin/tenants/example") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace") {
       return fulfillJson(route, tenant);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default") {
       return fulfillJson(route, project);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps") {
       return fulfillJson(route, [app]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1") {
       return fulfillJson(route, app);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/analysis-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/analysis-runs") {
       return fulfillJson(route, []);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-config") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-config") {
       return fulfillJson(
         route,
         makeProjectAppDeploymentConfig({
@@ -75,10 +75,10 @@ test("gates managed restore until an execution is selected and queues an async r
         }),
       );
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-releases") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-releases") {
       return fulfillJson(route, []);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-backups/executions") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-backups/executions") {
       return fulfillJson(route, {
         backup_key: "db-daily",
         resource_key: "db-primary",
@@ -100,10 +100,10 @@ test("gates managed restore until an execution is selected and queues an async r
         ],
       });
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-backups/restore-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-backups/restore-runs") {
       return fulfillJson(route, restoreRuns);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-backups/restore") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-backups/restore") {
       restoreRequestBody = route.request().postDataJSON() as Record<string, unknown>;
       const createdRun = {
         restore_run_id: "restore-run-1",
@@ -136,7 +136,7 @@ test("gates managed restore until an execution is selected and queues an async r
     return route.fallback();
   });
 
-  await page.goto("/example/projects/example-default/deployments/app-1", { waitUntil: "domcontentloaded" });
+  await page.goto("/example-workspace/projects/example-workspace-default/deployments/app-1", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Backups" }).click();
   await page.getByRole("button", { name: /Restore/ }).click();
 

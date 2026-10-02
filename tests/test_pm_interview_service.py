@@ -57,7 +57,9 @@ except ModuleNotFoundError:  # pragma: no cover - local test runner path quirk
 pytestmark = pytest.mark.contract
 
 
-def _complete_pm_brief_payload(*, objective: str = "Share the app with friends") -> dict[str, object]:
+def _complete_pm_brief_payload(
+    *, objective: str = "Share the app with friends"
+) -> dict[str, object]:
     return {
         "objective": objective,
         "user_value": "Tenant admins can invite teammates with less friction.",
@@ -88,13 +90,17 @@ class PMInterviewServiceTests(unittest.TestCase):
         clear_runtime_environment()
 
     def test_assess_pm_interview_brief_does_not_synthesize_next_question(self) -> None:
-        assessment = assess_pm_interview_brief(brief={"objective": "Share the app with friends"})
+        assessment = assess_pm_interview_brief(
+            brief={"objective": "Share the app with friends"}
+        )
 
         self.assertEqual(assessment.status, PM_INTERVIEW_STATUS_QUESTION_PENDING)
         self.assertGreater(len(assessment.missing_slots), 0)
         self.assertIsNone(assessment.next_question)
 
-    def test_assess_pm_interview_brief_uses_evidence_updates_and_reaches_ready_to_write(self) -> None:
+    def test_assess_pm_interview_brief_uses_evidence_updates_and_reaches_ready_to_write(
+        self,
+    ) -> None:
         evidence = normalize_pm_interview_evidence(
             [
                 {
@@ -141,7 +147,9 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertIn("Profile entry point", assessment.brief.scope_in)
         self.assertIn("Platform policy", assessment.brief.risks)
 
-    def test_assess_pm_interview_brief_treats_pm_completed_as_authoritative(self) -> None:
+    def test_assess_pm_interview_brief_treats_pm_completed_as_authoritative(
+        self,
+    ) -> None:
         assessment = assess_pm_interview_brief(
             brief={
                 "objective": "Unify tenant auth redesign",
@@ -160,8 +168,8 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-clear-open-questions",
                 source_kind="jira_parent",
                 channel_id="jira-parent-sync",
@@ -176,7 +184,9 @@ class PMInterviewServiceTests(unittest.TestCase):
                     "constraints": ["90 day retention window"],
                     "risks": ["Audit export misuse"],
                     "success_outcomes": ["Admins can export audit logs within policy"],
-                    "open_questions": ["What audit retention window should v1 support?"],
+                    "open_questions": [
+                        "What audit retention window should v1 support?"
+                    ],
                 },
             )
             session.commit()
@@ -184,8 +194,8 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             updated = upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-clear-open-questions",
                 source_kind="jira_parent",
                 channel_id="jira-parent-sync",
@@ -201,14 +211,18 @@ class PMInterviewServiceTests(unittest.TestCase):
 
             self.assertEqual(updated.status, PM_INTERVIEW_STATUS_READY_TO_WRITE)
             self.assertEqual(updated.brief_json["open_questions"], [])
-            self.assertEqual(updated.brief_json["constraints"], ["12 month retention window"])
+            self.assertEqual(
+                updated.brief_json["constraints"], ["12 month retention window"]
+            )
 
-    def test_pm_interview_case_round_trips_and_resolves_by_explicit_identity(self) -> None:
+    def test_pm_interview_case_round_trips_and_resolves_by_explicit_identity(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             case = upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-1",
                 source_kind="voice_note",
                 channel_id="discord-channel-1",
@@ -241,7 +255,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             resolved = resolve_pm_interview_case(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 request_id="pm-req-1",
             )
             self.assertIsNotNone(resolved)
@@ -250,21 +264,21 @@ class PMInterviewServiceTests(unittest.TestCase):
 
             by_thread = resolve_pm_interview_case_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 thread_channel_id="thread-1",
             )
             self.assertEqual(by_thread.status, "matched")
 
             by_root_message = resolve_pm_interview_case_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 root_message_id="message-1",
             )
             self.assertEqual(by_root_message.status, "matched")
 
             by_channel_only = resolve_pm_interview_case_match(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="discord-channel-1",
             )
             self.assertEqual(by_channel_only.status, "no_match")
@@ -273,8 +287,8 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-2",
                 source_kind="command",
                 channel_id="discord-channel-1",
@@ -283,7 +297,7 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
             mark_pm_interview_case_completed(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 request_id="pm-req-2",
                 parent_issue_key="TP-123",
             )
@@ -292,7 +306,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             completed = resolve_pm_interview_case(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 request_id="pm-req-2",
             )
             self.assertIsNone(completed)
@@ -305,8 +319,8 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             abandoned = upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-3",
                 source_kind="command",
                 channel_id="discord-channel-1",
@@ -315,7 +329,7 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
             mark_pm_interview_case_abandoned(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 request_id="pm-req-3",
             )
             session.commit()
@@ -325,8 +339,8 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 parent_issue_key="TP-500",
                 source_text="Legacy parent description",
                 brief={
@@ -337,8 +351,8 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-parent-1",
                 source_kind="command",
                 channel_id="discord-channel-1",
@@ -356,7 +370,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             brief = resolve_parent_feature_brief(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-500",
             )
 
@@ -366,14 +380,16 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(brief.user_value, "Legacy value")
         self.assertEqual(brief.acceptance_criteria, ())
 
-    def test_parent_planning_clarification_history_includes_stored_jira_answers(self) -> None:
+    def test_parent_planning_clarification_history_includes_stored_jira_answers(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
                 FollowupContext(
                     context_id="ctx-parent-plan-answer",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     context_type="parent_planning_clarification",
                     status="closed",
                     channel_id=None,
@@ -386,7 +402,9 @@ class PMInterviewServiceTests(unittest.TestCase):
                         "jira_comment_id": "22805",
                         "answer_comment_id": "22862",
                         "answer_text": "Recovery grants expire after 1 hour.",
-                        "questions": [{"question": "What recovery expiry should v1 use?"}],
+                        "questions": [
+                            {"question": "What recovery expiry should v1 use?"}
+                        ],
                     },
                     created_at=now,
                     updated_at=now,
@@ -398,7 +416,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             history = parent_planning_clarification_history(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-501",
             )
 
@@ -420,12 +438,14 @@ class PMInterviewServiceTests(unittest.TestCase):
             ),
         )
 
-    def test_persist_parent_feature_brief_snapshot_stores_parent_brief_record(self) -> None:
+    def test_persist_parent_feature_brief_snapshot_stores_parent_brief_record(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             row = persist_parent_feature_brief_snapshot(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 parent_issue_key="TP-501",
                 source_text="Objective\nFallback parent brief",
                 brief={
@@ -436,9 +456,15 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
             session.commit()
 
-            stored = session.query(PMInterviewCase).filter_by(request_id="parent-brief:TP-501").one()
+            stored = (
+                session.query(PMInterviewCase)
+                .filter_by(request_id="parent-brief:TP-501")
+                .one()
+            )
 
-        self.assertEqual(row.source_kind, PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT)
+        self.assertEqual(
+            row.source_kind, PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT
+        )
         self.assertEqual(stored.parent_issue_key, "TP-501")
         self.assertEqual(stored.status, PM_INTERVIEW_STATUS_PM_COMPLETED)
         self.assertEqual(stored.channel_id, "jira-parent-sync")
@@ -446,12 +472,14 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(stored.notes_json["source"], "jira_parent_brief_normalization")
         self.assertTrue(stored.notes_json["parent_brief_snapshot"])
 
-    def test_resolve_parent_feature_brief_include_incomplete_returns_draft_snapshot(self) -> None:
+    def test_resolve_parent_feature_brief_include_incomplete_returns_draft_snapshot(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 parent_issue_key="TP-502",
                 source_text="Loose parent brief",
                 brief={
@@ -466,12 +494,12 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             completed_only = resolve_parent_feature_brief(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-502",
             )
             latest_any_status = resolve_parent_feature_brief(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-502",
                 include_incomplete=True,
             )
@@ -482,12 +510,14 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(latest_any_status.objective, "Needs clarification")
         self.assertEqual(latest_any_status.user_value, "Still incomplete")
 
-    def test_resolve_parent_feature_brief_include_incomplete_returns_draft_case_only(self) -> None:
+    def test_resolve_parent_feature_brief_include_incomplete_returns_draft_case_only(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-parent-2",
                 source_kind="jira_parent",
                 channel_id="jira-parent-sync",
@@ -505,12 +535,12 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             completed_only = resolve_parent_feature_brief(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-503",
             )
             latest_any_status = resolve_parent_feature_brief(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-503",
                 include_incomplete=True,
             )
@@ -525,8 +555,8 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 parent_issue_key="TP-503A",
                 source_text="Canonical snapshot only",
                 brief={
@@ -539,19 +569,21 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             case = resolve_parent_feature_case(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-503A",
             )
 
         self.assertIsNone(case)
 
-    def test_resolve_parent_feature_brief_readiness_ignores_stale_clarification_after_canonical_snapshot(self) -> None:
+    def test_resolve_parent_feature_brief_readiness_ignores_stale_clarification_after_canonical_snapshot(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             persist_parent_feature_brief_snapshot(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 parent_issue_key="TP-504",
                 source_text="Canonical parent brief",
                 brief={
@@ -562,8 +594,8 @@ class PMInterviewServiceTests(unittest.TestCase):
             )
             upsert_pm_interview_case(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 request_id="pm-req-parent-504",
                 source_kind="jira_parent",
                 channel_id="jira-parent-sync",
@@ -574,14 +606,16 @@ class PMInterviewServiceTests(unittest.TestCase):
                     "objective": "Draft objective",
                     "user_value": "Draft value",
                 },
-                current_question={"question": "What retention window should v1 support?"},
+                current_question={
+                    "question": "What retention window should v1 support?"
+                },
                 next_question={"question": "What retention window should v1 support?"},
             )
             session.add(
                 FollowupContext(
                     context_id="ctx-pm-504",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     context_type="pm_interview",
                     status="active",
                     channel_id="TP-504",
@@ -605,7 +639,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         with self.session_factory() as session:
             readiness = resolve_parent_feature_brief_readiness(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 parent_issue_key="TP-504",
             )
 
@@ -618,7 +652,9 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertEqual(readiness.canonical_brief.objective, "Canonical objective")
         self.assertEqual(readiness.canonical_brief.open_questions, ())
 
-    def test_normalize_parent_feature_brief_with_runtime_returns_typed_brief(self) -> None:
+    def test_normalize_parent_feature_brief_with_runtime_returns_typed_brief(
+        self,
+    ) -> None:
         captured: dict[str, object] = {}
 
         def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
@@ -633,18 +669,25 @@ class PMInterviewServiceTests(unittest.TestCase):
                         "objective": "Refactor the orchestration stack",
                         "user_value": "Runtime behavior is easier to reason about and verify",
                         "primary_journey": "Plan and execute orchestration changes from Jira parents",
-                        "acceptance_criteria": ["One canonical decision state machine exists"],
+                        "acceptance_criteria": [
+                            "One canonical decision state machine exists"
+                        ],
                         "scope_in": ["Decision state machine refactor"],
                         "scope_out": ["Unrelated UI redesign"],
                         "constraints": ["Keep the runtime-agnostic contract stable"],
                         "risks": ["Planning drift across runtimes"],
-                        "success_outcomes": ["Parent planning produces stable child tickets"],
+                        "success_outcomes": [
+                            "Parent planning produces stable child tickets"
+                        ],
                         "recommendation": "Normalize the brief before planning child tickets",
                     },
                     "open_questions": [],
                 },
             ),
-            patch("orchestrator.core.pm.interview_service.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.pm.interview_service.render_prompt",
+                side_effect=_render_prompt,
+            ),
         ):
             payload = normalize_parent_feature_brief_with_runtime(
                 runtime=SimpleNamespace(),
@@ -656,15 +699,22 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         self.assertTrue(payload["ready_to_write"])
         self.assertEqual(payload["open_questions"], [])
-        self.assertEqual(payload["brief"]["objective"], "Refactor the orchestration stack")
+        self.assertEqual(
+            payload["brief"]["objective"], "Refactor the orchestration stack"
+        )
         self.assertIn("workflow/pm_parent_brief_normalization_system.j2", captured)
         user_kwargs = captured["workflow/pm_parent_brief_normalization_user.j2"]
         self.assertEqual(user_kwargs["parent_issue_key"], "MAB-200")
-        self.assertIn("Complete Runtime Architecture and Verification Reset", user_kwargs["parent_summary"])
+        self.assertIn(
+            "Complete Runtime Architecture and Verification Reset",
+            user_kwargs["parent_summary"],
+        )
         self.assertIn("governed_tools_json", user_kwargs)
         self.assertIn("native_tools_json", user_kwargs)
 
-    def test_normalize_parent_feature_brief_with_runtime_uses_tool_bridge_when_session_available(self) -> None:
+    def test_normalize_parent_feature_brief_with_runtime_uses_tool_bridge_when_session_available(
+        self,
+    ) -> None:
         captured: dict[str, object] = {}
 
         def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
@@ -673,7 +723,9 @@ class PMInterviewServiceTests(unittest.TestCase):
                 captured["native_tools_json"] = kwargs["native_tools_json"]
             return template_name
 
-        def _invoke_runtime_json_with_tools(*, context, user_prompt, allowed_tools, **kwargs):  # noqa: ANN001
+        def _invoke_runtime_json_with_tools(
+            *, context, user_prompt, allowed_tools, **kwargs
+        ):  # noqa: ANN001
             _ = kwargs
             captured["stage"] = context.stage
             captured["user_prompt"] = user_prompt
@@ -687,7 +739,9 @@ class PMInterviewServiceTests(unittest.TestCase):
                     "scope_in": ["Parent normalization"],
                     "scope_out": ["Runtime migration"],
                     "constraints": ["Keep planning reviewable in Jira and Discord"],
-                    "risks": ["Parent planning can drift without clear product answers"],
+                    "risks": [
+                        "Parent planning can drift without clear product answers"
+                    ],
                     "success_outcomes": ["Consistent parent structure"],
                     "recommendation": "Normalize before decomposition",
                     "open_questions": [],
@@ -697,8 +751,14 @@ class PMInterviewServiceTests(unittest.TestCase):
             }
 
         with (
-            patch("orchestrator.core.pm.interview_service.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+            patch(
+                "orchestrator.core.pm.interview_service.render_prompt",
+                side_effect=_render_prompt,
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
+                side_effect=_invoke_runtime_json_with_tools,
+            ),
         ):
             payload = normalize_parent_feature_brief_with_runtime(
                 session=object(),  # type: ignore[arg-type]
@@ -709,8 +769,8 @@ class PMInterviewServiceTests(unittest.TestCase):
                 parent_description="Stakeholder parent description",
                 invocation_context=AgentInvocationContext(
                     channel="jira",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     command="pm",
                     stage="pm_parent_brief_normalization",
                     working_dir=".",
@@ -727,7 +787,9 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertIn("knowledge.read", str(captured["governed_tools_json"]))
         self.assertNotIn("web.search", str(captured["native_tools_json"]))
 
-    def test_plan_pm_interview_with_runtime_uses_current_question_examples_and_json_contract(self) -> None:
+    def test_plan_pm_interview_with_runtime_uses_current_question_examples_and_json_contract(
+        self,
+    ) -> None:
         captured: dict[str, object] = {}
 
         def _render_prompt(template_name: str, **kwargs):  # noqa: ANN001
@@ -747,11 +809,18 @@ class PMInterviewServiceTests(unittest.TestCase):
                     "next_question": {
                         "slot_key": "user_value",
                         "question": "What user group should this support first?",
-                        "examples": ["New invited users", "Tenant admins", "Existing members inviting teammates"],
+                        "examples": [
+                            "New invited users",
+                            "Tenant admins",
+                            "Existing members inviting teammates",
+                        ],
                     },
                 },
             ),
-            patch("orchestrator.core.pm.interview_service.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.pm.interview_service.render_prompt",
+                side_effect=_render_prompt,
+            ),
         ):
             payload = plan_pm_interview_with_runtime(
                 runtime=SimpleNamespace(),
@@ -774,10 +843,14 @@ class PMInterviewServiceTests(unittest.TestCase):
 
         self.assertEqual(payload["message"], "What user group?")
         self.assertEqual(payload["status"], PM_INTERVIEW_STATUS_QUESTION_PENDING)
-        self.assertEqual(payload["missing_slots"], ["user_value", "acceptance_criteria"])
+        self.assertEqual(
+            payload["missing_slots"], ["user_value", "acceptance_criteria"]
+        )
         self.assertIn("discord/pm_interview_system.j2", captured)
         user_kwargs = captured["discord/pm_interview_user.j2"]
-        domain_model = prompt_domain_model_for_template("discord/pm_interview_system.j2") or {}
+        domain_model = (
+            prompt_domain_model_for_template("discord/pm_interview_system.j2") or {}
+        )
         self.assertEqual(domain_model["name"], "PMInterviewPlan")
         self.assertIn("status", str(domain_model))
         self.assertIn("ready_to_write", str(domain_model))
@@ -786,7 +859,10 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertIn("current_question_examples_json", user_kwargs)
         self.assertTrue(json.loads(user_kwargs["current_question_examples_json"]))
         self.assertIn("brief_json", user_kwargs)
-        self.assertEqual(json.loads(user_kwargs["brief_json"])["objective"], "Share the app with friends")
+        self.assertEqual(
+            json.loads(user_kwargs["brief_json"])["objective"],
+            "Share the app with friends",
+        )
 
     def test_plan_pm_interview_with_runtime_reports_invalid_status_value(self) -> None:
         with patch(
@@ -818,7 +894,9 @@ class PMInterviewServiceTests(unittest.TestCase):
                     invocation_context=SimpleNamespace(),
                 )
 
-    def test_plan_pm_interview_with_runtime_requires_explicit_next_question_when_incomplete(self) -> None:
+    def test_plan_pm_interview_with_runtime_requires_explicit_next_question_when_incomplete(
+        self,
+    ) -> None:
         with patch(
             "orchestrator.core.pm.interview_service._invoke_discord_json_maybe_tools",
             return_value={

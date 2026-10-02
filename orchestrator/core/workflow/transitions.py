@@ -79,7 +79,9 @@ class TransitionRule:
 
 
 _WORKFLOW_TRANSITIONS: dict[str, TransitionRule] = {
-    "workflow_enqueued": TransitionRule(frozenset({WORKFLOW_STATUS_QUEUED}), WORKFLOW_STATUS_QUEUED),
+    "workflow_enqueued": TransitionRule(
+        frozenset({WORKFLOW_STATUS_QUEUED}), WORKFLOW_STATUS_QUEUED
+    ),
     "attempt_started": TransitionRule(
         frozenset({WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUS_WAITING_FOR_INPUT}),
         WORKFLOW_STATUS_RUNNING,
@@ -111,7 +113,9 @@ _WORKFLOW_TRANSITIONS: dict[str, TransitionRule] = {
 }
 
 _ATTEMPT_TRANSITIONS: dict[str, TransitionRule] = {
-    "attempt_created": TransitionRule(frozenset({ATTEMPT_STATUS_QUEUED}), ATTEMPT_STATUS_QUEUED),
+    "attempt_created": TransitionRule(
+        frozenset({ATTEMPT_STATUS_QUEUED}), ATTEMPT_STATUS_QUEUED
+    ),
     "attempt_claimed": TransitionRule(
         frozenset({ATTEMPT_STATUS_QUEUED}),
         ATTEMPT_STATUS_DISPATCHING,
@@ -170,7 +174,9 @@ _INPUT_TRANSITIONS: dict[str, TransitionRule] = {
 }
 
 
-def _next_state(*, current_state: str, event: str, rules: dict[str, TransitionRule], entity: str) -> str:
+def _next_state(
+    *, current_state: str, event: str, rules: dict[str, TransitionRule], entity: str
+) -> str:
     rule = rules.get(event)
     if rule is None:
         raise WorkflowTransitionError(f"Unknown {entity} transition event: {event}")
@@ -182,15 +188,30 @@ def _next_state(*, current_state: str, event: str, rules: dict[str, TransitionRu
 
 
 def transition_workflow_state(*, current_state: str, event: str) -> str:
-    return _next_state(current_state=current_state, event=event, rules=_WORKFLOW_TRANSITIONS, entity="workflow")
+    return _next_state(
+        current_state=current_state,
+        event=event,
+        rules=_WORKFLOW_TRANSITIONS,
+        entity="workflow",
+    )
 
 
 def transition_attempt_state(*, current_state: str, event: str) -> str:
-    return _next_state(current_state=current_state, event=event, rules=_ATTEMPT_TRANSITIONS, entity="attempt")
+    return _next_state(
+        current_state=current_state,
+        event=event,
+        rules=_ATTEMPT_TRANSITIONS,
+        entity="attempt",
+    )
 
 
 def transition_input_request_state(*, current_state: str, event: str) -> str:
-    return _next_state(current_state=current_state, event=event, rules=_INPUT_TRANSITIONS, entity="input request")
+    return _next_state(
+        current_state=current_state,
+        event=event,
+        rules=_INPUT_TRANSITIONS,
+        entity="input request",
+    )
 
 
 def transition_workflow(current_status: str, event: str) -> str:
@@ -217,17 +238,27 @@ def is_attempt_worker_active(status: str) -> bool:
     return status in ACTIVE_ATTEMPT_STATUSES
 
 
-def attempt_creation_policy(*, workflow_status: str, mode: str) -> AttemptCreationPolicy:
+def attempt_creation_policy(
+    *, workflow_status: str, mode: str
+) -> AttemptCreationPolicy:
     normalized_mode = str(mode or "").strip().lower()
     if normalized_mode not in ATTEMPT_ENTRY_MODES:
-        return AttemptCreationPolicy(allowed=False, reuse_workflow=False, reason="invalid_mode")
+        return AttemptCreationPolicy(
+            allowed=False, reuse_workflow=False, reason="invalid_mode"
+        )
 
     normalized_status = str(workflow_status or "").strip().lower()
     if normalized_status in {WORKFLOW_STATUS_QUEUED, WORKFLOW_STATUS_RUNNING}:
-        return AttemptCreationPolicy(allowed=False, reuse_workflow=False, reason="active_attempt")
+        return AttemptCreationPolicy(
+            allowed=False, reuse_workflow=False, reason="active_attempt"
+        )
     if normalized_status == WORKFLOW_STATUS_WAITING_FOR_INPUT:
         if normalized_mode == "resume":
             return AttemptCreationPolicy(allowed=True, reuse_workflow=True)
-        return AttemptCreationPolicy(allowed=False, reuse_workflow=False, reason="waiting_for_input_requires_resume")
+        return AttemptCreationPolicy(
+            allowed=False,
+            reuse_workflow=False,
+            reason="waiting_for_input_requires_resume",
+        )
 
     return AttemptCreationPolicy(allowed=True, reuse_workflow=False)

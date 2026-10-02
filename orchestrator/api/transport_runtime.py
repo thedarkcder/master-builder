@@ -16,7 +16,9 @@ from orchestrator.core.communications import (
     TransportEnvelope,
     TransportAction,
 )
-from orchestrator.core.communications.integration_contracts import TransportActionExecutor
+from orchestrator.core.communications.integration_contracts import (
+    TransportActionExecutor,
+)
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
 from orchestrator.core.observability.otel import current_log_context
 from orchestrator.core.platform.secret_service import (
@@ -36,17 +38,25 @@ class HttpTransportExecutor:
                 headers=dict(action.headers),
             )
         if isinstance(action, HttpJsonResponseBytesAction):
-            body = action.body.encode("utf-8") if isinstance(action.body, str) else action.body
+            body = (
+                action.body.encode("utf-8")
+                if isinstance(action.body, str)
+                else action.body
+            )
             return Response(
                 status_code=action.status_code,
                 content=body,
                 media_type="application/json",
                 headers=dict(action.headers),
             )
-        raise RuntimeError(f"Unsupported HTTP transport action: {type(action).__name__}")
+        raise RuntimeError(
+            f"Unsupported HTTP transport action: {type(action).__name__}"
+        )
 
 
-def http_json_response_action(*, status_code: int, content: dict) -> HttpJsonResponseAction:
+def http_json_response_action(
+    *, status_code: int, content: dict
+) -> HttpJsonResponseAction:
     return HttpJsonResponseAction(status_code=status_code, content=content)
 
 
@@ -84,7 +94,9 @@ def execute_http_ingress_result(
             transport_action_executors=executor_tuple,
         )
     if response_action is None:
-        raise RuntimeError("IngressResult for HTTP transport did not include an HTTP response action")
+        raise RuntimeError(
+            "IngressResult for HTTP transport did not include an HTTP response action"
+        )
     _log_transport_runtime_event(
         "transport_http_response_selected",
         envelope=envelope,
@@ -166,8 +178,12 @@ def execute_side_effect_action(
             )
             raise
     if last_unsupported_error is not None:
-        raise RuntimeError(f"No HTTP transport executor handled action {type(action).__name__}") from last_unsupported_error
-    raise RuntimeError(f"HTTP ingress result included unsupported non-HTTP action: {type(action).__name__}")
+        raise RuntimeError(
+            f"No HTTP transport executor handled action {type(action).__name__}"
+        ) from last_unsupported_error
+    raise RuntimeError(
+        f"HTTP ingress result included unsupported non-HTTP action: {type(action).__name__}"
+    )
 
 
 def build_discord_transport_executor(
@@ -272,7 +288,9 @@ def _log_transport_runtime_event(
     )
 
 
-def _log_ingress_result_built(*, result: IngressResult, envelope: TransportEnvelope | None) -> None:
+def _log_ingress_result_built(
+    *, result: IngressResult, envelope: TransportEnvelope | None
+) -> None:
     _log_transport_runtime_event(
         "transport_ingress_result_built",
         envelope=envelope,
@@ -302,7 +320,9 @@ def decode_json_body(action: TransportAction) -> dict:
     if isinstance(action, HttpJsonResponseAction):
         return dict(action.content)
     if not isinstance(action, HttpJsonResponseBytesAction):
-        raise TypeError(f"Transport action body was not an HTTP JSON action: {type(action).__name__}")
+        raise TypeError(
+            f"Transport action body was not an HTTP JSON action: {type(action).__name__}"
+        )
     body = action.body
     if isinstance(body, bytes):
         return json.loads(body.decode("utf-8"))

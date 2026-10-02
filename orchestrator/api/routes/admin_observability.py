@@ -5,25 +5,39 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.audit_export_service import iter_audit_event_export
-from orchestrator.api.admin.agent_activity_service import list_agent_activity as list_agent_activity_impl
-from orchestrator.api.admin.alert_policy_service import evaluate_alerts as evaluate_alerts_impl
-from orchestrator.api.admin.notifications_service import list_tenant_notifications as list_tenant_notifications_impl
+from orchestrator.api.admin.agent_activity_service import (
+    list_agent_activity as list_agent_activity_impl,
+)
+from orchestrator.api.admin.alert_policy_service import (
+    evaluate_alerts as evaluate_alerts_impl,
+)
+from orchestrator.api.admin.notifications_service import (
+    list_tenant_notifications as list_tenant_notifications_impl,
+)
 from orchestrator.api.admin.observability_service import (
     platform_observability as platform_observability_impl,
     project_observability as project_observability_impl,
     tenant_observability as tenant_observability_impl,
 )
-from orchestrator.api.admin.platform_status_service import platform_status as platform_status_impl
+from orchestrator.api.admin.platform_status_service import (
+    platform_status as platform_status_impl,
+)
 from orchestrator.api.admin.worker_runtime_auth_service import (
     get_worker_runtime_auth_request as get_worker_runtime_auth_request_impl,
     start_worker_runtime_auth_request as start_worker_runtime_auth_request_impl,
 )
-from orchestrator.api.admin.webhook_queue_service import list_webhook_queue_jobs as list_webhook_queue_jobs_impl
-from orchestrator.api.admin.webhook_queue_service import retry_failed_webhook_job as retry_failed_webhook_job_impl
+from orchestrator.api.admin.webhook_queue_service import (
+    list_webhook_queue_jobs as list_webhook_queue_jobs_impl,
+)
+from orchestrator.api.admin.webhook_queue_service import (
+    retry_failed_webhook_job as retry_failed_webhook_job_impl,
+)
 from orchestrator.api.admin.project_metrics_service import (
     project_execution_metrics as project_execution_metrics_impl,
 )
-from orchestrator.api.admin.tenant_health_service import tenant_health as tenant_health_impl
+from orchestrator.api.admin.tenant_health_service import (
+    tenant_health as tenant_health_impl,
+)
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
     AuditEventExportRequest,
@@ -41,8 +55,12 @@ from orchestrator.api.schemas import (
     WebhookQueueJobPageRead,
     WorkerRuntimeAuthRequestRead,
 )
-from orchestrator.core.knowledge.jira_sync_runtime import get_knowledge_jira_sync_runtime_status
-from orchestrator.core.observability.observability_policy import normalize_tenant_observability_policy
+from orchestrator.core.knowledge.jira_sync_runtime import (
+    get_knowledge_jira_sync_runtime_status,
+)
+from orchestrator.core.observability.observability_policy import (
+    normalize_tenant_observability_policy,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
@@ -71,7 +89,10 @@ def list_agent_activity(
     )
 
 
-@router.get("/tenants/{tenant_id}/projects/{project_id}/metrics", response_model=ProjectExecutionMetricsRead)
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/metrics",
+    response_model=ProjectExecutionMetricsRead,
+)
 def get_project_execution_metrics(
     tenant_id: str,
     project_id: str,
@@ -103,7 +124,9 @@ def evaluate_alerts(
     )
 
 
-@router.get("/tenants/{tenant_id}/notifications", response_model=AdminNotificationListRead)
+@router.get(
+    "/tenants/{tenant_id}/notifications", response_model=AdminNotificationListRead
+)
 def list_tenant_notifications(
     tenant_id: str,
     status_filter: str | None = Query(default="open", alias="status"),
@@ -162,7 +185,9 @@ def list_webhook_queue_jobs(
             detail="project_id is required",
         )
     if not principal.is_platform_super_admin:
-        require_tenant_workspace_access(principal=principal, tenant_id=normalized_tenant_id)
+        require_tenant_workspace_access(
+            principal=principal, tenant_id=normalized_tenant_id
+        )
     return list_webhook_queue_jobs_impl(
         session=session,
         status_filter=status_filter,
@@ -175,7 +200,9 @@ def list_webhook_queue_jobs(
     )
 
 
-@router.post("/observability/webhook-jobs/{job_id}/retry", response_model=WebhookQueueJobRead)
+@router.post(
+    "/observability/webhook-jobs/{job_id}/retry", response_model=WebhookQueueJobRead
+)
 def retry_failed_webhook_job(
     job_id: str,
     tenant_id: str | None = Query(default=None),
@@ -196,7 +223,9 @@ def retry_failed_webhook_job(
             detail="project_id is required",
         )
     if not principal.is_platform_super_admin:
-        require_tenant_workspace_access(principal=principal, tenant_id=normalized_tenant_id)
+        require_tenant_workspace_access(
+            principal=principal, tenant_id=normalized_tenant_id
+        )
     return retry_failed_webhook_job_impl(
         session=session,
         tenant_id=normalized_tenant_id,
@@ -246,7 +275,9 @@ def get_worker_runtime_auth_request(
     )
 
 
-@router.get("/observability/knowledge-jira-sync", response_model=KnowledgeJiraSyncRuntimeRead)
+@router.get(
+    "/observability/knowledge-jira-sync", response_model=KnowledgeJiraSyncRuntimeRead
+)
 def knowledge_jira_sync_runtime_status(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
@@ -257,7 +288,9 @@ def knowledge_jira_sync_runtime_status(
     )
 
 
-@router.get("/observability/tenants/{tenant_id}", response_model=TenantObservabilityRead)
+@router.get(
+    "/observability/tenants/{tenant_id}", response_model=TenantObservabilityRead
+)
 def tenant_observability(
     tenant_id: str,
     _: str = Depends(require_admin),
@@ -293,10 +326,14 @@ def export_audit_events(
     session: Session = Depends(get_session),
 ) -> StreamingResponse:
     if not principal.is_platform_super_admin:
-        require_tenant_workspace_access(principal=principal, tenant_id=payload.tenant_id)
+        require_tenant_workspace_access(
+            principal=principal, tenant_id=payload.tenant_id
+        )
     tenant = session.get(Tenant, payload.tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     observability_policy = normalize_tenant_observability_policy(tenant.policy_config)
     if not observability_policy.audit_export_enabled:
         raise HTTPException(
@@ -307,7 +344,7 @@ def export_audit_events(
     if payload.execution_id:
         filename_parts.append(payload.execution_id)
     headers = {
-        "Content-Disposition": f"attachment; filename=\"{'-'.join(filename_parts)}.ndjson\"",
+        "Content-Disposition": f'attachment; filename="{"-".join(filename_parts)}.ndjson"',
     }
     return StreamingResponse(
         iter_audit_event_export(session=session, request=payload),

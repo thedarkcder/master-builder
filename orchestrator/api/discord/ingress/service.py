@@ -5,10 +5,16 @@ from typing import Callable, Literal
 
 from fastapi import Depends
 
-from orchestrator.api.commands.execution_service import CommandExecutionDependencies, execute_tenant_command
+from orchestrator.api.commands.execution_service import (
+    CommandExecutionDependencies,
+    execute_tenant_command,
+)
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
-from orchestrator.core.communications.command_pipeline import CommandExecutionContext, parse_ingress_source
+from orchestrator.core.communications.command_pipeline import (
+    CommandExecutionContext,
+    parse_ingress_source,
+)
 
 
 @dataclass(frozen=True)

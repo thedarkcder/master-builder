@@ -31,7 +31,9 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -60,7 +62,9 @@ def _volume_from_resource(resource: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _split_resources_and_volumes(resources: Any, existing_volumes: Any) -> tuple[list[Any], list[Any], bool]:
+def _split_resources_and_volumes(
+    resources: Any, existing_volumes: Any
+) -> tuple[list[Any], list[Any], bool]:
     retained_resources: list[Any] = []
     volumes = _coerce_list(existing_volumes)
     changed = False
@@ -113,7 +117,9 @@ def _split_deployment_config(payload: Any) -> tuple[dict[str, Any], bool]:
 
 
 def _migrate_table(table_name: str, id_column: str) -> None:
-    if not (_table_exists(table_name) and _column_exists(table_name, "deployment_config")):
+    if not (
+        _table_exists(table_name) and _column_exists(table_name, "deployment_config")
+    ):
         return
     bind = op.get_bind()
     table = sa.table(
@@ -121,7 +127,13 @@ def _migrate_table(table_name: str, id_column: str) -> None:
         sa.column(id_column, sa.String()),
         sa.column("deployment_config", sa.JSON()),
     )
-    rows = bind.execute(sa.text(f"SELECT {id_column}, deployment_config FROM {table_name}")).mappings().all()
+    rows = (
+        bind.execute(
+            sa.text(f"SELECT {id_column}, deployment_config FROM {table_name}")
+        )
+        .mappings()
+        .all()
+    )
     for row in rows:
         updated, changed = _split_deployment_config(row["deployment_config"])
         if not changed:

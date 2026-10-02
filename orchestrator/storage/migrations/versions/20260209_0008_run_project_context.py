@@ -19,7 +19,9 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("runs", schema=None) as batch_op:
-        batch_op.add_column(sa.Column("project_id", sa.String(length=128), nullable=True))
+        batch_op.add_column(
+            sa.Column("project_id", sa.String(length=128), nullable=True)
+        )
         batch_op.create_index("ix_runs_project_id", ["project_id"], unique=False)
         batch_op.create_foreign_key(
             "fk_runs_project_id_projects",

@@ -31,7 +31,13 @@ from orchestrator.core.workflow.runner import WorkflowResult
 from orchestrator.core.workflow.runner import WorkflowStageCheckpoint
 
 SNAPSHOT_VERSION = 1
-_VALID_WORKFLOW_OUTCOMES: set[str] = {"success", "requeue", "waiting_for_input", "blocked", "failed"}
+_VALID_WORKFLOW_OUTCOMES: set[str] = {
+    "success",
+    "requeue",
+    "waiting_for_input",
+    "blocked",
+    "failed",
+}
 
 
 class StageName(str, Enum):
@@ -95,10 +101,14 @@ class ExecutionSnapshot:
     stages: dict[str, ExecutionStageRecord] = field(default_factory=dict)
 
     @classmethod
-    def empty(cls, *, trigger_context: dict[str, Any] | None = None) -> ExecutionSnapshot:
+    def empty(
+        cls, *, trigger_context: dict[str, Any] | None = None
+    ) -> ExecutionSnapshot:
         return cls(
             version=SNAPSHOT_VERSION,
-            context=SnapshotContext(trigger_context=dict(trigger_context or {}), execution_context={}),
+            context=SnapshotContext(
+                trigger_context=dict(trigger_context or {}), execution_context={}
+            ),
             workflow=SnapshotWorkflow(),
             events=SnapshotEvents(),
             stages={},
@@ -125,7 +135,9 @@ class ExecutionSnapshot:
         )
 
     @classmethod
-    def require(cls, payload: object | None, *, allow_empty: bool = True) -> ExecutionSnapshot:
+    def require(
+        cls, payload: object | None, *, allow_empty: bool = True
+    ) -> ExecutionSnapshot:
         if payload is None:
             if allow_empty:
                 return cls.empty()
@@ -153,12 +165,28 @@ class ExecutionSnapshot:
                 "requeue_reason": self.workflow.requeue_reason,
             },
             "events": {
-                "stage_updates": _normalize_stage_update_payloads(self.events.stage_updates),
-                "live_stage_updates": [dict(item) for item in self.events.live_stage_updates if isinstance(item, dict)],
-                "stage_trace": [dict(item) for item in self.events.stage_trace if isinstance(item, dict)],
-                "workstream_trace": [dict(item) for item in self.events.workstream_trace if isinstance(item, dict)],
+                "stage_updates": _normalize_stage_update_payloads(
+                    self.events.stage_updates
+                ),
+                "live_stage_updates": [
+                    dict(item)
+                    for item in self.events.live_stage_updates
+                    if isinstance(item, dict)
+                ],
+                "stage_trace": [
+                    dict(item)
+                    for item in self.events.stage_trace
+                    if isinstance(item, dict)
+                ],
+                "workstream_trace": [
+                    dict(item)
+                    for item in self.events.workstream_trace
+                    if isinstance(item, dict)
+                ],
             },
-            "stages": {stage: record.to_payload() for stage, record in self.stages.items()},
+            "stages": {
+                stage: record.to_payload() for stage, record in self.stages.items()
+            },
         }
 
     def trigger_context(self) -> dict[str, Any]:
@@ -168,7 +196,9 @@ class ExecutionSnapshot:
         if execution_context:
             self.context.execution_context = dict(execution_context)
 
-    def append_live_stage_update(self, *, stage: str, recorded_at: str | None = None) -> None:
+    def append_live_stage_update(
+        self, *, stage: str, recorded_at: str | None = None
+    ) -> None:
         updates = list(self.events.live_stage_updates or [])
         updates.append(
             {
@@ -207,8 +237,16 @@ class ExecutionSnapshot:
             requeue_reason=workflow_result.requeue_reason,
         )
         self.events.stage_updates = _normalize_stage_update_payloads(stage_updates)
-        self.events.stage_trace = [dict(item) for item in workflow_result.orchestration_stage_trace if isinstance(item, dict)]
-        self.events.workstream_trace = [dict(item) for item in workflow_result.orchestration_workstream_trace if isinstance(item, dict)]
+        self.events.stage_trace = [
+            dict(item)
+            for item in workflow_result.orchestration_stage_trace
+            if isinstance(item, dict)
+        ]
+        self.events.workstream_trace = [
+            dict(item)
+            for item in workflow_result.orchestration_workstream_trace
+            if isinstance(item, dict)
+        ]
 
     def plan(self) -> PmPlan | None:
         record = self.stages.get("pm")
@@ -246,7 +284,11 @@ def _normalize_stage_update_payloads(
 ) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
     for item in stage_updates:
-        normalized = item if isinstance(item, WorkerStageUpdate) else WorkerStageUpdate.load(item)
+        normalized = (
+            item
+            if isinstance(item, WorkerStageUpdate)
+            else WorkerStageUpdate.load(item)
+        )
         if normalized is None:
             continue
         payloads.append(normalized.to_payload())
@@ -320,7 +362,9 @@ def _decode_workflow(raw: object) -> SnapshotWorkflow | None:
     attempts = raw.get("attempts")
     summary = raw.get("summary")
     outcome = raw.get("outcome")
-    if outcome is not None and (not isinstance(outcome, str) or outcome not in _VALID_WORKFLOW_OUTCOMES):
+    if outcome is not None and (
+        not isinstance(outcome, str) or outcome not in _VALID_WORKFLOW_OUTCOMES
+    ):
         return None
     parsed_summary = _parse_string_list(summary, require_non_empty=False)
     if not isinstance(attempts, int) or attempts < 0 or parsed_summary is None:
@@ -330,7 +374,9 @@ def _decode_workflow(raw: object) -> SnapshotWorkflow | None:
     requeue_reason = _parse_optional_string(raw.get("requeue_reason"))
     if outcome == "requeue" and requeue_reason is None:
         return None
-    if outcome != "requeue" and (requeue_target is not None or requeue_reason is not None):
+    if outcome != "requeue" and (
+        requeue_target is not None or requeue_reason is not None
+    ):
         return None
     return SnapshotWorkflow(
         outcome=outcome,
@@ -380,14 +426,22 @@ def _decode_stages(raw: object) -> dict[str, ExecutionStageRecord] | None:
     return normalized
 
 
-def _decode_stage_record(*, stage: StageName, raw: object) -> ExecutionStageRecord | None:
+def _decode_stage_record(
+    *, stage: StageName, raw: object
+) -> ExecutionStageRecord | None:
     if not isinstance(raw, dict):
         return None
     attempt = raw.get("attempt")
     status = _parse_optional_string(raw.get("status"))
     summary = _parse_optional_string(raw.get("summary"))
     completed_at = _parse_optional_string(raw.get("completed_at"))
-    if not isinstance(attempt, int) or attempt < 1 or status is None or summary is None or completed_at is None:
+    if (
+        not isinstance(attempt, int)
+        or attempt < 1
+        or status is None
+        or summary is None
+        or completed_at is None
+    ):
         return None
     artifact = raw.get("artifact")
     normalized_artifact: dict[str, Any] | None = None

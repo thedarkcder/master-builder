@@ -22,7 +22,9 @@ def _has_table(table_name: str) -> bool:
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
-    return index_name in {index["name"] for index in sa.inspect(op.get_bind()).get_indexes(table_name)}
+    return index_name in {
+        index["name"] for index in sa.inspect(op.get_bind()).get_indexes(table_name)
+    }
 
 
 def upgrade() -> None:
@@ -35,8 +37,13 @@ def upgrade() -> None:
     if has_jira_table:
         op.rename_table("jira_oauth_connections", "atlassian_oauth_connections")
     if _has_index("atlassian_oauth_connections", "ix_jira_oauth_connections_cloud_id"):
-        op.drop_index("ix_jira_oauth_connections_cloud_id", table_name="atlassian_oauth_connections")
-    if not _has_index("atlassian_oauth_connections", "ix_atlassian_oauth_connections_cloud_id"):
+        op.drop_index(
+            "ix_jira_oauth_connections_cloud_id",
+            table_name="atlassian_oauth_connections",
+        )
+    if not _has_index(
+        "atlassian_oauth_connections", "ix_atlassian_oauth_connections_cloud_id"
+    ):
         op.create_index(
             "ix_atlassian_oauth_connections_cloud_id",
             "atlassian_oauth_connections",
@@ -46,7 +53,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_atlassian_oauth_connections_cloud_id", table_name="atlassian_oauth_connections")
+    op.drop_index(
+        "ix_atlassian_oauth_connections_cloud_id",
+        table_name="atlassian_oauth_connections",
+    )
     op.rename_table("atlassian_oauth_connections", "jira_oauth_connections")
     op.create_index(
         "ix_jira_oauth_connections_cloud_id",

@@ -19,7 +19,9 @@ _WHISPER_MODEL_LOCK = threading.RLock()
 _WHISPER_MODELS: dict[tuple[str, str, str], object] = {}
 
 
-def download_audio_bytes(*, url: str, bot_token: str | None = None) -> tuple[bytes, str]:
+def download_audio_bytes(
+    *, url: str, bot_token: str | None = None
+) -> tuple[bytes, str]:
     normalized_url = str(url or "").strip()
     if not normalized_url:
         raise VoiceTranscriptionError("Audio attachment URL is missing")
@@ -40,9 +42,13 @@ def download_audio_bytes(*, url: str, bot_token: str | None = None) -> tuple[byt
             content_type = str(response.headers.get("Content-Type") or "").strip()
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="ignore")
-        raise VoiceTranscriptionError(f"Audio download failed ({exc.code}): {error_body}") from exc
+        raise VoiceTranscriptionError(
+            f"Audio download failed ({exc.code}): {error_body}"
+        ) from exc
     except URLError as exc:
-        raise VoiceTranscriptionError(f"Audio download failed (network): {exc}") from exc
+        raise VoiceTranscriptionError(
+            f"Audio download failed (network): {exc}"
+        ) from exc
     if not payload:
         raise VoiceTranscriptionError("Downloaded audio payload was empty")
     return payload, content_type
@@ -75,7 +81,9 @@ def transcribe_audio_bytes(
     raise VoiceTranscriptionError(f"Unsupported transcription provider '{provider}'")
 
 
-def ensure_transcription_provider_ready(*, settings: Settings, allow_download: bool = False) -> None:
+def ensure_transcription_provider_ready(
+    *, settings: Settings, allow_download: bool = False
+) -> None:
     provider = str(settings.voice_stt_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceTranscriptionError("Voice transcription is disabled")
@@ -107,7 +115,9 @@ def _transcribe_with_openai(
 
     model = _resolve_openai_model_name(settings=settings)
     language = str(settings.voice_transcription_language or "").strip()
-    inferred_content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    inferred_content_type = (
+        content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    )
     body, boundary = _encode_multipart_form_data(
         fields={
             "model": model,
@@ -136,19 +146,27 @@ def _transcribe_with_openai(
             raw_body = response.read().decode("utf-8")
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8")
-        raise VoiceTranscriptionError(f"OpenAI transcription failed ({exc.code}): {error_body}") from exc
+        raise VoiceTranscriptionError(
+            f"OpenAI transcription failed ({exc.code}): {error_body}"
+        ) from exc
     except URLError as exc:
-        raise VoiceTranscriptionError(f"OpenAI transcription failed (network): {exc}") from exc
+        raise VoiceTranscriptionError(
+            f"OpenAI transcription failed (network): {exc}"
+        ) from exc
 
     try:
         payload = json.loads(raw_body)
     except json.JSONDecodeError as exc:
-        raise VoiceTranscriptionError("OpenAI transcription returned invalid JSON") from exc
+        raise VoiceTranscriptionError(
+            "OpenAI transcription returned invalid JSON"
+        ) from exc
     if not isinstance(payload, dict):
         raise VoiceTranscriptionError("OpenAI transcription response was not an object")
     text = str(payload.get("text") or "").strip()
     if not text:
-        raise VoiceTranscriptionError("OpenAI transcription response did not include text")
+        raise VoiceTranscriptionError(
+            "OpenAI transcription response did not include text"
+        )
     return text
 
 
@@ -183,7 +201,9 @@ def _transcribe_with_whisper(
             transcript_parts.append(text)
     transcript = " ".join(transcript_parts).strip()
     if not transcript:
-        raise VoiceTranscriptionError("Whisper transcription response did not include text")
+        raise VoiceTranscriptionError(
+            "Whisper transcription response did not include text"
+        )
     return transcript
 
 
@@ -204,7 +224,9 @@ def _resolve_whisper_model_name(*, settings: Settings) -> str:
 def _get_whisper_model(*, settings: Settings, allow_download: bool = False) -> object:
     model_name = _resolve_whisper_model_name(settings=settings)
     device = str(settings.voice_transcription_device or "").strip() or "auto"
-    compute_type = str(settings.voice_transcription_compute_type or "").strip() or "int8"
+    compute_type = (
+        str(settings.voice_transcription_compute_type or "").strip() or "int8"
+    )
     cache_key = (model_name, device, compute_type)
     cached_model = _WHISPER_MODELS.get(cache_key)
     if cached_model is not None:
@@ -270,20 +292,30 @@ def _decode_audio_to_float32_mono(
     try:
         av = __import__("av")
     except ModuleNotFoundError as exc:
-        raise VoiceTranscriptionError("Whisper transcription requires PyAV at runtime.") from exc
+        raise VoiceTranscriptionError(
+            "Whisper transcription requires PyAV at runtime."
+        ) from exc
     try:
         numpy = __import__("numpy")
     except ModuleNotFoundError as exc:
-        raise VoiceTranscriptionError("Whisper transcription requires numpy at runtime.") from exc
+        raise VoiceTranscriptionError(
+            "Whisper transcription requires numpy at runtime."
+        ) from exc
 
     try:
-        with av.open(io.BytesIO(audio_bytes), mode="r", metadata_errors="ignore") as container:
-            audio_stream = next((stream for stream in container.streams if stream.type == "audio"), None)
+        with av.open(
+            io.BytesIO(audio_bytes), mode="r", metadata_errors="ignore"
+        ) as container:
+            audio_stream = next(
+                (stream for stream in container.streams if stream.type == "audio"), None
+            )
             if audio_stream is None:
                 raise VoiceTranscriptionError(
                     f"Whisper transcription could not find an audio stream in '{filename}'."
                 )
-            resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=16000)
+            resampler = av.audio.resampler.AudioResampler(
+                format="s16", layout="mono", rate=16000
+            )
             chunks: list[object] = []
             for frame in container.decode(audio_stream):
                 resampled_frames = resampler.resample(frame)
@@ -298,7 +330,11 @@ def _decode_audio_to_float32_mono(
     except VoiceTranscriptionError:
         raise
     except Exception as exc:  # noqa: BLE001
-        detected_content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        detected_content_type = (
+            content_type
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
         raise VoiceTranscriptionError(
             f"Whisper audio decode failed for '{filename}' ({detected_content_type}): {exc}"
         ) from exc

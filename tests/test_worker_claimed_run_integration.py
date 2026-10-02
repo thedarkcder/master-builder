@@ -11,7 +11,11 @@ import orchestrator.worker as worker_module
 from orchestrator.core.config import get_settings
 from orchestrator.core.worker.run_health import worker_service_instance_id_for_mode
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowResult, WorkflowRunner
+from orchestrator.core.workflow.runner import (
+    WorkflowRequest,
+    WorkflowResult,
+    WorkflowRunner,
+)
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -19,8 +23,8 @@ from tests.workflow_test_support import add_workflow_attempt
 
 FAILED_RUN_ID = "f424eee4-d8aa-4055-87d0-9fa51dde1e80"
 FAILED_WORKFLOW_ID = "f77a6bf8-d297-4a21-a431-67e71b0e6748"
-FAILED_TENANT_ID = "example"
-FAILED_PROJECT_ID = "example-default"
+FAILED_TENANT_ID = "example-workspace"
+FAILED_PROJECT_ID = "example-workspace-default"
 FAILED_ISSUE_KEY = "GP-186"
 FAILED_ISSUE_SUMMARY = "GP-186: PR remediation for #26"
 FAILED_HEAD_SHA = "809b7c33c2446563bf429009ca1cc7a16a8b5a69"
@@ -70,13 +74,15 @@ class _FakeAgents:
 class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
     @classmethod
     def bootstrap_template_database(cls) -> None:
-        session_factory = create_session_factory(database_url=cls._template_database_url)
+        session_factory = create_session_factory(
+            database_url=cls._template_database_url
+        )
         now = datetime.now(timezone.utc)
         with session_factory() as session:
             session.add(
                 Tenant(
                     tenant_id=FAILED_TENANT_ID,
-                    name="example",
+                    name="Example Workspace",
                     is_enabled=True,
                     jira_config={"project_keys": ["GP"]},
                     github_config={},
@@ -91,7 +97,7 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
                 Project(
                     project_id=FAILED_PROJECT_ID,
                     tenant_id=FAILED_TENANT_ID,
-                    name="example-default",
+                    name="example-workspace-default",
                     github_repository=FAILED_REPO_URL,
                     jira_project_key="GP",
                     is_archived=False,
@@ -103,18 +109,28 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
 
     def setUp(self) -> None:
         self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
-        self._original_allow_sqlite = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
+        self._original_allow_sqlite = os.environ.get(
+            "ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"
+        )
         self._original_agent_id = os.environ.get("ORCHESTRATOR_AGENT_ID")
         self._original_worker_caps = os.environ.get("ORCHESTRATOR_WORKER_CAPABILITIES")
-        self._original_workspace_key = os.environ.get("ORCHESTRATOR_WORKER_WORKSPACE_KEY")
-        self._original_checkout_base_dir = os.environ.get("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR")
-        self.database_url = self._prepare_test_database(name_prefix="worker-claimed-run")
+        self._original_workspace_key = os.environ.get(
+            "ORCHESTRATOR_WORKER_WORKSPACE_KEY"
+        )
+        self._original_checkout_base_dir = os.environ.get(
+            "ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"
+        )
+        self.database_url = self._prepare_test_database(
+            name_prefix="worker-claimed-run"
+        )
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = "true"
         os.environ["ORCHESTRATOR_AGENT_ID"] = "worker-linux-local"
         os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
         os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "test-worker"
-        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self._db_workspace.name
+        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = (
+            self._db_workspace.name
+        )
         get_settings.cache_clear()
         reset_db_engine_cache()
         self.session_factory = create_session_factory(database_url=self.database_url)
@@ -128,7 +144,9 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         if self._original_allow_sqlite is None:
             os.environ.pop("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS", None)
         else:
-            os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = self._original_allow_sqlite
+            os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = (
+                self._original_allow_sqlite
+            )
         if self._original_agent_id is None:
             os.environ.pop("ORCHESTRATOR_AGENT_ID", None)
         else:
@@ -140,11 +158,15 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         if self._original_workspace_key is None:
             os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
         else:
-            os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = self._original_workspace_key
+            os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = (
+                self._original_workspace_key
+            )
         if self._original_checkout_base_dir is None:
             os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
         else:
-            os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self._original_checkout_base_dir
+            os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = (
+                self._original_checkout_base_dir
+            )
         get_settings.cache_clear()
         reset_db_engine_cache()
 
@@ -224,7 +246,9 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         claimed = worker_module._claim_next_run_once(
             session_factory=self.session_factory,
             settings=settings,
-            service_instance_id=worker_service_instance_id_for_mode(settings=settings, mode="runs"),
+            service_instance_id=worker_service_instance_id_for_mode(
+                settings=settings, mode="runs"
+            ),
         )
         self.assertIsNotNone(claimed)
         assert claimed is not None
@@ -233,13 +257,17 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         return claimed
 
     @staticmethod
-    def _fake_workflow_request(*, session, tenant, run, project, effective_policy, settings):  # noqa: ANN001
+    def _fake_workflow_request(
+        *, session, tenant, run, project, effective_policy, settings
+    ):  # noqa: ANN001
         return WorkflowRequest(
             tenant_id=tenant.tenant_id,
             workflow_id=run.workflow_id,
             project_id=project.project_id if project is not None else run.project_id,
             project_name=project.name if project is not None else None,
-            github_repository=project.github_repository if project is not None else None,
+            github_repository=project.github_repository
+            if project is not None
+            else None,
             jira_project_key=project.jira_project_key if project is not None else None,
             run_id=run.run_id,
             attempt_number=int(getattr(run, "attempt_number", 1) or 1),
@@ -273,23 +301,55 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
     def _run_claimed(self, *, claimed_run, outcome: str):
         fake_runner = WorkflowRunner(_FakeAgents(outcome=outcome))
         with (
-            patch.object(run_dispatch_module, "build_workflow_runner_for_session", return_value=fake_runner),
-            patch.object(execution_service_module, "_build_workflow_request_for_run", new=self._fake_workflow_request),
-            patch.object(execution_service_module, "ensure_project_repository_checkout", side_effect=lambda *args, **kwargs: None),
-            patch.object(execution_service_module, "cleanup_run_workspaces", side_effect=lambda *args, **kwargs: None),
+            patch.object(
+                run_dispatch_module,
+                "build_workflow_runner_for_session",
+                return_value=fake_runner,
+            ),
+            patch.object(
+                execution_service_module,
+                "_build_workflow_request_for_run",
+                new=self._fake_workflow_request,
+            ),
+            patch.object(
+                execution_service_module,
+                "ensure_project_repository_checkout",
+                side_effect=lambda *args, **kwargs: None,
+            ),
+            patch.object(
+                execution_service_module,
+                "cleanup_run_workspaces",
+                side_effect=lambda *args, **kwargs: None,
+            ),
             patch.object(
                 execution_service_module,
                 "send_tenant_discord_message",
-                side_effect=lambda *args, **kwargs: SimpleNamespace(sent=False, reason="test"),
+                side_effect=lambda *args, **kwargs: SimpleNamespace(
+                    sent=False, reason="test"
+                ),
             ),
-            patch.object(execution_service_module, "_send_stage_update_to_jira", side_effect=lambda *args, **kwargs: None),
-            patch.object(execution_service_module, "_transition_issue_status", side_effect=lambda *args, **kwargs: None),
+            patch.object(
+                execution_service_module,
+                "_send_stage_update_to_jira",
+                side_effect=lambda *args, **kwargs: None,
+            ),
+            patch.object(
+                execution_service_module,
+                "_transition_issue_status",
+                side_effect=lambda *args, **kwargs: None,
+            ),
             patch.object(
                 execution_service_module,
                 "tenant_jira_issue_url",
-                side_effect=lambda *args, **kwargs: f"https://jira.example/browse/{kwargs['issue_key']}",
+                side_effect=lambda *args, **kwargs: (
+                    f"https://jira.example/browse/{kwargs['issue_key']}"
+                ),
             ),
-            patch.object(execution_service_module, "WorkerRunHeartbeatController", _FakeHeartbeatController),
+            patch.object(
+                execution_service_module,
+                "WorkerRunHeartbeatController",
+                _FakeHeartbeatController,
+            ),
         ):
             return worker_module._process_next_run_once(
                 session_factory=self.session_factory,
@@ -300,23 +360,55 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
     def _run_claimed_child_entry(self, *, claimed_run, outcome: str) -> int:
         fake_runner = WorkflowRunner(_FakeAgents(outcome=outcome))
         with (
-            patch.object(run_dispatch_module, "build_workflow_runner_for_session", return_value=fake_runner),
-            patch.object(execution_service_module, "_build_workflow_request_for_run", new=self._fake_workflow_request),
-            patch.object(execution_service_module, "ensure_project_repository_checkout", side_effect=lambda *args, **kwargs: None),
-            patch.object(execution_service_module, "cleanup_run_workspaces", side_effect=lambda *args, **kwargs: None),
+            patch.object(
+                run_dispatch_module,
+                "build_workflow_runner_for_session",
+                return_value=fake_runner,
+            ),
+            patch.object(
+                execution_service_module,
+                "_build_workflow_request_for_run",
+                new=self._fake_workflow_request,
+            ),
+            patch.object(
+                execution_service_module,
+                "ensure_project_repository_checkout",
+                side_effect=lambda *args, **kwargs: None,
+            ),
+            patch.object(
+                execution_service_module,
+                "cleanup_run_workspaces",
+                side_effect=lambda *args, **kwargs: None,
+            ),
             patch.object(
                 execution_service_module,
                 "send_tenant_discord_message",
-                side_effect=lambda *args, **kwargs: SimpleNamespace(sent=False, reason="test"),
+                side_effect=lambda *args, **kwargs: SimpleNamespace(
+                    sent=False, reason="test"
+                ),
             ),
-            patch.object(execution_service_module, "_send_stage_update_to_jira", side_effect=lambda *args, **kwargs: None),
-            patch.object(execution_service_module, "_transition_issue_status", side_effect=lambda *args, **kwargs: None),
+            patch.object(
+                execution_service_module,
+                "_send_stage_update_to_jira",
+                side_effect=lambda *args, **kwargs: None,
+            ),
+            patch.object(
+                execution_service_module,
+                "_transition_issue_status",
+                side_effect=lambda *args, **kwargs: None,
+            ),
             patch.object(
                 execution_service_module,
                 "tenant_jira_issue_url",
-                side_effect=lambda *args, **kwargs: f"https://jira.example/browse/{kwargs['issue_key']}",
+                side_effect=lambda *args, **kwargs: (
+                    f"https://jira.example/browse/{kwargs['issue_key']}"
+                ),
             ),
-            patch.object(execution_service_module, "WorkerRunHeartbeatController", _FakeHeartbeatController),
+            patch.object(
+                execution_service_module,
+                "WorkerRunHeartbeatController",
+                _FakeHeartbeatController,
+            ),
             patch.dict(
                 os.environ,
                 {
@@ -357,7 +449,10 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         self.assertEqual(run.issue_key, FAILED_ISSUE_KEY)
         self.assertEqual(run.issue_summary, FAILED_ISSUE_SUMMARY)
         self.assertEqual(run.dedupe_scope, "pr_remediation")
-        self.assertEqual(ExecutionSnapshot.require(run.plan).trigger_context().get("source"), "github_pr_review_feedback")
+        self.assertEqual(
+            ExecutionSnapshot.require(run.plan).trigger_context().get("source"),
+            "github_pr_review_feedback",
+        )
 
     def test_failed_live_run_fixture_leaves_dispatching_and_succeeds(self) -> None:
         self._seed_failed_run_regression_fixture()
@@ -382,7 +477,9 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
             run_id="1c4d7f01-5f5f-4f39-b1e7-5a39b9913d4a",
             workflow_id="41e26fb4-32dd-43f5-afb5-b7d3d8b0ad2c",
         )
-        claimed = self._claim_run(expected_run_id="1c4d7f01-5f5f-4f39-b1e7-5a39b9913d4a")
+        claimed = self._claim_run(
+            expected_run_id="1c4d7f01-5f5f-4f39-b1e7-5a39b9913d4a"
+        )
 
         result = self._run_claimed(claimed_run=claimed, outcome="failed")
 
@@ -390,7 +487,9 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.last_error, "Simulated agent failure")
         run = self._load_run(run_id="1c4d7f01-5f5f-4f39-b1e7-5a39b9913d4a")
-        workflow = self._load_workflow(workflow_id="41e26fb4-32dd-43f5-afb5-b7d3d8b0ad2c")
+        workflow = self._load_workflow(
+            workflow_id="41e26fb4-32dd-43f5-afb5-b7d3d8b0ad2c"
+        )
         self.assertEqual(run.status, "failed")
         self.assertEqual(workflow.status, "failed")
         self.assertEqual(run.last_error, "Simulated agent failure")
@@ -400,11 +499,15 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
         self.assertIsNone(run.worker_service_instance_id)
         self.assertNotEqual(run.status, "dispatching")
 
-    def test_run_worker_child_entry_leaves_failed_live_run_fixture_dispatching_state(self) -> None:
+    def test_run_worker_child_entry_leaves_failed_live_run_fixture_dispatching_state(
+        self,
+    ) -> None:
         self._seed_failed_run_regression_fixture()
         claimed = self._claim_run(expected_run_id=FAILED_RUN_ID)
 
-        exit_code = self._run_claimed_child_entry(claimed_run=claimed, outcome="success")
+        exit_code = self._run_claimed_child_entry(
+            claimed_run=claimed, outcome="success"
+        )
 
         self.assertEqual(exit_code, worker_module.WORKER_CHILD_EXIT_PROCESSED)
         run = self._load_run(run_id=FAILED_RUN_ID)

@@ -9,10 +9,21 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.schemas import WorkflowOperationRestartRequest, WorkflowOperationRetryRead
-from orchestrator.core.workflow.operation_service import OPERATION_STATUS_COMPLETED, OPERATION_STATUS_FAILED, OPERATION_STATUS_RUNNING
+from orchestrator.api.schemas import (
+    WorkflowOperationRestartRequest,
+    WorkflowOperationRetryRead,
+)
+from orchestrator.core.workflow.operation_service import (
+    OPERATION_STATUS_COMPLETED,
+    OPERATION_STATUS_FAILED,
+    OPERATION_STATUS_RUNNING,
+)
 from orchestrator.core.workflow.transitions import TERMINAL_WORKFLOW_STATUSES
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 logger = logging.getLogger(__name__)
 _TERMINAL_WORKFLOW_STATUSES = frozenset({*TERMINAL_WORKFLOW_STATUSES, "completed"})
@@ -38,8 +49,14 @@ def close_active_operation_attempts_for_terminal_workflows(
 ) -> int:
     rows = session.execute(
         select(WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt)
-        .join(WorkflowOperation, WorkflowOperation.workflow_id == WorkflowExecution.workflow_id)
-        .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.workflow_id == WorkflowExecution.workflow_id,
+        )
+        .join(
+            WorkflowOperationAttempt,
+            WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id,
+        )
         .where(
             WorkflowExecution.status.in_(_TERMINAL_WORKFLOW_STATUSES),
             WorkflowOperationAttempt.status == OPERATION_STATUS_RUNNING,
@@ -48,7 +65,11 @@ def close_active_operation_attempts_for_terminal_workflows(
     now = datetime.now(timezone.utc)
     for workflow, operation, attempt in rows:
         workflow_status = str(workflow.status or "").strip().lower()
-        operation.status = OPERATION_STATUS_COMPLETED if workflow_status in {"completed", "succeeded"} else OPERATION_STATUS_FAILED
+        operation.status = (
+            OPERATION_STATUS_COMPLETED
+            if workflow_status in {"completed", "succeeded"}
+            else OPERATION_STATUS_FAILED
+        )
         operation.finished_at = operation.finished_at or now
         operation.updated_at = now
         attempt.status = "failed"
@@ -81,8 +102,14 @@ def stale_running_workflow_operation_attempt_refs(
     cutoff = anchor - timedelta(seconds=max(60, int(stale_timeout_seconds)))
     rows = session.execute(
         select(WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt)
-        .join(WorkflowOperation, WorkflowOperation.workflow_id == WorkflowExecution.workflow_id)
-        .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.workflow_id == WorkflowExecution.workflow_id,
+        )
+        .join(
+            WorkflowOperationAttempt,
+            WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id,
+        )
         .where(
             WorkflowExecution.status.notin_(_TERMINAL_WORKFLOW_STATUSES),
             WorkflowOperationAttempt.status == OPERATION_STATUS_RUNNING,
@@ -96,7 +123,10 @@ def stale_running_workflow_operation_attempt_refs(
                 & (WorkflowOperationAttempt.started_at <= cutoff),
             ),
         )
-        .order_by(WorkflowOperationAttempt.started_at.asc(), WorkflowOperationAttempt.attempt_number.asc())
+        .order_by(
+            WorkflowOperationAttempt.started_at.asc(),
+            WorkflowOperationAttempt.attempt_number.asc(),
+        )
         .limit(limit)
     ).all()
     return [

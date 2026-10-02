@@ -20,7 +20,9 @@ def adf_to_text(node: object) -> str:
     if isinstance(node, str):
         return node
     if isinstance(node, list):
-        return " ".join(part for part in (adf_to_text(item) for item in node) if part).strip()
+        return " ".join(
+            part for part in (adf_to_text(item) for item in node) if part
+        ).strip()
     if not isinstance(node, dict):
         return ""
 
@@ -30,7 +32,9 @@ def adf_to_text(node: object) -> str:
 
     content = node.get("content")
     if isinstance(content, list):
-        return " ".join(part for part in (adf_to_text(item) for item in content) if part).strip()
+        return " ".join(
+            part for part in (adf_to_text(item) for item in content) if part
+        ).strip()
     return ""
 
 
@@ -39,11 +43,15 @@ def extract_issue_payload(
 ) -> tuple[str, list[str], str | None, str | None, str | None, str | None]:
     issue = payload.get("issue")
     if not isinstance(issue, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue object"
+        )
 
     issue_key = issue.get("key")
     if not isinstance(issue_key, str) or not issue_key:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue key")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing issue key"
+        )
 
     fields = issue.get("fields") if isinstance(issue.get("fields"), dict) else {}
     labels = fields.get("labels") if isinstance(fields, dict) else []
@@ -51,7 +59,11 @@ def extract_issue_payload(
         labels = []
 
     summary_raw = fields.get("summary") if isinstance(fields, dict) else None
-    summary = str(summary_raw).strip() if isinstance(summary_raw, str) and summary_raw.strip() else None
+    summary = (
+        str(summary_raw).strip()
+        if isinstance(summary_raw, str) and summary_raw.strip()
+        else None
+    )
 
     description_raw = fields.get("description") if isinstance(fields, dict) else None
     description_text = adf_to_text(description_raw).strip()
@@ -76,7 +88,14 @@ def extract_issue_payload(
                     status_category_key = normalized_status_category_key
 
     normalized_labels = [str(label) for label in labels]
-    return issue_key, normalized_labels, status_name, status_category_key, summary, description
+    return (
+        issue_key,
+        normalized_labels,
+        status_name,
+        status_category_key,
+        summary,
+        description,
+    )
 
 
 def extract_jira_comment_text(payload: dict) -> str | None:
@@ -93,7 +112,9 @@ def extract_jira_comment_text(payload: dict) -> str | None:
     return None
 
 
-def parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, str | None]:
+def parse_jira_comment_command(
+    payload: dict,
+) -> tuple[str | None, str | None, str | None]:
     comment_text = extract_jira_comment_text(payload)
     if not comment_text:
         return None, None, None
@@ -106,7 +127,11 @@ def parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, s
         candidate = raw_line.strip()
         if candidate:
             first_non_empty_line = candidate
-            remaining_lines = [line.strip() for line in comment_text.splitlines()[line_index + 1 :] if line.strip()]
+            remaining_lines = [
+                line.strip()
+                for line in comment_text.splitlines()[line_index + 1 :]
+                if line.strip()
+            ]
             break
     if not first_non_empty_line:
         return None, None, None
@@ -132,7 +157,9 @@ def parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, s
 
     if command_name in {"ask", "clarify"}:
         inline_question = " ".join(parts[1:]).strip()
-        full_question = "\n".join(part for part in [inline_question, *remaining_lines] if part).strip()
+        full_question = "\n".join(
+            part for part in [inline_question, *remaining_lines] if part
+        ).strip()
         if not full_question:
             return None, None, "invalid_comment_command"
         return command_name, full_question, None
@@ -183,8 +210,16 @@ def extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
 
         from_status = item.get("fromString")
         to_status = item.get("toString")
-        normalized_from_status = from_status.strip() if isinstance(from_status, str) and from_status.strip() else None
-        normalized_to_status = to_status.strip() if isinstance(to_status, str) and to_status.strip() else None
+        normalized_from_status = (
+            from_status.strip()
+            if isinstance(from_status, str) and from_status.strip()
+            else None
+        )
+        normalized_to_status = (
+            to_status.strip()
+            if isinstance(to_status, str) and to_status.strip()
+            else None
+        )
         return normalized_from_status, normalized_to_status
 
     return None, None
@@ -203,7 +238,9 @@ def extract_changed_fields(payload: dict) -> list[str]:
         if not isinstance(item, dict):
             continue
         field = item.get("field")
-        normalized = field.strip().casefold() if isinstance(field, str) and field.strip() else ""
+        normalized = (
+            field.strip().casefold() if isinstance(field, str) and field.strip() else ""
+        )
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)

@@ -25,7 +25,9 @@ def _jinja_environment() -> Any:
     try:
         from jinja2 import Environment, FileSystemLoader, StrictUndefined
     except ModuleNotFoundError as exc:  # pragma: no cover - environment dependency
-        raise RuntimeError("Prompt rendering requires jinja2; install it in the runtime environment") from exc
+        raise RuntimeError(
+            "Prompt rendering requires jinja2; install it in the runtime environment"
+        ) from exc
     return Environment(
         loader=FileSystemLoader(str(_prompts_dir())),
         autoescape=False,
@@ -42,13 +44,17 @@ def _load_skill_prompt_text(skill_name: str) -> str:
         raise ValueError(f"Invalid prompt skill name: {skill_name!r}")
     skill_path = _repo_root() / ".codex" / "skills" / normalized_name / "SKILL.md"
     if not skill_path.is_file():
-        raise RuntimeError(f"Required prompt skill is missing: {normalized_name} at {skill_path}")
+        raise RuntimeError(
+            f"Required prompt skill is missing: {normalized_name} at {skill_path}"
+        )
     return skill_path.read_text(encoding="utf-8").strip()
 
 
 def _prompt_skills_for_template(template_name: str) -> dict[str, str]:
     skill_names = _SKILLS_BY_TEMPLATE.get(template_name, ())
-    return {skill_name: _load_skill_prompt_text(skill_name) for skill_name in skill_names}
+    return {
+        skill_name: _load_skill_prompt_text(skill_name) for skill_name in skill_names
+    }
 
 
 def render_prompt(template_name: str, **context: Any) -> str:

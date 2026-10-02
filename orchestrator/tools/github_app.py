@@ -201,7 +201,9 @@ def github_client_from_tenant_config(
     platform_secret_lookup: Callable[[str], str | None],
 ) -> "GitHubAppClient":
     app_id_ref = str(tenant_github_config.get("app_id_ref") or "GITHUB_APP_ID")
-    private_key_ref = str(tenant_github_config.get("private_key_ref") or "GITHUB_APP_PRIVATE_KEY")
+    private_key_ref = str(
+        tenant_github_config.get("private_key_ref") or "GITHUB_APP_PRIVATE_KEY"
+    )
     installation_id = str(tenant_github_config.get("installation_id") or "")
 
     if not installation_id:
@@ -221,7 +223,9 @@ def github_client_from_tenant_config(
         platform_secret_lookup=platform_secret_lookup,
     )
     if not private_key_pem:
-        raise ValueError(f"Missing GitHub private key secret for ref '{private_key_ref}'")
+        raise ValueError(
+            f"Missing GitHub private key secret for ref '{private_key_ref}'"
+        )
 
     return GitHubAppClient(
         GitHubAppConfig(
@@ -329,12 +333,18 @@ class GitHubAppClient:
         token = response.get("token")
         expires_at_raw = response.get("expires_at")
         if not isinstance(token, str) or not token:
-            raise GitHubApiError("GitHub installation token response did not include token")
+            raise GitHubApiError(
+                "GitHub installation token response did not include token"
+            )
         if not isinstance(expires_at_raw, str) or not expires_at_raw:
-            raise GitHubApiError("GitHub installation token response did not include expires_at")
+            raise GitHubApiError(
+                "GitHub installation token response did not include expires_at"
+            )
 
         expires_at = _parse_github_datetime(expires_at_raw)
-        self._cached_installation_token = _InstallationToken(token=token, expires_at=expires_at)
+        self._cached_installation_token = _InstallationToken(
+            token=token, expires_at=expires_at
+        )
         return token
 
     def get_actor_login(self) -> str:
@@ -348,7 +358,9 @@ class GitHubAppClient:
         )
         login = response.get("login")
         if not isinstance(login, str) or not login.strip():
-            raise GitHubApiError("GitHub authenticated user response did not include login")
+            raise GitHubApiError(
+                "GitHub authenticated user response did not include login"
+            )
         self._cached_actor_login = login.strip()
         return self._cached_actor_login
 
@@ -403,12 +415,18 @@ class GitHubAppClient:
 
         return PullRequestResult(number=number, html_url=html_url)
 
-    def mark_pull_request_ready_for_review(self, *, repo_full_name: str, pr_number: int) -> PullRequestDetails:
-        details = self.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+    def mark_pull_request_ready_for_review(
+        self, *, repo_full_name: str, pr_number: int
+    ) -> PullRequestDetails:
+        details = self.get_pull_request_details(
+            repo_full_name=repo_full_name, pr_number=pr_number
+        )
         if not details.draft:
             return details
         if not details.node_id:
-            raise GitHubApiError("GitHub PR details response did not include node_id for ready-for-review mutation")
+            raise GitHubApiError(
+                "GitHub PR details response did not include node_id for ready-for-review mutation"
+            )
         installation_token = self.get_installation_token()
         response = self._request_json(
             method="POST",
@@ -426,9 +444,13 @@ class GitHubAppClient:
         errors = response.get("errors")
         if errors:
             raise GitHubApiError(f"GitHub ready-for-review mutation failed: {errors}")
-        refreshed = self.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+        refreshed = self.get_pull_request_details(
+            repo_full_name=repo_full_name, pr_number=pr_number
+        )
         if refreshed.draft:
-            raise GitHubApiError("GitHub ready-for-review mutation completed but PR remained draft")
+            raise GitHubApiError(
+                "GitHub ready-for-review mutation completed but PR remained draft"
+            )
         return refreshed
 
     def update_pull_request(
@@ -456,12 +478,16 @@ class GitHubAppClient:
         number = response.get("number")
         html_url = response.get("html_url")
         if not isinstance(number, int):
-            raise GitHubApiError("GitHub PR update response did not include numeric PR number")
+            raise GitHubApiError(
+                "GitHub PR update response did not include numeric PR number"
+            )
         if not isinstance(html_url, str) or not html_url:
             raise GitHubApiError("GitHub PR update response did not include html_url")
         return PullRequestResult(number=number, html_url=html_url)
 
-    def get_pull_request_details(self, *, repo_full_name: str, pr_number: int) -> PullRequestDetails:
+    def get_pull_request_details(
+        self, *, repo_full_name: str, pr_number: int
+    ) -> PullRequestDetails:
         installation_token = self.get_installation_token()
         response = self._request_json(
             method="GET",
@@ -488,10 +514,14 @@ class GitHubAppClient:
         if mergeable_state is not None and not isinstance(mergeable_state, str):
             mergeable_state = None
         raw_body = response.get("body")
-        body = raw_body.strip() if isinstance(raw_body, str) and raw_body.strip() else None
+        body = (
+            raw_body.strip() if isinstance(raw_body, str) and raw_body.strip() else None
+        )
 
         if not isinstance(number, int):
-            raise GitHubApiError("GitHub PR details response did not include numeric PR number")
+            raise GitHubApiError(
+                "GitHub PR details response did not include numeric PR number"
+            )
         if not isinstance(html_url, str) or not html_url:
             raise GitHubApiError("GitHub PR details response did not include html_url")
         if not isinstance(head_sha, str) or not head_sha:
@@ -507,14 +537,24 @@ class GitHubAppClient:
             head_sha=head_sha,
             title=title.strip(),
             state=state.strip(),
-            node_id=node_id.strip() if isinstance(node_id, str) and node_id.strip() else None,
-            head_ref=head_ref.strip() if isinstance(head_ref, str) and head_ref.strip() else None,
-            base_ref=base_ref.strip() if isinstance(base_ref, str) and base_ref.strip() else None,
-            base_sha=base_sha.strip() if isinstance(base_sha, str) and base_sha.strip() else None,
+            node_id=node_id.strip()
+            if isinstance(node_id, str) and node_id.strip()
+            else None,
+            head_ref=head_ref.strip()
+            if isinstance(head_ref, str) and head_ref.strip()
+            else None,
+            base_ref=base_ref.strip()
+            if isinstance(base_ref, str) and base_ref.strip()
+            else None,
+            base_sha=base_sha.strip()
+            if isinstance(base_sha, str) and base_sha.strip()
+            else None,
             body=body,
             draft=draft,
             mergeable=mergeable,
-            mergeable_state=mergeable_state.strip() if isinstance(mergeable_state, str) and mergeable_state.strip() else None,
+            mergeable_state=mergeable_state.strip()
+            if isinstance(mergeable_state, str) and mergeable_state.strip()
+            else None,
         )
 
     def get_branch_head_sha(self, *, repo_full_name: str, branch: str) -> str:
@@ -578,10 +618,14 @@ class GitHubAppClient:
         html_url = response.get("html_url")
         return CheckRunResult(
             check_run_id=check_run_id if isinstance(check_run_id, int) else None,
-            html_url=html_url.strip() if isinstance(html_url, str) and html_url.strip() else None,
+            html_url=html_url.strip()
+            if isinstance(html_url, str) and html_url.strip()
+            else None,
         )
 
-    def list_check_suites(self, *, repo_full_name: str, ref: str) -> list[WorkflowCheckSuite]:
+    def list_check_suites(
+        self, *, repo_full_name: str, ref: str
+    ) -> list[WorkflowCheckSuite]:
         installation_token = self.get_installation_token()
         response = self._request_json(
             method="GET",
@@ -591,7 +635,9 @@ class GitHubAppClient:
 
         suites = response.get("check_suites")
         if not isinstance(suites, list):
-            raise GitHubApiError("GitHub check suite response did not include check_suites")
+            raise GitHubApiError(
+                "GitHub check suite response did not include check_suites"
+            )
 
         parsed: list[WorkflowCheckSuite] = []
         for suite in suites:
@@ -612,11 +658,15 @@ class GitHubAppClient:
             if conclusion is not None and not isinstance(conclusion, str):
                 conclusion = None
 
-            parsed.append(WorkflowCheckSuite(name=name, status=status, conclusion=conclusion))
+            parsed.append(
+                WorkflowCheckSuite(name=name, status=status, conclusion=conclusion)
+            )
 
         return parsed
 
-    def list_pull_request_files(self, *, repo_full_name: str, pr_number: int) -> list[PullRequestFileChange]:
+    def list_pull_request_files(
+        self, *, repo_full_name: str, pr_number: int
+    ) -> list[PullRequestFileChange]:
         installation_token = self.get_installation_token()
         parsed: list[PullRequestFileChange] = []
         page = 1
@@ -629,7 +679,9 @@ class GitHubAppClient:
             )
 
             if not isinstance(response, list):
-                raise GitHubApiError("GitHub pull request files response was not a list")
+                raise GitHubApiError(
+                    "GitHub pull request files response was not a list"
+                )
 
             for item in response:
                 if not isinstance(item, dict):
@@ -669,11 +721,15 @@ class GitHubAppClient:
         encoding = str(response.get("encoding") or "").strip().lower()
         content = response.get("content")
         if encoding != "base64" or not isinstance(content, str):
-            raise GitHubApiError("GitHub file content response did not include base64 content")
+            raise GitHubApiError(
+                "GitHub file content response did not include base64 content"
+            )
         try:
             decoded = base64.b64decode(content.encode("ascii"), validate=False)
         except Exception as exc:  # noqa: BLE001
-            raise GitHubApiError(f"GitHub file content could not be decoded: {exc}") from exc
+            raise GitHubApiError(
+                f"GitHub file content could not be decoded: {exc}"
+            ) from exc
         return decoded.decode("utf-8")
 
     def list_pull_requests(
@@ -735,16 +791,28 @@ class GitHubAppClient:
                     html_url=html_url.strip(),
                     head_ref=head_ref.strip(),
                     base_ref=base_ref.strip(),
-                    created_at=created_at.strip() if isinstance(created_at, str) and created_at.strip() else None,
-                    updated_at=updated_at.strip() if isinstance(updated_at, str) and updated_at.strip() else None,
-                    closed_at=closed_at.strip() if isinstance(closed_at, str) and closed_at.strip() else None,
-                    merged_at=merged_at.strip() if isinstance(merged_at, str) and merged_at.strip() else None,
+                    created_at=created_at.strip()
+                    if isinstance(created_at, str) and created_at.strip()
+                    else None,
+                    updated_at=updated_at.strip()
+                    if isinstance(updated_at, str) and updated_at.strip()
+                    else None,
+                    closed_at=closed_at.strip()
+                    if isinstance(closed_at, str) and closed_at.strip()
+                    else None,
+                    merged_at=merged_at.strip()
+                    if isinstance(merged_at, str) and merged_at.strip()
+                    else None,
                 )
             )
         return parsed
 
-    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
-        return self.list_pull_requests(repo_full_name=repo_full_name, state="open", limit=limit)
+    def list_open_pull_requests(
+        self, *, repo_full_name: str, limit: int = 20
+    ) -> list[PullRequestSummary]:
+        return self.list_pull_requests(
+            repo_full_name=repo_full_name, state="open", limit=limit
+        )
 
     def find_open_pull_request(
         self,
@@ -758,7 +826,9 @@ class GitHubAppClient:
         normalized_base = str(base_branch or "").strip()
         if not normalized_head:
             return None
-        pull_requests = self.list_open_pull_requests(repo_full_name=repo_full_name, limit=limit)
+        pull_requests = self.list_open_pull_requests(
+            repo_full_name=repo_full_name, limit=limit
+        )
         for pull_request in pull_requests:
             if pull_request.head_ref != normalized_head:
                 continue
@@ -777,7 +847,9 @@ class GitHubAppClient:
 
         repositories = response.get("repositories")
         if not isinstance(repositories, list):
-            raise GitHubApiError("GitHub installation repositories response did not include repositories")
+            raise GitHubApiError(
+                "GitHub installation repositories response did not include repositories"
+            )
 
         parsed: list[InstallationRepository] = []
         for item in repositories:
@@ -808,7 +880,9 @@ class GitHubAppClient:
         parsed.sort(key=lambda repo: repo.full_name.lower())
         return parsed
 
-    def get_repository_default_branch(self, *, repo_full_name: str, github_repository: str) -> str:
+    def get_repository_default_branch(
+        self, *, repo_full_name: str, github_repository: str
+    ) -> str:
         enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
         installation_token = self.get_installation_token()
         response = self._request_json(
@@ -816,9 +890,13 @@ class GitHubAppClient:
             path=f"/repos/{repo_full_name}",
             bearer_token=installation_token,
         )
-        default_branch = response.get("default_branch") if isinstance(response, dict) else None
+        default_branch = (
+            response.get("default_branch") if isinstance(response, dict) else None
+        )
         if not isinstance(default_branch, str) or not default_branch.strip():
-            raise GitHubApiError("GitHub repository response did not include default_branch")
+            raise GitHubApiError(
+                "GitHub repository response did not include default_branch"
+            )
         return default_branch.strip()
 
     def list_repository_branches(
@@ -853,7 +931,9 @@ class GitHubAppClient:
                 GitHubBranch(
                     name=name.strip(),
                     protected=protected if isinstance(protected, bool) else False,
-                    head_sha=head_sha.strip() if isinstance(head_sha, str) and head_sha.strip() else None,
+                    head_sha=head_sha.strip()
+                    if isinstance(head_sha, str) and head_sha.strip()
+                    else None,
                 )
             )
         parsed.sort(key=lambda branch: branch.name.lower())
@@ -882,7 +962,9 @@ class GitHubAppClient:
             raise GitHubApiError("GitHub branch response did not include commit sha")
         return head_sha.strip()
 
-    def list_pull_request_reviews(self, *, repo_full_name: str, pr_number: int) -> list[PullRequestReview]:
+    def list_pull_request_reviews(
+        self, *, repo_full_name: str, pr_number: int
+    ) -> list[PullRequestReview]:
         installation_token = self.get_installation_token()
         response = self._request_json(
             method="GET",
@@ -898,7 +980,11 @@ class GitHubAppClient:
                 continue
             review_id = item.get("id")
             state = item.get("state")
-            if not isinstance(review_id, int) or not isinstance(state, str) or not state.strip():
+            if (
+                not isinstance(review_id, int)
+                or not isinstance(state, str)
+                or not state.strip()
+            ):
                 continue
             body = item.get("body")
             submitted_at = item.get("submitted_at")
@@ -908,9 +994,15 @@ class GitHubAppClient:
                 PullRequestReview(
                     review_id=review_id,
                     state=state.strip(),
-                    body=body.strip() if isinstance(body, str) and body.strip() else None,
-                    submitted_at=submitted_at.strip() if isinstance(submitted_at, str) and submitted_at.strip() else None,
-                    user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
+                    body=body.strip()
+                    if isinstance(body, str) and body.strip()
+                    else None,
+                    submitted_at=submitted_at.strip()
+                    if isinstance(submitted_at, str) and submitted_at.strip()
+                    else None,
+                    user_login=user_login.strip()
+                    if isinstance(user_login, str) and user_login.strip()
+                    else None,
                 )
             )
         return parsed
@@ -928,7 +1020,9 @@ class GitHubAppClient:
             bearer_token=installation_token,
         )
         if not isinstance(response, list):
-            raise GitHubApiError("GitHub pull request review comments response was not a list")
+            raise GitHubApiError(
+                "GitHub pull request review comments response was not a list"
+            )
 
         parsed: list[PullRequestReviewComment] = []
         for item in response:
@@ -954,7 +1048,9 @@ class GitHubAppClient:
         )
         comment = self._parse_pull_request_review_comment(response)
         if comment is None:
-            raise GitHubApiError("GitHub create pull request review comment reply response was not valid")
+            raise GitHubApiError(
+                "GitHub create pull request review comment reply response was not valid"
+            )
         return comment
 
     def list_pull_request_issue_comments(
@@ -970,7 +1066,9 @@ class GitHubAppClient:
             bearer_token=installation_token,
         )
         if not isinstance(response, list):
-            raise GitHubApiError("GitHub pull request issue comments response was not a list")
+            raise GitHubApiError(
+                "GitHub pull request issue comments response was not a list"
+            )
 
         parsed: list[PullRequestIssueComment] = []
         for item in response:
@@ -1049,7 +1147,9 @@ class GitHubAppClient:
         )
         comment = self._parse_pull_request_review_comment(response)
         if comment is None:
-            raise GitHubApiError("GitHub update pull request review comment response was not valid")
+            raise GitHubApiError(
+                "GitHub update pull request review comment response was not valid"
+            )
         return comment
 
     def add_issue_comment_reaction(
@@ -1128,7 +1228,9 @@ class GitHubAppClient:
             bearer_token=installation_token,
         )
         if not isinstance(response, list):
-            raise GitHubApiError("GitHub pull request reactions response was not a list")
+            raise GitHubApiError(
+                "GitHub pull request reactions response was not a list"
+            )
         reactions: list[ReactionSummary] = []
         for item in response:
             if not isinstance(item, dict):
@@ -1144,8 +1246,12 @@ class GitHubAppClient:
             reactions.append(
                 ReactionSummary(
                     reaction_id=reaction_id,
-                    content=content.strip() if isinstance(content, str) and content.strip() else None,
-                    user_login=login.strip() if isinstance(login, str) and login.strip() else None,
+                    content=content.strip()
+                    if isinstance(content, str) and content.strip()
+                    else None,
+                    user_login=login.strip()
+                    if isinstance(login, str) and login.strip()
+                    else None,
                 )
             )
         return reactions
@@ -1171,9 +1277,16 @@ class GitHubAppClient:
         content: str,
     ) -> CommentReactionResult:
         app_bot_login = self.get_app_bot_login()
-        for reaction in self.list_pull_request_reactions(repo_full_name=repo_full_name, pr_number=pr_number):
-            if reaction.user_login == app_bot_login and reaction.content in _PULL_REQUEST_STATUS_REACTIONS:
-                self.delete_issue_reaction(repo_full_name=repo_full_name, reaction_id=reaction.reaction_id)
+        for reaction in self.list_pull_request_reactions(
+            repo_full_name=repo_full_name, pr_number=pr_number
+        ):
+            if (
+                reaction.user_login == app_bot_login
+                and reaction.content in _PULL_REQUEST_STATUS_REACTIONS
+            ):
+                self.delete_issue_reaction(
+                    repo_full_name=repo_full_name, reaction_id=reaction.reaction_id
+                )
         return self.add_pull_request_reaction(
             repo_full_name=repo_full_name,
             pr_number=pr_number,
@@ -1237,7 +1350,9 @@ class GitHubAppClient:
         sha = response.get("sha")
         return PullRequestMergeResult(
             merged=merged,
-            message=message.strip() if isinstance(message, str) and message.strip() else None,
+            message=message.strip()
+            if isinstance(message, str) and message.strip()
+            else None,
             sha=sha.strip() if isinstance(sha, str) and sha.strip() else None,
         )
 
@@ -1246,7 +1361,11 @@ class GitHubAppClient:
             return None
         comment_id = item.get("id")
         body = item.get("body")
-        if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
+        if (
+            not isinstance(comment_id, int)
+            or not isinstance(body, str)
+            or not body.strip()
+        ):
             return None
         user = item.get("user")
         user_login = user.get("login") if isinstance(user, dict) else None
@@ -1254,16 +1373,26 @@ class GitHubAppClient:
         return PullRequestIssueComment(
             comment_id=comment_id,
             body=body.strip(),
-            created_at=created_at.strip() if isinstance(created_at, str) and created_at.strip() else None,
-            user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
+            created_at=created_at.strip()
+            if isinstance(created_at, str) and created_at.strip()
+            else None,
+            user_login=user_login.strip()
+            if isinstance(user_login, str) and user_login.strip()
+            else None,
         )
 
-    def _parse_pull_request_review_comment(self, item: object) -> PullRequestReviewComment | None:
+    def _parse_pull_request_review_comment(
+        self, item: object
+    ) -> PullRequestReviewComment | None:
         if not isinstance(item, dict):
             return None
         comment_id = item.get("id")
         body = item.get("body")
-        if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
+        if (
+            not isinstance(comment_id, int)
+            or not isinstance(body, str)
+            or not body.strip()
+        ):
             return None
         user = item.get("user")
         user_login = user.get("login") if isinstance(user, dict) else None
@@ -1274,6 +1403,11 @@ class GitHubAppClient:
             path=item.get("path") if isinstance(item.get("path"), str) else None,
             line=line if isinstance(line, int) else None,
             state=item.get("state") if isinstance(item.get("state"), str) else None,
-            created_at=created_at.strip() if isinstance((created_at := item.get("created_at")), str) and created_at.strip() else None,
-            user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
+            created_at=created_at.strip()
+            if isinstance((created_at := item.get("created_at")), str)
+            and created_at.strip()
+            else None,
+            user_login=user_login.strip()
+            if isinstance(user_login, str) and user_login.strip()
+            else None,
         )

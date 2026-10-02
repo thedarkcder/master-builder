@@ -21,7 +21,10 @@ from orchestrator.core.webhooks.health import reset_webhook_health_tracker_for_t
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
-from tests.test_support.workflow_runtime_harness import build_local_workflow_runtime, skip_product_event_notification
+from tests.test_support.workflow_runtime_harness import (
+    build_local_workflow_runtime,
+    skip_product_event_notification,
+)
 
 
 class JiraWebhookHarness(SqliteTemplateApiTestCase):
@@ -44,13 +47,36 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
 
     @classmethod
     def bootstrap_template_state(cls) -> None:
+        response = cls._class_client.put(
+            "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",
+            json={"value": "TEST_ONLY_GITHUB_WEBHOOK_SECRET"},
+            auth=("admin", "secret"),
+        )
+        if response.status_code != 200:
+            raise AssertionError(
+                f"Failed to configure test GitHub App webhook authentication: {response.status_code}"
+            )
         cls._create_tenant_with_client(
             client=cls._class_client,
             tenant_id="tenant-webhook",
         )
 
     @staticmethod
-    def _pre_run_check(*, outcome: str = "ready_for_agent", capability: str = "linux") -> PreRunCheckResult:
+    def _post_authenticated_github(client, *, payload: dict, headers: dict):
+        from tests.test_support.webhook_sender import post_signed_github_webhook
+
+        return post_signed_github_webhook(
+            client=client,
+            token="TEST_ONLY_GITHUB_WEBHOOK_SECRET",
+            url="/github/webhook",
+            json_payload=payload,
+            headers=headers,
+        )
+
+    @staticmethod
+    def _pre_run_check(
+        *, outcome: str = "ready_for_agent", capability: str = "linux"
+    ) -> PreRunCheckResult:
         return PreRunCheckResult(
             outcome=outcome,
             ready_label="agent:ready",
@@ -60,15 +86,23 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
             required_worker_label_present=False,
             decision_gate=DecisionGateResult(
                 triggered=(outcome == "decision_gate_required"),
-                reason="Decision Gate not required" if outcome != "decision_gate_required" else "Missing GTD sections",
+                reason="Decision Gate not required"
+                if outcome != "decision_gate_required"
+                else "Missing GTD sections",
                 missing_sections=(),
                 questions=(),
-                recommendation="Proceed" if outcome != "decision_gate_required" else "Decision required before build",
+                recommendation="Proceed"
+                if outcome != "decision_gate_required"
+                else "Decision required before build",
                 tags=(),
             ),
             gtd=GoodToDoValidationResult(
                 valid=(outcome != "gtd_required"),
-                missing_criteria=(() if outcome != "gtd_required" else ("Dependencies and risks identified",)),
+                missing_criteria=(
+                    ()
+                    if outcome != "gtd_required"
+                    else ("Dependencies and risks identified",)
+                ),
                 clarification_questions=(
                     ()
                     if outcome != "gtd_required"
@@ -86,14 +120,20 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
         auto_resolved_slots: list[str] | None = None,
     ) -> DecisionEngineResult:
         parsed_outcome = PrecheckOutcome.parse(pre_check.outcome)
-        block_reason = parsed_outcome.value if parsed_outcome in {
-            PrecheckOutcome.DECISION_GATE_REQUIRED,
-            PrecheckOutcome.GTD_REQUIRED,
-            PrecheckOutcome.MISSING_READY_LABEL,
-        } else None
+        block_reason = (
+            parsed_outcome.value
+            if parsed_outcome
+            in {
+                PrecheckOutcome.DECISION_GATE_REQUIRED,
+                PrecheckOutcome.GTD_REQUIRED,
+                PrecheckOutcome.MISSING_READY_LABEL,
+            }
+            else None
+        )
         classification = (
             DecisionClassification.DECISION_GATE
-            if parsed_outcome in {
+            if parsed_outcome
+            in {
                 PrecheckOutcome.DECISION_GATE_REQUIRED,
                 PrecheckOutcome.GTD_REQUIRED,
                 PrecheckOutcome.EXECUTION_BLOCKED,
@@ -119,7 +159,9 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
             cycle_id=cycle_id,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=resolve_execution_gate_state(decision=decision, classification=classification),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision, classification=classification
+            ),
         )
 
     def setUp(self) -> None:
@@ -133,6 +175,7 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
         reset_db_engine_cache()
         reset_webhook_health_tracker_for_tests()
         self.session_factory = create_session_factory(database_url=self.database_url)
+        self.client.headers["X-Webhook-Token"] = "TEST_ONLY_WEBHOOK_TOKEN"
 
         self._default_pre_run_check_patch = patch(
             "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
@@ -181,20 +224,31 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
         from orchestrator.api.webhooks import jira_admission_flow
 
         _ = idempotency_key
-        effective_issue_description = context.issue_description if issue_description is None else issue_description
+        effective_issue_description = (
+            context.issue_description
+            if issue_description is None
+            else issue_description
+        )
         pre_check = jira_admission_flow.evaluate_pre_run_check(
             tenant_id=context.tenant_id,
-            project_id=context.project.project_id if context.project is not None else None,
+            project_id=context.project.project_id
+            if context.project is not None
+            else None,
             issue_key=context.issue_key,
             issue_summary=context.issue_summary,
             issue_description=effective_issue_description,
             issue_labels=context.issue_labels,
-            ready_label=jira_admission_flow.resolve_ready_label_for_tenant(context.tenant),
+            ready_label=jira_admission_flow.resolve_ready_label_for_tenant(
+                context.tenant
+            ),
         )
         labels_to_add = []
         if pre_check.ready_label and not pre_check.ready_label_present:
             labels_to_add.append(pre_check.ready_label)
-        if pre_check.required_worker_label and not pre_check.required_worker_label_present:
+        if (
+            pre_check.required_worker_label
+            and not pre_check.required_worker_label_present
+        ):
             labels_to_add.append(pre_check.required_worker_label)
         if labels_to_add:
             try:
@@ -214,7 +268,11 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
                 )
         issue_labels = [
             *list(context.issue_labels or []),
-            *[label for label in labels_to_add if label not in set(context.issue_labels or [])],
+            *[
+                label
+                for label in labels_to_add
+                if label not in set(context.issue_labels or [])
+            ],
         ]
         return self._decision_result(
             pre_check=pre_check,
@@ -225,7 +283,7 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
     def _create_tenant(
         self,
         tenant_id: str,
-        webhook_secret_ref: str | None = None,
+        webhook_secret_ref: str | None = "fixture-webhook-token",
         github_webhook_secret_ref: str | None = None,
         github_installation_id: str = "12345",
         is_enabled: bool = True,
@@ -248,7 +306,7 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
         *,
         client,
         tenant_id: str,
-        webhook_secret_ref: str | None = None,
+        webhook_secret_ref: str | None = "fixture-webhook-token",
         github_webhook_secret_ref: str | None = None,
         github_installation_id: str = "12345",
         is_enabled: bool = True,
@@ -277,7 +335,9 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
             },
             "repos": {
                 "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_project_key": {
+                    "TP": "https://github.com/example/repo"
+                },
                 "mapping_rules_by_component": {},
                 "fallback_repo": None,
             },
@@ -293,14 +353,32 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
             },
             "discord": None,
         }
-        response = client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        response = client.post(
+            "/api/admin/tenants", json=payload, auth=("admin", "secret")
+        )
         if response.status_code != 201:
-            raise AssertionError(f"Failed to create tenant `{tenant_id}`: {response.status_code} {response.text}")
+            raise AssertionError(
+                f"Failed to create tenant `{tenant_id}`: {response.status_code} {response.text}"
+            )
+        if webhook_secret_ref == "fixture-webhook-token":
+            secret_response = client.put(
+                f"/api/admin/tenants/{tenant_id}/secrets/fixture-webhook-token",
+                json={"value": "TEST_ONLY_WEBHOOK_TOKEN"},
+                auth=("admin", "secret"),
+            )
+            if secret_response.status_code != 200:
+                raise AssertionError(
+                    f"Failed to configure test webhook authentication: {secret_response.status_code}"
+                )
         if response.json()["tenant_id"] != tenant_id:
-            raise AssertionError(f"Unexpected tenant id for `{tenant_id}`: {response.json()['tenant_id']}")
+            raise AssertionError(
+                f"Unexpected tenant id for `{tenant_id}`: {response.json()['tenant_id']}"
+            )
 
     def _sign_github_payload(self, payload_bytes: bytes, secret: str) -> str:
-        digest = hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+        digest = hmac.new(
+            secret.encode("utf-8"), payload_bytes, hashlib.sha256
+        ).hexdigest()
         return f"sha256={digest}"
 
     def _jira_issue_payload(
@@ -322,7 +400,7 @@ class JiraWebhookHarness(SqliteTemplateApiTestCase):
                         "statusCategory": {"key": status_category_key},
                     },
                 },
-            }
+            },
         }
 
     def _assert_jira_issue_event_queued(

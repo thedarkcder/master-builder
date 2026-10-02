@@ -41,7 +41,9 @@ from orchestrator.api.discord.interactions.followup_transport import (
     discord_api_client as _discord_api_client_impl,
     send_discord_interaction_followup as _send_discord_interaction_followup_impl,
 )
-from orchestrator.api.discord.interactions.parser import _parse_discord_interaction_command
+from orchestrator.api.discord.interactions.parser import (
+    _parse_discord_interaction_command,
+)
 from orchestrator.api.discord.shared.followup_format import (
     build_ask_confirmation_components,
     build_command_followup_message,
@@ -54,7 +56,9 @@ from orchestrator.core.pm.followup_context_service import (
 )
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.discord.channel_tenant_index import (
+    resolve_tenant_for_discord_channel,
+)
 from orchestrator.core.platform.install_request_service import (
     approve_install_request,
     get_project_install_request,
@@ -79,10 +83,12 @@ def _discord_api_client(*, session: Session, settings) -> DiscordApiClient:  # n
     )
 
 
-
-def _tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]) -> set[str]:
-    return _tenant_discord_channel_ids_impl(tenant=tenant, project_channel_ids=project_channel_ids)
-
+def _tenant_discord_channel_ids(
+    *, tenant: Tenant, project_channel_ids: set[str]
+) -> set[str]:
+    return _tenant_discord_channel_ids_impl(
+        tenant=tenant, project_channel_ids=project_channel_ids
+    )
 
 
 def _project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
@@ -102,12 +108,20 @@ def _resolve_project_for_channel(
     )
 
 
-def _project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    return _project_ask_thread_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
+def _project_ask_thread_channel_ids_for_tenant(
+    *, session: Session, tenant_id: str
+) -> set[str]:
+    return _project_ask_thread_channel_ids_for_tenant_impl(
+        session=session, tenant_id=tenant_id
+    )
 
 
-def _project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    return _project_seed_followup_thread_channel_ids_for_tenant_impl(session=session, tenant_id=tenant_id)
+def _project_seed_followup_thread_channel_ids_for_tenant(
+    *, session: Session, tenant_id: str
+) -> set[str]:
+    return _project_seed_followup_thread_channel_ids_for_tenant_impl(
+        session=session, tenant_id=tenant_id
+    )
 
 
 def _ask_thread_message_map_from_config(discord_config: dict) -> dict[str, str]:
@@ -127,10 +141,8 @@ def _resolve_thread_id_by_message_suffix(
     )
 
 
-
 def _ask_confirmation_components(request_id: str) -> list[dict]:
     return build_ask_confirmation_components(request_id)
-
 
 
 def _ask_reply_components() -> list[dict]:
@@ -202,7 +214,9 @@ def _resolve_followup_reaction(
     )
 
 
-def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tuple[str, str] | None:
+def _decision_gate_issue_for_thread(
+    *, session: Session, channel_id: str
+) -> tuple[str, str] | None:
     tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
     if tenant is None:
         return None
@@ -211,7 +225,10 @@ def _decision_gate_issue_for_thread(*, session: Session, channel_id: str) -> tup
         tenant_id=tenant.tenant_id,
         channel_id=channel_id,
     )
-    if context is None or str(getattr(context, "context_type", "") or "").strip() != "decision_gate":
+    if (
+        context is None
+        or str(getattr(context, "context_type", "") or "").strip() != "decision_gate"
+    ):
         return None
     issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
     if not issue_key or ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
@@ -232,7 +249,6 @@ def _resolve_thread_channel_for_reply(
     )
 
 
-
 def _build_command_followup_message(
     *,
     session: Session,
@@ -243,10 +259,11 @@ def _build_command_followup_message(
     return build_command_followup_message(
         user_id=user_id,
         command_response=command_response,
-        jira_browse_base_url=resolve_tenant_jira_browse_base_url(session=session, tenant=tenant),
+        jira_browse_base_url=resolve_tenant_jira_browse_base_url(
+            session=session, tenant=tenant
+        ),
         issue_key_pattern=ISSUE_KEY_PATTERN,
     )
-
 
 
 def _send_discord_interaction_followup(
@@ -296,17 +313,21 @@ def _send_discord_thread_followup(
         components=components,
         discord_api_client_fn=discord_api_client_fn or _discord_api_client,
         project_ask_thread_channel_ids_for_tenant_fn=(
-            project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant
+            project_ask_thread_channel_ids_for_tenant_fn
+            or _project_ask_thread_channel_ids_for_tenant
         ),
         project_seed_followup_thread_channel_ids_for_tenant_fn=(
-            project_seed_followup_thread_channel_ids_for_tenant_fn or _project_seed_followup_thread_channel_ids_for_tenant
+            project_seed_followup_thread_channel_ids_for_tenant_fn
+            or _project_seed_followup_thread_channel_ids_for_tenant
         ),
-        resolve_project_for_channel_fn=resolve_project_for_channel_fn or _resolve_project_for_channel,
+        resolve_project_for_channel_fn=resolve_project_for_channel_fn
+        or _resolve_project_for_channel,
         ask_thread_message_map_from_config_fn=(
             ask_thread_message_map_from_config_fn or _ask_thread_message_map_from_config
         ),
         resolve_thread_id_by_message_suffix_fn=(
-            resolve_thread_id_by_message_suffix_fn or _resolve_thread_id_by_message_suffix
+            resolve_thread_id_by_message_suffix_fn
+            or _resolve_thread_id_by_message_suffix
         ),
     )
 
@@ -342,9 +363,11 @@ def _send_discord_ask_response_with_thread(
         request_id=request_id,
         discord_api_client_fn=discord_api_client_fn or _discord_api_client,
         project_ask_thread_channel_ids_for_tenant_fn=(
-            project_ask_thread_channel_ids_for_tenant_fn or _project_ask_thread_channel_ids_for_tenant
+            project_ask_thread_channel_ids_for_tenant_fn
+            or _project_ask_thread_channel_ids_for_tenant
         ),
-        resolve_project_for_channel_fn=resolve_project_for_channel_fn or _resolve_project_for_channel,
+        resolve_project_for_channel_fn=resolve_project_for_channel_fn
+        or _resolve_project_for_channel,
         ask_thread_message_map_from_config_fn=(
             ask_thread_message_map_from_config_fn or _ask_thread_message_map_from_config
         ),
@@ -380,7 +403,8 @@ def _send_discord_seed_followup_with_thread(
             project_seed_followup_thread_channel_ids_for_tenant_fn
             or _project_seed_followup_thread_channel_ids_for_tenant
         ),
-        resolve_project_for_channel_fn=resolve_project_for_channel_fn or _resolve_project_for_channel,
+        resolve_project_for_channel_fn=resolve_project_for_channel_fn
+        or _resolve_project_for_channel,
     )
 
 
@@ -448,7 +472,6 @@ async def _run_discord_decision_gate_reply_followup(
     )
 
 
-
 def _run_discord_decision_gate_reply_followup_blocking(
     *,
     tenant_id: str | None,
@@ -471,7 +494,6 @@ def _run_discord_decision_gate_reply_followup_blocking(
         run_discord_command_followup_blocking_fn=_run_discord_command_followup_blocking,
         reply_to_message_id=reply_to_message_id,
     )
-
 
 
 def _run_discord_command_followup_blocking(
@@ -643,7 +665,6 @@ def _run_project_install_request_decision_followup_blocking(
             content=content,
             ephemeral=True,
         )
-
 
 
 def _run_discord_ask_confirmation_followup_blocking(

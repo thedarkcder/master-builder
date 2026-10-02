@@ -52,7 +52,10 @@ def _existing_followup_assessment(
         if str(item.source_ref or "").strip() != normalized_source_ref:
             continue
         metadata = dict(item.metadata or {})
-        if str(metadata.get("source_transport") or "").strip() != str(source_transport or "").strip():
+        if (
+            str(metadata.get("source_transport") or "").strip()
+            != str(source_transport or "").strip()
+        ):
             continue
         return pm_interview_case_from_row(existing_case)
     return None
@@ -148,17 +151,25 @@ def continue_pm_interview_from_followup(
         evidence=[*existing_evidence, *[item.to_payload() for item in new_evidence]],
         status_hint=str(pm_payload.get("status") or "").strip() or None,
     )
-    explicit_next_question = pm_interview_question_from_payload(pm_payload.get("next_question"))
+    explicit_next_question = pm_interview_question_from_payload(
+        pm_payload.get("next_question")
+    )
     if final_assessment.ready_to_write:
         assessment_to_store = final_assessment
         stored_next_question = None
         clarification_questions: tuple[str, ...] = ()
     elif explicit_next_question is None:
-        raise CodexRuntimeError("PM interview follow-up did not return a next clarification question")
+        raise CodexRuntimeError(
+            "PM interview follow-up did not return a next clarification question"
+        )
     else:
-        assessment_to_store = replace(final_assessment, next_question=explicit_next_question)
+        assessment_to_store = replace(
+            final_assessment, next_question=explicit_next_question
+        )
         stored_next_question = explicit_next_question
-        clarification_questions = (format_pm_interview_question(explicit_next_question),)
+        clarification_questions = (
+            format_pm_interview_question(explicit_next_question),
+        )
     question_history = [
         {
             "speaker": "user",
@@ -179,12 +190,21 @@ def continue_pm_interview_from_followup(
         tenant_id=tenant_id,
         project_id=project_id,
         request_id=request_id,
-        source_kind=str(getattr(existing_case, "source_kind", "") or "").strip() or "jira_parent",
+        source_kind=str(getattr(existing_case, "source_kind", "") or "").strip()
+        or "jira_parent",
         channel_id=str(getattr(existing_case, "channel_id", "") or "").strip(),
-        thread_channel_id=str(getattr(existing_case, "thread_channel_id", "") or "").strip() or None,
-        root_message_id=str(getattr(existing_case, "root_message_id", "") or "").strip() or None,
-        owner_user_id=str(getattr(existing_case, "owner_user_id", "") or "").strip() or None,
-        parent_issue_key=str(getattr(existing_case, "parent_issue_key", "") or "").strip() or None,
+        thread_channel_id=str(
+            getattr(existing_case, "thread_channel_id", "") or ""
+        ).strip()
+        or None,
+        root_message_id=str(getattr(existing_case, "root_message_id", "") or "").strip()
+        or None,
+        owner_user_id=str(getattr(existing_case, "owner_user_id", "") or "").strip()
+        or None,
+        parent_issue_key=str(
+            getattr(existing_case, "parent_issue_key", "") or ""
+        ).strip()
+        or None,
         source_text=reply_text,
         status=assessment_to_store.status,
         brief=assessment_to_store.brief.to_payload(),

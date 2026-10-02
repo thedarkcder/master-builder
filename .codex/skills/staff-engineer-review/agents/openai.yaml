@@ -1,4 +1,4 @@
 interface:
   display_name: "Staff Engineer Review"
-  short_description: "Run a rigorous design and risk review before implementation."
-  default_prompt: "Use $staff-engineer-review to produce a full staff-level design review and verdict before coding."
+  short_description: "Challenge assumptions, select the strongest design, and verify the real outcome before, during, and after implementation."
+  default_prompt: "Use $staff-engineer-review to model the domain, evaluate competing designs, validate contracts and lifecycle rules, assess operational risks, guide implementation decisions, and verify the intended user outcome."

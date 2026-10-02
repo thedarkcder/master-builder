@@ -35,10 +35,15 @@ class RunDispatchIdentityGateway:
 
     def __post_init__(self) -> None:
         _require_callable("cleanup_run_workspaces_fn", self.cleanup_run_workspaces_fn)
-        _require_callable("build_run_heartbeat_controller_fn", self.build_run_heartbeat_controller_fn)
+        _require_callable(
+            "build_run_heartbeat_controller_fn", self.build_run_heartbeat_controller_fn
+        )
         _require_callable("emit_agent_event_fn", self.emit_agent_event_fn)
         _require_callable("resolve_agent_id_fn", self.resolve_agent_id_fn)
-        _require_callable("resolve_worker_service_instance_id_fn", self.resolve_worker_service_instance_id_fn)
+        _require_callable(
+            "resolve_worker_service_instance_id_fn",
+            self.resolve_worker_service_instance_id_fn,
+        )
 
 
 @dataclass(frozen=True)
@@ -52,12 +57,16 @@ class RunProjectGateway:
 
     def __post_init__(self) -> None:
         _require_callable("resolve_project_for_run_fn", self.resolve_project_for_run_fn)
-        _require_callable("fail_missing_project_mapping_fn", self.fail_missing_project_mapping_fn)
+        _require_callable(
+            "fail_missing_project_mapping_fn", self.fail_missing_project_mapping_fn
+        )
         _require_callable("block_archived_project_fn", self.block_archived_project_fn)
         _require_callable("bind_run_project_fn", self.bind_run_project_fn)
         _require_callable("tenant_jira_issue_url_fn", self.tenant_jira_issue_url_fn)
         if self.transition_issue_status_fn is not None:
-            _require_callable("transition_issue_status_fn", self.transition_issue_status_fn)
+            _require_callable(
+                "transition_issue_status_fn", self.transition_issue_status_fn
+            )
 
 
 @dataclass(frozen=True)

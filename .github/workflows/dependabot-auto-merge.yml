@@ -16,7 +16,7 @@ jobs:
   patch-assist:
     name: Approve and guide patch updates
     if: github.actor == 'dependabot[bot]' && github.event.pull_request.draft == false
-    runs-on: self-hosted
+    runs-on: ubuntu-24.04
     steps:
       - name: Fetch Dependabot metadata
         id: metadata

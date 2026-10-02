@@ -4,7 +4,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.platform.secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
+from orchestrator.core.platform.secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+)
 from orchestrator.api.schemas import DiscordAllowlistRequestRead
 
 
@@ -35,7 +37,8 @@ def parse_discord_allowlist_requests(
             DiscordAllowlistRequestRead(
                 project_id=project_id,
                 user_id=user_id,
-                requested_at=str(item.get("requested_at") or "").strip() or datetime.now(timezone.utc).isoformat(),
+                requested_at=str(item.get("requested_at") or "").strip()
+                or datetime.now(timezone.utc).isoformat(),
                 channel_id=str(item.get("channel_id") or "").strip() or None,
                 reason=str(item.get("reason") or "").strip() or None,
                 permissions=permissions,

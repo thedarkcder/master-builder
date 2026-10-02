@@ -25,7 +25,11 @@ from orchestrator.core.workflow.operation_service import (
     upsert_workflow_operation,
 )
 from orchestrator.core.workflow.definition import WorkflowDefinition
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 
 def _now() -> datetime:
@@ -75,7 +79,12 @@ def classify_external_workflow_failure(*, error: Exception) -> str:
         return "content_limit"
     if "429" in message or "rate limit" in lowered:
         return "rate_limited"
-    if "502" in message or "503" in message or "504" in message or "timed out" in lowered:
+    if (
+        "502" in message
+        or "503" in message
+        or "504" in message
+        or "timed out" in lowered
+    ):
         return "transient_external_failure"
     return "external_failure"
 
@@ -101,7 +110,9 @@ def _normalize_source_description(source_description: object | None) -> str | No
     return str(source_description)
 
 
-def _descendant_operation_types(*, workflow_type: WorkflowDefinition, operation_type: str) -> set[str]:
+def _descendant_operation_types(
+    *, workflow_type: WorkflowDefinition, operation_type: str
+) -> set[str]:
     normalized = str(operation_type or "").strip()
     descendants: set[str] = set()
     changed = True
@@ -110,7 +121,9 @@ def _descendant_operation_types(*, workflow_type: WorkflowDefinition, operation_
         for definition in workflow_type.steps:
             if definition.key == normalized or definition.key in descendants:
                 continue
-            dependencies = {str(dependency or "").strip() for dependency in definition.after}
+            dependencies = {
+                str(dependency or "").strip() for dependency in definition.after
+            }
             if normalized in dependencies or descendants.intersection(dependencies):
                 descendants.add(definition.key)
                 changed = True
@@ -131,7 +144,9 @@ class WorkflowExecutionProjection:
                 operation_type=definition.key,
                 idempotency_key=f"workflow-definition:{definition.key}",
                 target_system=_target_system_for_operation(definition.key),
-                target_ref=self.workflow.source_ref if _target_system_for_operation(definition.key) else None,
+                target_ref=self.workflow.source_ref
+                if _target_system_for_operation(definition.key)
+                else None,
                 summary=definition.description,
             )
 
@@ -146,7 +161,10 @@ class WorkflowExecutionProjection:
         summary: str | None = None,
     ) -> WorkflowOperation:
         self.workflow_type.step(operation_type)
-        normalized_idempotency_key = str(idempotency_key or "").strip() or f"workflow-definition:{operation_type}"
+        normalized_idempotency_key = (
+            str(idempotency_key or "").strip()
+            or f"workflow-definition:{operation_type}"
+        )
         operation = self.session.execute(
             select(WorkflowOperation).where(
                 WorkflowOperation.workflow_id == self.workflow.workflow_id,
@@ -168,7 +186,9 @@ class WorkflowExecutionProjection:
                 operation_type=operation_type,
                 idempotency_key=normalized_idempotency_key,
                 run_id=run_id,
-                target_system=target_system if target_system is not None else default_target_system,
+                target_system=target_system
+                if target_system is not None
+                else default_target_system,
                 target_ref=resolved_target_ref,
                 summary=summary,
             )
@@ -211,7 +231,9 @@ class WorkflowExecutionProjection:
         return operation, attempt
 
     def _invalidate_descendant_operations(self, *, operation_type: str) -> None:
-        descendant_types = _descendant_operation_types(workflow_type=self.workflow_type, operation_type=operation_type)
+        descendant_types = _descendant_operation_types(
+            workflow_type=self.workflow_type, operation_type=operation_type
+        )
         if not descendant_types:
             return
         operations = self.session.execute(
@@ -220,7 +242,9 @@ class WorkflowExecutionProjection:
                 WorkflowOperation.operation_type.in_(descendant_types),
             )
         ).scalars()
-        definitions = {definition.key: definition for definition in self.workflow_type.steps}
+        definitions = {
+            definition.key: definition for definition in self.workflow_type.steps
+        }
         now = _now()
         for operation in operations:
             if str(operation.status or "").strip().lower() == OPERATION_STATUS_RUNNING:
@@ -229,12 +253,22 @@ class WorkflowExecutionProjection:
                     f"{operation_type}; dependent operation {operation.operation_type} is already running."
                 )
             operation.status = OPERATION_STATUS_PENDING
-            operation.summary = definitions.get(operation.operation_type).description if operation.operation_type in definitions else None
+            operation.summary = (
+                definitions.get(operation.operation_type).description
+                if operation.operation_type in definitions
+                else None
+            )
             operation.started_at = None
             operation.finished_at = None
             operation.updated_at = now
 
-    def complete_started_operation(self, *, operation: WorkflowOperation, attempt: WorkflowOperationAttempt, summary: str) -> None:
+    def complete_started_operation(
+        self,
+        *,
+        operation: WorkflowOperation,
+        attempt: WorkflowOperationAttempt,
+        summary: str,
+    ) -> None:
         complete_workflow_operation(
             self.session,
             operation=operation,
@@ -329,7 +363,8 @@ class WorkflowExecutionProjection:
                 completed_attempt = self.session.execute(
                     select(WorkflowOperationAttempt)
                     .where(
-                        WorkflowOperationAttempt.operation_id == completed_operation.operation_id,
+                        WorkflowOperationAttempt.operation_id
+                        == completed_operation.operation_id,
                         WorkflowOperationAttempt.status == OPERATION_STATUS_COMPLETED,
                     )
                     .order_by(desc(WorkflowOperationAttempt.attempt_number))
@@ -367,7 +402,9 @@ class WorkflowExecutionProjection:
         return operation, attempt
 
     def mark_completed_if_ready(self) -> None:
-        recompute_workflow_status(session=self.session, workflow=self.workflow, now=_now())
+        recompute_workflow_status(
+            session=self.session, workflow=self.workflow, now=_now()
+        )
 
 
 def ensure_workflow_execution(
@@ -436,7 +473,9 @@ def ensure_workflow_execution(
             and source_external_id
             and str(workflow.source_external_id or "").strip() != source_external_id
         ):
-            raise ValueError("Workflow source external id does not match the supplied source reference")
+            raise ValueError(
+                "Workflow source external id does not match the supplied source reference"
+            )
         workflow.project_id = project_id or workflow.project_id
         workflow.source_system = execution.source.source_system
         workflow.source_ref = source_ref
@@ -446,7 +485,9 @@ def ensure_workflow_execution(
         workflow.orchestration_backend = workflow_type.orchestration_backend
         workflow.dedupe_scope = workflow_type.system_key
         workflow.updated_at = now
-    projection = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+    projection = WorkflowExecutionProjection(
+        session=session, workflow=workflow, workflow_type=workflow_type
+    )
     projection.ensure_operations()
     return projection
 

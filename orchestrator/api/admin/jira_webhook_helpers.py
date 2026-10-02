@@ -45,11 +45,16 @@ def is_jira_webhook_limit_error(exc: Exception) -> bool:
 
 
 def is_jira_webhook_single_url_error(exc: Exception) -> bool:
-    return "only a single url per user is allowed to be registered via rest api" in str(exc).lower()
+    return (
+        "only a single url per user is allowed to be registered via rest api"
+        in str(exc).lower()
+    )
 
 
 def extract_jira_webhook_conflict_url(exc: Exception) -> str | None:
-    match = re.search(r"currently used url:\s*(https?://\S+)", str(exc), flags=re.IGNORECASE)
+    match = re.search(
+        r"currently used url:\s*(https?://\S+)", str(exc), flags=re.IGNORECASE
+    )
     if match is None:
         return None
     return match.group(1).rstrip(").,; ")
@@ -63,7 +68,7 @@ def jira_webhook_filter_jql(jira_config: dict) -> str:
     project_keys = jira_config_project_keys(jira_config=jira_config)
     if not project_keys:
         raise ValueError("Missing Jira project_keys")
-    quoted_projects = ", ".join(f"\"{key}\"" for key in project_keys)
+    quoted_projects = ", ".join(f'"{key}"' for key in project_keys)
     if not quoted_projects:
         raise ValueError("Missing Jira project_keys")
     return f"project in ({quoted_projects}) ORDER BY updated DESC"

@@ -25,7 +25,13 @@ from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for
 
 def test_workflow_step_decorator_infers_ordered_graph() -> None:
     class ExampleWorkflow:
-        @workflow_step(key="notify", label="Notify", kind=WorkflowStepKind.NOTIFICATION, after="build", required=False)
+        @workflow_step(
+            key="notify",
+            label="Notify",
+            kind=WorkflowStepKind.NOTIFICATION,
+            after="build",
+            required=False,
+        )
         def notify(self) -> None:
             raise NotImplementedError
 
@@ -35,19 +41,26 @@ def test_workflow_step_decorator_infers_ordered_graph() -> None:
 
     steps = infer_workflow_steps(ExampleWorkflow)
 
-    assert [(step.key, step.kind, step.after, step.supports, step.graph_index) for step in steps] == [
+    assert [
+        (step.key, step.kind, step.after, step.supports, step.graph_index)
+        for step in steps
+    ] == [
         ("build", WorkflowStepKind.BUSINESS, (), (), 0),
         ("notify", WorkflowStepKind.NOTIFICATION, ("build",), (), 1),
     ]
     assert not any(step.retryable for step in steps)
 
 
-def test_registered_parent_planning_retryable_steps_have_executable_capabilities() -> None:
+def test_registered_parent_planning_retryable_steps_have_executable_capabilities() -> (
+    None
+):
     workflow_type = get_workflow_type(workflow_type_key="parent_planning")
 
     executable_retry_types = {
         capability.operation_type
-        for capability in installed_operation_retry_capabilities(workflow_type=workflow_type)
+        for capability in installed_operation_retry_capabilities(
+            workflow_type=workflow_type
+        )
     }
     retryable_steps = {step.key for step in workflow_type.steps if step.retryable}
 
@@ -59,7 +72,9 @@ def test_registered_parent_planning_retryable_steps_have_executable_capabilities
     assert retryable_steps == executable_retry_types
 
 
-def test_registered_jira_project_reconciliation_workflow_has_expected_steps_and_work_units() -> None:
+def test_registered_jira_project_reconciliation_workflow_has_expected_steps_and_work_units() -> (
+    None
+):
     workflow_type = get_workflow_type(workflow_type_key="jira_project_reconciliation")
 
     assert [step.key for step in workflow_type.steps] == [
@@ -88,7 +103,9 @@ def test_registered_jira_project_reconciliation_workflow_has_expected_steps_and_
 
 def test_registered_project_deployment_setup_uses_dedicated_temporal_workflow() -> None:
     workflow_type = get_workflow_type(workflow_type_key="project_deployment_setup")
-    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+    binding = resolve_temporal_binding_for_handler(
+        handler_key=workflow_type.handler_key
+    )
 
     assert workflow_type.orchestration_backend == "temporal"
     assert workflow_type.handler_key == "project_deployment_setup"
@@ -109,12 +126,18 @@ def test_registered_project_deployment_setup_uses_dedicated_temporal_workflow() 
 
 def test_registered_demo_proof_workflow_matches_required_proof_chain() -> None:
     workflow_type = get_workflow_type(workflow_type_key="demo_proof")
-    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+    binding = resolve_temporal_binding_for_handler(
+        handler_key=workflow_type.handler_key
+    )
 
     assert workflow_type.orchestration_backend == "temporal"
     assert workflow_type.handler_key == "demo_proof"
     assert workflow_type.capabilities["independent_trigger"] is True
-    assert workflow_type.capabilities["required_capture_targets"] == ("browser", "ios", "android")
+    assert workflow_type.capabilities["required_capture_targets"] == (
+        "browser",
+        "ios",
+        "android",
+    )
     assert workflow_type.capabilities["supported_trigger_modes"] == (
         "from_run",
         "from_pr",
@@ -157,7 +180,8 @@ def test_registered_demo_proof_side_effect_units_require_idempotency() -> None:
     side_effect_unit_keys = {
         unit.key
         for unit in workflow_type.work_units
-        if unit.kind in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
+        if unit.kind
+        in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
     }
     idempotent_unit_keys = {
         unit.key
@@ -173,7 +197,9 @@ def test_registered_demo_proof_retryable_steps_have_executable_capabilities() ->
 
     executable_retry_types = {
         capability.operation_type
-        for capability in installed_operation_retry_capabilities(workflow_type=workflow_type)
+        for capability in installed_operation_retry_capabilities(
+            workflow_type=workflow_type
+        )
     }
     retryable_steps = {step.key for step in workflow_type.steps if step.retryable}
 
@@ -199,7 +225,10 @@ def test_installed_workflow_handler_registry_resolves_demo_proof_handler() -> No
         create_jira_comment_fn=lambda *_args, **_kwargs: object(),
     )
 
-    assert registry.resolve_advance_handler("demo_proof").__class__.__name__ == "DemoProofWorkflowAdvanceHandler"
+    assert (
+        registry.resolve_advance_handler("demo_proof").__class__.__name__
+        == "DemoProofWorkflowAdvanceHandler"
+    )
 
 
 def test_parent_planning_supporting_steps_declare_visual_owners() -> None:
@@ -211,17 +240,27 @@ def test_parent_planning_supporting_steps_declare_visual_owners() -> None:
         "pm_decision_resolution",
         "jira_child_fanout",
     )
-    assert steps["jira_parent_update"].supports == ("backlog_planning", "jira_child_fanout")
-    assert steps["discord_followup_projection"].supports == ("backlog_planning", "jira_child_fanout")
+    assert steps["jira_parent_update"].supports == (
+        "backlog_planning",
+        "jira_child_fanout",
+    )
+    assert steps["discord_followup_projection"].supports == (
+        "backlog_planning",
+        "jira_child_fanout",
+    )
     assert steps["jira_child_promotion"].supports == ("jira_child_fanout",)
 
 
-def test_registered_workflow_retry_metadata_never_exceeds_installed_capabilities() -> None:
+def test_registered_workflow_retry_metadata_never_exceeds_installed_capabilities() -> (
+    None
+):
     for workflow_type_key in ("issue_execution", "parent_planning", "pr_remediation"):
         workflow_type = get_workflow_type(workflow_type_key=workflow_type_key)
         executable_retry_types = {
             capability.operation_type
-            for capability in installed_operation_retry_capabilities(workflow_type=workflow_type)
+            for capability in installed_operation_retry_capabilities(
+                workflow_type=workflow_type
+            )
         }
         retryable_steps = {step.key for step in workflow_type.steps if step.retryable}
 
@@ -238,7 +277,9 @@ def test_run_workflows_do_not_expose_retry_without_registered_executor() -> None
 
 def test_workflow_step_graph_rejects_missing_dependencies() -> None:
     class BrokenWorkflow:
-        @workflow_step(key="child", label="Child", kind=WorkflowStepKind.BUSINESS, after="missing")
+        @workflow_step(
+            key="child", label="Child", kind=WorkflowStepKind.BUSINESS, after="missing"
+        )
         def child(self) -> None:
             raise NotImplementedError
 
@@ -248,11 +289,15 @@ def test_workflow_step_graph_rejects_missing_dependencies() -> None:
 
 def test_workflow_step_graph_rejects_cycles() -> None:
     class BrokenWorkflow:
-        @workflow_step(key="first", label="First", kind=WorkflowStepKind.BUSINESS, after="second")
+        @workflow_step(
+            key="first", label="First", kind=WorkflowStepKind.BUSINESS, after="second"
+        )
         def first(self) -> None:
             raise NotImplementedError
 
-        @workflow_step(key="second", label="Second", kind=WorkflowStepKind.BUSINESS, after="first")
+        @workflow_step(
+            key="second", label="Second", kind=WorkflowStepKind.BUSINESS, after="first"
+        )
         def second(self) -> None:
             raise NotImplementedError
 
@@ -262,7 +307,12 @@ def test_workflow_step_graph_rejects_cycles() -> None:
 
 def test_workflow_step_graph_rejects_missing_support_owner() -> None:
     class BrokenWorkflow:
-        @workflow_step(key="notify", label="Notify", kind=WorkflowStepKind.NOTIFICATION, supports="missing")
+        @workflow_step(
+            key="notify",
+            label="Notify",
+            kind=WorkflowStepKind.NOTIFICATION,
+            supports="missing",
+        )
         def notify(self) -> None:
             raise NotImplementedError
 
@@ -303,9 +353,9 @@ def test_workflow_work_unit_decorator_infers_units() -> None:
 
     work_units = infer_workflow_work_units(ExampleWorkflow)
 
-    assert [(unit.key, unit.step_key, unit.kind, unit.graph_index) for unit in work_units] == [
-        ("build.model", "build", WorkflowWorkUnitKind.MODEL_CALL, 0)
-    ]
+    assert [
+        (unit.key, unit.step_key, unit.kind, unit.graph_index) for unit in work_units
+    ] == [("build.model", "build", WorkflowWorkUnitKind.MODEL_CALL, 0)]
 
 
 def test_workflow_definition_rejects_unit_attached_to_unknown_step() -> None:
@@ -429,7 +479,9 @@ def test_no_runtime_code_references_db_authored_workflow_catalog() -> None:
 
 def test_temporal_run_activities_use_code_defined_step_runner() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    source = (repo_root / "orchestrator/temporal/activities/run_execution.py").read_text()
+    source = (
+        repo_root / "orchestrator/temporal/activities/run_execution.py"
+    ).read_text()
 
     assert "start_workflow_step_attempt(" in source
     assert "start_workflow_operation_attempt" not in source

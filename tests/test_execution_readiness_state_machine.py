@@ -9,7 +9,10 @@ from orchestrator.core.precheck.pre_run_check import resolve_precheck_outcome
 
 
 def test_blocking_reason_for_outcome_allows_only_blocking_outcomes() -> None:
-    assert blocking_reason_for_outcome("decision_gate_required") == "decision_gate_required"
+    assert (
+        blocking_reason_for_outcome("decision_gate_required")
+        == "decision_gate_required"
+    )
     assert blocking_reason_for_outcome("missing_ready_label") == "missing_ready_label"
     assert blocking_reason_for_outcome("ready_for_agent") is None
 

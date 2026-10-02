@@ -27,4 +27,6 @@ def downgrade() -> None:
     op.drop_index("ix_runs_dev_session_id", table_name="runs")
     with op.batch_alter_table("runs", recreate="auto") as batch_op:
         batch_op.alter_column("dev_session_id", new_column_name="codex_session_id")
-    op.create_index("ix_runs_codex_session_id", "runs", ["codex_session_id"], unique=False)
+    op.create_index(
+        "ix_runs_codex_session_id", "runs", ["codex_session_id"], unique=False
+    )

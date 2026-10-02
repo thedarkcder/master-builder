@@ -39,8 +39,12 @@ class RuntimeStageTooling:
         native_key: str = "native_tools_json",
     ) -> dict[str, str]:
         return {
-            governed_key: json.dumps(list(self.governed_catalog), ensure_ascii=False, sort_keys=True),
-            native_key: json.dumps(list(self.native_catalog), ensure_ascii=False, sort_keys=True),
+            governed_key: json.dumps(
+                list(self.governed_catalog), ensure_ascii=False, sort_keys=True
+            ),
+            native_key: json.dumps(
+                list(self.native_catalog), ensure_ascii=False, sort_keys=True
+            ),
         }
 
     def governed_prompt_context(
@@ -51,7 +55,9 @@ class RuntimeStageTooling:
     ) -> dict[str, str]:
         return {
             allowed_key: json.dumps(sorted(self.governed_tools), ensure_ascii=False),
-            catalog_key: json.dumps(list(self.governed_catalog), ensure_ascii=False, sort_keys=True),
+            catalog_key: json.dumps(
+                list(self.governed_catalog), ensure_ascii=False, sort_keys=True
+            ),
         }
 
 

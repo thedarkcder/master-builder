@@ -12,13 +12,13 @@ import {
 
 test("project automations render default drafts, save edits, and show execution history", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
     github_repository: "thedarkcder/girl-power",
     jira_project_key: "GP",
   });
@@ -28,32 +28,32 @@ test("project automations render default drafts, save edits, and show execution 
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/automations",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/automations",
       handler: (route) => fulfillJson(route, { automations: [] }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/discord/allowlist-requests",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/automations",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/automations",
       handler: async (route) => {
         savedPayload = await route.request().postDataJSON();
         await fulfillJson(
@@ -119,7 +119,7 @@ test("project automations render default drafts, save edits, and show execution 
     },
   ]);
 
-  await page.goto("/example/projects/example-default/automations");
+  await page.goto("/example-workspace/projects/example-workspace-default/automations");
 
   const standupCard = page.getByTestId("project-automation-standup_voice_brief");
   const retroCard = page.getByTestId("project-automation-retro_voice_brief");

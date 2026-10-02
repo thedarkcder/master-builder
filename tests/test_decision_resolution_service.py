@@ -12,7 +12,9 @@ class _RuntimeErrorForTest(RuntimeError):
 
 
 def test_resolve_slots_with_runtime_uses_issue_context_without_repo_evidence() -> None:
-    invoke_mock = MagicMock(return_value={"answers": {"decision_owner": "Platform Security"}})
+    invoke_mock = MagicMock(
+        return_value={"answers": {"decision_owner": "Platform Security"}}
+    )
     result = resolve_slots_with_runtime(
         session=MagicMock(),
         settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/nope"),
@@ -24,7 +26,9 @@ def test_resolve_slots_with_runtime_uses_issue_context_without_repo_evidence() -
         missing_slots=["decision_owner"],
         build_runtime_fn=lambda **_kwargs: object(),
         invoke_runtime_json_fn=invoke_mock,
-        project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path("/tmp/does-not-exist"),
+        project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path(
+            "/tmp/does-not-exist"
+        ),
         runtime_error_type=_RuntimeErrorForTest,
     )
 
@@ -46,7 +50,9 @@ def test_resolve_slots_with_runtime_skips_when_no_repo_or_issue_context() -> Non
         missing_slots=["decision_owner"],
         build_runtime_fn=lambda **_kwargs: object(),
         invoke_runtime_json_fn=invoke_mock,
-        project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path("/tmp/does-not-exist"),
+        project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path(
+            "/tmp/does-not-exist"
+        ),
         runtime_error_type=_RuntimeErrorForTest,
     )
 
@@ -70,13 +76,17 @@ def test_resolve_slots_with_runtime_fails_on_runtime_error() -> None:
             missing_slots=["decision_owner"],
             build_runtime_fn=lambda **_kwargs: object(),
             invoke_runtime_json_fn=_raise_runtime_error,
-            project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path("/tmp/does-not-exist"),
+            project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path(
+                "/tmp/does-not-exist"
+            ),
             runtime_error_type=_RuntimeErrorForTest,
         )
 
 
 def test_resolve_slots_with_runtime_fails_on_invalid_answers_payload() -> None:
-    with pytest.raises(RuntimeError, match="Runtime decision resolution returned invalid answers"):
+    with pytest.raises(
+        RuntimeError, match="Runtime decision resolution returned invalid answers"
+    ):
         resolve_slots_with_runtime(
             session=MagicMock(),
             settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/nope"),
@@ -88,6 +98,8 @@ def test_resolve_slots_with_runtime_fails_on_invalid_answers_payload() -> None:
             missing_slots=["decision_owner"],
             build_runtime_fn=lambda **_kwargs: object(),
             invoke_runtime_json_fn=MagicMock(return_value={"answers": []}),
-            project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path("/tmp/does-not-exist"),
+            project_repo_dir_fn=lambda **_kwargs: __import__("pathlib").Path(
+                "/tmp/does-not-exist"
+            ),
             runtime_error_type=_RuntimeErrorForTest,
         )

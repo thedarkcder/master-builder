@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { SERVER_API_BASE_URL } from "@/lib/server-api";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  const base = DEFAULT_API_BASE_URL.replace(/\/$/, "");
+  const base = SERVER_API_BASE_URL.replace(/\/$/, "");
   const targetUrl = `${base}/api/public/password-reset/confirm`;
   const headers = new Headers();
   const contentType = request.headers.get("content-type");

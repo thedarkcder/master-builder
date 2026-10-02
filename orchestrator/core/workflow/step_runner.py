@@ -49,7 +49,9 @@ def start_workflow_step_attempt(
 ) -> WorkflowStepAttempt:
     workflow_type = getattr(lifecycle, "workflow_type", None)
     if workflow_type is None or not hasattr(workflow_type, "step"):
-        raise ValueError("Workflow step attempts require a code-defined workflow definition")
+        raise ValueError(
+            "Workflow step attempts require a code-defined workflow definition"
+        )
     workflow_type.step(operation_type)
     operation, attempt = lifecycle.start_operation_attempt(
         operation_type=operation_type,
@@ -62,8 +64,12 @@ def start_workflow_step_attempt(
     return WorkflowStepAttempt(operation=operation, attempt=attempt)
 
 
-def complete_workflow_step_attempt(*, lifecycle, step: WorkflowStepAttempt, summary: str) -> None:  # noqa: ANN001
-    lifecycle.complete_started_operation(operation=step.operation, attempt=step.attempt, summary=summary)
+def complete_workflow_step_attempt(
+    *, lifecycle, step: WorkflowStepAttempt, summary: str
+) -> None:  # noqa: ANN001
+    lifecycle.complete_started_operation(
+        operation=step.operation, attempt=step.attempt, summary=summary
+    )
 
 
 def fail_workflow_step_attempt(
@@ -96,8 +102,12 @@ def retry_workflow_step_attempt(
     )
 
 
-def wait_workflow_step_attempt(*, lifecycle, step: WorkflowStepAttempt, summary: str) -> None:  # noqa: ANN001
-    lifecycle.wait_started_operation(operation=step.operation, attempt=step.attempt, summary=summary)
+def wait_workflow_step_attempt(
+    *, lifecycle, step: WorkflowStepAttempt, summary: str
+) -> None:  # noqa: ANN001
+    lifecycle.wait_started_operation(
+        operation=step.operation, attempt=step.attempt, summary=summary
+    )
 
 
 def complete_waiting_workflow_step_attempt(
@@ -108,7 +118,9 @@ def complete_waiting_workflow_step_attempt(
 ) -> WorkflowStepAttempt:
     workflow_type = getattr(lifecycle, "workflow_type", None)
     if workflow_type is None or not hasattr(workflow_type, "step"):
-        raise ValueError("Workflow step attempts require a code-defined workflow definition")
+        raise ValueError(
+            "Workflow step attempts require a code-defined workflow definition"
+        )
     workflow_type.step(operation_type)
     operation, attempt = lifecycle.complete_waiting_operation_attempt(
         operation_type=operation_type,

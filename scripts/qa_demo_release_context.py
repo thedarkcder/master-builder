@@ -11,7 +11,9 @@ def qa_demo_launch_context(payload: dict[str, object]) -> dict[str, str]:
         else ""
     )
     api_recording_url = str(payload.get("release_api_recording_url") or "").strip()
-    browser_recording_url = str(payload.get("release_browser_recording_url") or "").strip()
+    browser_recording_url = str(
+        payload.get("release_browser_recording_url") or ""
+    ).strip()
     api_base_url = str(payload.get("release_api_base_url") or "").strip()
     browser_url = str(payload.get("release_browser_url") or "").strip()
     candidates = {

@@ -60,13 +60,23 @@ class PrReviewPublication(Base):
     review_kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     signature: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    owner_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    owner_request_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     review_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class RepoBootstrapState(Base):
@@ -80,7 +90,13 @@ class RepoBootstrapState(Base):
     repo_url: Mapped[str] = mapped_column(String(512), primary_key=True)
     last_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    last_created_files: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    last_created_files: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     bootstrap_count: Mapped[int] = mapped_column(nullable=False, default=1)
-    bootstrapped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    bootstrapped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

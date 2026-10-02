@@ -248,7 +248,9 @@ def build_voice_room_spoken_reply_text(
     return f"{persona_label}. {normalized_message}"
 
 
-def _merged_persona_map(discord_config: dict[str, Any], keys: tuple[str, ...]) -> dict[str, str]:
+def _merged_persona_map(
+    discord_config: dict[str, Any], keys: tuple[str, ...]
+) -> dict[str, str]:
     merged: dict[str, str] = {}
     for key in keys:
         merged.update(_normalize_string_map(discord_config.get(key)))

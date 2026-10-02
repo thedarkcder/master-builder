@@ -65,9 +65,3 @@ If webhook processing is enabled for GitHub events, also configure webhook deliv
 - selected repositories (or marker for all repos)
 - webhook secret ref (if configured during onboarding)
 - timestamp + actor metadata for audit trail
-
-## Jira alignment
-This direction should be tracked primarily in:
-- `MAB-8` GitHub App auth, install/connect flow, and installation persistence
-- `MAB-13` Admin UI wizard and auth UX
-- `MAB-6` Tenant onboarding model updates for wizard flow

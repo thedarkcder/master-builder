@@ -13,7 +13,9 @@ from orchestrator.storage.migrations import run_migrations
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
-def test_resolve_jira_trigger_decision_disables_plain_status_recheck_in_transition_only_mode() -> None:
+def test_resolve_jira_trigger_decision_disables_plain_status_recheck_in_transition_only_mode() -> (
+    None
+):
     decision = resolve_jira_trigger_decision(
         comment_command=None,
         webhook_event="jira:issue_updated",

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
-from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
-from orchestrator.temporal.workflows.project_deployment_setup import ProjectDeploymentSetupWorkflow
+from orchestrator.temporal.workflows.development_team_run import (
+    DevelopmentTeamRunWorkflow,
+)
+from orchestrator.temporal.workflows.handler_backed_workflow import (
+    HandlerBackedWorkflow,
+)
+from orchestrator.temporal.workflows.project_deployment_setup import (
+    ProjectDeploymentSetupWorkflow,
+)
 
 
 @dataclass(frozen=True)
@@ -58,8 +64,12 @@ _TEMPORAL_BINDINGS = (
     ),
 )
 
-_TEMPORAL_WORKFLOW_REGISTRY = {binding.workflow_name: binding.workflow_defn for binding in _TEMPORAL_BINDINGS}
-_TEMPORAL_BINDINGS_BY_HANDLER_KEY = {binding.handler_key: binding for binding in _TEMPORAL_BINDINGS}
+_TEMPORAL_WORKFLOW_REGISTRY = {
+    binding.workflow_name: binding.workflow_defn for binding in _TEMPORAL_BINDINGS
+}
+_TEMPORAL_BINDINGS_BY_HANDLER_KEY = {
+    binding.handler_key: binding for binding in _TEMPORAL_BINDINGS
+}
 
 
 def list_registered_temporal_workflow_names() -> list[str]:
@@ -70,12 +80,18 @@ def resolve_temporal_workflow_definition(*, workflow_name: str):
     normalized = str(workflow_name or "").strip()
     workflow_defn = _TEMPORAL_WORKFLOW_REGISTRY.get(normalized)
     if workflow_defn is None:
-        raise LookupError(f"Temporal workflow definition is not registered: {workflow_name}")
+        raise LookupError(
+            f"Temporal workflow definition is not registered: {workflow_name}"
+        )
     return workflow_defn
 
 
-def resolve_temporal_binding_for_handler(*, handler_key: str) -> TemporalWorkflowBinding:
+def resolve_temporal_binding_for_handler(
+    *, handler_key: str
+) -> TemporalWorkflowBinding:
     binding = _TEMPORAL_BINDINGS_BY_HANDLER_KEY.get(str(handler_key or "").strip())
     if binding is None:
-        raise LookupError(f"Temporal engine is not available for handler: {handler_key}")
+        raise LookupError(
+            f"Temporal engine is not available for handler: {handler_key}"
+        )
     return binding

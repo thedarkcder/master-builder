@@ -148,7 +148,9 @@ def dispatch_persona_command(
         tenant=tenant,
         user_id=normalized_user_id,
         channel_id=normalized_channel_id,
-        question=_persona_history_question(command_name=command_name, question=question),
+        question=_persona_history_question(
+            command_name=command_name, question=question
+        ),
         answer=message,
         issue_key=normalized_issue_key,
         status_name=requested_status,

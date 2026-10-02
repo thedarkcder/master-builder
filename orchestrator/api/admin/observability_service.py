@@ -40,7 +40,9 @@ def _duration_stats(runs: list[Run]) -> ObservabilityDurationStatsRead:
         if duration >= 0:
             durations.append(duration)
     if not durations:
-        return ObservabilityDurationStatsRead(average_seconds=0.0, median_seconds=0.0, p95_seconds=0.0)
+        return ObservabilityDurationStatsRead(
+            average_seconds=0.0, median_seconds=0.0, p95_seconds=0.0
+        )
     ordered = sorted(durations)
     p95_index = max(0, ceil(len(ordered) * 0.95) - 1)
     return ObservabilityDurationStatsRead(
@@ -65,20 +67,30 @@ def _status_counts(runs: list[Run]) -> dict[str, int]:
 
 
 def platform_observability(*, session) -> PlatformObservabilityRead:  # noqa: ANN001
-    total_tenants = int(session.execute(select(func.count(Tenant.tenant_id))).scalar_one())
-    enabled_tenants = int(
-        session.execute(select(func.count(Tenant.tenant_id)).where(Tenant.is_enabled.is_(True))).scalar_one()
+    total_tenants = int(
+        session.execute(select(func.count(Tenant.tenant_id))).scalar_one()
     )
-    total_projects = int(session.execute(select(func.count(Project.project_id))).scalar_one())
+    enabled_tenants = int(
+        session.execute(
+            select(func.count(Tenant.tenant_id)).where(Tenant.is_enabled.is_(True))
+        ).scalar_one()
+    )
+    total_projects = int(
+        session.execute(select(func.count(Project.project_id))).scalar_one()
+    )
     active_projects = int(
-        session.execute(select(func.count(Project.project_id)).where(Project.is_archived.is_(False))).scalar_one()
+        session.execute(
+            select(func.count(Project.project_id)).where(Project.is_archived.is_(False))
+        ).scalar_one()
     )
     runs = session.execute(select(Run)).scalars().all()
     total_runs = len(runs)
     active_runs = sum(1 for run in runs if run.status in ACTIVE_RUN_STATUSES)
     cutoff = _utcnow() - timedelta(hours=24)
     failed_at_or_created = (
-        _coerce_aware(run.finished_at) if run.finished_at is not None else _coerce_aware(run.created_at)
+        _coerce_aware(run.finished_at)
+        if run.finished_at is not None
+        else _coerce_aware(run.created_at)
         for run in runs
         if run.status == "failed"
     )
@@ -100,9 +112,13 @@ def platform_observability(*, session) -> PlatformObservabilityRead:  # noqa: AN
 def tenant_observability(*, session, tenant_id: str) -> TenantObservabilityRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     total_projects = int(
-        session.execute(select(func.count(Project.project_id)).where(Project.tenant_id == tenant_id)).scalar_one()
+        session.execute(
+            select(func.count(Project.project_id)).where(Project.tenant_id == tenant_id)
+        ).scalar_one()
     )
     active_projects = int(
         session.execute(
@@ -112,11 +128,16 @@ def tenant_observability(*, session, tenant_id: str) -> TenantObservabilityRead:
             )
         ).scalar_one()
     )
-    runs = session.execute(select(Run).where(Run.tenant_id == tenant_id)).scalars().all()
+    runs = (
+        session.execute(select(Run).where(Run.tenant_id == tenant_id)).scalars().all()
+    )
     counts = _status_counts(runs)
     stale_cutoff = _utcnow() - timedelta(hours=2)
     stale_runs = sum(
-        1 for run in runs if run.status in STALE_STATUSES and _coerce_aware(run.created_at) <= stale_cutoff
+        1
+        for run in runs
+        if run.status in STALE_STATUSES
+        and _coerce_aware(run.created_at) <= stale_cutoff
     )
     return TenantObservabilityRead(
         tenant_id=tenant_id,
@@ -133,20 +154,31 @@ def tenant_observability(*, session, tenant_id: str) -> TenantObservabilityRead:
     )
 
 
-def project_observability(*, session, tenant_id: str, project_id: str) -> ProjectObservabilityRead:  # noqa: ANN001
+def project_observability(
+    *, session, tenant_id: str, project_id: str
+) -> ProjectObservabilityRead:  # noqa: ANN001
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    runs = session.execute(
-        select(Run).where(
-            Run.tenant_id == tenant_id,
-            Run.project_id == project_id,
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
-    ).scalars().all()
+    runs = (
+        session.execute(
+            select(Run).where(
+                Run.tenant_id == tenant_id,
+                Run.project_id == project_id,
+            )
+        )
+        .scalars()
+        .all()
+    )
     counts = _status_counts(runs)
     stale_cutoff = _utcnow() - timedelta(hours=2)
     stale_runs = sum(
-        1 for run in runs if run.status in STALE_STATUSES and _coerce_aware(run.created_at) <= stale_cutoff
+        1
+        for run in runs
+        if run.status in STALE_STATUSES
+        and _coerce_aware(run.created_at) <= stale_cutoff
     )
     return ProjectObservabilityRead(
         tenant_id=tenant_id,

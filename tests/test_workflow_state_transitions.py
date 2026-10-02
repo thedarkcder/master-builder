@@ -12,7 +12,9 @@ from orchestrator.core.workflow.transitions import (
 
 
 def test_workflow_waiting_for_input_resumes_to_queued() -> None:
-    assert transition_workflow("waiting_for_input", "resume_attempt_created") == "queued"
+    assert (
+        transition_workflow("waiting_for_input", "resume_attempt_created") == "queued"
+    )
 
 
 def test_workflow_blocked_can_resume_to_queued() -> None:
@@ -43,10 +45,14 @@ def test_attempt_creation_policy_allows_blocked_fresh_retry() -> None:
 
 
 def test_attempt_creation_policy_reuses_waiting_workflow_only_for_resume() -> None:
-    resume_policy = attempt_creation_policy(workflow_status="waiting_for_input", mode="resume")
+    resume_policy = attempt_creation_policy(
+        workflow_status="waiting_for_input", mode="resume"
+    )
     assert resume_policy.allowed is True
     assert resume_policy.reuse_workflow is True
 
-    restart_policy = attempt_creation_policy(workflow_status="waiting_for_input", mode="restart")
+    restart_policy = attempt_creation_policy(
+        workflow_status="waiting_for_input", mode="restart"
+    )
     assert restart_policy.allowed is False
     assert restart_policy.reason == "waiting_for_input_requires_resume"

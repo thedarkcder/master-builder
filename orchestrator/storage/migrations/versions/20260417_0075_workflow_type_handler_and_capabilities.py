@@ -20,12 +20,15 @@ depends_on = None
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
-    return column_name in {column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)}
+    return column_name in {
+        column["name"] for column in sa.inspect(op.get_bind()).get_columns(table_name)
+    }
 
 
 def _has_unique_constraint(table_name: str, constraint_name: str) -> bool:
     return constraint_name in {
-        constraint["name"] for constraint in sa.inspect(op.get_bind()).get_unique_constraints(table_name)
+        constraint["name"]
+        for constraint in sa.inspect(op.get_bind()).get_unique_constraints(table_name)
     }
 
 
@@ -36,9 +39,14 @@ def upgrade() -> None:
     added_handler_key = not _has_column("workflow_types", "handler_key")
     added_capabilities_json = not _has_column("workflow_types", "capabilities_json")
     if added_handler_key:
-        op.add_column("workflow_types", sa.Column("handler_key", sa.String(length=64), nullable=True))
+        op.add_column(
+            "workflow_types",
+            sa.Column("handler_key", sa.String(length=64), nullable=True),
+        )
     if added_capabilities_json:
-        op.add_column("workflow_types", sa.Column("capabilities_json", sa.JSON(), nullable=True))
+        op.add_column(
+            "workflow_types", sa.Column("capabilities_json", sa.JSON(), nullable=True)
+        )
 
     workflow_types = sa.table(
         "workflow_types",
@@ -59,7 +67,10 @@ def upgrade() -> None:
         .where(workflow_types.c.workflow_type_key == "parent_planning")
         .values(
             handler_key="jira_parent_feature",
-            capabilities_json={"child_issue_links": True, "state_path_kind": "operation"},
+            capabilities_json={
+                "child_issue_links": True,
+                "state_path_kind": "operation",
+            },
         )
     )
     bind.execute(
@@ -71,13 +82,21 @@ def upgrade() -> None:
         )
     )
 
-    rows = bind.execute(
-        sa.text("SELECT workflow_type_key, handler_key, capabilities_json FROM workflow_types")
-    ).mappings().all()
+    rows = (
+        bind.execute(
+            sa.text(
+                "SELECT workflow_type_key, handler_key, capabilities_json FROM workflow_types"
+            )
+        )
+        .mappings()
+        .all()
+    )
     for row in rows:
         handler_key = str(row["handler_key"] or "").strip()
         if not handler_key:
-            raise RuntimeError(f"workflow type {row['workflow_type_key']} is missing handler_key")
+            raise RuntimeError(
+                f"workflow type {row['workflow_type_key']} is missing handler_key"
+            )
         raw_capabilities = row["capabilities_json"]
         if isinstance(raw_capabilities, str):
             try:
@@ -87,7 +106,9 @@ def upgrade() -> None:
                     f"workflow type {row['workflow_type_key']} has invalid capabilities_json"
                 ) from exc
         if not isinstance(raw_capabilities, dict):
-            raise RuntimeError(f"workflow type {row['workflow_type_key']} is missing capabilities_json object")
+            raise RuntimeError(
+                f"workflow type {row['workflow_type_key']} is missing capabilities_json object"
+            )
 
     if dialect == "sqlite":
         with op.batch_alter_table("workflow_types") as batch_op:
@@ -95,15 +116,23 @@ def upgrade() -> None:
                 batch_op.alter_column("handler_key", nullable=False)
             if added_capabilities_json:
                 batch_op.alter_column("capabilities_json", nullable=False)
-            if not _has_unique_constraint("workflow_types", "uq_workflow_types_handler_key"):
-                batch_op.create_unique_constraint("uq_workflow_types_handler_key", ["handler_key"])
+            if not _has_unique_constraint(
+                "workflow_types", "uq_workflow_types_handler_key"
+            ):
+                batch_op.create_unique_constraint(
+                    "uq_workflow_types_handler_key", ["handler_key"]
+                )
     else:
         if added_handler_key:
             op.alter_column("workflow_types", "handler_key", nullable=False)
         if added_capabilities_json:
             op.alter_column("workflow_types", "capabilities_json", nullable=False)
-        if not _has_unique_constraint("workflow_types", "uq_workflow_types_handler_key"):
-            op.create_unique_constraint("uq_workflow_types_handler_key", "workflow_types", ["handler_key"])
+        if not _has_unique_constraint(
+            "workflow_types", "uq_workflow_types_handler_key"
+        ):
+            op.create_unique_constraint(
+                "uq_workflow_types_handler_key", "workflow_types", ["handler_key"]
+            )
 
 
 def downgrade() -> None:
@@ -114,6 +143,8 @@ def downgrade() -> None:
             batch_op.drop_column("capabilities_json")
             batch_op.drop_column("handler_key")
     else:
-        op.drop_constraint("uq_workflow_types_handler_key", "workflow_types", type_="unique")
+        op.drop_constraint(
+            "uq_workflow_types_handler_key", "workflow_types", type_="unique"
+        )
         op.drop_column("workflow_types", "capabilities_json")
         op.drop_column("workflow_types", "handler_key")

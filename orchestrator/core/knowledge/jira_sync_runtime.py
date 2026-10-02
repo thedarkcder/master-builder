@@ -10,7 +10,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.service import execute_atlassian_operation_with_refresh_retry
+from orchestrator.api.atlassian_oauth.service import (
+    execute_atlassian_operation_with_refresh_retry,
+)
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.knowledge.base import sync_project_knowledge_from_jira
@@ -24,9 +26,22 @@ from orchestrator.core.observability.logging import configure_logging
 from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.observability.otel_telemetry import initialize_telemetry
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeJiraSyncProjectState, KnowledgeSource, Project, Tenant
-from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
-from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthError, AtlassianOAuthHttpError
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    KnowledgeJiraSyncProjectState,
+    KnowledgeSource,
+    Project,
+    Tenant,
+)
+from orchestrator.storage.run_queue_events import (
+    is_postgres_database_url,
+    postgres_dsn_from_database_url,
+)
+from orchestrator.tools.atlassian_oauth_models import (
+    AtlassianOAuthAuthRequiredError,
+    AtlassianOAuthError,
+    AtlassianOAuthHttpError,
+)
 
 try:
     import psycopg
@@ -101,9 +116,16 @@ class KnowledgeJiraSyncRuntime:
             )
 
         stop_event = threading.Event()
-        lock_key = int(getattr(self._settings, "knowledge_jira_sync_lock_key", 947102033128))
-        poll_seconds = max(5, int(getattr(self._settings, "knowledge_jira_sync_poll_seconds", 30)))
-        interval_seconds = max(60, int(getattr(self._settings, "knowledge_jira_sync_interval_seconds", 3600)))
+        lock_key = int(
+            getattr(self._settings, "knowledge_jira_sync_lock_key", 947102033128)
+        )
+        poll_seconds = max(
+            5, int(getattr(self._settings, "knowledge_jira_sync_poll_seconds", 30))
+        )
+        interval_seconds = max(
+            60,
+            int(getattr(self._settings, "knowledge_jira_sync_interval_seconds", 3600)),
+        )
         dsn = postgres_dsn_from_database_url(self._settings.database_url)
         started_at = datetime.now(timezone.utc)
         self._write_runtime_status(
@@ -130,11 +152,15 @@ class KnowledgeJiraSyncRuntime:
                 with psycopg.connect(dsn, autocommit=True) as conn:
                     acquired = _try_acquire_leader_lock(conn=conn, lock_key=lock_key)
                     if not acquired:
-                        self._write_runtime_status(state="running", leader_acquired=False)
+                        self._write_runtime_status(
+                            state="running", leader_acquired=False
+                        )
                         stop_event.wait(timeout=poll_seconds)
                         continue
 
-                    logger.info("knowledge_jira_sync_leader_acquired lock_key=%s", lock_key)
+                    logger.info(
+                        "knowledge_jira_sync_leader_acquired lock_key=%s", lock_key
+                    )
                     self._write_runtime_status(state="running", leader_acquired=True)
                     try:
                         while not stop_event.is_set():
@@ -142,16 +168,25 @@ class KnowledgeJiraSyncRuntime:
                             waited = 0
                             while waited < interval_seconds and not stop_event.is_set():
                                 _leader_lock_healthcheck(conn=conn)
-                                self._write_runtime_status(state=self._current_runtime_state(), leader_acquired=True)
+                                self._write_runtime_status(
+                                    state=self._current_runtime_state(),
+                                    leader_acquired=True,
+                                )
                                 step = min(poll_seconds, interval_seconds - waited)
                                 stop_event.wait(timeout=step)
                                 waited += step
                     finally:
-                        self._write_runtime_status(state=self._current_runtime_state(), leader_acquired=False)
-                        logger.info("knowledge_jira_sync_leader_released lock_key=%s", lock_key)
+                        self._write_runtime_status(
+                            state=self._current_runtime_state(), leader_acquired=False
+                        )
+                        logger.info(
+                            "knowledge_jira_sync_leader_released lock_key=%s", lock_key
+                        )
             except Exception as exc:  # noqa: BLE001
                 self._write_runtime_status(state="degraded", leader_acquired=False)
-                logger.exception("knowledge_jira_sync_runtime_loop_failed error=%s", exc)
+                logger.exception(
+                    "knowledge_jira_sync_runtime_loop_failed error=%s", exc
+                )
                 stop_event.wait(timeout=poll_seconds)
 
         self._write_runtime_status(
@@ -172,7 +207,9 @@ class KnowledgeJiraSyncRuntime:
             projects = self._list_sync_projects(session)
             existing_status = {
                 (status.tenant_id, status.project_id): status
-                for status in get_runtime_status(session=session, settings=self._settings).projects
+                for status in get_runtime_status(
+                    session=session, settings=self._settings
+                ).projects
             }
 
         if not projects:
@@ -185,13 +222,18 @@ class KnowledgeJiraSyncRuntime:
             return
 
         any_degraded = False
-        active_projects = {(project.tenant_id, project.project_id) for project in projects}
+        active_projects = {
+            (project.tenant_id, project.project_id) for project in projects
+        }
         for project in projects:
             now = datetime.now(timezone.utc)
-            existing_project_status = existing_status.get((project.tenant_id, project.project_id))
+            existing_project_status = existing_status.get(
+                (project.tenant_id, project.project_id)
+            )
             if (
                 existing_project_status is not None
-                and existing_project_status.failure_category in {"invalid_refresh_token", "auth_required"}
+                and existing_project_status.failure_category
+                in {"invalid_refresh_token", "auth_required"}
                 and existing_project_status.next_retry_at is not None
                 and existing_project_status.next_retry_at > now
             ):
@@ -236,7 +278,13 @@ class KnowledgeJiraSyncRuntime:
                     + timedelta(
                         seconds=max(
                             60,
-                            int(getattr(self._settings, "knowledge_jira_sync_invalid_token_backoff_seconds", 21600)),
+                            int(
+                                getattr(
+                                    self._settings,
+                                    "knowledge_jira_sync_invalid_token_backoff_seconds",
+                                    21600,
+                                )
+                            ),
                         )
                     )
                     if category in {"invalid_refresh_token", "auth_required"}
@@ -248,9 +296,15 @@ class KnowledgeJiraSyncRuntime:
                     failure_category=category,
                     last_error=str(exc),
                     last_attempted_at=now,
-                    last_successful_sync_at=existing_project_status.last_successful_sync_at if existing_project_status else None,
+                    last_successful_sync_at=existing_project_status.last_successful_sync_at
+                    if existing_project_status
+                    else None,
                     next_retry_at=next_retry_at,
-                    consecutive_failures=(existing_project_status.consecutive_failures + 1) if existing_project_status else 1,
+                    consecutive_failures=(
+                        existing_project_status.consecutive_failures + 1
+                    )
+                    if existing_project_status
+                    else 1,
                 )
                 if category in {"invalid_refresh_token", "auth_required"}:
                     logger.error(
@@ -259,7 +313,9 @@ class KnowledgeJiraSyncRuntime:
                         project.project_id,
                         project.jira_project_key,
                         category,
-                        next_retry_at.isoformat() if next_retry_at is not None else None,
+                        next_retry_at.isoformat()
+                        if next_retry_at is not None
+                        else None,
                         exc,
                     )
                 else:
@@ -282,7 +338,9 @@ class KnowledgeJiraSyncRuntime:
         with self._session_factory() as session:
             connection = session.get(AtlassianOAuthConnection, project.connection_id)
             if connection is None:
-                raise KnowledgeJiraSyncDependencyFailure("Atlassian connection record not found.")
+                raise KnowledgeJiraSyncDependencyFailure(
+                    "Atlassian connection record not found."
+                )
             cloud_id = connection.cloud_id
 
         def _operation(session: Session, jira_client, access_token: str):  # noqa: ANN001
@@ -294,7 +352,10 @@ class KnowledgeJiraSyncRuntime:
                 jira_client=jira_client,
                 access_token=access_token,
                 cloud_id=cloud_id,
-                max_issues=max(1, int(getattr(self._settings, "knowledge_jira_sync_max_issues", 500))),
+                max_issues=max(
+                    1,
+                    int(getattr(self._settings, "knowledge_jira_sync_max_issues", 500)),
+                ),
             )
 
         return execute_atlassian_operation_with_refresh_retry(
@@ -309,12 +370,20 @@ class KnowledgeJiraSyncRuntime:
     def _list_sync_projects(self, session: Session) -> list[_SyncProject]:
         tenants = {
             tenant.tenant_id: tenant
-            for tenant in session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
+            for tenant in session.execute(
+                select(Tenant).where(Tenant.is_enabled.is_(True))
+            )
+            .scalars()
+            .all()
         }
         if not tenants:
             return []
         projects: list[_SyncProject] = []
-        all_projects = session.execute(select(Project).where(Project.is_archived.is_(False))).scalars().all()
+        all_projects = (
+            session.execute(select(Project).where(Project.is_archived.is_(False)))
+            .scalars()
+            .all()
+        )
         jira_sources = list(
             session.execute(
                 select(KnowledgeSource).where(
@@ -332,7 +401,9 @@ class KnowledgeJiraSyncRuntime:
             tenant = tenants.get(project.tenant_id)
             if tenant is None:
                 continue
-            connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+            connection_id = tenant_jira_config_text(
+                tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+            )
             if not connection_id:
                 continue
             jira_project_key = str(project.jira_project_key or "").strip().upper()
@@ -342,14 +413,23 @@ class KnowledgeJiraSyncRuntime:
                 tenant_policy=dict(tenant.policy_config or {}),
                 project_overrides=dict(project.policy_overrides or {}),
                 default_codex_model=None,
-                default_codex_reasoning_effort=getattr(self._settings, "codex_reasoning_effort", None),
+                default_codex_reasoning_effort=getattr(
+                    self._settings, "codex_reasoning_effort", None
+                ),
             )
             if not bool(effective_policy.get("knowledge_base_enabled", True)):
                 continue
             configured_sources = jira_sources_by_project.get(project.project_id, [])
             if configured_sources:
                 for source in configured_sources:
-                    source_project_key = str((source.config_json or {}).get("project_key") or jira_project_key).strip().upper()
+                    source_project_key = (
+                        str(
+                            (source.config_json or {}).get("project_key")
+                            or jira_project_key
+                        )
+                        .strip()
+                        .upper()
+                    )
                     if not source_project_key:
                         continue
                     projects.append(
@@ -373,7 +453,10 @@ class KnowledgeJiraSyncRuntime:
 
     def _current_runtime_state(self, *, default: str = "running") -> str:
         with self._session_factory() as session:
-            return get_runtime_status(session=session, settings=self._settings).state or default
+            return (
+                get_runtime_status(session=session, settings=self._settings).state
+                or default
+            )
 
     def _write_runtime_status(
         self,
@@ -428,9 +511,13 @@ class KnowledgeJiraSyncRuntime:
             )
             session.commit()
 
-    def _prune_inactive_project_statuses(self, *, active_projects: set[tuple[str, str]]) -> None:
+    def _prune_inactive_project_statuses(
+        self, *, active_projects: set[tuple[str, str]]
+    ) -> None:
         with self._session_factory() as session:
-            runtime_status = get_runtime_status(session=session, settings=self._settings)
+            runtime_status = get_runtime_status(
+                session=session, settings=self._settings
+            )
             active_rows = {
                 (project_status.tenant_id, project_status.project_id): project_status
                 for project_status in runtime_status.projects
@@ -438,11 +525,13 @@ class KnowledgeJiraSyncRuntime:
             stale_projects = set(active_rows).difference(active_projects)
             if stale_projects:
                 from orchestrator.core.knowledge.jira_sync_status import RUNTIME_NAME
+
                 session.query(KnowledgeJiraSyncProjectState).filter(
                     KnowledgeJiraSyncProjectState.runtime_name == RUNTIME_NAME,
-                    tuple_(KnowledgeJiraSyncProjectState.tenant_id, KnowledgeJiraSyncProjectState.project_id).in_(
-                        list(stale_projects)
-                    ),
+                    tuple_(
+                        KnowledgeJiraSyncProjectState.tenant_id,
+                        KnowledgeJiraSyncProjectState.project_id,
+                    ).in_(list(stale_projects)),
                 ).delete(synchronize_session=False)
                 session.commit()
 

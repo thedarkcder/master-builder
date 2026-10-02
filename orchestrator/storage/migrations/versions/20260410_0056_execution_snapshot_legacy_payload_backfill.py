@@ -96,7 +96,11 @@ def _is_canonical_snapshot(payload: dict[str, Any]) -> bool:
     workflow = payload.get("workflow")
     events = payload.get("events")
     stages = payload.get("stages")
-    if not isinstance(context, dict) or not isinstance(workflow, dict) or not isinstance(events, dict):
+    if (
+        not isinstance(context, dict)
+        or not isinstance(workflow, dict)
+        or not isinstance(events, dict)
+    ):
         return False
     return isinstance(stages, dict)
 
@@ -108,9 +112,15 @@ def _legacy_to_canonical_snapshot_payload(payload: dict[str, Any]) -> dict[str, 
     stage_updates = _coerce_dict_list(payload.get("stage_updates"))
     stage_trace = _coerce_dict_list(payload.get("stage_trace"))
     workstream_trace = _coerce_dict_list(payload.get("workstream_trace"))
-    decision_gate = payload.get("decision_gate") if isinstance(payload.get("decision_gate"), dict) else {}
+    decision_gate = (
+        payload.get("decision_gate")
+        if isinstance(payload.get("decision_gate"), dict)
+        else {}
+    )
     outcome = _derive_legacy_outcome(payload=payload, decision_gate=decision_gate)
-    blocker_message = _derive_legacy_blocker_message(payload=payload, decision_gate=decision_gate)
+    blocker_message = _derive_legacy_blocker_message(
+        payload=payload, decision_gate=decision_gate
+    )
     return {
         "version": 1,
         "context": {
@@ -160,11 +170,19 @@ def _empty_snapshot_payload() -> dict[str, Any]:
     }
 
 
-def _derive_legacy_outcome(*, payload: dict[str, Any], decision_gate: dict[str, Any]) -> str | None:
+def _derive_legacy_outcome(
+    *, payload: dict[str, Any], decision_gate: dict[str, Any]
+) -> str | None:
     explicit_outcome = payload.get("outcome")
     if isinstance(explicit_outcome, str):
         normalized = explicit_outcome.strip().lower()
-        if normalized in {"success", "requeue", "waiting_for_input", "blocked", "failed"}:
+        if normalized in {
+            "success",
+            "requeue",
+            "waiting_for_input",
+            "blocked",
+            "failed",
+        }:
             return normalized
     succeeded = payload.get("succeeded")
     if succeeded is True:
@@ -176,7 +194,9 @@ def _derive_legacy_outcome(*, payload: dict[str, Any], decision_gate: dict[str, 
     return None
 
 
-def _derive_legacy_blocker_message(*, payload: dict[str, Any], decision_gate: dict[str, Any]) -> str | None:
+def _derive_legacy_blocker_message(
+    *, payload: dict[str, Any], decision_gate: dict[str, Any]
+) -> str | None:
     blocker = payload.get("blocker_message")
     if isinstance(blocker, str):
         normalized = blocker.strip()

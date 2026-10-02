@@ -6,7 +6,9 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.executor_registry import register_tenant_command_executor
-from orchestrator.api.discord.ask.context import tenant_project_keys as _tenant_project_keys
+from orchestrator.api.discord.ask.context import (
+    tenant_project_keys as _tenant_project_keys,
+)
 from orchestrator.api.discord.ingress import (
     ask_history_runtime,
     ask_runtime,
@@ -14,10 +16,16 @@ from orchestrator.api.discord.ingress import (
     gap_runtime,
     jira_runtime,
 )
-from orchestrator.api.discord.ingress.service import execute_tenant_command_ingress as _execute_tenant_command_ingress
+from orchestrator.api.discord.ingress.service import (
+    execute_tenant_command_ingress as _execute_tenant_command_ingress,
+)
 from orchestrator.api.discord.ingress.wiring import build_discord_ingress_dependencies
-from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
-from orchestrator.api.discord.shared.execution_policy import ensure_issue_is_executable as _ensure_issue_is_executable_impl
+from orchestrator.api.discord.shared.channel_scope_repository import (
+    SqlAlchemyDiscordChannelScopeRepository,
+)
+from orchestrator.api.discord.shared.execution_policy import (
+    ensure_issue_is_executable as _ensure_issue_is_executable_impl,
+)
 from orchestrator.api.discord.shared.scope_service import (
     enrich_command_scope as _enrich_command_scope_impl,
     normalize_scope_channel_id as _normalize_scope_channel_id_impl,
@@ -34,12 +42,21 @@ from orchestrator.api.discord.shared.state import (
 )
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.runtime.runtime import build_codex_runtime
-from orchestrator.core.runtime.working_dir import resolve_codex_working_dir as _resolve_codex_working_dir_impl
+from orchestrator.core.runtime.working_dir import (
+    resolve_codex_working_dir as _resolve_codex_working_dir_impl,
+)
 from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision.clarification_port import DecisionClarificationPort, RuntimeDecisionClarificationPort
+from orchestrator.core.decision.clarification_port import (
+    DecisionClarificationPort,
+    RuntimeDecisionClarificationPort,
+)
 from orchestrator.core.projects.routing import find_active_project_for_issue_key
-from orchestrator.core.runs.service import RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED, RUN_STATUS_FAILED
+from orchestrator.core.runs.service import (
+    RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.runtime import issue_fanout
@@ -51,12 +68,13 @@ _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 
 RETRYABLE_STATUSES = {RUN_STATUS_FAILED, RUN_STATUS_BLOCKED, RUN_STATUS_CANCELLED}
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
-_default_decision_clarification_port: DecisionClarificationPort = RuntimeDecisionClarificationPort()
+_default_decision_clarification_port: DecisionClarificationPort = (
+    RuntimeDecisionClarificationPort()
+)
 
 
 def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
     return _normalize_scope_channel_id_impl(channel_id)
-
 
 
 def _ensure_issue_is_executable(
@@ -73,8 +91,9 @@ def _ensure_issue_is_executable(
     )
 
 
-
-def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str | None) -> CommandScope:
+def _resolve_command_scope(
+    *, session: Session, tenant: Tenant, channel_id: str | None
+) -> CommandScope:
     return _resolve_command_scope_impl(
         session=session,
         tenant=tenant,
@@ -82,7 +101,6 @@ def _resolve_command_scope(*, session: Session, tenant: Tenant, channel_id: str 
         channel_scope_repository=_channel_scope_repository,
         tenant_project_keys_fn=_tenant_project_keys,
     )
-
 
 
 def _enrich_command_scope(
@@ -105,14 +123,15 @@ def _enrich_command_scope(
     )
 
 
-def _resolve_project_for_issue(*, session: Session, tenant: Tenant, issue_key: str) -> Project:
+def _resolve_project_for_issue(
+    *, session: Session, tenant: Tenant, issue_key: str
+) -> Project:
     return _resolve_project_for_issue_impl(
         session=session,
         tenant=tenant,
         issue_key=issue_key,
         find_active_project_for_issue_key_fn=find_active_project_for_issue_key,
     )
-
 
 
 def _resolve_codex_working_dir(
@@ -132,48 +151,55 @@ def _resolve_codex_working_dir(
     )
 
 
-
 def _build_ingress_dependencies():
     return build_discord_ingress_dependencies(
         issue_key_pattern=ISSUE_KEY_PATTERN,
         retryable_statuses=RETRYABLE_STATUSES,
         decision_clarification_port=_default_decision_clarification_port,
         get_tenant_fn=lambda db, current_tenant_id: db.get(Tenant, current_tenant_id),
-        assert_channel_scope_fn=lambda db, current_tenant, channel_id: _assert_channel_scope(
-            session=db,
-            tenant=current_tenant,
-            channel_id=channel_id,
+        assert_channel_scope_fn=lambda db, current_tenant, channel_id: (
+            _assert_channel_scope(
+                session=db,
+                tenant=current_tenant,
+                channel_id=channel_id,
+            )
         ),
-        assert_sensitive_command_permission_fn=lambda db, current_tenant, command_name, user_id, channel_id: _assert_sensitive_command_permission(
-            session=db,
-            tenant=current_tenant,
-            command_name=command_name,
-            user_id=user_id,
-            channel_id=channel_id,
+        assert_sensitive_command_permission_fn=lambda db, current_tenant, command_name, user_id, channel_id: (
+            _assert_sensitive_command_permission(
+                session=db,
+                tenant=current_tenant,
+                command_name=command_name,
+                user_id=user_id,
+                channel_id=channel_id,
+            )
         ),
         resolve_scope_fn=lambda db, current_tenant, channel_id: _resolve_command_scope(
             session=db,
             tenant=current_tenant,
             channel_id=channel_id,
         ),
-        enrich_scope_fn=lambda db, current_tenant, command_name, arguments, payload, current_scope: _enrich_command_scope(
-            session=db,
-            tenant=current_tenant,
-            command_name=command_name,
-            arguments=arguments,
-            payload=payload,
-            current_scope=current_scope,
+        enrich_scope_fn=lambda db, current_tenant, command_name, arguments, payload, current_scope: (
+            _enrich_command_scope(
+                session=db,
+                tenant=current_tenant,
+                command_name=command_name,
+                arguments=arguments,
+                payload=payload,
+                current_scope=current_scope,
+            )
         ),
         prune_missing_issue_keys_from_ask_history_fn=ask_history_runtime.prune_missing_issue_keys_from_ask_history,
         recent_ask_history_fn=ask_history_runtime.recent_ask_history,
         collect_ask_context_with_history_context_fn=ask_runtime.collect_ask_context_with_history_context,
-        collect_github_ask_context_fn=lambda **kwargs: ask_runtime.collect_github_ask_context(
-            **kwargs,
-            get_settings_fn=get_settings,
-            resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
-            resolve_platform_secret_ref_fn=resolve_platform_secret_ref,
-            github_client_from_tenant_config_fn=github_client_from_tenant_config,
-            collect_local_repo_context_fn=collect_local_repo_context,
+        collect_github_ask_context_fn=lambda **kwargs: (
+            ask_runtime.collect_github_ask_context(
+                **kwargs,
+                get_settings_fn=get_settings,
+                resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+                resolve_platform_secret_ref_fn=resolve_platform_secret_ref,
+                github_client_from_tenant_config_fn=github_client_from_tenant_config,
+                collect_local_repo_context_fn=collect_local_repo_context,
+            )
         ),
         store_pending_ask_action_fn=ask_history_runtime.store_pending_ask_action,
         store_ask_history_entry_fn=ask_history_runtime.store_ask_history_entry,
@@ -206,7 +232,6 @@ def _build_ingress_dependencies():
     )
 
 
-
 def execute_tenant_command_ingress(
     tenant_id: str,
     payload: DiscordCommandRequest,
@@ -225,7 +250,6 @@ def execute_tenant_command_ingress(
         ingress_source=ingress_source,
         deps=_build_ingress_dependencies(),
     )
-
 
 
 def execute_discord_command(

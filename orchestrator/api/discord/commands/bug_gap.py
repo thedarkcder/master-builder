@@ -26,12 +26,17 @@ def dispatch_bug_gap_command(
     create_discord_bug_issue: Callable[..., Any],
 ) -> DiscordCommandResponse | None:
     if command_name == "gap":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        command_params = (
+            payload.command_params if isinstance(payload.command_params, dict) else {}
+        )
         issue_key_param = str(command_params.get("issue_key") or "").strip().upper()
         issue_key_arg = arguments[0].strip().upper() if arguments else ""
         issue_key = issue_key_param or issue_key_arg
         if not issue_key:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !gap <ISSUE_KEY>",
+            )
         message, data = run_gap_analysis(
             session=session,
             tenant=tenant,
@@ -45,11 +50,19 @@ def dispatch_bug_gap_command(
         )
 
     if command_name == "bug":
-        command_params = payload.command_params if isinstance(payload.command_params, dict) else {}
+        command_params = (
+            payload.command_params if isinstance(payload.command_params, dict) else {}
+        )
         summary = str(command_params.get("summary") or "").strip()
         details = str(command_params.get("details") or "").strip()
-        related_issue_key_raw = str(command_params.get("issue_key") or "").strip().upper()
-        related_issue_key = related_issue_key_raw if issue_key_pattern.match(related_issue_key_raw) else None
+        related_issue_key_raw = (
+            str(command_params.get("issue_key") or "").strip().upper()
+        )
+        related_issue_key = (
+            related_issue_key_raw
+            if issue_key_pattern.match(related_issue_key_raw)
+            else None
+        )
         if not summary:
             raw_body = " ".join(arguments).strip()
             if " -- " in raw_body:

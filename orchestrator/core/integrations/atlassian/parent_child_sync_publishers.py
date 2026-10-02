@@ -13,8 +13,15 @@ from orchestrator.core.clarification.projection_service import (
     matching_active_jira_clarification_evidence_id,
     upsert_clarification_projection,
 )
-from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
-from orchestrator.core.pm.followup_context_service import FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION, FOLLOWUP_CONTEXT_PM_INTERVIEW, upsert_followup_context
+from orchestrator.core.clarification.questions import (
+    ClarificationQuestion,
+    ClarificationQuestionSet,
+)
+from orchestrator.core.pm.followup_context_service import (
+    FOLLOWUP_CONTEXT_ENGINEERING_CLARIFICATION,
+    FOLLOWUP_CONTEXT_PM_INTERVIEW,
+    upsert_followup_context,
+)
 from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     extract_created_comment_id,
     normalize_sync_labels,
@@ -24,9 +31,17 @@ from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     system_comment_marker,
 )
 from orchestrator.core.integrations.atlassian.links import JiraRemoteLinkSpec
-from orchestrator.core.projects.parent_feature_brief_store import resolve_parent_feature_brief, resolve_parent_feature_case
-from orchestrator.core.projects.parent_planning_clarification_service import ClarificationPublishEffects
-from orchestrator.core.platform.secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF, resolve_platform_secret_ref
+from orchestrator.core.projects.parent_feature_brief_store import (
+    resolve_parent_feature_brief,
+    resolve_parent_feature_case,
+)
+from orchestrator.core.projects.parent_planning_clarification_service import (
+    ClarificationPublishEffects,
+)
+from orchestrator.core.platform.secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+    resolve_platform_secret_ref,
+)
 from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
     PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
@@ -49,8 +64,14 @@ def update_issue_sync_label(
     target_label: str,
 ) -> None:
     next_labels = normalize_sync_labels(issue_detail.labels, target_label=target_label)
-    current_labels = [str(label or "").strip() for label in issue_detail.labels if str(label or "").strip()]
-    if {label.casefold() for label in current_labels} == {label.casefold() for label in next_labels}:
+    current_labels = [
+        str(label or "").strip()
+        for label in issue_detail.labels
+        if str(label or "").strip()
+    ]
+    if {label.casefold() for label in current_labels} == {
+        label.casefold() for label in next_labels
+    }:
         return
     oauth.client.replace_issue_labels(
         access_token=oauth.access_token,
@@ -64,9 +85,15 @@ def _sync_note(*, body: str) -> str:
     return f"{system_comment_marker()} {body}".strip()
 
 
-def extract_jira_issue_mention_target(*, payload: dict[str, Any]) -> tuple[str | None, str | None]:
+def extract_jira_issue_mention_target(
+    *, payload: dict[str, Any]
+) -> tuple[str | None, str | None]:
     issue = payload.get("issue") if isinstance(payload, dict) else None
-    fields = issue.get("fields") if isinstance(issue, dict) and isinstance(issue.get("fields"), dict) else {}
+    fields = (
+        issue.get("fields")
+        if isinstance(issue, dict) and isinstance(issue.get("fields"), dict)
+        else {}
+    )
     for field_name in ("reporter", "assignee"):
         actor = fields.get(field_name)
         if not isinstance(actor, dict):
@@ -78,7 +105,9 @@ def extract_jira_issue_mention_target(*, payload: dict[str, Any]) -> tuple[str |
     return None, None
 
 
-def build_jira_question_list_items(*, questions: tuple[ClarificationQuestion, ...]) -> list[dict[str, Any]]:
+def build_jira_question_list_items(
+    *, questions: tuple[ClarificationQuestion, ...]
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for question in questions:
         list_item_content: list[dict[str, Any]] = [
@@ -91,7 +120,12 @@ def build_jira_question_list_items(*, questions: tuple[ClarificationQuestion, ..
             list_item_content.append(
                 {
                     "type": "paragraph",
-                    "content": [{"type": "text", "text": f"Why it matters: {question.why_it_matters}"}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Why it matters: {question.why_it_matters}",
+                        }
+                    ],
                 }
             )
         items.append({"type": "listItem", "content": list_item_content})
@@ -141,7 +175,9 @@ def jira_question_comment_adf(
     return {"type": "doc", "version": 1, "content": content}
 
 
-def start_development_link_comment_adf(*, issue_key: str, action_url: str) -> dict[str, Any]:
+def start_development_link_comment_adf(
+    *, issue_key: str, action_url: str
+) -> dict[str, Any]:
     normalized_issue_key = str(issue_key or "").strip().upper()
     normalized_url = str(action_url or "").strip()
     if not normalized_issue_key:
@@ -155,7 +191,10 @@ def start_development_link_comment_adf(*, issue_key: str, action_url: str) -> di
             {
                 "type": "paragraph",
                 "content": [
-                    {"type": "text", "text": f"{system_comment_marker()} Master Builder prepared engineering work for {normalized_issue_key}."},
+                    {
+                        "type": "text",
+                        "text": f"{system_comment_marker()} Master Builder prepared engineering work for {normalized_issue_key}.",
+                    },
                 ],
             },
             {
@@ -167,7 +206,10 @@ def start_development_link_comment_adf(*, issue_key: str, action_url: str) -> di
                         "text": "start ready development work",
                         "marks": [{"type": "link", "attrs": {"href": normalized_url}}],
                     },
-                    {"type": "text", "text": ". Already-started child work will be skipped."},
+                    {
+                        "type": "text",
+                        "text": ". Already-started child work will be skipped.",
+                    },
                 ],
             },
         ],
@@ -188,27 +230,39 @@ def persist_parent_brief_jira_followup(
         tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
         parent_issue_key=parent_issue_key,
     )
-    existing_request_id = str(getattr(parent_case, "request_id", "") or "").strip() or None
+    existing_request_id = (
+        str(getattr(parent_case, "request_id", "") or "").strip() or None
+    )
     existing_source_kind = str(getattr(parent_case, "source_kind", "") or "").strip()
     pm_request_id = (
         existing_request_id
-        if existing_request_id and existing_source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT
+        if existing_request_id
+        and existing_source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT
         else f"pm-parent-interview:{parent_issue_key}"
     )
     owner_user_id = str(getattr(parent_case, "owner_user_id", "") or "").strip() or None
-    root_message_id = str(getattr(parent_case, "root_message_id", "") or "").strip() or posted_comment_id or None
+    root_message_id = (
+        str(getattr(parent_case, "root_message_id", "") or "").strip()
+        or posted_comment_id
+        or None
+    )
     interview_case = upsert_pm_interview_case(
         session=session,
         tenant_id=str(getattr(tenant, "tenant_id", "") or ""),
         project_id=project_id,
         request_id=pm_request_id,
         source_kind="jira_parent",
-        channel_id=str(getattr(parent_case, "channel_id", "") or "").strip() or PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
-        thread_channel_id=str(getattr(parent_case, "thread_channel_id", "") or "").strip() or None,
+        channel_id=str(getattr(parent_case, "channel_id", "") or "").strip()
+        or PM_INTERVIEW_PARENT_BRIEF_CHANNEL_ID,
+        thread_channel_id=str(
+            getattr(parent_case, "thread_channel_id", "") or ""
+        ).strip()
+        or None,
         root_message_id=root_message_id,
         owner_user_id=owner_user_id,
         parent_issue_key=parent_issue_key,
-        source_text=str(getattr(parent_case, "source_text", "") or "") or f"Parent issue {parent_issue_key} requires PM clarification.",
+        source_text=str(getattr(parent_case, "source_text", "") or "")
+        or f"Parent issue {parent_issue_key} requires PM clarification.",
         status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
         brief=resolve_parent_feature_brief(
             session=session,
@@ -218,7 +272,9 @@ def persist_parent_brief_jira_followup(
         ),
         notes={
             "source": "jira_parent_brief_normalization",
-            "normalization_questions": ClarificationQuestionSet(questions=questions).to_payload(),
+            "normalization_questions": ClarificationQuestionSet(
+                questions=questions
+            ).to_payload(),
         },
     )
     upsert_clarification_projection(
@@ -228,7 +284,9 @@ def persist_parent_brief_jira_followup(
             project_id=project_id,
             context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
             issue_key=parent_issue_key,
-            request_id=pm_interview_jira_followup_request_id(parent_issue_key=parent_issue_key),
+            request_id=pm_interview_jira_followup_request_id(
+                parent_issue_key=parent_issue_key
+            ),
             channel_id=parent_issue_key,
             thread_channel_id=None,
             root_message_id=posted_comment_id,
@@ -241,7 +299,10 @@ def persist_parent_brief_jira_followup(
                 "parent_issue_key": parent_issue_key,
                 "questions": ClarificationQuestionSet(questions=questions).to_payload(),
                 "source": "jira_parent_brief_normalization",
-                "pm_request_id": str(getattr(interview_case, "request_id", "") or "").strip() or pm_request_id,
+                "pm_request_id": str(
+                    getattr(interview_case, "request_id", "") or ""
+                ).strip()
+                or pm_request_id,
                 "jira_comment_id": posted_comment_id,
             },
         ),
@@ -259,7 +320,9 @@ def post_parent_brief_questions_to_jira(
     settings,  # noqa: ANN001
     create_jira_comment_fn,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    mention_account_id, mention_display_name = extract_jira_issue_mention_target(payload=payload)
+    mention_account_id, mention_display_name = extract_jira_issue_mention_target(
+        payload=payload
+    )
     comment = jira_question_comment_adf(
         issue_key=issue_key,
         questions=questions,
@@ -295,7 +358,9 @@ def post_pm_product_clarification_questions_to_jira(
     settings,  # noqa: ANN001
     create_jira_comment_fn,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    mention_account_id, mention_display_name = extract_jira_issue_mention_target(payload=payload)
+    mention_account_id, mention_display_name = extract_jira_issue_mention_target(
+        payload=payload
+    )
     comment = jira_question_comment_adf(
         issue_key=issue_key,
         questions=questions,
@@ -346,7 +411,9 @@ def post_start_development_link_to_jira(
         session=session,
         tenant=tenant,
         issue_key=issue_key,
-        comment=start_development_link_comment_adf(issue_key=issue_key, action_url=action_url),
+        comment=start_development_link_comment_adf(
+            issue_key=issue_key, action_url=action_url
+        ),
         settings=settings,
     )
 
@@ -381,18 +448,26 @@ def active_issue_followup_contexts(
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_issue_key = str(issue_key or "").strip().upper()
     normalized_context_type = str(context_type or "").strip()
-    if not normalized_tenant_id or not normalized_issue_key or not normalized_context_type:
+    if (
+        not normalized_tenant_id
+        or not normalized_issue_key
+        or not normalized_context_type
+    ):
         return []
-    return session.execute(
-        select(FollowupContext)
-        .where(
-            FollowupContext.tenant_id == normalized_tenant_id,
-            FollowupContext.issue_key == normalized_issue_key,
-            FollowupContext.context_type == normalized_context_type,
-            FollowupContext.status == "active",
+    return (
+        session.execute(
+            select(FollowupContext)
+            .where(
+                FollowupContext.tenant_id == normalized_tenant_id,
+                FollowupContext.issue_key == normalized_issue_key,
+                FollowupContext.context_type == normalized_context_type,
+                FollowupContext.status == "active",
+            )
+            .order_by(FollowupContext.updated_at.desc())
         )
-        .order_by(FollowupContext.updated_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def mark_issues_sync_blocked(
@@ -411,6 +486,7 @@ def mark_issues_sync_blocked(
             issue_detail=detail,
             target_label="sync-blocked",
         )
+
 
 def upsert_jira_remote_link(
     *,
@@ -435,7 +511,9 @@ def format_parent_brief_questions_for_discord(
     questions: tuple[object, ...] | list[object],
 ) -> str:
     question_lines = "\n".join(
-        ClarificationQuestionSet.from_values(questions).render_lines(include_reasons=True)
+        ClarificationQuestionSet.from_values(questions).render_lines(
+            include_reasons=True
+        )
     )
     return (
         f"Decision needed for `{parent_issue_key}` before I can finish backlog planning.\n"
@@ -507,19 +585,29 @@ def post_parent_brief_questions_to_discord(
     )
     project = session.get(Project, project_id) if project_id else None
     project_discord_config = dict(getattr(project, "discord_config", None) or {})
-    project_channel_id = str(project_discord_config.get("channel_id") or "").strip() or str(
-        (getattr(tenant, "discord_config", None) or {}).get("channel_id") or ""
-    ).strip()
-    existing_request_id = str(getattr(parent_case, "request_id", "") or "").strip() or None
+    project_channel_id = (
+        str(project_discord_config.get("channel_id") or "").strip()
+        or str(
+            (getattr(tenant, "discord_config", None) or {}).get("channel_id") or ""
+        ).strip()
+    )
+    existing_request_id = (
+        str(getattr(parent_case, "request_id", "") or "").strip() or None
+    )
     existing_source_kind = str(getattr(parent_case, "source_kind", "") or "").strip()
     reusable_request_id = (
         existing_request_id
-        if existing_request_id and existing_source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT
+        if existing_request_id
+        and existing_source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT
         else f"pm-parent-interview:{parent_issue_key}"
     )
     owner_user_id = str(getattr(parent_case, "owner_user_id", "") or "").strip() or None
-    existing_root_channel_id = str(getattr(parent_case, "channel_id", "") or "").strip() or None
-    existing_thread_channel_id = str(getattr(parent_case, "thread_channel_id", "") or "").strip() or None
+    existing_root_channel_id = (
+        str(getattr(parent_case, "channel_id", "") or "").strip() or None
+    )
+    existing_thread_channel_id = (
+        str(getattr(parent_case, "thread_channel_id", "") or "").strip() or None
+    )
     root_channel_id = existing_root_channel_id or project_channel_id or None
     if not root_channel_id:
         raise RuntimeError(
@@ -527,7 +615,9 @@ def post_parent_brief_questions_to_discord(
         )
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
-        raise RuntimeError("Discord clarification projection requires PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF")
+        raise RuntimeError(
+            "Discord clarification projection requires PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF"
+        )
     bot_token = resolve_platform_secret_ref(
         session,
         secret_ref=token_ref,
@@ -544,7 +634,9 @@ def post_parent_brief_questions_to_discord(
         posted_root_message_id = None
         thread_channel_id = existing_thread_channel_id
         if thread_channel_id:
-            post_discord_message_content(client=client, channel_id=thread_channel_id, content=message)
+            post_discord_message_content(
+                client=client, channel_id=thread_channel_id, content=message
+            )
         else:
             posted = client.post_message(
                 channel_id=root_channel_id,
@@ -555,7 +647,9 @@ def post_parent_brief_questions_to_discord(
                 raise RuntimeError(
                     f"Discord clarification projection did not return a root message id for {parent_issue_key}"
                 )
-            thread_name = f"{getattr(tenant, 'tenant_id', 'tenant')}-pm-{parent_issue_key}".replace(" ", "-")[:100]
+            thread_name = f"{getattr(tenant, 'tenant_id', 'tenant')}-pm-{parent_issue_key}".replace(
+                " ", "-"
+            )[:100]
             thread_channel_id = client.create_thread_from_message(
                 channel_id=root_channel_id,
                 message_id=posted_root_message_id,
@@ -564,19 +658,29 @@ def post_parent_brief_questions_to_discord(
             if project is not None:
                 raw_thread_ids = project_discord_config.get("ask_thread_channel_ids")
                 thread_ids = (
-                    [str(value).strip() for value in raw_thread_ids if str(value).strip()]
+                    [
+                        str(value).strip()
+                        for value in raw_thread_ids
+                        if str(value).strip()
+                    ]
                     if isinstance(raw_thread_ids, list)
                     else []
                 )
                 if thread_channel_id not in thread_ids:
                     thread_ids.append(thread_channel_id)
-                ask_message_map = dict(project_discord_config.get("ask_thread_by_message_id") or {})
+                ask_message_map = dict(
+                    project_discord_config.get("ask_thread_by_message_id") or {}
+                )
                 ask_message_map[posted_root_message_id] = thread_channel_id
                 project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
-                project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
+                project_discord_config["ask_thread_by_message_id"] = dict(
+                    list(ask_message_map.items())[-500:]
+                )
                 project.discord_config = project_discord_config
                 project.updated_at = datetime.now(timezone.utc)
-            post_discord_message_content(client=client, channel_id=thread_channel_id, content=message)
+            post_discord_message_content(
+                client=client, channel_id=thread_channel_id, content=message
+            )
     except (DiscordApiError, ValueError) as exc:
         logger.warning(
             "jira_parent_brief_question_discord_post_failed tenant_id=%s parent_issue_key=%s channel_id=%s",
@@ -595,11 +699,16 @@ def post_parent_brief_questions_to_discord(
         request_id=reusable_request_id,
         source_kind="jira_parent",
         channel_id=root_channel_id,
-        thread_channel_id=thread_channel_id if thread_channel_id != root_channel_id else None,
-        root_message_id=posted_root_message_id or str(getattr(parent_case, "root_message_id", "") or "").strip() or None,
+        thread_channel_id=thread_channel_id
+        if thread_channel_id != root_channel_id
+        else None,
+        root_message_id=posted_root_message_id
+        or str(getattr(parent_case, "root_message_id", "") or "").strip()
+        or None,
         owner_user_id=owner_user_id,
         parent_issue_key=parent_issue_key,
-        source_text=str(getattr(parent_case, "source_text", "") or "") or f"Parent issue {parent_issue_key} requires PM clarification.",
+        source_text=str(getattr(parent_case, "source_text", "") or "")
+        or f"Parent issue {parent_issue_key} requires PM clarification.",
         status=PM_INTERVIEW_STATUS_QUESTION_PENDING,
         brief=resolve_parent_feature_brief(
             session=session,
@@ -619,10 +728,16 @@ def post_parent_brief_questions_to_discord(
             project_id=project_id,
             context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
             issue_key=parent_issue_key,
-            request_id=str(getattr(interview_case, "request_id", "") or "").strip() or None,
+            request_id=str(getattr(interview_case, "request_id", "") or "").strip()
+            or None,
             channel_id=root_channel_id,
-            thread_channel_id=thread_channel_id if thread_channel_id != root_channel_id else None,
-            root_message_id=str(getattr(interview_case, "root_message_id", "") or "").strip() or None,
+            thread_channel_id=thread_channel_id
+            if thread_channel_id != root_channel_id
+            else None,
+            root_message_id=str(
+                getattr(interview_case, "root_message_id", "") or ""
+            ).strip()
+            or None,
             owner_user_id=owner_user_id or None,
             origin_command="pm",
             questions=question_set.questions,
@@ -673,7 +788,10 @@ class JiraEngineeringClarificationPublisher:
         if jira_comment_id is None:
             return None
         comments = self._jira_adapter.list_issue_comments(issue_id_or_key=issue_key)
-        if not any(str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id for comment in comments):
+        if not any(
+            str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id
+            for comment in comments
+        ):
             return None
         return ClarificationPublishEffects(
             state_recorded=True,
@@ -706,7 +824,10 @@ class JiraEngineeringClarificationPublisher:
         jira_comment_id = jira_comment_evidence_id(projection.followup_context)
         if jira_comment_id:
             comments = self._jira_adapter.list_issue_comments(issue_id_or_key=issue_key)
-            if not any(str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id for comment in comments):
+            if not any(
+                str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id
+                for comment in comments
+            ):
                 jira_comment_id = None
         if not jira_comment_id:
             created_comment, error = post_pm_product_clarification_questions_to_jira(
@@ -721,7 +842,9 @@ class JiraEngineeringClarificationPublisher:
             if error is None and created_comment is not None:
                 jira_comment_id = extract_created_comment_id(created_comment)
                 if not jira_comment_id:
-                    raise RuntimeError(f"Jira engineering clarification projection for {issue_key} did not return a comment id")
+                    raise RuntimeError(
+                        f"Jira engineering clarification projection for {issue_key} did not return a comment id"
+                    )
                 metadata = dict(projection.metadata)
                 metadata["jira_comment_id"] = jira_comment_id
                 upsert_followup_context(
@@ -735,7 +858,10 @@ class JiraEngineeringClarificationPublisher:
                     metadata=metadata,
                 )
         if not jira_comment_id:
-            message = error or f"Jira engineering clarification projection did not create a comment for {issue_key}"
+            message = (
+                error
+                or f"Jira engineering clarification projection did not create a comment for {issue_key}"
+            )
             raise RuntimeError(message)
         jira_comment_created = error is None and created_comment is not None
         return ClarificationPublishEffects(

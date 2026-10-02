@@ -129,4 +129,7 @@ def cleanup_conflicting_jira_webhook_url(
         if touched_tenants > 0
         else ""
     )
-    return len(delete_ids), f"Deleted {len(delete_ids)} conflicting Jira webhook URL subscription(s).{tenant_note}"
+    return (
+        len(delete_ids),
+        f"Deleted {len(delete_ids)} conflicting Jira webhook URL subscription(s).{tenant_note}",
+    )

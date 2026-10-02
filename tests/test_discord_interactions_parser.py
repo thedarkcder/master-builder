@@ -30,7 +30,9 @@ class DiscordInteractionsParserTests(unittest.TestCase):
             },
             {"type": 3, "name": "root", "value": "C"},
         ]
-        self.assertEqual(_flatten_discord_option_values(options), ["sub", "A", "B", "C"])
+        self.assertEqual(
+            _flatten_discord_option_values(options), ["sub", "A", "B", "C"]
+        )
         self.assertEqual(_find_focused_discord_option(options), ("focused", "B"))
         self.assertEqual(_discord_option_value(options, name="alpha"), "A")
         self.assertIsNone(_discord_option_value(options, name="missing"))
@@ -38,7 +40,11 @@ class DiscordInteractionsParserTests(unittest.TestCase):
     def test_attachment_helpers(self) -> None:
         options = [
             {"type": 11, "name": "file1", "value": "a1"},
-            {"type": 1, "name": "sub", "options": [{"type": 11, "name": "file2", "value": "a2"}]},
+            {
+                "type": 1,
+                "name": "sub",
+                "options": [{"type": 11, "name": "file2", "value": "a2"}],
+            },
             {"type": 11, "name": "empty", "value": ""},
         ]
         self.assertEqual(_discord_option_attachment_ids(options), ["a1", "a2"])
@@ -57,17 +63,30 @@ class DiscordInteractionsParserTests(unittest.TestCase):
                 }
             }
         }
-        normalized = _discord_resolved_attachments(data=data, attachment_ids=["a1", "a2", "a3"])
+        normalized = _discord_resolved_attachments(
+            data=data, attachment_ids=["a1", "a2", "a3"]
+        )
         self.assertEqual([item["id"] for item in normalized], ["a1", "a2"])
         self.assertEqual(normalized[0]["proxy_url"], "https://media.discordapp.net/x/1")
 
     def test_issue_autocomplete_filters_dedupes_and_limits(self) -> None:
-        issues = [SimpleNamespace(key="MAB-1", summary="first"), SimpleNamespace(key="MAB-1", summary="dup")]
-        issues.extend(SimpleNamespace(key=f"MAB-{i}", summary=f"issue {i}") for i in range(2, 35))
+        issues = [
+            SimpleNamespace(key="MAB-1", summary="first"),
+            SimpleNamespace(key="MAB-1", summary="dup"),
+        ]
+        issues.extend(
+            SimpleNamespace(key=f"MAB-{i}", summary=f"issue {i}") for i in range(2, 35)
+        )
         tenant = SimpleNamespace()
         with (
-            patch("orchestrator.api.discord.interactions.parser._project_filter_jql", return_value='project = "MAB"'),
-            patch("orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant", return_value=issues),
+            patch(
+                "orchestrator.api.discord.interactions.parser._project_filter_jql",
+                return_value='project = "MAB"',
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant",
+                return_value=issues,
+            ),
         ):
             choices = _discord_issue_autocomplete_choices(
                 session=MagicMock(),
@@ -78,14 +97,22 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         self.assertLessEqual(len(choices), 25)
         self.assertTrue(all(choice["value"].startswith("MAB-") for choice in choices))
 
-    def test_issue_autocomplete_prefers_exact_issue_key_lookup_before_recent_results(self) -> None:
+    def test_issue_autocomplete_prefers_exact_issue_key_lookup_before_recent_results(
+        self,
+    ) -> None:
         tenant = SimpleNamespace()
         exact_issue = SimpleNamespace(key="MAB-4242", summary="Older but exact")
         recent_issue = SimpleNamespace(key="MAB-1", summary="Recent issue")
         search_mock = MagicMock(side_effect=[[exact_issue], [recent_issue]])
         with (
-            patch("orchestrator.api.discord.interactions.parser._project_filter_jql", return_value='project = "MAB"'),
-            patch("orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant", search_mock),
+            patch(
+                "orchestrator.api.discord.interactions.parser._project_filter_jql",
+                return_value='project = "MAB"',
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant",
+                search_mock,
+            ),
         ):
             choices = _discord_issue_autocomplete_choices(
                 session=MagicMock(),
@@ -96,7 +123,9 @@ class DiscordInteractionsParserTests(unittest.TestCase):
 
         self.assertEqual(choices[0]["value"], "MAB-4242")
         self.assertEqual(search_mock.call_count, 2)
-        self.assertIn('AND key = "MAB-4242"', search_mock.call_args_list[0].kwargs["jql"])
+        self.assertIn(
+            'AND key = "MAB-4242"', search_mock.call_args_list[0].kwargs["jql"]
+        )
         self.assertEqual(search_mock.call_args_list[0].kwargs["max_results"], 1)
         self.assertEqual(search_mock.call_args_list[1].kwargs["max_results"], 100)
 
@@ -106,9 +135,13 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             _parse_discord_interaction_command({"data": {}, "channel_id": "c1"})
         with self.assertRaises(HTTPException):
-            _parse_discord_interaction_command({"data": {"name": "ask"}, "channel_id": " "})
+            _parse_discord_interaction_command(
+                {"data": {"name": "ask"}, "channel_id": " "}
+            )
         with self.assertRaises(HTTPException):
-            _parse_discord_interaction_command({"data": {"name": "ask"}, "channel_id": "c1"})
+            _parse_discord_interaction_command(
+                {"data": {"name": "ask"}, "channel_id": "c1"}
+            )
 
     def test_parse_ask_pm_persona_run_retry_and_request_commands(self) -> None:
         payload_ask = {
@@ -122,7 +155,9 @@ class DiscordInteractionsParserTests(unittest.TestCase):
             "channel_id": "c1",
             "user": {"id": "u1"},
         }
-        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload_ask)
+        user_id, channel_id, command_text, command_params, attachments = (
+            _parse_discord_interaction_command(payload_ask)
+        )
         self.assertEqual((user_id, channel_id), ("u1", "c1"))
         self.assertEqual(command_text, "!ask @MAB-1 what changed?")
         self.assertIsNone(command_params)
@@ -132,7 +167,11 @@ class DiscordInteractionsParserTests(unittest.TestCase):
             "data": {
                 "name": "pm",
                 "options": [
-                    {"type": 3, "name": "question", "value": "what should we ship first?"},
+                    {
+                        "type": 3,
+                        "name": "question",
+                        "value": "what should we ship first?",
+                    },
                 ],
             },
             "channel_id": "c1",
@@ -146,17 +185,26 @@ class DiscordInteractionsParserTests(unittest.TestCase):
                 "name": "engineer",
                 "options": [
                     {"type": 3, "name": "issue_key", "value": "MAB-9"},
-                    {"type": 3, "name": "question", "value": "how should we decompose this?"},
+                    {
+                        "type": 3,
+                        "name": "question",
+                        "value": "how should we decompose this?",
+                    },
                 ],
             },
             "channel_id": "c1",
             "user": {"id": "u1"},
         }
         parsed_engineer = _parse_discord_interaction_command(payload_engineer)
-        self.assertEqual(parsed_engineer[2], "!engineer @MAB-9 how should we decompose this?")
+        self.assertEqual(
+            parsed_engineer[2], "!engineer @MAB-9 how should we decompose this?"
+        )
 
         payload_run = {
-            "data": {"name": "run", "options": [{"type": 3, "name": "issue_key", "value": "MAB-2"}]},
+            "data": {
+                "name": "run",
+                "options": [{"type": 3, "name": "issue_key", "value": "MAB-2"}],
+            },
             "channel_id": "c1",
             "member": {"user": {"id": "u2"}},
         }
@@ -164,7 +212,10 @@ class DiscordInteractionsParserTests(unittest.TestCase):
         self.assertEqual(parsed_run[2], "!run MAB-2")
 
         payload_retry = {
-            "data": {"name": "retry", "options": [{"type": 3, "name": "target", "value": "latest"}]},
+            "data": {
+                "name": "retry",
+                "options": [{"type": 3, "name": "target", "value": "latest"}],
+            },
             "channel_id": "c1",
             "user": {"id": "u2"},
         }
@@ -193,7 +244,9 @@ class DiscordInteractionsParserTests(unittest.TestCase):
                     {
                         "type": 1,
                         "name": "seed",
-                        "options": [{"type": 3, "name": "spec", "value": "create stories"}],
+                        "options": [
+                            {"type": 3, "name": "spec", "value": "create stories"}
+                        ],
                     }
                 ],
             },
@@ -210,7 +263,9 @@ class DiscordInteractionsParserTests(unittest.TestCase):
                     {
                         "type": 1,
                         "name": "followup",
-                        "options": [{"type": 3, "name": "answers", "value": "clarified scope"}],
+                        "options": [
+                            {"type": 3, "name": "answers", "value": "clarified scope"}
+                        ],
                     }
                 ],
             },
@@ -229,12 +284,22 @@ class DiscordInteractionsParserTests(unittest.TestCase):
                     {"type": 3, "name": "issue_key", "value": "MAB-3"},
                     {"type": 11, "name": "attachment", "value": "att-1"},
                 ],
-                "resolved": {"attachments": {"att-1": {"id": "att-1", "url": "https://x", "filename": "bug.png"}}},
+                "resolved": {
+                    "attachments": {
+                        "att-1": {
+                            "id": "att-1",
+                            "url": "https://x",
+                            "filename": "bug.png",
+                        }
+                    }
+                },
             },
             "channel_id": "c1",
             "user": {"id": "u3"},
         }
-        user_id, channel_id, command_text, params, attachments = _parse_discord_interaction_command(payload_bug)
+        user_id, channel_id, command_text, params, attachments = (
+            _parse_discord_interaction_command(payload_bug)
+        )
         self.assertEqual((user_id, channel_id), ("u3", "c1"))
         self.assertEqual(command_text, "!bug bad state")
         self.assertEqual(params["issue_key"], "MAB-3")
@@ -243,7 +308,10 @@ class DiscordInteractionsParserTests(unittest.TestCase):
 
     def test_parse_fallback_command(self) -> None:
         payload = {
-            "data": {"name": "custom", "options": [{"type": 3, "name": "arg", "value": "value"}]},
+            "data": {
+                "name": "custom",
+                "options": [{"type": 3, "name": "arg", "value": "value"}],
+            },
             "channel_id": "c1",
             "user": {"id": "u4"},
         }

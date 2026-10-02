@@ -24,7 +24,9 @@ def _table_exists(table_name: str) -> bool:
 
 def _index_exists(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -35,28 +37,51 @@ def upgrade() -> None:
             sa.Column("tenant_id", sa.String(length=128), nullable=False),
             sa.Column("project_id", sa.String(length=128), nullable=False),
             sa.Column("kind", sa.String(length=64), nullable=False),
-            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "enabled", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("timezone", sa.String(length=128), nullable=False),
             sa.Column("days_of_week", sa.JSON(), nullable=False),
             sa.Column("local_time", sa.String(length=8), nullable=False),
             sa.Column("delivery_text_channel_id", sa.String(length=64), nullable=False),
             sa.Column("voice_id", sa.String(length=64), nullable=True),
-            sa.Column("fallback_lookback_hours", sa.Integer(), nullable=False, server_default="24"),
-            sa.Column("last_successful_window_end_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column(
+                "fallback_lookback_hours",
+                sa.Integer(),
+                nullable=False,
+                server_default="24",
+            ),
+            sa.Column(
+                "last_successful_window_end_at",
+                sa.DateTime(timezone=True),
+                nullable=True,
+            ),
             sa.Column("next_run_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("automation_id"),
-            sa.UniqueConstraint("tenant_id", "project_id", "kind", name="uq_project_automations_scope_kind"),
+            sa.UniqueConstraint(
+                "tenant_id",
+                "project_id",
+                "kind",
+                name="uq_project_automations_scope_kind",
+            ),
         )
     for index_name, columns in (
         ("ix_project_automations_due_scan", ["enabled", "next_run_at"]),
         ("ix_project_automations_tenant_id", ["tenant_id"]),
         ("ix_project_automations_project_id", ["project_id"]),
         ("ix_project_automations_kind", ["kind"]),
-        ("ix_project_automations_last_successful_window_end_at", ["last_successful_window_end_at"]),
+        (
+            "ix_project_automations_last_successful_window_end_at",
+            ["last_successful_window_end_at"],
+        ),
         ("ix_project_automations_next_run_at", ["next_run_at"]),
     ):
         if not _index_exists("project_automations", index_name):
@@ -70,7 +95,9 @@ def upgrade() -> None:
             sa.Column("scheduled_for", sa.DateTime(timezone=True), nullable=False),
             sa.Column("window_start_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("window_end_at", sa.DateTime(timezone=True), nullable=False),
-            sa.Column("status", sa.String(length=32), nullable=False, server_default="queued"),
+            sa.Column(
+                "status", sa.String(length=32), nullable=False, server_default="queued"
+            ),
             sa.Column("dedupe_key", sa.String(length=255), nullable=False),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
@@ -78,19 +105,34 @@ def upgrade() -> None:
             sa.Column("last_error", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["automation_id"], ["project_automations.automation_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["automation_id"],
+                ["project_automations.automation_id"],
+                ondelete="CASCADE",
+            ),
             sa.PrimaryKeyConstraint("execution_id"),
-            sa.UniqueConstraint("automation_id", "scheduled_for", name="uq_project_automation_executions_automation_scheduled_for"),
-            sa.UniqueConstraint("dedupe_key", name="uq_project_automation_executions_dedupe_key"),
+            sa.UniqueConstraint(
+                "automation_id",
+                "scheduled_for",
+                name="uq_project_automation_executions_automation_scheduled_for",
+            ),
+            sa.UniqueConstraint(
+                "dedupe_key", name="uq_project_automation_executions_dedupe_key"
+            ),
         )
     for index_name, columns in (
         ("ix_project_automation_executions_due_scan", ["status", "scheduled_for"]),
-        ("ix_project_automation_executions_automation_history", ["automation_id", "scheduled_for"]),
+        (
+            "ix_project_automation_executions_automation_history",
+            ["automation_id", "scheduled_for"],
+        ),
         ("ix_project_automation_executions_automation_id", ["automation_id"]),
         ("ix_project_automation_executions_status", ["status"]),
     ):
         if not _index_exists("project_automation_executions", index_name):
-            op.create_index(index_name, "project_automation_executions", columns, unique=False)
+            op.create_index(
+                index_name, "project_automation_executions", columns, unique=False
+            )
 
 
 def downgrade() -> None:

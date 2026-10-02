@@ -31,7 +31,9 @@ def upgrade() -> None:
             workflows.c.status.label("workflow_status"),
         )
         .select_from(
-            attempts.join(operations, operations.c.operation_id == attempts.c.operation_id).join(
+            attempts.join(
+                operations, operations.c.operation_id == attempts.c.operation_id
+            ).join(
                 workflows,
                 workflows.c.workflow_id == operations.c.workflow_id,
             )
@@ -46,7 +48,9 @@ def upgrade() -> None:
         attempt_id = row["attempt_id"]
         operation_id = row["operation_id"]
         workflow_status = str(row["workflow_status"] or "").strip().lower()
-        operation_status = "completed" if workflow_status in {"completed", "succeeded"} else "failed"
+        operation_status = (
+            "completed" if workflow_status in {"completed", "succeeded"} else "failed"
+        )
         bind.execute(
             attempts.update()
             .where(attempts.c.attempt_id == attempt_id)
@@ -79,7 +83,8 @@ def repair_active_terminal_workflow_attempt_rows(
             "attempt_status": "failed",
             "operation_status": (
                 "completed"
-                if str(row.get("workflow_status") or "").strip().lower() in {"completed", "succeeded"}
+                if str(row.get("workflow_status") or "").strip().lower()
+                in {"completed", "succeeded"}
                 else "failed"
             ),
         }
@@ -88,4 +93,6 @@ def repair_active_terminal_workflow_attempt_rows(
 
 
 def downgrade() -> None:
-    raise RuntimeError("Terminal workflow active operation attempt repair cannot be downgraded")
+    raise RuntimeError(
+        "Terminal workflow active operation attempt repair cannot be downgraded"
+    )

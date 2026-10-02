@@ -8,10 +8,17 @@ import pytest
 
 from temporalio.exceptions import ApplicationError
 
-from orchestrator.core.planning.specialist import RetryableSpecialistPlanningContractError
+from orchestrator.core.planning.specialist import (
+    RetryableSpecialistPlanningContractError,
+)
 from orchestrator.core.workflow.advance import WorkflowAdvanceOutcome
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
-from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
+from orchestrator.core.workflow.operation_service import (
+    WorkflowOperationAttemptAlreadyRunningError,
+)
 from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
@@ -28,9 +35,15 @@ from orchestrator.temporal.workflow_engine import (
     TemporalWorkflowEngine,
     notify_temporal_run_result,
 )
-from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
-from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
-from orchestrator.temporal.workflows.project_deployment_setup import ProjectDeploymentSetupWorkflow
+from orchestrator.temporal.workflows.development_team_run import (
+    DevelopmentTeamRunWorkflow,
+)
+from orchestrator.temporal.workflows.handler_backed_workflow import (
+    HandlerBackedWorkflow,
+)
+from orchestrator.temporal.workflows.project_deployment_setup import (
+    ProjectDeploymentSetupWorkflow,
+)
 
 
 def _workflow_input(**overrides) -> DevelopmentTeamRunWorkflowInput:
@@ -76,7 +89,9 @@ def test_temporal_engine_uses_workflow_type_timeouts(monkeypatch):
         retry_backoff_coefficient=2.0,
     )
 
-    monkeypatch.setattr("orchestrator.temporal.workflow_engine.connect_temporal_client", _connect)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine.connect_temporal_client", _connect
+    )
     monkeypatch.setattr(
         "orchestrator.temporal.workflow_engine._temporal_config_for_workflow",
         lambda **kwargs: config,
@@ -118,7 +133,9 @@ def test_temporal_engine_uses_workflow_type_timeouts(monkeypatch):
     assert captured["kwargs"]["run_timeout"] == timedelta(seconds=222)
 
 
-def test_development_team_run_workflow_waits_for_execution_worker_result_and_uses_resume_timeout(monkeypatch):
+def test_development_team_run_workflow_waits_for_execution_worker_result_and_uses_resume_timeout(
+    monkeypatch,
+):
     resume_captured: dict[str, object] = {}
     workflow_defn = DevelopmentTeamRunWorkflow()
     wait_calls = 0
@@ -184,13 +201,19 @@ def test_development_team_run_workflow_waits_for_execution_worker_result_and_use
             pending_request_id="request-123",
         )
     )
-    resumed_run_id = asyncio.run(workflow_defn.resume_human_input(HumanInputResumeInput(request_id="request-123")))
+    resumed_run_id = asyncio.run(
+        workflow_defn.resume_human_input(
+            HumanInputResumeInput(request_id="request-123")
+        )
+    )
     assert resumed_run_id == "run-456"
     assert resume_captured["payload"] == HumanInputResumeInput(request_id="request-123")
     assert resume_captured["timeout"] == timedelta(seconds=654)
 
 
-def test_development_team_run_workflow_records_execution_worker_result_update(monkeypatch):
+def test_development_team_run_workflow_records_execution_worker_result_update(
+    monkeypatch,
+):
     workflow_defn = DevelopmentTeamRunWorkflow()
 
     async def _fake_wait_condition(predicate):
@@ -204,7 +227,10 @@ def test_development_team_run_workflow_records_execution_worker_result_update(mo
             )
         )
 
-    monkeypatch.setattr("orchestrator.temporal.workflows.development_team_run.workflow.wait_condition", _fake_wait_condition)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflows.development_team_run.workflow.wait_condition",
+        _fake_wait_condition,
+    )
 
     payload = _workflow_input()
     state = asyncio.run(workflow_defn.run(payload))
@@ -238,7 +264,11 @@ def test_development_team_run_workflow_rejects_mismatched_pending_request_id():
     )
 
     with pytest.raises(ValueError, match="request-123"):
-        asyncio.run(workflow_defn.resume_human_input(HumanInputResumeInput(request_id="request-456")))
+        asyncio.run(
+            workflow_defn.resume_human_input(
+                HumanInputResumeInput(request_id="request-456")
+            )
+        )
 
 
 def test_notify_temporal_run_result_includes_pending_request_id(monkeypatch):
@@ -281,7 +311,9 @@ def test_notify_temporal_run_result_includes_pending_request_id(monkeypatch):
         retry_backoff_coefficient=2.0,
     )
 
-    monkeypatch.setattr("orchestrator.temporal.workflow_engine.connect_temporal_client", _connect)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine.connect_temporal_client", _connect
+    )
     monkeypatch.setattr(
         "orchestrator.temporal.workflow_engine._temporal_config_for_workflow",
         lambda **_kwargs: config,
@@ -307,11 +339,15 @@ def test_notify_temporal_run_result_includes_pending_request_id(monkeypatch):
     assert payload.pending_request_id == "request-123"
 
 
-def test_temporal_engine_advances_handler_backed_workflow_through_temporal_update(monkeypatch):
+def test_temporal_engine_advances_handler_backed_workflow_through_temporal_update(
+    monkeypatch,
+):
     captured: dict[str, object] = {}
 
     class _FakeClient:
-        async def execute_update_with_start_workflow(self, update_method, payload, *, start_workflow_operation):
+        async def execute_update_with_start_workflow(
+            self, update_method, payload, *, start_workflow_operation
+        ):
             captured["update_method"] = update_method
             captured["update_payload"] = payload
             captured["start_operation"] = start_workflow_operation
@@ -340,7 +376,9 @@ def test_temporal_engine_advances_handler_backed_workflow_through_temporal_updat
         retry_backoff_coefficient=2.0,
     )
 
-    monkeypatch.setattr("orchestrator.temporal.workflow_engine.connect_temporal_client", _connect)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine.connect_temporal_client", _connect
+    )
     monkeypatch.setattr(
         "orchestrator.temporal.workflow_engine._temporal_config_for_workflow_type",
         lambda **kwargs: config,
@@ -429,7 +467,9 @@ def test_temporal_engine_handler_retry_waits_for_retry_activity_result(monkeypat
         return _FakeClient()
 
     config = TemporalWorkflowConfig(
-        workflow_defn=SimpleNamespace(run="workflow-run", retry_operation="workflow-retry"),
+        workflow_defn=SimpleNamespace(
+            run="workflow-run", retry_operation="workflow-retry"
+        ),
         execution_mode="handler",
         task_queue="custom-queue",
         workflow_execution_timeout_seconds=111,
@@ -442,14 +482,18 @@ def test_temporal_engine_handler_retry_waits_for_retry_activity_result(monkeypat
         retry_backoff_coefficient=2.0,
     )
 
-    monkeypatch.setattr("orchestrator.temporal.workflow_engine.connect_temporal_client", _connect)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine.connect_temporal_client", _connect
+    )
     monkeypatch.setattr(
         "orchestrator.temporal.workflow_engine._temporal_config_for_workflow",
         lambda **kwargs: config,
     )
     monkeypatch.setattr(
         "orchestrator.temporal.workflow_engine.get_workflow_type",
-        lambda session, workflow_type_key: SimpleNamespace(handler_key="jira_parent_feature"),
+        lambda session, workflow_type_key: SimpleNamespace(
+            handler_key="jira_parent_feature"
+        ),
     )
 
     engine = TemporalWorkflowEngine(
@@ -496,7 +540,9 @@ def test_handler_backed_workflow_advances_with_single_activity_input(monkeypatch
     workflow_defn._workflow_id = "workflow-123"
     workflow_defn._activity_timeout_seconds = 321
 
-    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout, retry_policy=None):
+    async def _fake_execute_activity(
+        fn, payload, *, start_to_close_timeout, retry_policy=None
+    ):
         captured["fn"] = fn
         captured["payload"] = payload
         captured["timeout"] = start_to_close_timeout
@@ -538,12 +584,16 @@ def test_handler_backed_workflow_advances_with_single_activity_input(monkeypatch
     assert captured["retry_policy"] is None
 
 
-def test_handler_backed_workflow_advance_does_not_depend_on_initialized_workflow_state(monkeypatch):
+def test_handler_backed_workflow_advance_does_not_depend_on_initialized_workflow_state(
+    monkeypatch,
+):
     captured: dict[str, object] = {}
     workflow_defn = HandlerBackedWorkflow()
     workflow_defn._activity_timeout_seconds = 321
 
-    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout, retry_policy=None):
+    async def _fake_execute_activity(
+        fn, payload, *, start_to_close_timeout, retry_policy=None
+    ):
         captured["fn"] = fn
         captured["payload"] = payload
         captured["timeout"] = start_to_close_timeout
@@ -590,7 +640,9 @@ def test_handler_backed_workflow_advance_uses_retry_policy_from_payload(monkeypa
     workflow_defn = HandlerBackedWorkflow()
     workflow_defn._activity_timeout_seconds = 321
 
-    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout, retry_policy=None):
+    async def _fake_execute_activity(
+        fn, payload, *, start_to_close_timeout, retry_policy=None
+    ):
         captured["fn"] = fn
         captured["payload"] = payload
         captured["timeout"] = start_to_close_timeout
@@ -636,15 +688,21 @@ def test_handler_backed_workflow_advance_uses_retry_policy_from_payload(monkeypa
     assert retry_policy.initial_interval == timedelta(seconds=5)
     assert retry_policy.maximum_interval == timedelta(seconds=30)
     assert retry_policy.backoff_coefficient == 2.0
-    assert retry_policy.non_retryable_error_types == ("terminal_workflow_advance_error",)
+    assert retry_policy.non_retryable_error_types == (
+        "terminal_workflow_advance_error",
+    )
 
 
-def test_handler_backed_workflow_operation_retry_uses_retry_policy_from_payload(monkeypatch):
+def test_handler_backed_workflow_operation_retry_uses_retry_policy_from_payload(
+    monkeypatch,
+):
     captured: dict[str, object] = {}
     workflow_defn = HandlerBackedWorkflow()
     workflow_defn._activity_timeout_seconds = 321
 
-    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout, retry_policy=None):  # noqa: ANN001
+    async def _fake_execute_activity(
+        fn, payload, *, start_to_close_timeout, retry_policy=None
+    ):  # noqa: ANN001
         captured["fn"] = fn
         captured["payload"] = payload
         captured["timeout"] = start_to_close_timeout
@@ -680,20 +738,26 @@ def test_handler_backed_workflow_operation_retry_uses_retry_policy_from_payload(
     assert retry_policy.initial_interval == timedelta(seconds=5)
     assert retry_policy.maximum_interval == timedelta(seconds=30)
     assert retry_policy.backoff_coefficient == 2.0
-    assert retry_policy.non_retryable_error_types == ("terminal_workflow_operation_retry_error",)
+    assert retry_policy.non_retryable_error_types == (
+        "terminal_workflow_operation_retry_error",
+    )
 
 
-def test_process_handler_workflow_advance_activity_raises_retryable_application_error(monkeypatch):
+def test_process_handler_workflow_advance_activity_raises_retryable_application_error(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.get_settings",
         lambda: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.create_session_factory",
-        lambda: lambda: _FakeSessionContextManager(
-            session=_FakeSession(
-                tenant=SimpleNamespace(tenant_id="tenant-a"),
-                workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+        lambda: (
+            lambda: _FakeSessionContextManager(
+                session=_FakeSession(
+                    tenant=SimpleNamespace(tenant_id="tenant-a"),
+                    workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+                )
             )
         ),
     )
@@ -721,7 +785,9 @@ def test_process_handler_workflow_advance_activity_raises_retryable_application_
     )
 
     with pytest.raises(ApplicationError) as exc_info:
-        from orchestrator.temporal.activities.handler_workflow import process_handler_workflow_advance_activity
+        from orchestrator.temporal.activities.handler_workflow import (
+            process_handler_workflow_advance_activity,
+        )
 
         process_handler_workflow_advance_activity(payload)
 
@@ -729,17 +795,21 @@ def test_process_handler_workflow_advance_activity_raises_retryable_application_
     assert exc_info.value.non_retryable is False
 
 
-def test_process_handler_workflow_advance_activity_raises_terminal_application_error(monkeypatch):
+def test_process_handler_workflow_advance_activity_raises_terminal_application_error(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.get_settings",
         lambda: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.create_session_factory",
-        lambda: lambda: _FakeSessionContextManager(
-            session=_FakeSession(
-                tenant=SimpleNamespace(tenant_id="tenant-a"),
-                workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+        lambda: (
+            lambda: _FakeSessionContextManager(
+                session=_FakeSession(
+                    tenant=SimpleNamespace(tenant_id="tenant-a"),
+                    workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+                )
             )
         ),
     )
@@ -763,7 +833,9 @@ def test_process_handler_workflow_advance_activity_raises_terminal_application_e
     )
 
     with pytest.raises(ApplicationError) as exc_info:
-        from orchestrator.temporal.activities.handler_workflow import process_handler_workflow_advance_activity
+        from orchestrator.temporal.activities.handler_workflow import (
+            process_handler_workflow_advance_activity,
+        )
 
         process_handler_workflow_advance_activity(payload)
 
@@ -771,7 +843,9 @@ def test_process_handler_workflow_advance_activity_raises_terminal_application_e
     assert exc_info.value.non_retryable is True
 
 
-def test_process_handler_workflow_advance_activity_returns_current_state_for_active_operation(monkeypatch):
+def test_process_handler_workflow_advance_activity_returns_current_state_for_active_operation(
+    monkeypatch,
+):
     workflow = SimpleNamespace(
         workflow_id="parent_planning:MAB-232",
         status="waiting_for_input",
@@ -814,7 +888,9 @@ def test_process_handler_workflow_advance_activity_returns_current_state_for_act
         source_ref="MAB-232",
     )
 
-    from orchestrator.temporal.activities.handler_workflow import process_handler_workflow_advance_activity
+    from orchestrator.temporal.activities.handler_workflow import (
+        process_handler_workflow_advance_activity,
+    )
 
     result = process_handler_workflow_advance_activity(payload)
 
@@ -826,17 +902,21 @@ def test_process_handler_workflow_advance_activity_returns_current_state_for_act
     assert result.last_error is None
 
 
-def test_process_handler_workflow_advance_activity_allows_explicit_no_persist_noop(monkeypatch):
+def test_process_handler_workflow_advance_activity_allows_explicit_no_persist_noop(
+    monkeypatch,
+):
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.get_settings",
         lambda: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.create_session_factory",
-        lambda: lambda: _FakeSessionContextManager(
-            session=_FakeSession(
-                tenant=SimpleNamespace(tenant_id="tenant-a"),
-                workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+        lambda: (
+            lambda: _FakeSessionContextManager(
+                session=_FakeSession(
+                    tenant=SimpleNamespace(tenant_id="tenant-a"),
+                    workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+                )
             )
         ),
     )
@@ -863,7 +943,9 @@ def test_process_handler_workflow_advance_activity_allows_explicit_no_persist_no
         source_ref="MAB-232",
     )
 
-    from orchestrator.temporal.activities.handler_workflow import process_handler_workflow_advance_activity
+    from orchestrator.temporal.activities.handler_workflow import (
+        process_handler_workflow_advance_activity,
+    )
 
     result = process_handler_workflow_advance_activity(payload)
 
@@ -872,7 +954,9 @@ def test_process_handler_workflow_advance_activity_allows_explicit_no_persist_no
     assert result.status == "ignored"
 
 
-def test_retry_handler_workflow_operation_activity_dispatches_projectless_workflow(monkeypatch):
+def test_retry_handler_workflow_operation_activity_dispatches_projectless_workflow(
+    monkeypatch,
+):
     workflow = SimpleNamespace(
         workflow_id="tenant_workflow:abc",
         workflow_type_key="tenant_workflow",
@@ -887,7 +971,9 @@ def test_retry_handler_workflow_operation_activity_dispatches_projectless_workfl
         workflow_id="tenant_workflow:abc",
         operation_type="tenant_operation",
     )
-    registry = SimpleNamespace(resolve_operation_retry_handler=lambda _handler_key: None)
+    registry = SimpleNamespace(
+        resolve_operation_retry_handler=lambda _handler_key: None
+    )
     captured: dict[str, object] = {}
 
     class _ProjectlessRetrySession:
@@ -897,7 +983,9 @@ def test_retry_handler_workflow_operation_activity_dispatches_projectless_workfl
                 return workflow if key == workflow.workflow_id else None
             if model_name == "WorkflowOperation":
                 return operation if key == operation.operation_id else None
-            raise AssertionError(f"Retry activity should not load {model_name} before dispatch")
+            raise AssertionError(
+                f"Retry activity should not load {model_name} before dispatch"
+            )
 
         def commit(self):
             captured["committed"] = True
@@ -929,10 +1017,14 @@ def test_retry_handler_workflow_operation_activity_dispatches_projectless_workfl
         _retry_use_case,
     )
 
-    from orchestrator.temporal.activities.handler_workflow import retry_handler_workflow_operation_activity
+    from orchestrator.temporal.activities.handler_workflow import (
+        retry_handler_workflow_operation_activity,
+    )
 
     result = retry_handler_workflow_operation_activity(
-        WorkflowOperationRetryInput(workflow_id=workflow.workflow_id, operation_id=operation.operation_id)
+        WorkflowOperationRetryInput(
+            workflow_id=workflow.workflow_id, operation_id=operation.operation_id
+        )
     )
 
     assert result.workflow_id == workflow.workflow_id
@@ -942,7 +1034,9 @@ def test_retry_handler_workflow_operation_activity_dispatches_projectless_workfl
     assert captured["committed"] is True
 
 
-def test_retry_handler_workflow_operation_activity_raises_retryable_application_error(monkeypatch):
+def test_retry_handler_workflow_operation_activity_raises_retryable_application_error(
+    monkeypatch,
+):
     workflow = SimpleNamespace(
         workflow_id="parent_planning:MAB-233",
         workflow_type_key="parent_planning",
@@ -957,7 +1051,9 @@ def test_retry_handler_workflow_operation_activity_raises_retryable_application_
         workflow_id=workflow.workflow_id,
         operation_type="backlog_planning",
     )
-    registry = SimpleNamespace(resolve_operation_retry_handler=lambda _handler_key: None)
+    registry = SimpleNamespace(
+        resolve_operation_retry_handler=lambda _handler_key: None
+    )
 
     class _RetrySession:
         def get(self, model, key):
@@ -992,11 +1088,15 @@ def test_retry_handler_workflow_operation_activity_raises_retryable_application_
         ),
     )
 
-    from orchestrator.temporal.activities.handler_workflow import retry_handler_workflow_operation_activity
+    from orchestrator.temporal.activities.handler_workflow import (
+        retry_handler_workflow_operation_activity,
+    )
 
     with pytest.raises(ApplicationError) as exc_info:
         retry_handler_workflow_operation_activity(
-            WorkflowOperationRetryInput(workflow_id=workflow.workflow_id, operation_id=operation.operation_id)
+            WorkflowOperationRetryInput(
+                workflow_id=workflow.workflow_id, operation_id=operation.operation_id
+            )
         )
 
     assert exc_info.value.type == "retryable_invalid_model_output"
@@ -1004,16 +1104,30 @@ def test_retry_handler_workflow_operation_activity_raises_retryable_application_
 
 
 def test_temporal_registry_includes_parent_planning_and_pr_remediation():
-    from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
+    from orchestrator.temporal.workflow_registry import (
+        resolve_temporal_binding_for_handler,
+    )
 
-    assert resolve_temporal_binding_for_handler(handler_key="jira_parent_feature").handler_key == "jira_parent_feature"
-    assert resolve_temporal_binding_for_handler(handler_key="pr_remediation").handler_key == "pr_remediation"
+    assert (
+        resolve_temporal_binding_for_handler(
+            handler_key="jira_parent_feature"
+        ).handler_key
+        == "jira_parent_feature"
+    )
+    assert (
+        resolve_temporal_binding_for_handler(handler_key="pr_remediation").handler_key
+        == "pr_remediation"
+    )
 
 
-def test_project_deployment_setup_workflow_accepts_temporal_dict_activity_result(monkeypatch):
+def test_project_deployment_setup_workflow_accepts_temporal_dict_activity_result(
+    monkeypatch,
+):
     workflow_defn = ProjectDeploymentSetupWorkflow()
 
-    async def _fake_execute_activity(_name, _payload, *, start_to_close_timeout, retry_policy=None):  # noqa: ANN001
+    async def _fake_execute_activity(
+        _name, _payload, *, start_to_close_timeout, retry_policy=None
+    ):  # noqa: ANN001
         assert start_to_close_timeout == timedelta(seconds=321)
         assert retry_policy is not None
         return {

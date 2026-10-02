@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.api.atlassian_oauth.service import (
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient
@@ -18,8 +21,12 @@ class AtlassianTenantOAuthContext:
     access_token: str
 
 
-def resolve_tenant_atlassian_connection(*, session: Session, tenant: Tenant) -> AtlassianOAuthConnection:
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+def resolve_tenant_atlassian_connection(
+    *, session: Session, tenant: Tenant
+) -> AtlassianOAuthConnection:
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

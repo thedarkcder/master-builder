@@ -14,7 +14,10 @@ from orchestrator.api.schemas import (
     DeploymentHostRegistrationRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.deployment_host_tokens import generate_deployment_host_token, hash_deployment_host_token
+from orchestrator.core.deployment_host_tokens import (
+    generate_deployment_host_token,
+    hash_deployment_host_token,
+)
 from orchestrator.storage.models import DeploymentHost, DeploymentHostCommand
 
 _ACTIVE_HOST_STATES = {"active", "degraded"}
@@ -30,13 +33,17 @@ def _normalize_optional_string(value: object) -> str | None:
 
 
 def _effective_host_state(*, host: DeploymentHost) -> str:
-    configured_state = str(host.state or "provisioning").strip().lower() or "provisioning"
+    configured_state = (
+        str(host.state or "provisioning").strip().lower() or "provisioning"
+    )
     if configured_state == "retired":
         return "retired"
     if configured_state == "provisioning":
         return "provisioning"
     settings = get_settings()
-    timeout_seconds = max(30, int(getattr(settings, "deployment_host_stale_timeout_seconds", 180)))
+    timeout_seconds = max(
+        30, int(getattr(settings, "deployment_host_stale_timeout_seconds", 180))
+    )
     last_seen = host.last_seen_at
     if last_seen is None:
         return "offline"
@@ -98,14 +105,22 @@ def deployment_host_command_to_schema(
 
 
 def list_deployment_hosts(*, session) -> list[DeploymentHostRead]:  # noqa: ANN001
-    hosts = session.execute(select(DeploymentHost).order_by(DeploymentHost.created_at.asc())).scalars().all()
+    hosts = (
+        session.execute(
+            select(DeploymentHost).order_by(DeploymentHost.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
     return [deployment_host_to_schema(host) for host in hosts]
 
 
 def get_deployment_host(*, session, host_id: str) -> DeploymentHostRead:  # noqa: ANN001
     host = session.get(DeploymentHost, host_id)
     if host is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment host not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment host not found"
+        )
     return deployment_host_to_schema(host)
 
 
@@ -136,7 +151,9 @@ def create_deployment_host(
     session.add(host)
     session.commit()
     session.refresh(host)
-    return DeploymentHostBootstrapRead(host=deployment_host_to_schema(host), bootstrap_token=bootstrap_token)
+    return DeploymentHostBootstrapRead(
+        host=deployment_host_to_schema(host), bootstrap_token=bootstrap_token
+    )
 
 
 def register_deployment_host(
@@ -148,12 +165,20 @@ def register_deployment_host(
 ) -> DeploymentHostRegistrationRead:  # noqa: ANN001
     bootstrap_hash = hash_deployment_host_token(bootstrap_token)
     host = session.execute(
-        select(DeploymentHost).where(DeploymentHost.bootstrap_token_hash == bootstrap_hash)
+        select(DeploymentHost).where(
+            DeploymentHost.bootstrap_token_hash == bootstrap_hash
+        )
     ).scalar_one_or_none()
     if host is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid deployment host bootstrap token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid deployment host bootstrap token",
+        )
     if host.registered_at is not None or host.access_token_hash is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Deployment host bootstrap token has already been used")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Deployment host bootstrap token has already been used",
+        )
     access_token = generate_deployment_host_token()
     now = _now()
     host.bootstrap_token_hash = None
@@ -166,7 +191,9 @@ def register_deployment_host(
     host.updated_at = now
     session.commit()
     session.refresh(host)
-    return DeploymentHostRegistrationRead(host=deployment_host_to_schema(host), access_token=access_token)
+    return DeploymentHostRegistrationRead(
+        host=deployment_host_to_schema(host), access_token=access_token
+    )
 
 
 def touch_deployment_host(
@@ -179,7 +206,9 @@ def touch_deployment_host(
 ) -> DeploymentHostRead:  # noqa: ANN001
     host = session.get(DeploymentHost, host_id)
     if host is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment host not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment host not found"
+        )
     host.agent_version = _normalize_optional_string(agent_version)
     host.capability_keys_json = list(advertised_capabilities)
     host.state = str(state or "active").strip().lower() or "active"
@@ -197,7 +226,10 @@ def resolve_active_deployment_host(
 ) -> DeploymentHost:
     host = session.get(DeploymentHost, host_id)
     if host is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant deployment plane references an unknown managed host")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenant deployment plane references an unknown managed host",
+        )
     effective_state = _effective_host_state(host=host)
     if effective_state not in _ACTIVE_HOST_STATES:
         raise HTTPException(
@@ -214,19 +246,28 @@ def resolve_default_active_deployment_host(
     infrastructure_provider: str | None = None,
     region: str | None = None,
 ) -> DeploymentHost:
-    hosts = session.execute(
-        select(DeploymentHost)
-        .where(DeploymentHost.provider == provider)
-        .order_by(DeploymentHost.created_at.asc())
-    ).scalars().all()
+    hosts = (
+        session.execute(
+            select(DeploymentHost)
+            .where(DeploymentHost.provider == provider)
+            .order_by(DeploymentHost.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
 
-    active_hosts = [host for host in hosts if _effective_host_state(host=host) in _ACTIVE_HOST_STATES]
+    active_hosts = [
+        host
+        for host in hosts
+        if _effective_host_state(host=host) in _ACTIVE_HOST_STATES
+    ]
     normalized_provider = _normalize_optional_string(infrastructure_provider)
     if normalized_provider is not None:
         exact_provider_matches = [
             host
             for host in active_hosts
-            if _normalize_optional_string(host.infrastructure_provider) == normalized_provider
+            if _normalize_optional_string(host.infrastructure_provider)
+            == normalized_provider
         ]
         if not exact_provider_matches:
             raise HTTPException(
@@ -250,7 +291,10 @@ def resolve_default_active_deployment_host(
         active_hosts = exact_region_matches
 
     if not active_hosts:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No active managed host is available for database restore")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No active managed host is available for database restore",
+        )
     if len(active_hosts) > 1:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

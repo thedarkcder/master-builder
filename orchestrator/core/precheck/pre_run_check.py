@@ -108,9 +108,14 @@ def evaluate_execution_readiness_only(
     normalized_labels = {str(label).strip().casefold() for label in issue_labels or []}
     normalized_ready_label = str(ready_label or "").strip() or None
     ready_label_present = bool(
-        normalized_ready_label and normalized_ready_label.casefold() in normalized_labels
+        normalized_ready_label
+        and normalized_ready_label.casefold() in normalized_labels
     )
-    required_worker_capability, invalid_worker_labels, conflicting_worker_capabilities = _resolve_required_worker_capability(
+    (
+        required_worker_capability,
+        invalid_worker_labels,
+        conflicting_worker_capabilities,
+    ) = _resolve_required_worker_capability(
         issue_summary=issue_summary,
         issue_description=issue_description,
         issue_labels=issue_labels,
@@ -126,7 +131,9 @@ def evaluate_execution_readiness_only(
         else required_worker_label.casefold() in normalized_labels
     )
     invalid_label_guard = _invalid_worker_label_guard(invalid_worker_labels)
-    conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
+    conflicting_capability_guard = _conflicting_worker_capability_guard(
+        conflicting_worker_capabilities
+    )
     gtd_guard = invalid_label_guard or conflicting_capability_guard
     outcome = (
         PrecheckOutcome.EXECUTION_BLOCKED.value
@@ -169,7 +176,8 @@ def evaluate_execution_readiness_only(
             ),
             tags=(),
         ),
-        gtd=gtd_guard or GoodToDoValidationResult(
+        gtd=gtd_guard
+        or GoodToDoValidationResult(
             valid=True,
             missing_criteria=(),
             clarification_questions=(),
@@ -194,9 +202,14 @@ def evaluate_pre_run_check(
     normalized_labels = {str(label).strip().casefold() for label in issue_labels or []}
     normalized_ready_label = str(ready_label or "").strip() or None
     ready_label_present = bool(
-        normalized_ready_label and normalized_ready_label.casefold() in normalized_labels
+        normalized_ready_label
+        and normalized_ready_label.casefold() in normalized_labels
     )
-    required_worker_capability, invalid_worker_labels, conflicting_worker_capabilities = _resolve_required_worker_capability(
+    (
+        required_worker_capability,
+        invalid_worker_labels,
+        conflicting_worker_capabilities,
+    ) = _resolve_required_worker_capability(
         issue_summary=issue_summary,
         issue_description=issue_description,
         issue_labels=issue_labels,
@@ -212,7 +225,9 @@ def evaluate_pre_run_check(
         else required_worker_label.casefold() in normalized_labels
     )
     invalid_label_guard = _invalid_worker_label_guard(invalid_worker_labels)
-    conflicting_capability_guard = _conflicting_worker_capability_guard(conflicting_worker_capabilities)
+    conflicting_capability_guard = _conflicting_worker_capability_guard(
+        conflicting_worker_capabilities
+    )
     if invalid_label_guard is not None:
         return PreRunCheckResult(
             outcome=PrecheckOutcome.GTD_REQUIRED.value,
@@ -304,18 +319,26 @@ def _resolve_required_worker_capability(
             label_parse.invalid_labels,
             label_parse.conflicting_capabilities,
         )
-    return infer_required_worker_capability(
-        issue_summary=issue_summary,
-        issue_description=issue_description,
-        issue_labels=issue_labels,
-        project_default_worker_capability=(project_policy_overrides or {}).get("default_worker_capability"),
-        tenant_id=tenant_id,
-        project_id=project_id,
-        issue_key=issue_key,
-    ), label_parse.invalid_labels, label_parse.conflicting_capabilities
+    return (
+        infer_required_worker_capability(
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            issue_labels=issue_labels,
+            project_default_worker_capability=(project_policy_overrides or {}).get(
+                "default_worker_capability"
+            ),
+            tenant_id=tenant_id,
+            project_id=project_id,
+            issue_key=issue_key,
+        ),
+        label_parse.invalid_labels,
+        label_parse.conflicting_capabilities,
+    )
 
 
-def _invalid_worker_label_guard(invalid_labels: tuple[str, ...]) -> GoodToDoValidationResult | None:
+def _invalid_worker_label_guard(
+    invalid_labels: tuple[str, ...],
+) -> GoodToDoValidationResult | None:
     if not invalid_labels:
         return None
     invalid = ", ".join(invalid_labels)
@@ -333,7 +356,9 @@ def _conflicting_worker_capability_guard(
 ) -> GoodToDoValidationResult | None:
     if not conflicting_capabilities:
         return None
-    normalized = ", ".join(sorted(capability.value for capability in conflicting_capabilities))
+    normalized = ", ".join(
+        sorted(capability.value for capability in conflicting_capabilities)
+    )
     return GoodToDoValidationResult(
         valid=False,
         missing_criteria=("Worker capability labels must not conflict.",),

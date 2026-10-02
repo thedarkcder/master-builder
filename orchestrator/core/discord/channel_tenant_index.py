@@ -30,17 +30,25 @@ def invalidate_discord_channel_tenant_index() -> None:
         _INDEX_CACHE = None
 
 
-def resolve_tenant_for_discord_channel(*, session: Session, channel_id: str) -> Tenant | None:
+def resolve_tenant_for_discord_channel(
+    *, session: Session, channel_id: str
+) -> Tenant | None:
     normalized_channel_id = str(channel_id or "").strip()
     if not normalized_channel_id:
         return None
-    tenant = _resolve_from_index(session=session, channel_id=normalized_channel_id, force_refresh=False)
+    tenant = _resolve_from_index(
+        session=session, channel_id=normalized_channel_id, force_refresh=False
+    )
     if tenant is not None:
         return tenant
-    return _resolve_from_index(session=session, channel_id=normalized_channel_id, force_refresh=True)
+    return _resolve_from_index(
+        session=session, channel_id=normalized_channel_id, force_refresh=True
+    )
 
 
-def _resolve_from_index(*, session: Session, channel_id: str, force_refresh: bool) -> Tenant | None:
+def _resolve_from_index(
+    *, session: Session, channel_id: str, force_refresh: bool
+) -> Tenant | None:
     index = _get_or_refresh_index(session=session, force_refresh=force_refresh)
     tenant_ids = index.channel_to_tenant_ids.get(channel_id, set())
     if len(tenant_ids) != 1:
@@ -49,16 +57,24 @@ def _resolve_from_index(*, session: Session, channel_id: str, force_refresh: boo
     tenant = session.get(Tenant, tenant_id)
     if tenant is None or not tenant.is_enabled:
         return None
-    if not _tenant_allows_channel(session=session, tenant_id=tenant_id, channel_id=channel_id):
+    if not _tenant_allows_channel(
+        session=session, tenant_id=tenant_id, channel_id=channel_id
+    ):
         return None
     return tenant
 
 
-def _get_or_refresh_index(*, session: Session, force_refresh: bool) -> _DiscordChannelTenantIndex:
+def _get_or_refresh_index(
+    *, session: Session, force_refresh: bool
+) -> _DiscordChannelTenantIndex:
     global _INDEX_CACHE
     revision = _current_revision(session=session)
     with _INDEX_LOCK:
-        if not force_refresh and _INDEX_CACHE is not None and _INDEX_CACHE.revision == revision:
+        if (
+            not force_refresh
+            and _INDEX_CACHE is not None
+            and _INDEX_CACHE.revision == revision
+        ):
             return _INDEX_CACHE
         _INDEX_CACHE = _build_index(session=session, revision=revision)
         return _INDEX_CACHE
@@ -67,13 +83,19 @@ def _get_or_refresh_index(*, session: Session, force_refresh: bool) -> _DiscordC
 def _current_revision(*, session: Session) -> _Revision:
     bind_identity = str(session.bind.url) if session.bind is not None else "unknown"
     project_max_updated_at, project_count = session.execute(
-        select(func.max(Project.updated_at), func.count(Project.project_id)).where(Project.is_archived.is_(False))
+        select(func.max(Project.updated_at), func.count(Project.project_id)).where(
+            Project.is_archived.is_(False)
+        )
     ).one()
     tenant_max_updated_at, tenant_count = session.execute(
-        select(func.max(Tenant.updated_at), func.count(Tenant.tenant_id)).where(Tenant.is_enabled.is_(True))
+        select(func.max(Tenant.updated_at), func.count(Tenant.tenant_id)).where(
+            Tenant.is_enabled.is_(True)
+        )
     ).one()
     followup_max_updated_at, followup_count = session.execute(
-        select(func.max(FollowupContext.updated_at), func.count(FollowupContext.context_id)).where(
+        select(
+            func.max(FollowupContext.updated_at), func.count(FollowupContext.context_id)
+        ).where(
             FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
             or_(
                 FollowupContext.thread_channel_id.is_not(None),
@@ -99,14 +121,18 @@ def _build_index(
 ) -> _DiscordChannelTenantIndex:
     channel_to_tenant_ids: dict[str, set[str]] = {}
     projects = session.execute(
-        select(Project.tenant_id, Project.discord_config).where(Project.is_archived.is_(False))
+        select(Project.tenant_id, Project.discord_config).where(
+            Project.is_archived.is_(False)
+        )
     ).all()
     for tenant_id, discord_config in projects:
         for channel in channel_ids_from_discord_config(dict(discord_config or {})):
             channel_to_tenant_ids.setdefault(channel, set()).add(str(tenant_id))
 
     tenants = session.execute(
-        select(Tenant.tenant_id, Tenant.discord_config).where(Tenant.is_enabled.is_(True))
+        select(Tenant.tenant_id, Tenant.discord_config).where(
+            Tenant.is_enabled.is_(True)
+        )
     ).all()
     for tenant_id, discord_config in tenants:
         channel = str((discord_config or {}).get("channel_id") or "").strip()
@@ -114,7 +140,11 @@ def _build_index(
             channel_to_tenant_ids.setdefault(channel, set()).add(str(tenant_id))
 
     followup_contexts = session.execute(
-        select(FollowupContext.tenant_id, FollowupContext.channel_id, FollowupContext.thread_channel_id).where(
+        select(
+            FollowupContext.tenant_id,
+            FollowupContext.channel_id,
+            FollowupContext.thread_channel_id,
+        ).where(
             FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
             or_(
                 FollowupContext.thread_channel_id.is_not(None),
@@ -123,7 +153,10 @@ def _build_index(
         )
     ).all()
     for tenant_id, channel_id, thread_channel_id in followup_contexts:
-        for channel in {str(channel_id or "").strip(), str(thread_channel_id or "").strip()}:
+        for channel in {
+            str(channel_id or "").strip(),
+            str(thread_channel_id or "").strip(),
+        }:
             if channel:
                 channel_to_tenant_ids.setdefault(channel, set()).add(str(tenant_id))
 
@@ -133,7 +166,9 @@ def _build_index(
     )
 
 
-def _tenant_allows_channel(*, session: Session, tenant_id: str, channel_id: str) -> bool:
+def _tenant_allows_channel(
+    *, session: Session, tenant_id: str, channel_id: str
+) -> bool:
     projects = session.execute(
         select(Project.discord_config).where(
             Project.tenant_id == tenant_id,

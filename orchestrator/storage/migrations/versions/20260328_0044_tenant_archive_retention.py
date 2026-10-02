@@ -19,23 +19,38 @@ depends_on = None
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _column_exists("tenants", "archived_at"):
-        op.add_column("tenants", sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True))
+        op.add_column(
+            "tenants",
+            sa.Column("archived_at", sa.DateTime(timezone=True), nullable=True),
+        )
     if not _column_exists("tenants", "purge_after_at"):
-        op.add_column("tenants", sa.Column("purge_after_at", sa.DateTime(timezone=True), nullable=True))
+        op.add_column(
+            "tenants",
+            sa.Column("purge_after_at", sa.DateTime(timezone=True), nullable=True),
+        )
     if not _has_index("tenants", "ix_tenants_archived_at"):
-        op.create_index("ix_tenants_archived_at", "tenants", ["archived_at"], unique=False)
+        op.create_index(
+            "ix_tenants_archived_at", "tenants", ["archived_at"], unique=False
+        )
     if not _has_index("tenants", "ix_tenants_purge_after_at"):
-        op.create_index("ix_tenants_purge_after_at", "tenants", ["purge_after_at"], unique=False)
+        op.create_index(
+            "ix_tenants_purge_after_at", "tenants", ["purge_after_at"], unique=False
+        )
 
 
 def downgrade() -> None:

@@ -9,7 +9,9 @@ from orchestrator.api.discord.ask.context import (
     project_filter_jql as _project_filter_jql,
     search_jira_issues_for_tenant as _search_jira_issues_for_tenant,
 )
-from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.discord.channel_tenant_index import (
+    resolve_tenant_for_discord_channel,
+)
 from orchestrator.storage.models import Tenant
 
 
@@ -106,7 +108,9 @@ def _discord_option_attachment_ids(options: object) -> list[str]:
     return attachment_ids
 
 
-def _discord_resolved_attachments(*, data: dict, attachment_ids: list[str]) -> list[dict[str, str]]:
+def _discord_resolved_attachments(
+    *, data: dict, attachment_ids: list[str]
+) -> list[dict[str, str]]:
     if not attachment_ids:
         return []
     resolved = data.get("resolved")
@@ -144,7 +148,9 @@ def _discord_issue_autocomplete_choices(
     channel_id: str | None,
     current_value: str,
 ) -> list[dict]:
-    project_jql = _project_filter_jql(session=session, tenant=tenant, channel_id=channel_id)
+    project_jql = _project_filter_jql(
+        session=session, tenant=tenant, channel_id=channel_id
+    )
     normalized = current_value.strip().upper()
     issues = []
     if _ISSUE_KEY_PATTERN.fullmatch(normalized):
@@ -184,18 +190,28 @@ def _discord_issue_autocomplete_choices(
     return choices
 
 
-def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, dict[str, str] | None, list[dict[str, str]]]:
+def _parse_discord_interaction_command(
+    payload: dict,
+) -> tuple[str, str, str, dict[str, str] | None, list[dict[str, str]]]:
     data = payload.get("data")
     if not isinstance(data, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction data")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction data"
+        )
 
     command_name = data.get("name")
     if not isinstance(command_name, str) or not command_name.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction command name")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing interaction command name",
+        )
 
     channel_id = payload.get("channel_id")
     if not isinstance(channel_id, str) or not channel_id.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction channel_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing interaction channel_id",
+        )
 
     user_id: str | None = None
     member = payload.get("member")
@@ -212,7 +228,10 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
             if isinstance(raw_user_id, str) and raw_user_id.strip():
                 user_id = raw_user_id.strip()
     if user_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing interaction user_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing interaction user_id",
+        )
 
     normalized_command = command_name.strip().lower()
     options = data.get("options")
@@ -230,7 +249,13 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
         question = _discord_option_value(options, name="question")
         if question:
             command_text = f"{command_text} {question}"
-    elif normalized_command in {"architect", "engineer", "tester", "security", "reviewer"}:
+    elif normalized_command in {
+        "architect",
+        "engineer",
+        "tester",
+        "security",
+        "reviewer",
+    }:
         issue_key = _discord_option_value(options, name="issue_key")
         question = _discord_option_value(options, name="question")
         if issue_key:
@@ -275,7 +300,9 @@ def _parse_discord_interaction_command(payload: dict) -> tuple[str, str, str, di
         details = _discord_option_value(options, name="details")
         issue_key = _discord_option_value(options, name="issue_key")
         attachment_ids = _discord_option_attachment_ids(options)
-        attachments = _discord_resolved_attachments(data=data, attachment_ids=attachment_ids)
+        attachments = _discord_resolved_attachments(
+            data=data, attachment_ids=attachment_ids
+        )
         command_params = {}
         if summary:
             command_params["summary"] = summary

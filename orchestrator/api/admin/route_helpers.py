@@ -55,7 +55,9 @@ from orchestrator.api.admin.project_normalization import (
     with_preserved_discord_system_fields as _with_preserved_discord_system_fields,
 )
 from orchestrator.api.admin.project_service import AdminProjectService
-from orchestrator.api.admin.schema_mappers import project_to_schema as _project_to_schema
+from orchestrator.api.admin.schema_mappers import (
+    project_to_schema as _project_to_schema,
+)
 from orchestrator.api.admin.tenant_project_helpers import (
     allocate_tenant_id as _allocate_tenant_id_impl,
     ensure_default_project_for_tenant as _ensure_default_project_for_tenant_impl,
@@ -66,7 +68,9 @@ from orchestrator.api.admin.tenant_project_helpers import (
     sync_tenant_project_discord_channels as _sync_tenant_project_discord_channels_impl,
     sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys_impl,
 )
-from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
+from orchestrator.core.jira_project_reconciliation.start import (
+    start_jira_project_reconciliation,
+)
 from orchestrator.api.schemas import (
     DiscordAllowlistRequestRead,
     JiraWebhookActionResult,
@@ -82,7 +86,10 @@ from orchestrator.core.platform.secret_service import (
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
@@ -371,7 +378,9 @@ def discover_project_run_board_id(
     jira_project_key: str,
     settings,  # noqa: ANN001
 ) -> int | None:
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         return None
     connection = session.get(AtlassianOAuthConnection, connection_id)
@@ -398,7 +407,9 @@ def discover_project_run_board_id(
 
     project_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{quote_plus(project_key)}"
     try:
-        project_payload = http_client.get_json(url=project_url, access_token=access_token)
+        project_payload = http_client.get_json(
+            url=project_url, access_token=access_token
+        )
     except (AtlassianOAuthError, URLError, ValueError) as exc:
         logger.warning(
             "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=project_metadata_error error=%s",
@@ -455,7 +466,9 @@ def discover_project_run_board_id(
     for board_id in range(1, _MAX_BOARD_DISCOVERY_SCAN + 1):
         board_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/agile/1.0/board/{board_id}"
         try:
-            board_payload = http_client.get_json(url=board_url, access_token=access_token)
+            board_payload = http_client.get_json(
+                url=board_url, access_token=access_token
+            )
         except (AtlassianOAuthError, URLError, ValueError):
             continue
         if not isinstance(board_payload, dict):
@@ -476,11 +489,17 @@ def discover_project_run_board_id(
     return None
 
 
-def ensure_project_repository_checkout(*, session: Session, tenant: Tenant, project: Project) -> None:
+def ensure_project_repository_checkout(
+    *, session: Session, tenant: Tenant, project: Project
+) -> None:
     settings = get_settings()
     github_config = tenant.github_config or {}
-    app_id_ref = str(github_config.get("app_id_ref") or PLATFORM_SECRET_GITHUB_APP_ID_REF).strip()
-    private_key_ref = str(github_config.get("private_key_ref") or PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF).strip()
+    app_id_ref = str(
+        github_config.get("app_id_ref") or PLATFORM_SECRET_GITHUB_APP_ID_REF
+    ).strip()
+    private_key_ref = str(
+        github_config.get("private_key_ref") or PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF
+    ).strip()
 
     tenant_id = tenant.tenant_id
     app_id = (
@@ -595,6 +614,7 @@ def provision_jira_webhook(
 
 def jira_webhook_action_status_code(result: JiraWebhookActionResult) -> int:
     return _jira_webhook_action_status_code_impl(result)
+
 
 JIRA_WEBHOOK_EVENTS = [
     "jira:issue_created",

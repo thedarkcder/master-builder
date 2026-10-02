@@ -5,17 +5,27 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.ask.history_service import DiscordAskHistoryService
-from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
+from orchestrator.api.discord.shared.channel_scope_repository import (
+    SqlAlchemyDiscordChannelScopeRepository,
+)
 from orchestrator.api.atlassian_oauth.connection_service import (
     resolve_tenant_atlassian_connection,
     tenant_atlassian_oauth_context,
 )
-from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client as _atlassian_oauth_client
-from orchestrator.api.atlassian_oauth.service import refresh_atlassian_connection_tokens as _refresh_atlassian_connection_tokens
+from orchestrator.api.atlassian_oauth.service import (
+    atlassian_oauth_client as _atlassian_oauth_client,
+)
+from orchestrator.api.atlassian_oauth.service import (
+    refresh_atlassian_connection_tokens as _refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision.types import tenant_jira_project_keys
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview, AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth import (
+    JiraIssueDetail,
+    JiraIssuePreview,
+    AtlassianOAuthError,
+)
 
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 _ask_history_service = DiscordAskHistoryService(
@@ -38,24 +48,35 @@ def _normalize_scope_channel_id(channel_id: str | None) -> str | None:
 
 
 def tenant_active_projects(*, session: Session, tenant_id: str) -> list[Project]:
-    return session.execute(
-        select(Project)
-        .where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    return (
+        session.execute(
+            select(Project)
+            .where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
+            .order_by(Project.created_at)
         )
-        .order_by(Project.created_at)
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
-    keys = [project.jira_project_key for project in tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
+    keys = [
+        project.jira_project_key
+        for project in tenant_active_projects(
+            session=session, tenant_id=tenant.tenant_id
+        )
+    ]
     if keys:
         return keys
     return [key.upper() for key in tenant_jira_project_keys(tenant)]
 
 
-def project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | None = None) -> str:
+def project_filter_jql(
+    *, session: Session, tenant: Tenant, channel_id: str | None = None
+) -> str:
     normalized_channel_id = _normalize_scope_channel_id(channel_id)
     if normalized_channel_id:
         scope = _channel_scope_repository.resolve_project_scope(
@@ -71,7 +92,10 @@ def project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | No
         return f'project = "{scope.jira_project_key}"'
     keys = tenant_project_keys(session=session, tenant=tenant)
     if not keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant has no Jira project keys",
+        )
     if len(keys) == 1:
         return f'project = "{keys[0]}"'
     joined = ", ".join(f'"{key}"' for key in keys)
@@ -87,7 +111,9 @@ def search_jira_issues_for_tenant(
 ) -> list[JiraIssuePreview]:
     settings = get_settings()
     try:
-        oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context(
+            session=session, tenant=tenant, settings=settings
+        )
         return oauth.client.search_issues_by_jql(
             access_token=oauth.access_token,
             cloud_id=oauth.connection.cloud_id,
@@ -148,7 +174,9 @@ def fetch_jira_issue_detail_for_tenant(
         ) from exc
 
 
-def consume_pending_ask_action(*, session: Session, tenant: Tenant, request_id: str) -> dict | None:
+def consume_pending_ask_action(
+    *, session: Session, tenant: Tenant, request_id: str
+) -> dict | None:
     return _ask_history_service.consume_pending_ask_action(
         session=session,
         tenant=tenant,

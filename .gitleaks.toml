@@ -1,0 +1,89 @@
+title = "Master Builder gitleaks config"
+
+[extend]
+useDefault = true
+
+# Keep all default rules. These exceptions require BOTH the exact file and
+# reviewed non-secret text, never a test-directory exclusion or key baseline.
+# Configuration semantics: https://github.com/gitleaks/gitleaks/blob/v8.30.1/README.md#configuration
+
+[[rules]]
+id = "discord-client-secret"
+
+[[rules.allowlists]]
+description = "Function identifier captured across a historical helper assignment"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)orchestrator/api/(admin/project_service|admin_project_service)\.py$''']
+regexes = ['''^self\._normalize_project_discord_config = normalize_project_discord_config$''']
+
+[[rules.allowlists]]
+description = "Mocked function identifier captured across a historical helper assertion"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)tests/test_discord_routes_wrapper_helpers\.py$''']
+regexes = ['''^discord_route, "_consume_pending_ask_action_impl"$''']
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Keyword argument identifier after a secret-reference name, not its value"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)tests/test_secret_manager_platform_scope\.py$''']
+regexes = ['''^DISCORD_BOT_TOKEN", encryption_key="$''']
+
+[[rules]]
+id = "private-key"
+
+[[rules.allowlists]]
+description = "Exact PEM-header parser expression and diagnostic text"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)orchestrator/tools/github_app\.py$''']
+regexes = ['''^\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-", "\-\-\-\-\-BEGIN RSA PRIVATE KEY\-\-\-\-\-"\)\n        \):\n            raise ValueError\(\n                "Invalid GitHub App private key secret: expected GitHub App PEM private key "\n                "\(\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-$''']
+
+[[rules.allowlists]]
+description = "Exact invalid abc PEM fixture and mocked normalization assertion"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)tests/test_github_app\.py$''']
+regexes = ['''^\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-\\\\nabc\\\\n\-\-\-\-\-END PRIVATE KEY\-\-\-\-\-\\\\n",\n        \)\n        client = GitHubAppClient\(config\)\n\n        with patch\("orchestrator\.tools\.github_app\.jwt\.encode", return_value="token"\) as mock_encode:\n            token = client\.create_app_jwt\(\)\n\n        self\.assertEqual\(token, "token"\)\n        self\.assertEqual\(\n            mock_encode\.call_args\.args\[1\],\n            "\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-$''']
+
+[[rules.allowlists]]
+description = "Exact invalid abc PEM fixture and mocked normalization assertion"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)tests/test_github_app\.py$''']
+regexes = ['''^\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-\\\\nabc\\\\n\-\-\-\-\-END PRIVATE KEY\-\-\-\-\-\\\\n"',\n        \)\n        client = GitHubAppClient\(config\)\n\n        with patch\("orchestrator\.tools\.github_app\.jwt\.encode", return_value="token"\) as mock_encode:\n            token = client\.create_app_jwt\(\)\n\n        self\.assertEqual\(token, "token"\)\n        self\.assertEqual\(\n            mock_encode\.call_args\.args\[1\],\n            "\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-$''']
+
+
+[[rules.allowlists]]
+description = "Exact formatter-wrapped invalid abc PEM normalization fixture"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)tests/test_github_app\.py$''']
+regexes = ['''^\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-\\\\nabc\\\\n\-\-\-\-\-END PRIVATE KEY\-\-\-\-\-\\\\n",\n        \)\n        client = GitHubAppClient\(config\)\n\n        with patch\(\n            "orchestrator\.tools\.github_app\.jwt\.encode", return_value="token"\n        \) as mock_encode:\n            token = client\.create_app_jwt\(\)\n\n        self\.assertEqual\(token, "token"\)\n        self\.assertEqual\(\n            mock_encode\.call_args\.args\[1\],\n            "\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-$''']
+
+[[rules.allowlists]]
+description = "Exact formatter-wrapped invalid abc PEM normalization fixture"
+condition = "AND"
+regexTarget = "match"
+paths = ['''(^|/)tests/test_github_app\.py$''']
+regexes = ['''^\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-\\\\nabc\\\\n\-\-\-\-\-END PRIVATE KEY\-\-\-\-\-\\\\n"',\n        \)\n        client = GitHubAppClient\(config\)\n\n        with patch\(\n            "orchestrator\.tools\.github_app\.jwt\.encode", return_value="token"\n        \) as mock_encode:\n            token = client\.create_app_jwt\(\)\n\n        self\.assertEqual\(token, "token"\)\n        self\.assertEqual\(\n            mock_encode\.call_args\.args\[1\],\n            "\-\-\-\-\-BEGIN PRIVATE KEY\-\-\-\-\-$''']
+
+[[rules]]
+id = "master-builder-fernet-key"
+description = "Literal configured Master Builder encryption keys"
+regex = '''(?i)ORCHESTRATOR_SECRETS_ENCRYPTION_KEY[\s"']{0,3}[:=][\s"']{0,3}([A-Za-z0-9_-]{43}=)'''
+secretGroup = 1
+keywords = ["orchestrator_secrets_encryption_key"]
+
+# Complete PEM bodies need their own boundary: the default header rule can consume
+# a later header while matching parser-fixture text earlier in the same file.
+[[rules]]
+id = "master-builder-pem-key"
+description = "Complete PEM private keys with base64 bodies and an end marker"
+regex = '''-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]{64,}-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----'''
+keywords = ["-----begin"]

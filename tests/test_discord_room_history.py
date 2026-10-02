@@ -3,7 +3,9 @@ from __future__ import annotations
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
 
 
-def test_append_room_history_entry_keeps_one_room_across_text_voice_note_and_live_voice() -> None:
+def test_append_room_history_entry_keeps_one_room_across_text_voice_note_and_live_voice() -> (
+    None
+):
     service = DiscordRoomHistoryService(max_history_entries=3, max_history_context=2)
     config: dict = {}
 
@@ -55,7 +57,9 @@ def test_append_room_history_entry_keeps_one_room_across_text_voice_note_and_liv
 
     recent = service.recent_room_history(discord_config=config, channel_id="text-1")
     assert [entry["source_mode"] for entry in recent] == ["voice_note", "live_voice"]
-    inferred = service.recent_room_history(discord_config=config, voice_channel_id="voice-1")
+    inferred = service.recent_room_history(
+        discord_config=config, voice_channel_id="voice-1"
+    )
     assert [entry["source_mode"] for entry in inferred] == ["voice_note", "live_voice"]
 
 
@@ -125,4 +129,7 @@ def test_room_history_bounds_entries_without_touching_input_config() -> None:
     )
 
     assert original == {}
-    assert [entry["text"] for entry in updated["persona_room_history"]] == ["two", "three"]
+    assert [entry["text"] for entry in updated["persona_room_history"]] == [
+        "two",
+        "three",
+    ]

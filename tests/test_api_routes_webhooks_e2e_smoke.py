@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import unittest
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -19,7 +20,14 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import AtlassianOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    Run,
+    Tenant,
+    WorkflowCheckpoint,
+    WorkflowExecution,
+)
+from tests.test_support.webhook_sender import configure_tenant_webhook_sender
 
 pytestmark = pytest.mark.smoke
 
@@ -28,6 +36,7 @@ pytestmark = pytest.mark.smoke
 class RouteScenario:
     path: str
     auth: tuple[str, str] | None = None
+    headers: dict[str, str] | None = None
     json: dict | None = None
     expected_statuses: tuple[int, ...] = (200,)
 
@@ -36,10 +45,14 @@ class _FakeJiraClient:
     def build_authorize_url(self, *, state: str) -> str:
         return f"https://jira.example/oauth?state={state}"
 
-    def list_projects(self, *, access_token: str, cloud_id: str) -> list[SimpleNamespace]:
+    def list_projects(
+        self, *, access_token: str, cloud_id: str
+    ) -> list[SimpleNamespace]:
         return [SimpleNamespace(key="TP", name="Tenant Project")]
 
-    def list_confluence_spaces(self, *, access_token: str, cloud_id: str, limit: int = 250) -> list[SimpleNamespace]:
+    def list_confluence_spaces(
+        self, *, access_token: str, cloud_id: str, limit: int = 250
+    ) -> list[SimpleNamespace]:
         return [SimpleNamespace(space_id="space-1", key="ARCH", name="Architecture")]
 
     def get_confluence_space_by_key(
@@ -59,7 +72,13 @@ class _FakeJiraClient:
         site_url: str,
         space_id: str,
     ) -> list[SimpleNamespace]:
-        return [SimpleNamespace(page_id="page-1", title="Architecture Home", webui_url=f"{site_url}/wiki/spaces/ARCH")]
+        return [
+            SimpleNamespace(
+                page_id="page-1",
+                title="Architecture Home",
+                webui_url=f"{site_url}/wiki/spaces/ARCH",
+            )
+        ]
 
     def register_webhook(
         self,
@@ -72,7 +91,9 @@ class _FakeJiraClient:
     ) -> list[int]:
         return [111]
 
-    def delete_webhooks(self, *, access_token: str, cloud_id: str, webhook_ids: list[int]) -> None:
+    def delete_webhooks(
+        self, *, access_token: str, cloud_id: str, webhook_ids: list[int]
+    ) -> None:
         return None
 
     def list_webhooks(self, *, access_token: str, cloud_id: str) -> list[dict]:
@@ -103,8 +124,13 @@ class _FakeGitHubClient:
             )
         ]
 
-    def list_repository_branches(self, *, repo_full_name: str, github_repository: str) -> list[SimpleNamespace]:
-        return [SimpleNamespace(name="main", protected=True), SimpleNamespace(name="develop", protected=False)]
+    def list_repository_branches(
+        self, *, repo_full_name: str, github_repository: str
+    ) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(name="main", protected=True),
+            SimpleNamespace(name="develop", protected=False),
+        ]
 
 
 class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
@@ -123,13 +149,19 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
-        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
+        os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = (
+            "admin-token-secret-for-tests-0123456789"
+        )
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:60002"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:60001"
-        os.environ["ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET"] = "atlassian-oauth-state-secret"
+        os.environ["ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET"] = (
+            "atlassian-oauth-state-secret"
+        )
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
 
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -182,7 +214,9 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self.patch_stack.enter_context(
             patch(
                 "orchestrator.api.routes.webhook_github.ingest_github_webhook_event",
-                new=AsyncMock(return_value=JSONResponse(status_code=200, content={"ok": True})),
+                new=AsyncMock(
+                    return_value=JSONResponse(status_code=200, content={"ok": True})
+                ),
             )
         )
         self.patch_stack.enter_context(
@@ -214,17 +248,50 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self.client = TestClient(self.app, raise_server_exceptions=False)
 
         self._seed_platform_secret("GITHUB_APP_ID", "12345")
-        self._seed_platform_secret("GITHUB_APP_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----")
+        self._seed_platform_secret(
+            "GITHUB_APP_PRIVATE_KEY",
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+        )
         self._seed_platform_secret("GITHUB_APP_SLUG", "master-builder-app")
         self._seed_platform_secret("ATLASSIAN_OAUTH_CLIENT_ID", "atlassian-client-id")
-        self._seed_platform_secret("ATLASSIAN_OAUTH_CLIENT_SECRET", "atlassian-client-secret")
+        self._seed_platform_secret(
+            "ATLASSIAN_OAUTH_CLIENT_SECRET", "atlassian-client-secret"
+        )
         self._seed_platform_secret("DISCORD_INTERACTIONS_PUBLIC_KEY", "0" * 64)
         self._seed_platform_secret("DISCORD_BOT_TOKEN", "discord-token")
         self._seed_platform_secret("DELETE_ME", "remove-me")
 
-        self._create_tenant("example")
+        tenant_id = self._create_tenant("Example Workspace")
+        self.assertEqual(tenant_id, "example-workspace")
+        projects_response = self.client.get(
+            f"/api/admin/tenants/{tenant_id}/projects", auth=("admin", "secret")
+        )
+        self.assertEqual(projects_response.status_code, 200)
+        projects = projects_response.json()
+        self.assertEqual(len(projects), 1)
+        self.project_id = projects[0]["project_id"]
+        webhook_secret_response = self.client.put(
+            f"/api/admin/tenants/{tenant_id}/secrets/COOLIFY_WEBHOOK_TOKEN",
+            json={"value": secrets.token_urlsafe(32)},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(webhook_secret_response.status_code, 200)
+        deployment_plane_response = self.client.put(
+            f"/api/admin/tenants/{tenant_id}/deployment-plane",
+            json={
+                "secret_refs": {
+                    "coolify_webhook_token": f"tenant/{tenant_id}/COOLIFY_WEBHOOK_TOKEN"
+                }
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(deployment_plane_response.status_code, 200)
         self._create_tenant("Tenant Delete")
         self._prepare_runtime_records()
+        self.webhook_token = configure_tenant_webhook_sender(
+            session_factory=create_session_factory(self.database_url),
+            tenant_id=tenant_id,
+        )
 
     def tearDown(self) -> None:
         self.client.close()
@@ -243,9 +310,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             auth=("admin", "secret"),
         )
         if response.status_code != 200:
-            raise RuntimeError(f"Failed seeding secret {secret_ref}: {response.status_code} {response.text}")
+            raise RuntimeError(
+                f"Failed seeding secret {secret_ref}: {response.status_code} {response.text}"
+            )
 
-    def _create_tenant(self, name: str) -> None:
+    def _create_tenant(self, name: str) -> str:
         payload = {
             "name": name,
             "is_enabled": True,
@@ -259,7 +328,9 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             },
             "repos": {
                 "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_project_key": {
+                    "TP": "https://github.com/example/repo"
+                },
                 "mapping_rules_by_component": {},
                 "fallback_repo": None,
             },
@@ -275,20 +346,28 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 "allowed_commands": ["python -m unittest"],
                 "require_agents_md": False,
             },
-            "discord": {"channel_id": "discord-channel-1", "notify_events": ["run_started"]},
+            "discord": {
+                "channel_id": "discord-channel-1",
+                "notify_events": ["run_started"],
+            },
         }
-        response = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        response = self.client.post(
+            "/api/admin/tenants", json=payload, auth=("admin", "secret")
+        )
         if response.status_code != 201:
-            raise RuntimeError(f"Failed creating tenant {name}: {response.status_code} {response.text}")
+            raise RuntimeError(
+                f"Failed creating tenant {name}: {response.status_code} {response.text}"
+            )
+        return response.json()["tenant_id"]
 
     def _prepare_runtime_records(self) -> None:
         session_factory = create_session_factory(self.database_url)
         settings = get_settings()
         now = datetime.now(timezone.utc)
         with session_factory() as session:
-            tenant = session.get(Tenant, "example")
+            tenant = session.get(Tenant, "example-workspace")
             if tenant is None:
-                raise RuntimeError("Missing seeded tenant example")
+                raise RuntimeError("Missing seeded tenant example-workspace")
             tenant.jira_config = {
                 **dict(tenant.jira_config or {}),
                 "connection_id": "conn-e2e",
@@ -303,7 +382,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     account_email="test@example.com",
                     cloud_id="cloud-1",
                     site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work", "read:space:confluence", "read:page:confluence"],
+                    scopes=[
+                        "read:jira-work",
+                        "write:jira-work",
+                        "read:space:confluence",
+                        "read:page:confluence",
+                    ],
                     access_token_encrypted=encrypt_value(
                         plaintext="access-token",
                         encryption_key=settings.secrets_encryption_key,
@@ -322,8 +406,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     workflow_id="workflow-e2e",
                     execution_id="workflow-e2e",
                     workflow_type_key="issue_execution",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id=self.project_id,
                     source_system="jira",
                     source_ref="TP-1",
                     display_name="smoke",
@@ -349,8 +433,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 Run(
                     run_id="run-e2e",
                     workflow_id="workflow-e2e",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id=self.project_id,
                     issue_key="TP-1",
                     issue_summary="smoke",
                     issue_description=None,
@@ -392,14 +476,18 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         kwargs: dict = {}
         if scenario.auth is not None:
             kwargs["auth"] = scenario.auth
+        if scenario.headers is not None:
+            kwargs["headers"] = scenario.headers
         if scenario.json is not None:
             kwargs["json"] = scenario.json
-        if scenario.path.split("?", maxsplit=1)[0].endswith("/stream") and 200 in scenario.expected_statuses:
+        if (
+            scenario.path.split("?", maxsplit=1)[0].endswith("/stream")
+            and 200 in scenario.expected_statuses
+        ):
             return SimpleNamespace(status_code=200, text="")
         return self.client.request(method, scenario.path, **kwargs)
 
-    @classmethod
-    def _route_scenarios(cls) -> dict[tuple[str, str], RouteScenario]:
+    def _route_scenarios(self) -> dict[tuple[str, str], RouteScenario]:
         admin = ("admin", "secret")
         return {
             ("POST", "/api/admin/auth/login"): RouteScenario(
@@ -407,8 +495,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 json={"username": "admin", "password": "secret"},
                 expected_statuses=(200,),
             ),
-            ("GET", "/api/admin/auth/me"): RouteScenario(path="/api/admin/auth/me", auth=admin),
-            ("GET", "/api/admin/status"): RouteScenario(path="/api/admin/status", auth=admin),
+            ("GET", "/api/admin/auth/me"): RouteScenario(
+                path="/api/admin/auth/me", auth=admin
+            ),
+            ("GET", "/api/admin/status"): RouteScenario(
+                path="/api/admin/status", auth=admin
+            ),
             ("GET", "/api/admin/agent-runtime-models"): RouteScenario(
                 path="/api/admin/agent-runtime-models",
                 auth=admin,
@@ -425,13 +517,27 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/atlassian/connect/start?return_to=wizard",
                 auth=admin,
             ),
-            ("GET", "/api/admin/atlassian/connections/{connection_id}/jira-projects"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/atlassian/connections/{connection_id}/jira-projects",
+            ): RouteScenario(
                 path="/api/admin/atlassian/connections/conn-e2e/jira-projects",
                 auth=admin,
             ),
-            ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
-            ("GET", "/api/admin/runs/{run_id}"): RouteScenario(path="/api/admin/runs/run-e2e", auth=admin),
-            ("GET", "/api/admin/workflows"): RouteScenario(path="/api/admin/workflows", auth=admin),
+            ("GET", "/api/admin/runs"): RouteScenario(
+                path="/api/admin/runs", auth=admin
+            ),
+            ("GET", "/api/admin/runs/{run_id}"): RouteScenario(
+                path="/api/admin/runs/run-e2e", auth=admin
+            ),
+            ("POST", "/api/admin/runs/{run_id}/preview"): RouteScenario(
+                path="/api/admin/runs/run-missing/preview",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows"): RouteScenario(
+                path="/api/admin/workflows", auth=admin
+            ),
             ("POST", "/api/admin/workflows"): RouteScenario(
                 path="/api/admin/workflows",
                 auth=admin,
@@ -439,15 +545,15 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(422,),
             ),
             ("GET", "/api/admin/workflows/board"): RouteScenario(
-                path="/api/admin/workflows/board?tenant_id=example",
+                path="/api/admin/workflows/board?tenant_id=example-workspace",
                 auth=admin,
             ),
             ("GET", "/api/admin/workflow-types"): RouteScenario(
-                path="/api/admin/workflow-types?tenant_id=example",
+                path="/api/admin/workflow-types?tenant_id=example-workspace",
                 auth=admin,
             ),
             ("GET", "/api/admin/workflow-types/{workflow_type_key}"): RouteScenario(
-                path="/api/admin/workflow-types/issue_execution?tenant_id=example",
+                path="/api/admin/workflow-types/issue_execution?tenant_id=example-workspace",
                 auth=admin,
             ),
             ("GET", "/api/admin/workflows/{execution_id}"): RouteScenario(
@@ -482,11 +588,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(404,),
             ),
             ("GET", "/api/admin/runtime/logs"): RouteScenario(
-                path="/api/admin/runtime/logs?tenant_id=example&project_id=example-default",
+                path=f"/api/admin/runtime/logs?tenant_id=example-workspace&project_id={self.project_id}",
                 auth=admin,
             ),
             ("GET", "/api/admin/runtime/events/stream"): RouteScenario(
-                path="/api/admin/runtime/events/stream?tenant_id=example&project_id=example-default",
+                path=f"/api/admin/runtime/events/stream?tenant_id=example-workspace&project_id={self.project_id}",
                 auth=admin,
             ),
             ("POST", "/api/admin/workflows/{execution_id}/attempts"): RouteScenario(
@@ -500,47 +606,74 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(201, 400, 404, 409),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/telemetry",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/telemetry",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry/stream"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry/stream",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/telemetry/stream",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/telemetry/stream",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/audit"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/audit",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/audit",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/audit"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/audit",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/audit",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/transcript"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/transcript",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/transcript",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("POST", "/api/admin/workflows/{execution_id}/operations/{operation_id}/retry"): RouteScenario(
+            (
+                "POST",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/retry",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/retry",
                 auth=admin,
                 expected_statuses=(400, 404, 409),
             ),
-            ("POST", "/api/admin/workflows/{execution_id}/operations/{operation_id}/restart"): RouteScenario(
+            (
+                "POST",
+                "/api/admin/workflows/{execution_id}/operations/{operation_id}/restart",
+            ): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/operations/op-missing/restart",
                 auth=admin,
                 json={"restart_reason": "Smoke test restart request"},
@@ -563,21 +696,24 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(200, 409),
             ),
             ("GET", "/api/admin/agents/activity"): RouteScenario(
-                path="/api/admin/agents/activity?tenant_id=example&project_id=example-default",
+                path=f"/api/admin/agents/activity?tenant_id=example-workspace&project_id={self.project_id}",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/metrics"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/metrics",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/metrics",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/metrics",
                 auth=admin,
             ),
             ("GET", "/api/admin/alerts/evaluate"): RouteScenario(
-                path="/api/admin/alerts/evaluate?tenant_id=example",
+                path="/api/admin/alerts/evaluate?tenant_id=example-workspace",
                 auth=admin,
             ),
             ("POST", "/api/admin/audit/export"): RouteScenario(
                 path="/api/admin/audit/export",
                 auth=admin,
-                json={"tenant_id": "example"},
+                json={"tenant_id": "example-workspace"},
             ),
             ("GET", "/api/admin/discord/commands/status"): RouteScenario(
                 path="/api/admin/discord/commands/status",
@@ -588,37 +724,46 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/health"): RouteScenario(
-                path="/api/admin/tenants/example/health",
+                path="/api/admin/tenants/example-workspace/health",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/notifications"): RouteScenario(
-                path="/api/admin/tenants/example/notifications",
+                path="/api/admin/tenants/example-workspace/notifications",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/delivery-summary"): RouteScenario(
-                path="/api/admin/tenants/example/delivery-summary",
+                path="/api/admin/tenants/example-workspace/delivery-summary",
                 auth=admin,
             ),
             ("GET", "/api/admin/observability/platform"): RouteScenario(
                 path="/api/admin/observability/platform",
                 auth=admin,
             ),
-            ("POST", "/api/admin/workers/{service_instance_id}/runtime-dependencies/{runtime_kind}/login-session"): RouteScenario(
+            (
+                "POST",
+                "/api/admin/workers/{service_instance_id}/runtime-dependencies/{runtime_kind}/login-session",
+            ): RouteScenario(
                 path="/api/admin/workers/worker-missing/runtime-dependencies/openai/login-session",
                 auth=admin,
                 expected_statuses=(202, 404, 409),
             ),
-            ("GET", "/api/admin/workers/runtime-auth-requests/{request_id}"): RouteScenario(
+            (
+                "GET",
+                "/api/admin/workers/runtime-auth-requests/{request_id}",
+            ): RouteScenario(
                 path="/api/admin/workers/runtime-auth-requests/request-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
             ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
-                path="/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&limit=25&offset=0",
+                path=f"/api/admin/observability/webhook-jobs?tenant_id=example-workspace&project_id={self.project_id}&limit=25&offset=0",
                 auth=admin,
             ),
-            ("POST", "/api/admin/observability/webhook-jobs/{job_id}/retry"): RouteScenario(
-                path="/api/admin/observability/webhook-jobs/job-missing/retry?tenant_id=example&project_id=example-default",
+            (
+                "POST",
+                "/api/admin/observability/webhook-jobs/{job_id}/retry",
+            ): RouteScenario(
+                path=f"/api/admin/observability/webhook-jobs/job-missing/retry?tenant_id=example-workspace&project_id={self.project_id}",
                 auth=admin,
                 expected_statuses=(404, 409),
             ),
@@ -627,14 +772,19 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
             ),
             ("GET", "/api/admin/observability/tenants/{tenant_id}"): RouteScenario(
-                path="/api/admin/observability/tenants/example",
+                path="/api/admin/observability/tenants/example-workspace",
                 auth=admin,
             ),
-            ("GET", "/api/admin/observability/tenants/{tenant_id}/projects/{project_id}"): RouteScenario(
-                path="/api/admin/observability/tenants/example/projects/example-default",
+            (
+                "GET",
+                "/api/admin/observability/tenants/{tenant_id}/projects/{project_id}",
+            ): RouteScenario(
+                path=f"/api/admin/observability/tenants/example-workspace/projects/{self.project_id}",
                 auth=admin,
             ),
-            ("GET", "/api/admin/secrets"): RouteScenario(path="/api/admin/secrets", auth=admin),
+            ("GET", "/api/admin/secrets"): RouteScenario(
+                path="/api/admin/secrets", auth=admin
+            ),
             ("GET", "/api/admin/agent-runtimes"): RouteScenario(
                 path="/api/admin/agent-runtimes",
                 auth=admin,
@@ -670,12 +820,18 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(200, 400, 404, 422),
             ),
-            ("POST", "/api/admin/agent-runtime-profiles/{profile_name}/reset"): RouteScenario(
+            (
+                "POST",
+                "/api/admin/agent-runtime-profiles/{profile_name}/reset",
+            ): RouteScenario(
                 path="/api/admin/agent-runtime-profiles/smoke_profile/reset",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 422),
             ),
-            ("DELETE", "/api/admin/agent-runtime-profiles/{profile_name}"): RouteScenario(
+            (
+                "DELETE",
+                "/api/admin/agent-runtime-profiles/{profile_name}",
+            ): RouteScenario(
                 path="/api/admin/agent-runtime-profiles/smoke_profile",
                 auth=admin,
                 expected_statuses=(204, 404),
@@ -685,7 +841,9 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 json={
                     "role_routing": {"pm": "pm_conversation_fast"},
-                    "name_routing": {"workflow_review_default": "engineering_execution_deep"},
+                    "name_routing": {
+                        "workflow_review_default": "engineering_execution_deep"
+                    },
                 },
             ),
             ("POST", "/api/admin/agent-runtimes/reset"): RouteScenario(
@@ -711,7 +869,9 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 json={"value": "abc"},
             ),
-            ("GET", "/api/admin/tenants"): RouteScenario(path="/api/admin/tenants", auth=admin),
+            ("GET", "/api/admin/tenants"): RouteScenario(
+                path="/api/admin/tenants", auth=admin
+            ),
             ("POST", "/api/admin/tenants"): RouteScenario(
                 path="/api/admin/tenants",
                 auth=admin,
@@ -722,7 +882,9 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     "github": {"mode": "github_app", "installation_id": "12345"},
                     "repos": {
                         "allowlist": ["https://github.com/example/repo"],
-                        "mapping_rules_by_project_key": {"TC": "https://github.com/example/repo"},
+                        "mapping_rules_by_project_key": {
+                            "TC": "https://github.com/example/repo"
+                        },
                         "mapping_rules_by_component": {},
                         "fallback_repo": None,
                     },
@@ -747,14 +909,16 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(204,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}"): RouteScenario(path="/api/admin/tenants/example", auth=admin),
+            ("GET", "/api/admin/tenants/{tenant_id}"): RouteScenario(
+                path="/api/admin/tenants/example-workspace", auth=admin
+            ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/configuration"): RouteScenario(
-                path="/api/admin/tenants/example/configuration",
+                path="/api/admin/tenants/example-workspace/configuration",
                 auth=admin,
-                json={"name": "example"},
+                json={"name": "Example Workspace"},
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/jira"): RouteScenario(
-                path="/api/admin/tenants/example/jira",
+                path="/api/admin/tenants/example-workspace/jira",
                 auth=admin,
                 json={
                     "jira": {
@@ -766,24 +930,26 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/github"): RouteScenario(
-                path="/api/admin/tenants/example/github",
+                path="/api/admin/tenants/example-workspace/github",
                 auth=admin,
                 json={"github": {"mode": "github_app", "installation_id": "12345"}},
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/repos"): RouteScenario(
-                path="/api/admin/tenants/example/repos",
+                path="/api/admin/tenants/example-workspace/repos",
                 auth=admin,
                 json={
                     "repos": {
                         "allowlist": ["https://github.com/example/repo"],
-                        "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                        "mapping_rules_by_project_key": {
+                            "TP": "https://github.com/example/repo"
+                        },
                         "mapping_rules_by_component": {},
                         "fallback_repo": None,
                     },
                 },
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/policy"): RouteScenario(
-                path="/api/admin/tenants/example/policy",
+                path="/api/admin/tenants/example-workspace/policy",
                 auth=admin,
                 json={
                     "policy": {
@@ -801,130 +967,183 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/observability"): RouteScenario(
-                path="/api/admin/tenants/example/observability",
+                path="/api/admin/tenants/example-workspace/observability",
                 auth=admin,
-                json={"observability": {"audit_retention_days": 365, "audit_export_enabled": True}},
+                json={
+                    "observability": {
+                        "audit_retention_days": 365,
+                        "audit_export_enabled": True,
+                    }
+                },
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/discord"): RouteScenario(
-                path="/api/admin/tenants/example/discord",
+                path="/api/admin/tenants/example-workspace/discord",
                 auth=admin,
-                json={"discord": {"channel_id": "discord-channel-1", "notify_events": ["run_started"]}},
+                json={
+                    "discord": {
+                        "channel_id": "discord-channel-1",
+                        "command_secret_ref": "test-webhook-token",
+                        "notify_events": ["run_started"],
+                    }
+                },
             ),
             ("PATCH", "/api/admin/tenants/{tenant_id}/experience"): RouteScenario(
-                path="/api/admin/tenants/example/experience",
+                path="/api/admin/tenants/example-workspace/experience",
                 auth=admin,
                 json={"experience": {"default_mode": "technical"}, "setup_state": {}},
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/archive"): RouteScenario(
-                path="/api/admin/tenants/example/archive",
+                path="/api/admin/tenants/example-workspace/archive",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/github/install/start"): RouteScenario(
-                path="/api/admin/tenants/example/github/install/start?return_to=edit",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/github/install/start",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/github/install/start?return_to=edit",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/discord/install/start"): RouteScenario(
-                path="/api/admin/tenants/example/discord/install/start?return_to=edit",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/discord/install/start",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/discord/install/start?return_to=edit",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 422),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/discord/link/start"): RouteScenario(
-                path="/api/admin/tenants/example/discord/link/start",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/discord/link/start",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/discord/link/start",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 422),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/discord/onboarding-invite"): RouteScenario(
-                path="/api/admin/tenants/example/discord/onboarding-invite",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/discord/onboarding-invite",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/discord/onboarding-invite",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 422),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/discord/identity"): RouteScenario(
-                path="/api/admin/tenants/example/discord/identity",
+                path="/api/admin/tenants/example-workspace/discord/identity",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/github/repositories"): RouteScenario(
-                path="/api/admin/tenants/example/github/repositories",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/github/repositories",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/github/repositories",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/members"): RouteScenario(
-                path="/api/admin/tenants/example/members",
+                path="/api/admin/tenants/example-workspace/members",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/members/{membership_id}"): RouteScenario(
-                path="/api/admin/tenants/example/members/membership-missing",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/members/{membership_id}",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/members/membership-missing",
                 auth=admin,
                 json={},
                 expected_statuses=(404, 422),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/teams"): RouteScenario(
-                path="/api/admin/tenants/example/teams",
+                path="/api/admin/tenants/example-workspace/teams",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/teams"): RouteScenario(
-                path="/api/admin/tenants/example/teams",
+                path="/api/admin/tenants/example-workspace/teams",
                 auth=admin,
                 json={},
                 expected_statuses=(201, 409, 422),
             ),
             ("PUT", "/api/admin/tenants/{tenant_id}/teams/{team_id}"): RouteScenario(
-                path="/api/admin/tenants/example/teams/team-missing",
+                path="/api/admin/tenants/example-workspace/teams/team-missing",
                 auth=admin,
                 json={},
                 expected_statuses=(404, 422),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/invites"): RouteScenario(
-                path="/api/admin/tenants/example/invites",
+                path="/api/admin/tenants/example-workspace/invites",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/invites"): RouteScenario(
-                path="/api/admin/tenants/example/invites",
+                path="/api/admin/tenants/example-workspace/invites",
                 auth=admin,
                 json={},
                 expected_statuses=(201, 409, 422),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/invites/{invite_id}/resend"): RouteScenario(
-                path="/api/admin/tenants/example/invites/invite-missing/resend",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/invites/{invite_id}/resend",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/invites/invite-missing/resend",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/invites/{invite_id}/revoke"): RouteScenario(
-                path="/api/admin/tenants/example/invites/invite-missing/revoke",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/invites/{invite_id}/revoke",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/invites/invite-missing/revoke",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/disconnect"): RouteScenario(
-                path="/api/admin/tenants/example/atlassian/disconnect",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/atlassian/disconnect",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/atlassian/disconnect",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/diagnostics"): RouteScenario(
-                path="/api/admin/tenants/example/atlassian/jira/webhooks/diagnostics",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/diagnostics",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/atlassian/jira/webhooks/diagnostics",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces"): RouteScenario(
-                path="/api/admin/tenants/example/atlassian/confluence/spaces",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/atlassian/confluence/spaces",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces/{space_key}/pages"): RouteScenario(
-                path="/api/admin/tenants/example/atlassian/confluence/spaces/ARCH/pages",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces/{space_key}/pages",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/atlassian/confluence/spaces/ARCH/pages",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/provision"): RouteScenario(
-                path="/api/admin/tenants/example/atlassian/jira/webhooks/provision",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/provision",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/atlassian/jira/webhooks/provision",
                 auth=admin,
                 expected_statuses=(200, 400, 502),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/reset"): RouteScenario(
-                path="/api/admin/tenants/example/atlassian/jira/webhooks/reset",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/reset",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/atlassian/jira/webhooks/reset",
                 auth=admin,
                 expected_statuses=(200, 400, 502),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects"): RouteScenario(
-                path="/api/admin/tenants/example/projects",
+                path="/api/admin/tenants/example-workspace/projects",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/projects"): RouteScenario(
-                path="/api/admin/tenants/example/projects",
+                path="/api/admin/tenants/example-workspace/projects",
                 auth=admin,
                 json={
                     "name": "Project Added",
@@ -937,57 +1156,87 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(201,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}",
                 auth=admin,
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/configuration"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/configuration",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/configuration",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/configuration",
                 auth=admin,
                 json={
-                    "name": "example Default",
+                    "name": "Example Workspace Default",
                     "github_repository": "https://github.com/example/repo",
                     "jira_project_key": "TP",
                 },
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/policy"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/policy",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/policy",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/policy",
                 auth=admin,
                 json={"policy_overrides": {}},
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/environment"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/environment",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/environment",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/environment",
                 auth=admin,
                 json={"environment": {}},
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/secrets"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/secrets",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/secrets",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/secrets",
                 auth=admin,
                 json={"secret_refs": {}},
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/discord",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/discord",
                 auth=admin,
                 json={"discord": {"notify_events": []}},
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/archive"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/archive",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/archive",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/archive",
                 auth=admin,
                 json={
                     "is_archived": False,
                 },
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/jira/resolve-run-board",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/jira/resolve-run-board",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 502),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/installs",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/installs",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/installs",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/installs",
                 auth=admin,
                 json={
                     "kind": "fastlane_lane",
@@ -1003,8 +1252,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(201,),
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/installs/install-missing",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/installs/install-missing",
                 auth=admin,
                 json={
                     "kind": "fastlane_lane",
@@ -1020,85 +1272,136 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(404,),
             ),
-            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/installs/install-missing",
+            (
+                "DELETE",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/installs/install-missing",
                 auth=admin,
                 expected_statuses=(404, 204),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/install-requests",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/install-requests",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/install-requests/request-missing",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/install-requests/request-missing",
                 auth=admin,
                 json={"status": "rejected"},
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/automations",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/automations",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/automations",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/automations",
                 auth=admin,
                 json={"automations": []},
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations/{kind}/run-now"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/automations/daily-summary/run-now",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/automations/{kind}/run-now",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/automations/daily-summary/run-now",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 409),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/architecture-documents",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/architecture-documents",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/architecture-documents",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/architecture-documents",
                 auth=admin,
                 json={},
                 expected_statuses=(422,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/architecture-documents/document-missing",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/architecture-documents/document-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/architecture-documents/document-missing",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/architecture-documents/document-missing",
                 auth=admin,
                 json={"title": "Missing", "status": "draft"},
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/assets",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/assets",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/sources",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/sources",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/stats"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/stats",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/stats",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/stats",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/assets/asset-missing",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/chunks"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing/chunks",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/chunks",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/assets/asset-missing/chunks",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/debug-search"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/debug-search?query=test",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/debug-search",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/debug-search?query=test",
                 auth=admin,
                 expected_statuses=(200,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/assets",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/assets",
                 auth=admin,
                 json={
                     "title": "E2E Knowledge Note",
@@ -1108,8 +1411,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(201,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/sources",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/sources",
                 auth=admin,
                 json={
                     "connector_type": "discord",
@@ -1118,44 +1424,68 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(201, 409),
             ),
-            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing",
+            (
+                "DELETE",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/assets/asset-missing",
                 auth=admin,
                 expected_statuses=(204, 404),
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/sources/source-missing",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/sources/source-missing",
                 auth=admin,
                 json={"status": "disabled"},
                 expected_statuses=(200, 404, 409),
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/status"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/assets/asset-missing/status",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets/{asset_id}/status",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/assets/asset-missing/status",
                 auth=admin,
                 json={"status": "ready"},
                 expected_statuses=(200, 404, 409),
             ),
-            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/sources/source-missing",
+            (
+                "DELETE",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/sources/source-missing",
                 auth=admin,
                 expected_statuses=(204, 404),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}/sync"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/sources/source-missing/sync",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sources/{source_id}/sync",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/sources/source-missing/sync",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 409, 502),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sync-jira"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/knowledge/sync-jira",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/sync-jira",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/knowledge/sync-jira",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 502),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/discord/allowlist-requests",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests/{user_id}/approve"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/discord/allowlist-requests/u1/approve",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord/allowlist-requests/{user_id}/approve",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/discord/allowlist-requests/u1/approve",
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
@@ -1176,12 +1506,20 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ),
             ("POST", "/api/internal/deployment-hosts/register"): RouteScenario(
                 path="/api/internal/deployment-hosts/register",
-                json={"bootstrap_token": "missing", "agent_version": "smoke", "advertised_capabilities": []},
+                json={
+                    "bootstrap_token": "missing",
+                    "agent_version": "smoke",
+                    "advertised_capabilities": [],
+                },
                 expected_statuses=(401,),
             ),
             ("POST", "/api/internal/deployment-hosts/heartbeat"): RouteScenario(
                 path="/api/internal/deployment-hosts/heartbeat",
-                json={"agent_version": "smoke", "advertised_capabilities": [], "state": "active"},
+                json={
+                    "agent_version": "smoke",
+                    "advertised_capabilities": [],
+                    "state": "active",
+                },
                 expected_statuses=(401, 403),
             ),
             ("POST", "/api/internal/deployment-hosts/commands/claim"): RouteScenario(
@@ -1189,171 +1527,279 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 json={},
                 expected_statuses=(401, 403),
             ),
-            ("POST", "/api/internal/deployment-hosts/commands/{command_id}/start"): RouteScenario(
+            (
+                "POST",
+                "/api/internal/deployment-hosts/commands/{command_id}/start",
+            ): RouteScenario(
                 path="/api/internal/deployment-hosts/commands/command-missing/start",
                 json={"claim_id": "claim-missing"},
                 expected_statuses=(401, 403),
             ),
-            ("POST", "/api/internal/deployment-hosts/commands/{command_id}/result"): RouteScenario(
+            (
+                "POST",
+                "/api/internal/deployment-hosts/commands/{command_id}/result",
+            ): RouteScenario(
                 path="/api/internal/deployment-hosts/commands/command-missing/result",
-                json={"claim_id": "claim-missing", "status": "failed", "result": {}, "last_error": "smoke"},
+                json={
+                    "claim_id": "claim-missing",
+                    "status": "failed",
+                    "result": {},
+                    "last_error": "smoke",
+                },
                 expected_statuses=(401, 403),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/deployment-plane"): RouteScenario(
-                path="/api/admin/tenants/example/deployment-plane",
+                path="/api/admin/tenants/example-workspace/deployment-plane",
                 auth=admin,
             ),
             ("PUT", "/api/admin/tenants/{tenant_id}/deployment-plane"): RouteScenario(
-                path="/api/admin/tenants/example/deployment-plane",
+                path="/api/admin/tenants/example-workspace/deployment-plane",
                 auth=admin,
                 json={"provider": "internal_coolify", "state": "unconfigured"},
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/deployments/overview"): RouteScenario(
-                path="/api/admin/tenants/example/deployments/overview",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/deployments/overview",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/deployments/overview",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/project-navigation"): RouteScenario(
-                path="/api/admin/tenants/example/project-navigation",
+                path="/api/admin/tenants/example-workspace/project-navigation",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/github/branches"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/github/branches",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/github/branches",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/github/branches",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 502),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-policy"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-policy",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-policy",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/deployment-policy",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-policy"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-policy",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-policy",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/deployment-policy",
                 auth=admin,
-                json={"enabled": False, "production_branch": None, "preview_prs_enabled": False},
+                json={
+                    "enabled": False,
+                    "production_branch": None,
+                    "preview_prs_enabled": False,
+                },
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-setup"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/deployment-setup",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-setup",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/deployment-setup",
                 auth=admin,
-                json={"enabled": False, "production_branch": None, "preview_prs_enabled": False},
+                json={
+                    "enabled": False,
+                    "production_branch": None,
+                    "preview_prs_enabled": False,
+                },
                 expected_statuses=(202, 400, 409, 422),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps?limit=10&offset=0",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps?limit=10&offset=0",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps",
                 auth=admin,
                 json={},
                 expected_statuses=(422,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analyze"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/analyze",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analyze",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/analyze",
                 auth=admin,
                 json={},
                 expected_statuses=(201, 400, 404, 409, 422),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/analysis-runs",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/analysis-runs",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs/{run_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/analysis-runs/run-missing",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs/{run_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/analysis-runs/run-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing",
                 auth=admin,
                 json={"name": "Missing App"},
                 expected_statuses=(404,),
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing",
                 auth=admin,
                 json={"name": "Missing App"},
                 expected_statuses=(404,),
             ),
-            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing",
+            (
+                "DELETE",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing",
                 auth=admin,
                 expected_statuses=(204, 404),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-config",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-config",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-config",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-config",
                 auth=admin,
                 json={},
                 expected_statuses=(404, 422),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-releases",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-releases",
                 auth=admin,
                 json={"git_ref": "main", "commit_sha": "abcdef1"},
                 expected_statuses=(404, 409, 422),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases/release-missing",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-releases/release-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-releases/release-missing/status",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/logs",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/projects/project-missing/apps/app-missing/deployment-releases/release-missing/logs",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            (
+                "PATCH",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-releases/release-missing/status",
                 auth=admin,
                 json={"status": "failed", "last_error": "smoke"},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-resources/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-resources/apply",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-resources/apply",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-resources/apply",
                 auth=admin,
                 json={"resource_keys": []},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-volumes/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-volumes/apply",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-volumes/apply",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-volumes/apply",
                 auth=admin,
                 json={"volume_keys": []},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-domains/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-domains/apply",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-domains/apply",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-domains/apply",
                 auth=admin,
                 json={"domain_keys": []},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/apply"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/apply",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/apply",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/apply",
                 auth=admin,
                 json={"backup_keys": []},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/trigger"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/trigger",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/trigger",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/trigger",
                 auth=admin,
                 json={"backup_keys": []},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/request"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/request",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/request",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/request",
                 auth=admin,
                 json={"backup_keys": []},
                 expected_statuses=(404,),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/restore",
+            (
+                "POST",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/restore",
                 auth=admin,
                 json={
                     "backup_key": "backup",
@@ -1363,93 +1809,123 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 },
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/executions"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/executions?backup_key=backup",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/executions",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/executions?backup_key=backup",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/restore-runs",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/restore-runs",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs/{restore_run_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default/apps/app-missing/deployment-backups/restore-runs/restore-missing",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs/{restore_run_id}",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/projects/{self.project_id}/apps/app-missing/deployment-backups/restore-runs/restore-missing",
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("POST", "/deployments/coolify/webhook/{tenant_id}/{project_id}/{token}"): RouteScenario(
-                path="/deployments/coolify/webhook/example/example-default/token-missing",
+            (
+                "POST",
+                "/deployments/coolify/webhook/{tenant_id}/{project_id}/{token}",
+            ): RouteScenario(
+                path=f"/deployments/coolify/webhook/example-workspace/{self.project_id}/INVALID_TEST_TOKEN",
                 json={},
-                expected_statuses=(202, 401, 404),
+                expected_statuses=(401,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/ready-preview"): RouteScenario(
-                path="/api/admin/tenants/example/ready-preview?max_results=5",
+                path="/api/admin/tenants/example-workspace/ready-preview?max_results=5",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/release/bootstrap"): RouteScenario(
-                path="/api/admin/tenants/example/release/bootstrap",
+                path="/api/admin/tenants/example-workspace/release/bootstrap",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/release/bootstrap"): RouteScenario(
-                path="/api/admin/tenants/example/release/bootstrap",
+                path="/api/admin/tenants/example-workspace/release/bootstrap",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/repo-bootstrap"): RouteScenario(
-                path="/api/admin/tenants/example/repo-bootstrap",
+                path="/api/admin/tenants/example-workspace/repo-bootstrap",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/secrets"): RouteScenario(
-                path="/api/admin/tenants/example/secrets",
+                path="/api/admin/tenants/example-workspace/secrets",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/secrets/resolve"): RouteScenario(
-                path="/api/admin/tenants/example/secrets/resolve",
+                path="/api/admin/tenants/example-workspace/secrets/resolve",
                 auth=admin,
                 json={"secret_ref": "DISCORD_BOT_TOKEN"},
             ),
-            ("DELETE", "/api/admin/tenants/{tenant_id}/secrets/{secret_key:path}"): RouteScenario(
-                path="/api/admin/tenants/example/secrets/E2E_TENANT_SECRET",
+            (
+                "DELETE",
+                "/api/admin/tenants/{tenant_id}/secrets/{secret_key:path}",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/secrets/E2E_TENANT_SECRET",
                 auth=admin,
                 expected_statuses=(204, 404),
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/secrets/{secret_key:path}"): RouteScenario(
-                path="/api/admin/tenants/example/secrets/E2E_TENANT_SECRET",
+            (
+                "PUT",
+                "/api/admin/tenants/{tenant_id}/secrets/{secret_key:path}",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/secrets/E2E_TENANT_SECRET",
                 auth=admin,
                 json={"value": "abc"},
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/token-stage-diagnostics"): RouteScenario(
-                path="/api/admin/tenants/example/token-stage-diagnostics?project_id=example-default",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/token-stage-diagnostics",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/token-stage-diagnostics?project_id={self.project_id}",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/token-stage-diagnostics-compare"): RouteScenario(
-                path="/api/admin/tenants/example/token-stage-diagnostics-compare?project_ids=example-default",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/token-stage-diagnostics-compare",
+            ): RouteScenario(
+                path=f"/api/admin/tenants/example-workspace/token-stage-diagnostics-compare?project_ids={self.project_id}",
                 auth=admin,
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/token-overview"): RouteScenario(
-                path="/api/admin/tenants/example/token-overview?project_id=example-default",
+                path=f"/api/admin/tenants/example-workspace/token-overview?project_id={self.project_id}",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/runs/{run_id}/token-timeline"): RouteScenario(
-                path="/api/admin/tenants/example/runs/run-e2e/token-timeline",
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/runs/{run_id}/token-timeline",
+            ): RouteScenario(
+                path="/api/admin/tenants/example-workspace/runs/run-e2e/token-timeline",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/token-compare"): RouteScenario(
-                path="/api/admin/tenants/example/token-compare?project_id=example-default",
+                path=f"/api/admin/tenants/example-workspace/token-compare?project_id={self.project_id}",
                 auth=admin,
-                json={"run_ids": ["run-e2e", "run-missing"], "align_by": "turn_sequence"},
+                json={
+                    "run_ids": ["run-e2e", "run-missing"],
+                    "align_by": "turn_sequence",
+                },
                 expected_statuses=(404,),
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/test-github"): RouteScenario(
-                path="/api/admin/tenants/example/test-github",
+                path="/api/admin/tenants/example-workspace/test-github",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/test-atlassian"): RouteScenario(
-                path="/api/admin/tenants/example/test-atlassian",
+                path="/api/admin/tenants/example-workspace/test-atlassian",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/unarchive"): RouteScenario(
-                path="/api/admin/tenants/example/unarchive",
+                path="/api/admin/tenants/example-workspace/unarchive",
                 auth=admin,
             ),
             ("GET", "/api/admin/discord/install/callback"): RouteScenario(
@@ -1457,18 +1933,37 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(400, 422),
             ),
             ("POST", "/discord/command/{tenant_id}"): RouteScenario(
-                path="/discord/command/example",
-                json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
+                path="/discord/command/example-workspace",
+                json={
+                    "user_id": "u1",
+                    "command": "!help",
+                    "channel_id": "discord-channel-1",
+                },
             ),
             ("POST", "/discord/interactions"): RouteScenario(
                 path="/discord/interactions",
                 json={"type": 1},
             ),
             ("POST", "/discord/webhook/{tenant_id}"): RouteScenario(
-                path="/discord/webhook/example",
-                json={"user_id": "u1", "command": "!help", "channel_id": "discord-channel-1"},
+                path="/discord/webhook/example-workspace",
+                headers={"X-Webhook-Token": self.webhook_token},
+                json={
+                    "user_id": "u1",
+                    "command": "!help",
+                    "channel_id": "discord-channel-1",
+                },
             ),
-            ("POST", "/github/webhook"): RouteScenario(path="/github/webhook", json={"action": "opened"}),
+            ("POST", "/github/webhook"): RouteScenario(
+                path="/github/webhook", json={"action": "opened"}
+            ),
+            (
+                "GET",
+                "/api/qa-artifacts/{tenant_id}/{project_id}/{run_id}/{artifact_path:path}",
+            ): RouteScenario(
+                path="/api/qa-artifacts/example-workspace/unknown-project/unknown-run/video.webm",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
             ("POST", "/api/public/register"): RouteScenario(
                 path="/api/public/register",
                 json={},
@@ -1513,20 +2008,49 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(401, 422),
             ),
             ("PUT", "/api/app/tenants/{tenant_id}/me/settings"): RouteScenario(
-                path="/api/app/tenants/example/me/settings",
+                path="/api/app/tenants/example-workspace/me/settings",
                 json={},
                 expected_statuses=(401, 422),
             ),
             ("POST", "/api/app/onboarding/{tenant_id}/complete"): RouteScenario(
-                path="/api/app/onboarding/example/complete",
+                path="/api/app/onboarding/example-workspace/complete",
                 json={},
                 expected_statuses=(401, 404, 422),
             ),
             ("GET", "/health"): RouteScenario(path="/health"),
             ("GET", "/metrics"): RouteScenario(path="/metrics"),
-            ("POST", "/jira/webhook/{tenant_id}"): RouteScenario(path="/jira/webhook/example", json={"webhookEvent": "jira:issue_updated"}),
+            ("POST", "/jira/webhook/{tenant_id}"): RouteScenario(
+                path="/jira/webhook/example-workspace",
+                headers={"X-Webhook-Token": self.webhook_token},
+                json={"webhookEvent": "jira:issue_updated"},
+            ),
             ("GET", "/runs/{run_id}"): RouteScenario(path="/runs/run-e2e", auth=admin),
         }
+
+    def test_run_preview_scenario_requires_authentication_and_rejects_missing_run(
+        self,
+    ) -> None:
+        scenario = self._route_scenarios()[("POST", "/api/admin/runs/{run_id}/preview")]
+        unauthenticated = self.client.post(scenario.path)
+        self.assertEqual(unauthenticated.status_code, 401)
+        response = self._request("POST", scenario)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Run not found"})
+
+    def test_deployment_logs_scenario_requires_authentication_and_rejects_missing_project(
+        self,
+    ) -> None:
+        scenario = self._route_scenarios()[
+            (
+                "GET",
+                "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/logs",
+            )
+        ]
+        unauthenticated = self.client.get(scenario.path)
+        self.assertEqual(unauthenticated.status_code, 401)
+        response = self._request("GET", scenario)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Project not found"})
 
     def test_every_external_route_has_smoke_scenario_and_no_500(self) -> None:
         scenarios = self._route_scenarios()

@@ -7,7 +7,10 @@ import re
 
 from sqlalchemy import select
 
-from orchestrator.core.qa.demo_proof_workflow import DEMO_PROOF_STATE_REQUESTED, transition_demo_proof_state
+from orchestrator.core.qa.demo_proof_workflow import (
+    DEMO_PROOF_STATE_REQUESTED,
+    transition_demo_proof_state,
+)
 from orchestrator.core.workflow.execution_projection import workflow_execution_id
 from orchestrator.core.workflow.operation_service import (
     OPERATION_STATUS_FAILED,
@@ -17,7 +20,10 @@ from orchestrator.core.workflow.operation_service import (
     OPERATION_STATUS_WAITING_FOR_INPUT,
     fail_workflow_operation,
 )
-from orchestrator.core.workflow.execution_status import mark_workflow_completed, mark_workflow_failed
+from orchestrator.core.workflow.execution_status import (
+    mark_workflow_completed,
+    mark_workflow_failed,
+)
 from orchestrator.core.workflow.runtime import WorkflowAdvanceOutcome
 from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
@@ -32,7 +38,11 @@ from orchestrator.core.workflow.work_units import (
     seed_declared_work_units_for_operation_attempt,
 )
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 DEMO_PROOF_HANDLER_KEY = "demo_proof"
 DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
@@ -162,9 +172,18 @@ _DEMO_PROOF_OBSERVATION_EVENTS: dict[str, tuple[str, str]] = {
     "RouteReady": (DEMO_PROOF_STEP_RELEASE, "route_ready_observed"),
     "RecordingStarted": (DEMO_PROOF_STEP_RECORDING, "recording_started_observed"),
     "RecordingDeferred": (DEMO_PROOF_STEP_RECORDING, "recording_deferred_observed"),
-    "EvidenceUploadStarted": (DEMO_PROOF_STEP_EVIDENCE_UPLOAD, "evidence_upload_started_observed"),
-    "PREvidenceAttachStarted": (DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE, "pr_evidence_attach_started_observed"),
-    "PreviewCleanupRequested": (DEMO_PROOF_STEP_PREVIEW_CLEANUP, "preview_cleanup_requested_observed"),
+    "EvidenceUploadStarted": (
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        "evidence_upload_started_observed",
+    ),
+    "PREvidenceAttachStarted": (
+        DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        "pr_evidence_attach_started_observed",
+    ),
+    "PreviewCleanupRequested": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "preview_cleanup_requested_observed",
+    ),
     "FailureEvidenceUploadStarted": (
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
         "failure_evidence_upload_started_observed",
@@ -228,7 +247,11 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 }
 _DEMO_PROOF_CLEANUP_FAILURE_EVENTS = frozenset(
     event
-    for event, (operation_type, _category, _reason) in _DEMO_PROOF_FAILURE_EVENTS.items()
+    for event, (
+        operation_type,
+        _category,
+        _reason,
+    ) in _DEMO_PROOF_FAILURE_EVENTS.items()
     if operation_type == DEMO_PROOF_STEP_PREVIEW_CLEANUP
 )
 
@@ -254,14 +277,24 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "RecordingCompleted": ("artifact_urls", "recordings"),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url", "pr_body_sha256"),
-    "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
+    "PreviewCleanupCompleted": (
+        "release_id",
+        "cleanup_status",
+        "cleanup_mode",
+        "cleanup_evidence",
+    ),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("demo_proof_lease",),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
-    "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
+    "FailurePreviewCleanupCompleted": (
+        "release_id",
+        "cleanup_status",
+        "cleanup_mode",
+        "cleanup_evidence",
+    ),
 }
 _RECORDING_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("demo_proof_lease",),
@@ -282,7 +315,12 @@ _RECORDING_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 }
 _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("demo_proof_lease",),
-    "ReleaseFailed": ("release_id", "release_commit_sha", "demo_proof_lease", "error_message"),
+    "ReleaseFailed": (
+        "release_id",
+        "release_commit_sha",
+        "demo_proof_lease",
+        "error_message",
+    ),
     "ReleaseFailedPreviewCleanupCompleted": (
         "release_id",
         "cleanup_status",
@@ -290,7 +328,9 @@ _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "cleanup_evidence",
     ),
 }
-_PR_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+_PR_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[
+    str, tuple[str, ...]
+] = {
     "ProofLeaseAcquired": ("demo_proof_lease",),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ServiceVerificationPassed": (
@@ -315,7 +355,9 @@ _PR_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, 
         "cleanup_evidence",
     ),
 }
-_PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+_PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[
+    str, tuple[str, ...]
+] = {
     "ProofLeaseAcquired": ("demo_proof_lease",),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "FailureEvidenceUploaded": ("artifact_urls", "failure_evidence"),
@@ -376,7 +418,9 @@ def _required_trigger_mode(payload: dict[str, object]) -> str:
     return trigger_mode
 
 
-def _requested_release_id(payload: dict[str, object], *, trigger_mode: str) -> str | None:
+def _requested_release_id(
+    payload: dict[str, object], *, trigger_mode: str
+) -> str | None:
     release_id = str(payload.get("release_id") or "").strip()
     if trigger_mode in {"from_release", "cleanup_only"} and not release_id:
         raise RuntimeError(f"Demo proof {trigger_mode} requires release_id")
@@ -421,8 +465,14 @@ def _normalized_capture_targets(required_capture_targets: list[object]) -> list[
         seen.add(target)
         targets.append(target)
     if not targets:
-        raise RuntimeError("Demo proof required_capture_targets must be provided by PM demo requirements")
-    unsupported_targets = [target for target in targets if target not in DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS]
+        raise RuntimeError(
+            "Demo proof required_capture_targets must be provided by PM demo requirements"
+        )
+    unsupported_targets = [
+        target
+        for target in targets
+        if target not in DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS
+    ]
     if unsupported_targets:
         raise RuntimeError(
             "Demo proof required_capture_targets contains unsupported target(s): "
@@ -438,7 +488,9 @@ def _normalized_required_recording_counts(
 ) -> dict[str, int]:
     targets = _normalized_capture_targets(required_capture_targets)
     if value is None:
-        raise RuntimeError("Demo proof required_recording_counts must be provided by PM demo requirements")
+        raise RuntimeError(
+            "Demo proof required_recording_counts must be provided by PM demo requirements"
+        )
     if not isinstance(value, dict):
         raise RuntimeError("Demo proof required_recording_counts must be a JSON object")
     counts: dict[str, int] = {}
@@ -446,20 +498,29 @@ def _normalized_required_recording_counts(
     for raw_target, raw_count in value.items():
         target = str(raw_target or "").strip()
         if target not in target_set:
-            raise RuntimeError(f"Demo proof required_recording_counts contains unsupported target: {target}")
+            raise RuntimeError(
+                f"Demo proof required_recording_counts contains unsupported target: {target}"
+            )
         if isinstance(raw_count, bool):
-            raise RuntimeError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+            raise RuntimeError(
+                f"Demo proof required_recording_counts.{target} must be a positive integer"
+            )
         try:
             count = int(raw_count)
         except (TypeError, ValueError) as exc:
-            raise RuntimeError(f"Demo proof required_recording_counts.{target} must be a positive integer") from exc
+            raise RuntimeError(
+                f"Demo proof required_recording_counts.{target} must be a positive integer"
+            ) from exc
         if count < 1:
-            raise RuntimeError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+            raise RuntimeError(
+                f"Demo proof required_recording_counts.{target} must be a positive integer"
+            )
         counts[target] = count
     missing_targets = [target for target in targets if target not in counts]
     if missing_targets:
         raise RuntimeError(
-            "Demo proof required_recording_counts is missing required target(s): " + ", ".join(missing_targets)
+            "Demo proof required_recording_counts is missing required target(s): "
+            + ", ".join(missing_targets)
         )
     return counts
 
@@ -473,7 +534,9 @@ def _event_metadata(payload: dict[str, object]) -> dict[str, object] | None:
     try:
         json.dumps(raw_metadata, sort_keys=True)
     except (TypeError, ValueError) as exc:
-        raise RuntimeError("Demo proof event_metadata must be JSON serializable") from exc
+        raise RuntimeError(
+            "Demo proof event_metadata must be JSON serializable"
+        ) from exc
     return dict(raw_metadata)
 
 
@@ -485,7 +548,9 @@ def _recording_workflow_descriptions(
     event_metadata: dict[str, object] | None,
 ) -> list[dict[str, str]]:
     existing_state_by_target: dict[str, str] = {}
-    for item in list(previous_description.get(_RECORDING_WORKFLOW_DESCRIPTION_KEY) or []):
+    for item in list(
+        previous_description.get(_RECORDING_WORKFLOW_DESCRIPTION_KEY) or []
+    ):
         if not isinstance(item, dict):
             continue
         capture_target = str(item.get("capture_target") or "").strip()
@@ -494,16 +559,35 @@ def _recording_workflow_descriptions(
             existing_state_by_target[capture_target] = state
     normalized_event = str(event or "").strip()
     next_state = _RECORDING_EVENT_STATES.get(normalized_event)
-    recorded_targets = set(_metadata_string_list((event_metadata or {}).get("recorded_capture_targets")))
-    remaining_targets = set(_metadata_string_list((event_metadata or {}).get("remaining_capture_targets")))
+    recorded_targets = set(
+        _metadata_string_list((event_metadata or {}).get("recorded_capture_targets"))
+    )
+    remaining_targets = set(
+        _metadata_string_list((event_metadata or {}).get("remaining_capture_targets"))
+    )
     workflows: list[dict[str, str]] = []
     for capture_target in _normalized_capture_targets(required_capture_targets):
-        if normalized_event in {"RecordingCompleted", "RecordingFailureEvidenceCaptured"}:
-            evidence_field = "recordings" if normalized_event == "RecordingCompleted" else "failure_evidence"
-            evidence_targets = set(_metadata_string_list((event_metadata or {}).get("capture_targets")))
-            evidence_targets.update(_metadata_capture_targets_from_items((event_metadata or {}).get(evidence_field)))
+        if normalized_event in {
+            "RecordingCompleted",
+            "RecordingFailureEvidenceCaptured",
+        }:
+            evidence_field = (
+                "recordings"
+                if normalized_event == "RecordingCompleted"
+                else "failure_evidence"
+            )
+            evidence_targets = set(
+                _metadata_string_list((event_metadata or {}).get("capture_targets"))
+            )
+            evidence_targets.update(
+                _metadata_capture_targets_from_items(
+                    (event_metadata or {}).get(evidence_field)
+                )
+            )
             if capture_target in evidence_targets:
-                state = "recorded" if normalized_event == "RecordingCompleted" else "failed"
+                state = (
+                    "recorded" if normalized_event == "RecordingCompleted" else "failed"
+                )
             else:
                 state = existing_state_by_target.get(capture_target, "planned")
             workflows.append({"capture_target": capture_target, "state": state})
@@ -514,18 +598,25 @@ def _recording_workflow_descriptions(
             elif capture_target in remaining_targets:
                 state = "deferred"
             else:
-                state = existing_state_by_target.get(capture_target, next_state or "planned")
+                state = existing_state_by_target.get(
+                    capture_target, next_state or "planned"
+                )
             workflows.append({"capture_target": capture_target, "state": state})
             continue
         if normalized_event == "RecordingStarted":
             existing_state = existing_state_by_target.get(capture_target, "planned")
-            state = existing_state if existing_state in {"recorded", "failed"} else "recording"
+            state = (
+                existing_state
+                if existing_state in {"recorded", "failed"}
+                else "recording"
+            )
             workflows.append({"capture_target": capture_target, "state": state})
             continue
         workflows.append(
             {
                 "capture_target": capture_target,
-                "state": next_state or existing_state_by_target.get(capture_target, "planned"),
+                "state": next_state
+                or existing_state_by_target.get(capture_target, "planned"),
             }
         )
     return workflows
@@ -556,7 +647,9 @@ def _current_demo_proof_state(*, session, workflow_id: str) -> str:  # noqa: ANN
     payload = _decode_demo_proof_description(workflow.source_description)
     state = str(payload.get(_DEMO_PROOF_STATE_DESCRIPTION_KEY) or "").strip()
     if not state:
-        raise RuntimeError("Existing demo proof workflow is missing durable demo_proof_state")
+        raise RuntimeError(
+            "Existing demo proof workflow is missing durable demo_proof_state"
+        )
     return state
 
 
@@ -578,7 +671,9 @@ def _demo_proof_description(
 ) -> dict[str, object]:
     payload = dict(previous_description)
     events = list(payload.get(_DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY) or [])
-    metadata_entries = list(payload.get(_DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY) or [])
+    metadata_entries = list(
+        payload.get(_DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY) or []
+    )
     previous_last_event = str(events[-1]) if events else ""
     previous_trigger_mode = str(payload.get("trigger_mode") or "").strip()
     if previous_trigger_mode and previous_trigger_mode != trigger_mode:
@@ -634,7 +729,9 @@ def _demo_proof_description(
             "requested_release_id": requested_release_id,
             "run_id": run_id,
             "pr_url": pr_url,
-            "required_capture_targets": [str(target) for target in required_capture_targets],
+            "required_capture_targets": [
+                str(target) for target in required_capture_targets
+            ],
             "required_recording_counts": dict(required_recording_counts),
             _RECORDING_WORKFLOW_DESCRIPTION_KEY: _recording_workflow_descriptions(
                 previous_description=previous_description,
@@ -659,12 +756,16 @@ def _persist_demo_proof_state(
 ) -> None:
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
-        raise RuntimeError("Demo proof workflow did not create a durable workflow execution")
+        raise RuntimeError(
+            "Demo proof workflow did not create a durable workflow execution"
+        )
     workflow.source_description = json.dumps(description, sort_keys=True)
     session.flush()
 
 
-def _workflow_operation_status(*, session, workflow_id: str, operation_type: str) -> str | None:  # noqa: ANN001
+def _workflow_operation_status(
+    *, session, workflow_id: str, operation_type: str
+) -> str | None:  # noqa: ANN001
     operation = session.execute(
         select(WorkflowOperation).where(
             WorkflowOperation.workflow_id == workflow_id,
@@ -711,7 +812,9 @@ def _wait_for_operation_once(
         workflow_type=lifecycle.workflow_type,
         operation=operation,
         operation_attempt=attempt,
-        input_payload=demo_proof_operation_input_payload(description=description, summary=summary),
+        input_payload=demo_proof_operation_input_payload(
+            description=description, summary=summary
+        ),
     )
     lifecycle.wait_started_operation(
         operation=operation,
@@ -731,9 +834,13 @@ def demo_proof_operation_input_payload(
     if not proof_scope_id:
         raise RuntimeError("Demo proof operation input requires proof_scope_id")
     if not commit_sha:
-        raise RuntimeError(f"Demo proof operation input requires commit_sha for proof scope {proof_scope_id}")
+        raise RuntimeError(
+            f"Demo proof operation input requires commit_sha for proof scope {proof_scope_id}"
+        )
     if not trigger_mode:
-        raise RuntimeError(f"Demo proof operation input requires trigger_mode for proof scope {proof_scope_id}")
+        raise RuntimeError(
+            f"Demo proof operation input requires trigger_mode for proof scope {proof_scope_id}"
+        )
     required_capture_targets = description.get("required_capture_targets")
     if not isinstance(required_capture_targets, list) or not required_capture_targets:
         raise RuntimeError(
@@ -765,17 +872,25 @@ def demo_proof_operation_input_payload(
         "run_id": _metadata_string(description.get("run_id")) or None,
         "release_id": release_id,
         "pr_url": _metadata_string(description.get("pr_url")) or None,
-        "required_capture_targets": [str(target) for target in required_capture_targets],
+        "required_capture_targets": [
+            str(target) for target in required_capture_targets
+        ],
         "required_recording_counts": dict(required_recording_counts),
         "summary": summary,
     }
-    release_commit_sha = _metadata_string(release_identity_metadata.get("release_commit_sha"))
+    release_commit_sha = _metadata_string(
+        release_identity_metadata.get("release_commit_sha")
+    )
     if release_commit_sha:
         payload["release_commit_sha"] = release_commit_sha
     demo_proof_lease = release_identity_metadata.get("demo_proof_lease")
     if isinstance(demo_proof_lease, dict):
         payload["demo_proof_lease"] = dict(demo_proof_lease)
-    service_metadata = metadata.get("ServiceVerificationPassed") or metadata.get("ServiceVerificationFailed") or {}
+    service_metadata = (
+        metadata.get("ServiceVerificationPassed")
+        or metadata.get("ServiceVerificationFailed")
+        or {}
+    )
     service_urls = service_metadata.get("service_urls")
     if isinstance(service_urls, list):
         payload["release_service_urls"] = [
@@ -801,12 +916,16 @@ def _wait_summary(
     return f"Waiting for {operation_type} event for demo proof scope {proof_scope_id}."
 
 
-def _require_pr_url_for_pr_evidence_event(*, event: str, pr_url: str | None, proof_scope_id: str) -> None:
+def _require_pr_url_for_pr_evidence_event(
+    *, event: str, pr_url: str | None, proof_scope_id: str
+) -> None:
     if event not in _PR_EVIDENCE_REQUEST_EVENTS:
         return
     if str(pr_url or "").strip():
         return
-    raise RuntimeError(f"Demo proof scope {proof_scope_id} requires PR URL before PR evidence update.")
+    raise RuntimeError(
+        f"Demo proof scope {proof_scope_id} requires PR URL before PR evidence update."
+    )
 
 
 def _metadata_by_event(description: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -864,7 +983,9 @@ def _require_no_unplanned_capture_targets(
     proof_scope_id: str,
 ) -> None:
     reported_targets = _metadata_string_set(event_metadata.get("capture_targets"))
-    reported_targets.update(_metadata_capture_targets_from_items(event_metadata.get(evidence_field)))
+    reported_targets.update(
+        _metadata_capture_targets_from_items(event_metadata.get(evidence_field))
+    )
     unplanned_targets = sorted(reported_targets - required_targets)
     if unplanned_targets:
         raise RuntimeError(
@@ -877,7 +998,9 @@ def _metadata_string(value: object) -> str:
     return str(value or "").strip()
 
 
-def _require_recording_failed_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+def _require_recording_failed_metadata(
+    *, description: dict[str, object], proof_scope_id: str
+) -> None:
     metadata = _metadata_by_event(description)
     failure_metadata = metadata.get("RecordingFailed") or {}
     missing = [
@@ -896,7 +1019,11 @@ def _require_recording_failed_metadata(*, description: dict[str, object], proof_
             f"Demo proof scope {proof_scope_id} requires auditable no-evidence recording failure metadata: "
             + ", ".join(f"RecordingFailed.{field}" for field in missing)
         )
-    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    required_targets = set(
+        _normalized_capture_targets(
+            list(description.get("required_capture_targets") or [])
+        )
+    )
     failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
     missing_targets = sorted(required_targets - failure_targets)
     if missing_targets:
@@ -922,7 +1049,9 @@ def _require_from_release_event_matches_requested_release(
         return
     requested_release_id = _metadata_string(description.get("requested_release_id"))
     if not requested_release_id:
-        raise RuntimeError(f"Demo proof scope {proof_scope_id} from_release requires release_id")
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} from_release requires release_id"
+        )
     event_metadata = _metadata_by_event(description).get(event, {})
     event_release_id = _metadata_string(event_metadata.get("release_id"))
     if not event_release_id:
@@ -1006,7 +1135,9 @@ def _recording_artifact_counts_by_target(value: object) -> dict[str, int]:
             for field in _RECORDING_ARTIFACT_REQUIRED_FIELDS
         }
         if capture_target and all(artifact_metadata.values()):
-            counts_by_target[capture_target] = counts_by_target.get(capture_target, 0) + 1
+            counts_by_target[capture_target] = (
+                counts_by_target.get(capture_target, 0) + 1
+            )
     return counts_by_target
 
 
@@ -1027,7 +1158,9 @@ def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
     return evidence_by_target
 
 
-def _artifact_lineage_by_target(*, value: object, required_fields: frozenset[str]) -> dict[str, list[tuple[str, ...]]]:
+def _artifact_lineage_by_target(
+    *, value: object, required_fields: frozenset[str]
+) -> dict[str, list[tuple[str, ...]]]:
     if not isinstance(value, list):
         return {}
     fields = tuple(sorted(required_fields))
@@ -1080,7 +1213,10 @@ def _require_artifact_metadata_fields(
         if missing:
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} requires uploaded artifact metadata before PR evidence: "
-                + ", ".join(f"{event}.{evidence_field}.{capture_target}.{field}" for field in missing)
+                + ", ".join(
+                    f"{event}.{evidence_field}.{capture_target}.{field}"
+                    for field in missing
+                )
             )
 
 
@@ -1092,10 +1228,9 @@ def _expected_release_context_sha256(
     service_urls = service_metadata.get("service_urls")
     if not isinstance(service_urls, list):
         return ""
-    release_commit_sha = (
-        _metadata_string(service_metadata.get("release_commit_sha"))
-        or _metadata_string(metadata.get("ReleaseLive", {}).get("release_commit_sha"))
-    )
+    release_commit_sha = _metadata_string(
+        service_metadata.get("release_commit_sha")
+    ) or _metadata_string(metadata.get("ReleaseLive", {}).get("release_commit_sha"))
     if not release_commit_sha:
         return ""
     payload = {
@@ -1149,14 +1284,18 @@ def _require_artifacts_match_verified_release_context(
             _metadata_string(item.get("capture_target")) or "<missing>"
             for item in artifacts
             if isinstance(item, dict)
-            and _metadata_string(item.get("release_context_sha256")).lower() != expected_context_sha256.lower()
+            and _metadata_string(item.get("release_context_sha256")).lower()
+            != expected_context_sha256.lower()
         )
         if mismatched_targets:
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} {event}.{evidence_field} release context does not match verified "
-                "release context for capture target(s): " + ", ".join(mismatched_targets)
+                "release context for capture target(s): "
+                + ", ".join(mismatched_targets)
             )
-    browser_release_url = _verified_release_service_url(metadata=metadata, service_kind="website")
+    browser_release_url = _verified_release_service_url(
+        metadata=metadata, service_kind="website"
+    )
     if browser_release_url:
         expected_browser_reference = _normalized_release_reference(browser_release_url)
         mismatched_browser_references = sorted(
@@ -1164,12 +1303,14 @@ def _require_artifacts_match_verified_release_context(
             for item in artifacts
             if isinstance(item, dict)
             and _metadata_string(item.get("capture_target")) == "browser"
-            and _normalized_release_reference(item.get("capture_reference")) != expected_browser_reference
+            and _normalized_release_reference(item.get("capture_reference"))
+            != expected_browser_reference
         )
         if mismatched_browser_references:
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} browser {evidence_label} capture_reference must match verified "
-                f"release URL {expected_browser_reference}: " + ", ".join(mismatched_browser_references)
+                f"release URL {expected_browser_reference}: "
+                + ", ".join(mismatched_browser_references)
             )
 
 
@@ -1224,7 +1365,8 @@ def _require_matching_artifact_lineage(
     if mismatched_targets:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} {downstream_event}.{evidence_field} must match "
-            f"{source_event}.{evidence_field} for capture target(s): " + ", ".join(mismatched_targets)
+            f"{source_event}.{evidence_field} for capture target(s): "
+            + ", ".join(mismatched_targets)
         )
 
 
@@ -1271,7 +1413,9 @@ def _require_demo_proof_lease_state(
     )
 
 
-def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope_id: str) -> None:
+def _require_cleanup_evidence_metadata(
+    *, value: object, event: str, proof_scope_id: str
+) -> None:
     if not isinstance(value, dict):
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence to be a JSON object"
@@ -1334,11 +1478,7 @@ def _require_cleanup_resource_refs(
             "terminal cleanup completion"
         )
     invalid_actions = sorted(
-        {
-            ref["cleanup_action"]
-            for ref in refs
-            if ref["cleanup_action"] != lease_state
-        }
+        {ref["cleanup_action"] for ref in refs if ref["cleanup_action"] != lease_state}
     )
     if invalid_actions:
         raise RuntimeError(
@@ -1443,7 +1583,10 @@ def _require_cleanup_failure_metadata(
             f"{event}.cleanup_evidence.release_id={cleanup_release_id or '<missing>'}"
         )
     cleanup_commit_sha = _metadata_string(cleanup_evidence.get("commit_sha")).lower()
-    if cleanup_commit_sha != _metadata_string(failure_metadata.get("release_commit_sha")).lower():
+    if (
+        cleanup_commit_sha
+        != _metadata_string(failure_metadata.get("release_commit_sha")).lower()
+    ):
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} cleanup failure evidence must reference "
             f"{event}.release_commit_sha {_metadata_string(failure_metadata.get('release_commit_sha')).lower()}: "
@@ -1466,7 +1609,9 @@ def _require_lease_scope_identity(
     event: str,
     proof_scope_id: str,
 ) -> None:
-    acquired_lease = _demo_proof_lease_metadata(acquired_metadata.get("demo_proof_lease"))
+    acquired_lease = _demo_proof_lease_metadata(
+        acquired_metadata.get("demo_proof_lease")
+    )
     if not acquired_lease:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires ProofLeaseAcquired.demo_proof_lease metadata before "
@@ -1481,9 +1626,16 @@ def _require_lease_scope_identity(
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires ReleaseLive.demo_proof_lease metadata before terminal "
             "completion: "
-            + ", ".join(f"ReleaseLive.demo_proof_lease.{field}" for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS))
+            + ", ".join(
+                f"ReleaseLive.demo_proof_lease.{field}"
+                for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS)
+            )
         )
-    release_event = "ReleaseFailed" if event == "ReleaseFailedPreviewCleanupCompleted" else "ReleaseLive"
+    release_event = (
+        "ReleaseFailed"
+        if event == "ReleaseFailedPreviewCleanupCompleted"
+        else "ReleaseLive"
+    )
     _require_demo_proof_lease_state(
         lease_metadata=acquired_lease,
         event="ProofLeaseAcquired",
@@ -1537,8 +1689,12 @@ def _require_lease_scope_identity(
             f"Demo proof scope {proof_scope_id} cleanup evidence must reference ReleaseLive.demo_proof_lease.lease_id "
             f"{release_lease_id}: {event}.cleanup_evidence.lease_id={cleanup_lease_id or '<missing>'}"
         )
-    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
-    acquired_lease_commit_sha = _metadata_string(acquired_lease.get("commit_sha")).lower()
+    release_commit_sha = _metadata_string(
+        release_metadata.get("release_commit_sha")
+    ).lower()
+    acquired_lease_commit_sha = _metadata_string(
+        acquired_lease.get("commit_sha")
+    ).lower()
     lease_commit_sha = _metadata_string(release_lease.get("commit_sha")).lower()
     cleanup_commit_sha = (
         _metadata_string(cleanup_evidence.get("commit_sha")).lower()
@@ -1595,7 +1751,9 @@ def _require_cleanup_only_requested_release_identity(
 ) -> None:
     requested_release_id = _metadata_string(description.get("requested_release_id"))
     if not requested_release_id:
-        raise RuntimeError(f"Demo proof scope {proof_scope_id} cleanup_only requires release_id")
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup_only requires release_id"
+        )
     cleanup_release_id = _metadata_string(cleanup_metadata.get("release_id"))
     cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
     cleanup_evidence_release_id = (
@@ -1603,7 +1761,10 @@ def _require_cleanup_only_requested_release_identity(
         if isinstance(cleanup_evidence, dict)
         else ""
     )
-    if cleanup_release_id == requested_release_id and cleanup_evidence_release_id == requested_release_id:
+    if (
+        cleanup_release_id == requested_release_id
+        and cleanup_evidence_release_id == requested_release_id
+    ):
         return
     raise RuntimeError(
         f"Demo proof scope {proof_scope_id} cleanup_only requested release_id {requested_release_id}, "
@@ -1679,7 +1840,9 @@ def _require_pr_evidence_targets_workflow_pr(
     )
 
 
-def _require_pr_body_sha256_metadata(*, pr_metadata: dict[str, object], pr_event: str, proof_scope_id: str) -> None:
+def _require_pr_body_sha256_metadata(
+    *, pr_metadata: dict[str, object], pr_event: str, proof_scope_id: str
+) -> None:
     value = _metadata_string(pr_metadata.get("pr_body_sha256")).lower()
     if len(value) == 64 and all(char in "0123456789abcdef" for char in value):
         return
@@ -1688,7 +1851,9 @@ def _require_pr_body_sha256_metadata(*, pr_metadata: dict[str, object], pr_event
     )
 
 
-def _require_proof_lease_acquired_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+def _require_proof_lease_acquired_metadata(
+    *, description: dict[str, object], proof_scope_id: str
+) -> None:
     metadata = _metadata_by_event(description).get("ProofLeaseAcquired", {})
     lease_metadata = _demo_proof_lease_metadata(metadata.get("demo_proof_lease"))
     missing: list[str] = []
@@ -1716,10 +1881,16 @@ def _require_proof_lease_acquired_metadata(*, description: dict[str, object], pr
         )
 
 
-def _require_recording_completion_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+def _require_recording_completion_metadata(
+    *, description: dict[str, object], proof_scope_id: str
+) -> None:
     metadata = _metadata_by_event(description)
     recording_metadata = metadata.get("RecordingCompleted", {})
-    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    required_targets = set(
+        _normalized_capture_targets(
+            list(description.get("required_capture_targets") or [])
+        )
+    )
     _require_no_unplanned_capture_targets(
         required_targets=required_targets,
         event_metadata=recording_metadata,
@@ -1740,8 +1911,12 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
             f"Demo proof scope {proof_scope_id} recording completion requires at least {len(required_targets)} "
             f"artifact URL(s) for required capture target(s), got {len(artifact_urls)}."
         )
-    artifacts_by_target = _recording_artifacts_by_target(recording_metadata.get("recordings"))
-    missing_target_artifacts = sorted(target for target in required_targets if target not in artifacts_by_target)
+    artifacts_by_target = _recording_artifacts_by_target(
+        recording_metadata.get("recordings")
+    )
+    missing_target_artifacts = sorted(
+        target for target in required_targets if target not in artifacts_by_target
+    )
     if missing_target_artifacts:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} recording completion metadata is missing artifact metadata "
@@ -1755,7 +1930,9 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
         evidence_label="recording",
         proof_scope_id=proof_scope_id,
     )
-    recording_counts_by_target = _recording_artifact_counts_by_target(recording_metadata.get("recordings"))
+    recording_counts_by_target = _recording_artifact_counts_by_target(
+        recording_metadata.get("recordings")
+    )
     required_counts = _normalized_required_recording_counts(
         required_capture_targets=list(required_targets),
         value=description.get("required_recording_counts"),
@@ -1773,9 +1950,15 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
         )
 
 
-def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+def _require_evidence_uploaded_metadata(
+    *, description: dict[str, object], proof_scope_id: str
+) -> None:
     metadata = _metadata_by_event(description)
-    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    required_targets = set(
+        _normalized_capture_targets(
+            list(description.get("required_capture_targets") or [])
+        )
+    )
     recording_metadata = metadata.get("RecordingCompleted", {})
     evidence_metadata = metadata.get("EvidenceUploaded", {})
     _require_no_unplanned_capture_targets(
@@ -1803,8 +1986,12 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
             f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} "
             "distinct playable artifact URL(s) for required capture target(s)."
         )
-    artifacts_by_target = _recording_artifacts_by_target(evidence_metadata.get("recordings"))
-    missing_target_artifacts = sorted(target for target in required_targets if target not in artifacts_by_target)
+    artifacts_by_target = _recording_artifacts_by_target(
+        evidence_metadata.get("recordings")
+    )
+    missing_target_artifacts = sorted(
+        target for target in required_targets if target not in artifacts_by_target
+    )
     if missing_target_artifacts:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} evidence metadata is missing uploaded artifact metadata "
@@ -1842,7 +2029,9 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
         required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
         proof_scope_id=proof_scope_id,
     )
-    recording_counts_by_target = _recording_artifact_counts_by_target(evidence_metadata.get("recordings"))
+    recording_counts_by_target = _recording_artifact_counts_by_target(
+        evidence_metadata.get("recordings")
+    )
     required_counts = _normalized_required_recording_counts(
         required_capture_targets=list(required_targets),
         value=description.get("required_recording_counts"),
@@ -1864,7 +2053,8 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
         mismatched_commit_targets = sorted(
             target
             for target in required_targets
-            if artifacts_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
+            if artifacts_by_target[target]["release_commit_sha"].lower()
+            != release_commit_sha.lower()
         )
         if mismatched_commit_targets:
             raise RuntimeError(
@@ -1880,7 +2070,11 @@ def _require_evidence_uploaded_capture_targets_metadata(
     proof_scope_id: str,
 ) -> None:
     metadata = _metadata_by_event(description)
-    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    required_targets = set(
+        _normalized_capture_targets(
+            list(description.get("required_capture_targets") or [])
+        )
+    )
     evidence_metadata = metadata.get("EvidenceUploaded", {})
     evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
     missing_targets = sorted(required_targets - evidence_targets)
@@ -1911,7 +2105,10 @@ def _require_evidence_uploaded_lineage_matches_recording(
     )
     if set(source_lineage) != set(downstream_lineage):
         return
-    if any(len(source_lineage[target]) != len(downstream_lineage[target]) for target in source_lineage):
+    if any(
+        len(source_lineage[target]) != len(downstream_lineage[target])
+        for target in source_lineage
+    ):
         return
     artifact_urls = _metadata_string_list(evidence_metadata.get("artifact_urls"))
     if len(artifact_urls) != len(set(artifact_urls)):
@@ -1933,7 +2130,11 @@ def _require_failure_evidence_target_metadata(
     failure_metadata: dict[str, object],
     proof_scope_id: str,
 ) -> dict[str, dict[str, str]]:
-    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    required_targets = set(
+        _normalized_capture_targets(
+            list(description.get("required_capture_targets") or [])
+        )
+    )
     _require_no_unplanned_capture_targets(
         required_targets=required_targets,
         event_metadata=failure_metadata,
@@ -1964,8 +2165,12 @@ def _require_failure_evidence_target_metadata(
         failure_metadata=failure_metadata,
         proof_scope_id=proof_scope_id,
     )
-    evidence_by_target = _failure_evidence_by_target(failure_metadata.get("failure_evidence"))
-    missing_diagnostic_targets = sorted(target for target in required_targets if target not in evidence_by_target)
+    evidence_by_target = _failure_evidence_by_target(
+        failure_metadata.get("failure_evidence")
+    )
+    missing_diagnostic_targets = sorted(
+        target for target in required_targets if target not in evidence_by_target
+    )
     if missing_diagnostic_targets:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} failure evidence metadata is missing uploaded diagnostic "
@@ -2004,7 +2209,11 @@ def _require_failure_evidence_uploaded_capture_targets_metadata(
     proof_scope_id: str,
 ) -> None:
     metadata = _metadata_by_event(description)
-    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    required_targets = set(
+        _normalized_capture_targets(
+            list(description.get("required_capture_targets") or [])
+        )
+    )
     failure_metadata = metadata.get("FailureEvidenceUploaded", {})
     failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
     missing_targets = sorted(required_targets - failure_targets)
@@ -2062,7 +2271,9 @@ def _require_failure_evidence_problem_details(
         )
 
 
-def _require_failure_evidence_uploaded_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+def _require_failure_evidence_uploaded_metadata(
+    *, description: dict[str, object], proof_scope_id: str
+) -> None:
     metadata = _metadata_by_event(description)
     source_event, captured_failure_metadata = _failure_evidence_source_metadata(
         metadata=metadata,
@@ -2089,7 +2300,8 @@ def _require_failure_evidence_uploaded_metadata(*, description: dict[str, object
         mismatched_commit_targets = sorted(
             target
             for target in evidence_by_target
-            if evidence_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
+            if evidence_by_target[target]["release_commit_sha"].lower()
+            != release_commit_sha.lower()
         )
         if mismatched_commit_targets:
             raise RuntimeError(
@@ -2125,7 +2337,10 @@ def _require_failure_evidence_uploaded_lineage_matches_captured(
     )
     if set(source_lineage) != set(downstream_lineage):
         return
-    if any(len(source_lineage[target]) != len(downstream_lineage[target]) for target in source_lineage):
+    if any(
+        len(source_lineage[target]) != len(downstream_lineage[target])
+        for target in source_lineage
+    ):
         return
     artifact_urls = _metadata_string_list(failure_metadata.get("artifact_urls"))
     if len(artifact_urls) != len(set(artifact_urls)):
@@ -2154,14 +2369,20 @@ def _require_service_verification_metadata(
             f"Demo proof scope {proof_scope_id} service verification must reference ReleaseLive.release_id "
             f"{release_id}: ServiceVerificationPassed.release_id={service_release_id or '<missing>'}"
         )
-    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
-    service_commit_sha = _metadata_string(service_metadata.get("release_commit_sha")).lower()
+    release_commit_sha = _metadata_string(
+        release_metadata.get("release_commit_sha")
+    ).lower()
+    service_commit_sha = _metadata_string(
+        service_metadata.get("release_commit_sha")
+    ).lower()
     if service_commit_sha != release_commit_sha:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} service verification must reference ReleaseLive.release_commit_sha "
             f"{release_commit_sha}: ServiceVerificationPassed.release_commit_sha={service_commit_sha or '<missing>'}"
         )
-    required_kinds = set(_metadata_string_list(service_metadata.get("required_service_kinds")))
+    required_kinds = set(
+        _metadata_string_list(service_metadata.get("required_service_kinds"))
+    )
     if not required_kinds:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires ServiceVerificationPassed.required_service_kinds "
@@ -2189,15 +2410,21 @@ def _require_service_verification_failure_metadata(
             f"Demo proof scope {proof_scope_id} service verification failure must reference ReleaseLive.release_id "
             f"{release_id}: ServiceVerificationFailed.release_id={failure_release_id or '<missing>'}"
         )
-    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
-    failure_commit_sha = _metadata_string(failure_metadata.get("release_commit_sha")).lower()
+    release_commit_sha = _metadata_string(
+        release_metadata.get("release_commit_sha")
+    ).lower()
+    failure_commit_sha = _metadata_string(
+        failure_metadata.get("release_commit_sha")
+    ).lower()
     if failure_commit_sha != release_commit_sha:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} service verification failure must reference "
             f"ReleaseLive.release_commit_sha {release_commit_sha}: "
             f"ServiceVerificationFailed.release_commit_sha={failure_commit_sha or '<missing>'}"
         )
-    required_kinds = set(_metadata_string_list(failure_metadata.get("required_service_kinds")))
+    required_kinds = set(
+        _metadata_string_list(failure_metadata.get("required_service_kinds"))
+    )
     if not required_kinds:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires ServiceVerificationFailed.required_service_kinds "
@@ -2296,19 +2523,27 @@ def _require_terminal_proof_metadata(
                 f"{cleanup_proof_scope_id or '<missing>'}"
             )
         _require_cleanup_resource_refs(
-            value=cleanup_evidence.get("resource_refs") if isinstance(cleanup_evidence, dict) else None,
+            value=cleanup_evidence.get("resource_refs")
+            if isinstance(cleanup_evidence, dict)
+            else None,
             release_id=_metadata_string(cleanup_metadata.get("release_id")),
-            lease_state=_metadata_string(cleanup_evidence.get("lease_state")) if isinstance(cleanup_evidence, dict) else "",
+            lease_state=_metadata_string(cleanup_evidence.get("lease_state"))
+            if isinstance(cleanup_evidence, dict)
+            else "",
             event=event,
             proof_scope_id=proof_scope_id,
         )
         return
     if event != "ReleaseFailedPreviewCleanupCompleted":
         service_failure_metadata = metadata.get("ServiceVerificationFailed", {})
-        if event in {
-            "FailurePreviewCleanupCompleted",
-            "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
-        } and service_failure_metadata:
+        if (
+            event
+            in {
+                "FailurePreviewCleanupCompleted",
+                "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
+            }
+            and service_failure_metadata
+        ):
             _require_service_verification_failure_metadata(
                 release_metadata=release_metadata,
                 failure_metadata=service_failure_metadata,
@@ -2358,16 +2593,22 @@ def _require_terminal_proof_metadata(
             )
         cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
         _require_cleanup_resource_refs(
-            value=cleanup_evidence.get("resource_refs") if isinstance(cleanup_evidence, dict) else None,
+            value=cleanup_evidence.get("resource_refs")
+            if isinstance(cleanup_evidence, dict)
+            else None,
             release_id=_metadata_string(release_metadata.get("release_id")),
-            lease_state=_metadata_string(cleanup_evidence.get("lease_state")) if isinstance(cleanup_evidence, dict) else "",
+            lease_state=_metadata_string(cleanup_evidence.get("lease_state"))
+            if isinstance(cleanup_evidence, dict)
+            else "",
             event=event,
             proof_scope_id=proof_scope_id,
         )
     if event == "ReleaseFailedPreviewCleanupCompleted":
         return
     if event == "PREvidenceAttachFailedPreviewCleanupCompleted":
-        _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
+        _require_evidence_uploaded_metadata(
+            description=description, proof_scope_id=proof_scope_id
+        )
         evidence_metadata = metadata.get("EvidenceUploaded", {})
         failed_pr_metadata = metadata.get("PREvidenceAttachFailed", {})
         _require_pr_evidence_matches_uploaded_artifacts(
@@ -2384,7 +2625,9 @@ def _require_terminal_proof_metadata(
         )
         return
     if event == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted":
-        _require_failure_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
+        _require_failure_evidence_uploaded_metadata(
+            description=description, proof_scope_id=proof_scope_id
+        )
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
         failed_pr_metadata = metadata.get("PRFailureEvidenceAttachFailed", {})
         _require_pr_evidence_matches_uploaded_artifacts(
@@ -2401,7 +2644,9 @@ def _require_terminal_proof_metadata(
         )
         return
     if event == "PreviewCleanupCompleted":
-        _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
+        _require_evidence_uploaded_metadata(
+            description=description, proof_scope_id=proof_scope_id
+        )
         evidence_metadata = metadata.get("EvidenceUploaded", {})
         _require_pr_evidence_matches_uploaded_artifacts(
             uploaded_metadata=evidence_metadata,
@@ -2427,7 +2672,9 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
     if event == "FailurePreviewCleanupCompleted":
-        _require_failure_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
+        _require_failure_evidence_uploaded_metadata(
+            description=description, proof_scope_id=proof_scope_id
+        )
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
         _require_pr_evidence_matches_uploaded_artifacts(
             uploaded_metadata=failure_metadata,
@@ -2563,21 +2810,30 @@ class DemoProofWorkflowAdvanceHandler:
             raise RuntimeError(f"Tenant {request.tenant_id} was not found")
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant.tenant_id:
-            raise RuntimeError(f"Project {project_id} was not found for tenant {tenant.tenant_id}")
+            raise RuntimeError(
+                f"Project {project_id} was not found for tenant {tenant.tenant_id}"
+            )
         if bool(getattr(project, "is_archived", False)):
             raise RuntimeError("Demo proof workflow cannot run for an archived project")
 
         run_id = str(request.payload.get("run_id") or "").strip() or None
         pr_url = str(request.payload.get("pr_url") or "").strip() or None
         required_capture_targets = request.payload.get("required_capture_targets")
-        if not isinstance(required_capture_targets, list) or not required_capture_targets:
-            raise RuntimeError("Demo proof required_capture_targets must be provided by PM demo requirements")
+        if (
+            not isinstance(required_capture_targets, list)
+            or not required_capture_targets
+        ):
+            raise RuntimeError(
+                "Demo proof required_capture_targets must be provided by PM demo requirements"
+            )
         required_recording_counts = _normalized_required_recording_counts(
             required_capture_targets=required_capture_targets,
             value=request.payload.get("required_recording_counts"),
         )
         workflow_id = _workflow_id(workflow_type=workflow_type, request=request)
-        current_state = _current_demo_proof_state(session=session, workflow_id=workflow_id)
+        current_state = _current_demo_proof_state(
+            session=session, workflow_id=workflow_id
+        )
         existing_workflow = session.get(WorkflowExecution, workflow_id)
         if trigger_mode == "retry_recording" and existing_workflow is None:
             raise RuntimeError(
@@ -2588,24 +2844,39 @@ class DemoProofWorkflowAdvanceHandler:
             if existing_workflow is not None
             else {}
         )
-        previous_trigger_mode = str(previous_description.get("trigger_mode") or "").strip()
-        if trigger_mode != "retry_recording" and previous_trigger_mode and previous_trigger_mode != trigger_mode:
+        previous_trigger_mode = str(
+            previous_description.get("trigger_mode") or ""
+        ).strip()
+        if (
+            trigger_mode != "retry_recording"
+            and previous_trigger_mode
+            and previous_trigger_mode != trigger_mode
+        ):
             raise RuntimeError(
                 f"Demo proof workflow trigger_mode cannot change for proof scope {proof_scope_id}: "
                 f"{previous_trigger_mode} != {trigger_mode}"
             )
         if trigger_mode == "from_pr" and run_id is not None:
-            raise RuntimeError(f"Demo proof from_pr must not include run_id for proof scope {proof_scope_id}")
-        requested_release_id = _requested_release_id(request.payload, trigger_mode=trigger_mode)
+            raise RuntimeError(
+                f"Demo proof from_pr must not include run_id for proof scope {proof_scope_id}"
+            )
+        requested_release_id = _requested_release_id(
+            request.payload, trigger_mode=trigger_mode
+        )
         durable_trigger_mode = trigger_mode
         if trigger_mode == "retry_recording":
-            durable_trigger_mode = str(previous_description.get("trigger_mode") or "").strip()
+            durable_trigger_mode = str(
+                previous_description.get("trigger_mode") or ""
+            ).strip()
             if not durable_trigger_mode:
                 raise RuntimeError(
                     f"Demo proof retry_recording requires existing trigger_mode for proof scope {proof_scope_id}"
                 )
             if requested_release_id is None:
-                requested_release_id = str(previous_description.get("requested_release_id") or "").strip() or None
+                requested_release_id = (
+                    str(previous_description.get("requested_release_id") or "").strip()
+                    or None
+                )
         trigger_event = str(getattr(request.trigger, "event", "") or "").strip()
         if trigger_event:
             state_event = trigger_event
@@ -2617,7 +2888,9 @@ class DemoProofWorkflowAdvanceHandler:
             state_event = "DemoProofRequested"
         event_metadata = _event_metadata(request.payload)
         try:
-            next_state = transition_demo_proof_state(current_state=current_state, event=state_event)
+            next_state = transition_demo_proof_state(
+                current_state=current_state, event=state_event
+            )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(str(exc)) from exc
         next_description = _demo_proof_description(
@@ -2790,16 +3063,22 @@ class DemoProofWorkflowAdvanceHandler:
         if event_spec is None:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")
         completed_operation_type, next_operation_type, reason = event_spec
-        _require_pr_url_for_pr_evidence_event(event=event, pr_url=pr_url, proof_scope_id=proof_scope_id)
+        _require_pr_url_for_pr_evidence_event(
+            event=event, pr_url=pr_url, proof_scope_id=proof_scope_id
+        )
         if event == "ProofLeaseAcquired":
-            _require_proof_lease_acquired_metadata(description=description, proof_scope_id=proof_scope_id)
+            _require_proof_lease_acquired_metadata(
+                description=description, proof_scope_id=proof_scope_id
+            )
         _require_from_release_event_matches_requested_release(
             description=description,
             event=event,
             proof_scope_id=proof_scope_id,
         )
         if event == "RecordingCompleted":
-            _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
+            _require_recording_completion_metadata(
+                description=description, proof_scope_id=proof_scope_id
+            )
         if event == "RecordingFailureEvidenceCaptured":
             metadata = _metadata_by_event(description)
             failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
@@ -2812,10 +3091,16 @@ class DemoProofWorkflowAdvanceHandler:
                 proof_scope_id=proof_scope_id,
             )
         if event == "RecordingFailed":
-            _require_recording_failed_metadata(description=description, proof_scope_id=proof_scope_id)
+            _require_recording_failed_metadata(
+                description=description, proof_scope_id=proof_scope_id
+            )
         if event == "EvidenceUploaded":
             metadata = _metadata_by_event(description)
-            required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+            required_targets = set(
+                _normalized_capture_targets(
+                    list(description.get("required_capture_targets") or [])
+                )
+            )
             _require_no_unplanned_capture_targets(
                 required_targets=required_targets,
                 event_metadata=metadata.get("EvidenceUploaded", {}),
@@ -2823,10 +3108,16 @@ class DemoProofWorkflowAdvanceHandler:
                 evidence_field="recordings",
                 proof_scope_id=proof_scope_id,
             )
-            _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
+            _require_evidence_uploaded_metadata(
+                description=description, proof_scope_id=proof_scope_id
+            )
         if event == "FailureEvidenceUploaded":
             metadata = _metadata_by_event(description)
-            required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+            required_targets = set(
+                _normalized_capture_targets(
+                    list(description.get("required_capture_targets") or [])
+                )
+            )
             _require_no_unplanned_capture_targets(
                 required_targets=required_targets,
                 event_metadata=metadata.get("FailureEvidenceUploaded", {}),
@@ -2901,7 +3192,9 @@ class DemoProofWorkflowAdvanceHandler:
                 pr_event="PRFailureEvidenceAttached",
                 proof_scope_id=proof_scope_id,
             )
-        _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
+        _require_terminal_proof_metadata(
+            event=event, description=description, proof_scope_id=proof_scope_id
+        )
         operation, attempt = lifecycle.complete_waiting_operation_attempt(
             operation_type=completed_operation_type,
             summary=f"Applied {event} for demo proof scope {proof_scope_id}.",

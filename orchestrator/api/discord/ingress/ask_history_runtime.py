@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.ask.context import project_filter_jql, search_jira_issues_for_tenant
+from orchestrator.api.discord.ask.context import (
+    project_filter_jql,
+    search_jira_issues_for_tenant,
+)
 from orchestrator.api.discord.ask.memory import (
     MAX_ASK_HISTORY_CONTEXT as ASK_HISTORY_CONTEXT_LIMIT,
     consume_pending_ask_action as _consume_pending_ask_action_impl,
@@ -26,7 +29,9 @@ def existing_issue_keys_for_tenant(
     if not issue_keys:
         return set()
 
-    normalized_issue_keys = sorted({value.strip().upper() for value in issue_keys if value and value.strip()})[:100]
+    normalized_issue_keys = sorted(
+        {value.strip().upper() for value in issue_keys if value and value.strip()}
+    )[:100]
     if not normalized_issue_keys:
         return set()
 
@@ -38,7 +43,11 @@ def existing_issue_keys_for_tenant(
         jql=jql,
         max_results=len(normalized_issue_keys),
     )
-    return {str(issue.key or "").strip().upper() for issue in issues if str(issue.key or "").strip()}
+    return {
+        str(issue.key or "").strip().upper()
+        for issue in issues
+        if str(issue.key or "").strip()
+    }
 
 
 def prune_missing_issue_keys_from_ask_history(

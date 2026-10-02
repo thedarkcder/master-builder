@@ -7,7 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.ask.context import fetch_jira_issue_detail_for_tenant
-from orchestrator.api.discord.shared.followup_format import resolve_tenant_jira_browse_base_url
+from orchestrator.api.discord.shared.followup_format import (
+    resolve_tenant_jira_browse_base_url,
+)
 from orchestrator.api.discord.shared.response_format import format_issue_markdown_link
 from orchestrator.core.runs.service import RUN_STATUS_SUCCEEDED
 from orchestrator.storage.models import Run, Tenant
@@ -60,12 +62,17 @@ def extract_acceptance_criteria_from_description(description: str) -> list[str]:
     fallback: list[str] = []
     for line in lines:
         normalized = line.lower()
-        if any(token in normalized for token in ("must", "should", "returns", "include", "supports")):
+        if any(
+            token in normalized
+            for token in ("must", "should", "returns", "include", "supports")
+        ):
             fallback.append(line.lstrip("-*• ").strip())
     return fallback[:5]
 
 
-def gap_confidence(*, has_acceptance: bool, has_successful_run: bool, has_pr: bool) -> str:
+def gap_confidence(
+    *, has_acceptance: bool, has_successful_run: bool, has_pr: bool
+) -> str:
     score = int(has_acceptance) + int(has_successful_run) + int(has_pr)
     if score >= 3:
         return "high"
@@ -84,9 +91,13 @@ def run_gap_analysis(
 ) -> tuple[str, dict]:  # noqa: ANN001
     normalized_issue_key = issue_key.strip().upper()
     if not issue_key_pattern.match(normalized_issue_key):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !gap <ISSUE_KEY>"
+        )
 
-    issue = fetch_jira_issue_detail_for_tenant(session=session, tenant=tenant, issue_key=normalized_issue_key)
+    issue = fetch_jira_issue_detail_for_tenant(
+        session=session, tenant=tenant, issue_key=normalized_issue_key
+    )
     acceptance = extract_acceptance_criteria_from_description(issue.description)
     latest_run = session.execute(
         select(Run)
@@ -96,11 +107,17 @@ def run_gap_analysis(
     ).scalar_one_or_none()
 
     jira_base_url = resolve_tenant_jira_browse_base_url(session=session, tenant=tenant)
-    jira_url = f"{jira_base_url}/browse/{normalized_issue_key}" if jira_base_url else None
+    jira_url = (
+        f"{jira_base_url}/browse/{normalized_issue_key}" if jira_base_url else None
+    )
     repo_url = tenant_repo_url(tenant)
-    repo_issue_search_url = f"{repo_url}/search?q={quote_plus(normalized_issue_key)}" if repo_url else None
+    repo_issue_search_url = (
+        f"{repo_url}/search?q={quote_plus(normalized_issue_key)}" if repo_url else None
+    )
     pr_url = str(latest_run.pr_url or "").strip() if latest_run else ""
-    has_successful_run = latest_run is not None and latest_run.status == RUN_STATUS_SUCCEEDED
+    has_successful_run = (
+        latest_run is not None and latest_run.status == RUN_STATUS_SUCCEEDED
+    )
     has_pr = bool(pr_url)
     confidence = gap_confidence(
         has_acceptance=bool(acceptance),
@@ -114,7 +131,9 @@ def run_gap_analysis(
     if latest_run is None:
         gaps.append("No run has been executed yet for this issue.")
     elif latest_run.status != RUN_STATUS_SUCCEEDED:
-        gaps.append(f"Latest run `{latest_run.run_id}` is `{latest_run.status}` (not `succeeded`).")
+        gaps.append(
+            f"Latest run `{latest_run.run_id}` is `{latest_run.status}` (not `succeeded`)."
+        )
     if not pr_url:
         gaps.append("No PR is linked to the latest run.")
 
@@ -126,10 +145,14 @@ def run_gap_analysis(
     if not pr_url:
         next_actions.append("Create or link a PR that implements the issue scope.")
     if not next_actions:
-        next_actions.append("Re-validate acceptance criteria against latest merged code before release.")
+        next_actions.append(
+            "Re-validate acceptance criteria against latest merged code before release."
+        )
 
     repo_context = (
-        collect_project_repo_context_fn(session=session, tenant=tenant, issue_key=normalized_issue_key)
+        collect_project_repo_context_fn(
+            session=session, tenant=tenant, issue_key=normalized_issue_key
+        )
         if collect_project_repo_context_fn is not None
         else None
     )
@@ -152,12 +175,16 @@ def run_gap_analysis(
             + (f" | PR: [open]({pr_url})" if pr_url else "")
         )
     if repo_issue_search_url:
-        lines.append(f"- Code reference: [repo search for {normalized_issue_key}]({repo_issue_search_url})")
+        lines.append(
+            f"- Code reference: [repo search for {normalized_issue_key}]({repo_issue_search_url})"
+        )
 
     lines.extend(["", "Acceptance Criteria:"])
     if acceptance:
         for criterion in acceptance[:6]:
-            criterion_search = f"{repo_url}/search?q={quote_plus(criterion)}" if repo_url else None
+            criterion_search = (
+                f"{repo_url}/search?q={quote_plus(criterion)}" if repo_url else None
+            )
             if criterion_search:
                 lines.append(f"- {criterion} ([code search]({criterion_search}))")
             else:
@@ -184,7 +211,9 @@ def run_gap_analysis(
             for commit_line in issue_commits[:5]:
                 lines.append(f"  - `{commit_line}`")
         else:
-            lines.append(f"- No commits currently reference `{normalized_issue_key}` in local checkout.")
+            lines.append(
+                f"- No commits currently reference `{normalized_issue_key}` in local checkout."
+            )
 
     return (
         "\n".join(lines),

@@ -33,13 +33,17 @@ def extract_pr_number(
     return None
 
 
-def extract_remediation_head_ref(parsed_trigger_context: object, normalize_branch_fn) -> str | None:
+def extract_remediation_head_ref(
+    parsed_trigger_context: object, normalize_branch_fn
+) -> str | None:
     if not isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
         return None
     return normalize_branch_fn(parsed_trigger_context.head_ref)
 
 
-def extract_remediation_base_ref(parsed_trigger_context: object, normalize_branch_fn) -> str | None:
+def extract_remediation_base_ref(
+    parsed_trigger_context: object, normalize_branch_fn
+) -> str | None:
     if not isinstance(parsed_trigger_context, GithubPrRemediationTriggerContext):
         return None
     return normalize_branch_fn(parsed_trigger_context.base_ref)

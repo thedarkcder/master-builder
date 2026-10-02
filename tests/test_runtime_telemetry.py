@@ -8,7 +8,10 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.core.observability.telemetry import build_runtime_log_sink
-from orchestrator.core.observability.otel_telemetry import initialize_telemetry, telemetry_span
+from orchestrator.core.observability.otel_telemetry import (
+    initialize_telemetry,
+    telemetry_span,
+)
 
 
 class RuntimeTelemetryTests(unittest.TestCase):
@@ -29,7 +32,10 @@ class RuntimeTelemetryTests(unittest.TestCase):
             issue_key="TA-1",
         )
 
-        with patch("orchestrator.core.observability.telemetry.logger.info", side_effect=_capture_log):
+        with patch(
+            "orchestrator.core.observability.telemetry.logger.info",
+            side_effect=_capture_log,
+        ):
             sink(
                 "stderr",
                 "APP_STORE_CONNECT_API_KEY_BASE64=super-secret-value email=user@example.com",
@@ -44,10 +50,14 @@ class RuntimeTelemetryTests(unittest.TestCase):
         self.assertIn("[REDACTED]", rendered)
 
 
-def test_telemetry_span_without_opentelemetry_preserves_body_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_telemetry_span_without_opentelemetry_preserves_body_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     real_import = builtins.__import__
 
-    def _import_without_opentelemetry(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: ANN001
+    def _import_without_opentelemetry(
+        name, globals=None, locals=None, fromlist=(), level=0
+    ):  # noqa: ANN001
         if str(name).startswith("opentelemetry"):
             raise ImportError("blocked optional opentelemetry import")
         return real_import(name, globals, locals, fromlist, level)
@@ -62,7 +72,9 @@ def test_telemetry_span_without_opentelemetry_preserves_body_exception(monkeypat
     assert not isinstance(exc_info.value.__context__, ImportError)
 
 
-def test_api_telemetry_does_not_import_fastapi_auto_instrumentation_at_startup() -> None:
+def test_api_telemetry_does_not_import_fastapi_auto_instrumentation_at_startup() -> (
+    None
+):
     source = inspect.getsource(initialize_telemetry)
 
     assert "opentelemetry.instrumentation.fastapi" not in source

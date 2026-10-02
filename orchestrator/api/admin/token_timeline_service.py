@@ -26,7 +26,11 @@ def _safe_ratio(numerator: float, denominator: float | int) -> float:
 
 
 def _normalize_chain_id(row: RunTokenUsage) -> tuple[str, str, int | None]:
-    return (str(row.invocation_id or "").strip() or "default", str(row.stage or "").strip().lower(), row.attempt)
+    return (
+        str(row.invocation_id or "").strip() or "default",
+        str(row.stage or "").strip().lower(),
+        row.attempt,
+    )
 
 
 def _to_non_negative_int(value: object) -> int:
@@ -39,7 +43,9 @@ def _to_non_negative_int(value: object) -> int:
     return 0
 
 
-def _build_spike_reasons(*, delta_input: int, delta_uncached: int, cache_ratio: float, input_tokens: int) -> tuple[bool, list[str]]:
+def _build_spike_reasons(
+    *, delta_input: int, delta_uncached: int, cache_ratio: float, input_tokens: int
+) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if delta_input >= _STAGE_SPIKE_THRESHOLD:
         reasons.append(f"stage_delta_spike_{_STAGE_SPIKE_THRESHOLD}")
@@ -64,7 +70,9 @@ def _coalesce_delta(stored: int | None, computed: int) -> int:
     return max(0, stored)
 
 
-def _build_delta(prev: tuple[int, int, int] | None, current: tuple[int, int, int]) -> tuple[int, int, int]:
+def _build_delta(
+    prev: tuple[int, int, int] | None, current: tuple[int, int, int]
+) -> tuple[int, int, int]:
     if prev is None:
         return current
     prev_input, prev_cached, prev_output = prev
@@ -99,10 +107,18 @@ def _load_rows(
     if attempt is not None:
         query = query.where(RunTokenUsage.attempt == attempt)
     elif not include_retries:
-        query = query.where((RunTokenUsage.attempt.is_(None)) | (RunTokenUsage.attempt <= 1))
+        query = query.where(
+            (RunTokenUsage.attempt.is_(None)) | (RunTokenUsage.attempt <= 1)
+        )
     if model:
         query = query.where(RunTokenUsage.model == str(model).strip())
-    return session.execute(query.order_by(RunTokenUsage.recorded_at.asc(), RunTokenUsage.id.asc())).scalars().all()
+    return (
+        session.execute(
+            query.order_by(RunTokenUsage.recorded_at.asc(), RunTokenUsage.id.asc())
+        )
+        .scalars()
+        .all()
+    )
 
 
 def get_run_token_timeline(
@@ -117,13 +133,19 @@ def get_run_token_timeline(
 ) -> TokenTimelineRead:
     tenant_id = str(tenant_id).strip()
     if not tenant_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id is required"
+        )
 
     run = session.get(Run, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     if str(run.tenant_id or "").strip() != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
 
     rows = _load_rows(
         session=session,
@@ -147,7 +169,9 @@ def get_run_token_timeline(
         uncached_input_tokens = max(0, input_tokens - cached_input_tokens)
 
         chain_id = _normalize_chain_id(row)
-        prev_input, prev_cached, prev_output = chain_prev.get(chain_id, (None, None, None))
+        prev_input, prev_cached, prev_output = chain_prev.get(
+            chain_id, (None, None, None)
+        )
         prev = chain_prev.get(chain_id)
         delta_input_raw, delta_uncached_raw, delta_output_raw = _build_delta(
             prev=(prev_input, prev_cached, prev_output) if prev is not None else None,
@@ -182,7 +206,9 @@ def get_run_token_timeline(
                 delta_input=delta_input,
                 delta_uncached=delta_uncached,
                 delta_output=delta_output,
-                runtime_ms=_to_non_negative_int(row.runtime_ms) if row.runtime_ms is not None else None,
+                runtime_ms=_to_non_negative_int(row.runtime_ms)
+                if row.runtime_ms is not None
+                else None,
                 is_growth_spike=is_growth_spike,
                 spike_reason=spike_reason,
             )

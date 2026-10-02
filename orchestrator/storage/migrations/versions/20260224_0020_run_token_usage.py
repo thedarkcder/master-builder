@@ -30,7 +30,9 @@ def upgrade() -> None:
         sa.Column("turn_id", sa.String(length=128), nullable=True),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("input_tokens", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("cached_input_tokens", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column(
+            "cached_input_tokens", sa.Integer(), nullable=False, server_default="0"
+        ),
         sa.Column("output_tokens", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("delta_input", sa.Integer(), nullable=True),
         sa.Column("delta_uncached", sa.Integer(), nullable=True),
@@ -42,8 +44,12 @@ def upgrade() -> None:
         sa.Column("output_chars", sa.Integer(), nullable=True),
         sa.Column("truncated", sa.Boolean(), nullable=True),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "run_id",
@@ -57,18 +63,36 @@ def upgrade() -> None:
     op.create_index("ix_run_token_usage_run_id", "run_token_usage", ["run_id"])
     op.create_index("ix_run_token_usage_project_id", "run_token_usage", ["project_id"])
     op.create_index("ix_run_token_usage_stage", "run_token_usage", ["stage"])
-    op.create_index("ix_run_token_usage_invocation_id", "run_token_usage", ["invocation_id"])
+    op.create_index(
+        "ix_run_token_usage_invocation_id", "run_token_usage", ["invocation_id"]
+    )
     op.create_index("ix_run_token_usage_turn_id", "run_token_usage", ["turn_id"])
-    op.create_index("ix_run_token_usage_recorded_at", "run_token_usage", ["recorded_at"])
-    op.create_index("ix_run_token_usage_stage_attempt_recorded_at", "run_token_usage", ["stage", "attempt", "recorded_at"])
-    op.create_index("ix_run_token_usage_tenant_recorded_at", "run_token_usage", ["tenant_id", "recorded_at"])
-    op.create_index("ix_run_token_usage_run_recorded_at", "run_token_usage", ["run_id", "recorded_at"])
+    op.create_index(
+        "ix_run_token_usage_recorded_at", "run_token_usage", ["recorded_at"]
+    )
+    op.create_index(
+        "ix_run_token_usage_stage_attempt_recorded_at",
+        "run_token_usage",
+        ["stage", "attempt", "recorded_at"],
+    )
+    op.create_index(
+        "ix_run_token_usage_tenant_recorded_at",
+        "run_token_usage",
+        ["tenant_id", "recorded_at"],
+    )
+    op.create_index(
+        "ix_run_token_usage_run_recorded_at",
+        "run_token_usage",
+        ["run_id", "recorded_at"],
+    )
 
 
 def downgrade() -> None:
     op.drop_index("ix_run_token_usage_run_recorded_at", table_name="run_token_usage")
     op.drop_index("ix_run_token_usage_tenant_recorded_at", table_name="run_token_usage")
-    op.drop_index("ix_run_token_usage_stage_attempt_recorded_at", table_name="run_token_usage")
+    op.drop_index(
+        "ix_run_token_usage_stage_attempt_recorded_at", table_name="run_token_usage"
+    )
     op.drop_index("ix_run_token_usage_recorded_at", table_name="run_token_usage")
     op.drop_index("ix_run_token_usage_turn_id", table_name="run_token_usage")
     op.drop_index("ix_run_token_usage_invocation_id", table_name="run_token_usage")

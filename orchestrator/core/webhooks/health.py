@@ -49,4 +49,3 @@ webhook_health_tracker = WebhookHealthTracker()
 
 def reset_webhook_health_tracker_for_tests() -> None:
     webhook_health_tracker.reset()
-

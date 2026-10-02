@@ -82,24 +82,24 @@ class DiscordThreadActionHandler:
     def execute_ask_with_thread(self, *, action: DiscordAskWithThreadAction) -> None:
         self._with_followup_context(
             tenant_id=action.tenant_id,
-                callback=lambda session, settings, tenant: self._ask_with_thread_sender(
-                    session=session,
-                    settings=settings,
-                    tenant=tenant,
-                    channel_id=action.channel_id,
-                    user_id=action.user_id,
-                    content=action.content,
-                    components=action.components,
-                    issue_key=action.issue_key,
-                    followup_context_type=action.followup_context_type,
-                    request_id=action.request_id,
-                    discord_api_client_fn=self._discord_api_client,
-                    project_ask_thread_channel_ids_for_tenant_fn=project_ask_thread_channel_ids_for_tenant,
-                    resolve_project_for_channel_fn=resolve_project_for_channel,
-                    ask_thread_message_map_from_config_fn=ask_thread_message_map_from_config,
-                    ask_reply_components_fn=_default_ask_reply_components,
-                ),
-            )
+            callback=lambda session, settings, tenant: self._ask_with_thread_sender(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                channel_id=action.channel_id,
+                user_id=action.user_id,
+                content=action.content,
+                components=action.components,
+                issue_key=action.issue_key,
+                followup_context_type=action.followup_context_type,
+                request_id=action.request_id,
+                discord_api_client_fn=self._discord_api_client,
+                project_ask_thread_channel_ids_for_tenant_fn=project_ask_thread_channel_ids_for_tenant,
+                resolve_project_for_channel_fn=resolve_project_for_channel,
+                ask_thread_message_map_from_config_fn=ask_thread_message_map_from_config,
+                ask_reply_components_fn=_default_ask_reply_components,
+            ),
+        )
 
     def execute_seed_with_thread(self, *, action: DiscordSeedWithThreadAction) -> None:
         self._with_followup_context(
@@ -132,7 +132,9 @@ class DiscordThreadActionHandler:
         with self._session_factory() as session:
             tenant = session.get(Tenant, normalized_tenant_id)
             if tenant is None or not tenant.is_enabled:
-                raise RuntimeError(f"Discord tenant '{normalized_tenant_id}' is unavailable for follow-up action")
+                raise RuntimeError(
+                    f"Discord tenant '{normalized_tenant_id}' is unavailable for follow-up action"
+                )
             callback(session, settings, tenant)
 
     def _discord_api_client(self, *, session: Session, settings) -> DiscordApiClient:  # noqa: ANN001
@@ -153,17 +155,25 @@ class DiscordNotificationActionHandler:
     ) -> None:
         self._session_factory = session_factory
         self._settings_factory = settings_factory
-        self._send_tenant_discord_message_fn = send_tenant_discord_message_fn or send_tenant_discord_message
+        self._send_tenant_discord_message_fn = (
+            send_tenant_discord_message_fn or send_tenant_discord_message
+        )
 
-    def execute_tenant_notification(self, *, action: DiscordTenantNotificationAction) -> None:
+    def execute_tenant_notification(
+        self, *, action: DiscordTenantNotificationAction
+    ) -> None:
         normalized_tenant_id = str(action.tenant_id or "").strip()
         if not normalized_tenant_id:
-            raise RuntimeError("Discord tenant notification action is missing tenant context")
+            raise RuntimeError(
+                "Discord tenant notification action is missing tenant context"
+            )
         settings = self._settings_factory()
         with self._session_factory() as session:
             tenant = session.get(Tenant, normalized_tenant_id)
             if tenant is None or not tenant.is_enabled:
-                raise RuntimeError(f"Discord tenant '{normalized_tenant_id}' is unavailable for notification action")
+                raise RuntimeError(
+                    f"Discord tenant '{normalized_tenant_id}' is unavailable for notification action"
+                )
             project = None
             normalized_project_id = str(action.project_id or "").strip()
             if normalized_project_id:
@@ -205,7 +215,11 @@ class DiscordTransportExecutor:
         self._client_factory = client_factory
         self._thread_action_handler = thread_action_handler
         self._notification_action_handler = notification_action_handler
-        if self._thread_action_handler is None and session_factory is not None and settings_factory is not None:
+        if (
+            self._thread_action_handler is None
+            and session_factory is not None
+            and settings_factory is not None
+        ):
             self._thread_action_handler = DiscordThreadActionHandler(
                 session_factory=session_factory,
                 settings_factory=settings_factory,
@@ -214,7 +228,11 @@ class DiscordTransportExecutor:
                 ask_with_thread_sender=ask_with_thread_sender,
                 seed_with_thread_sender=seed_with_thread_sender,
             )
-        if self._notification_action_handler is None and session_factory is not None and settings_factory is not None:
+        if (
+            self._notification_action_handler is None
+            and session_factory is not None
+            and settings_factory is not None
+        ):
             self._notification_action_handler = DiscordNotificationActionHandler(
                 session_factory=session_factory,
                 settings_factory=settings_factory,
@@ -225,7 +243,11 @@ class DiscordTransportExecutor:
             self._interaction_callback_sender(
                 interaction_id=action.interaction_id,
                 interaction_token=action.interaction_token,
-                response_body=(action.body.encode("utf-8") if isinstance(action.body, str) else action.body),
+                response_body=(
+                    action.body.encode("utf-8")
+                    if isinstance(action.body, str)
+                    else action.body
+                ),
             )
             return
         if isinstance(action, DiscordChannelMessageAction):
@@ -239,7 +261,9 @@ class DiscordTransportExecutor:
             return self._execute_attachment_action(action=action)
         if isinstance(action, DiscordInteractionFollowupAction):
             if self._interaction_followup_sender is None:
-                raise RuntimeError("Discord interaction follow-up sender is not configured")
+                raise RuntimeError(
+                    "Discord interaction follow-up sender is not configured"
+                )
             self._interaction_followup_sender(
                 application_id=action.application_id,
                 interaction_token=action.interaction_token,
@@ -257,16 +281,24 @@ class DiscordTransportExecutor:
             self._require_thread_action_handler().execute_ask_with_thread(action=action)
             return
         if isinstance(action, DiscordSeedWithThreadAction):
-            self._require_thread_action_handler().execute_seed_with_thread(action=action)
+            self._require_thread_action_handler().execute_seed_with_thread(
+                action=action
+            )
             return
         if isinstance(action, DiscordTenantNotificationAction):
-            self._require_notification_action_handler().execute_tenant_notification(action=action)
+            self._require_notification_action_handler().execute_tenant_notification(
+                action=action
+            )
             return
-        raise RuntimeError(f"Unsupported Discord transport action: {type(action).__name__}")
+        raise RuntimeError(
+            f"Unsupported Discord transport action: {type(action).__name__}"
+        )
 
     def _require_client(self) -> DiscordApiClient:
         if not self._bot_token:
-            raise RuntimeError("Discord bot token is not configured for message actions")
+            raise RuntimeError(
+                "Discord bot token is not configured for message actions"
+            )
         return self._client_factory(bot_token=self._bot_token)
 
     def _require_thread_action_handler(self) -> DiscordThreadActionHandler:
@@ -279,7 +311,9 @@ class DiscordTransportExecutor:
             raise RuntimeError("Discord notification action handler is not configured")
         return self._notification_action_handler
 
-    def _execute_attachment_action(self, *, action: DiscordChannelMessageWithAttachmentAction) -> dict[str, Any] | None:
+    def _execute_attachment_action(
+        self, *, action: DiscordChannelMessageWithAttachmentAction
+    ) -> dict[str, Any] | None:
         try:
             data = self._require_client().post_message_with_attachment(
                 channel_id=action.channel_id,
@@ -310,7 +344,9 @@ class DiscordTransportExecutor:
                 raise
         return None
 
-    def _message_result(self, *, data: dict[str, Any], channel_id: str) -> dict[str, Any]:
+    def _message_result(
+        self, *, data: dict[str, Any], channel_id: str
+    ) -> dict[str, Any]:
         message_id = str(data.get("id") or "").strip()
         if not message_id:
             raise RuntimeError("Discord transport action did not return a message id")

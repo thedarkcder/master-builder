@@ -18,7 +18,9 @@ from orchestrator.core.planning.specialist.models import (
     SpecialistPlanningStageResult,
     TechnicalDecision,
 )
-from orchestrator.core.planning.specialist.stage_runner import SpecialistPlanningStageRunner
+from orchestrator.core.planning.specialist.stage_runner import (
+    SpecialistPlanningStageRunner,
+)
 
 
 def _merge_unique(*sequences: Iterable[str]) -> tuple[str, ...]:
@@ -56,7 +58,9 @@ def _merge_unique_pm_decision_requests(
 
 
 class SpecialistPlanningFanoutService:
-    def __init__(self, *, stage_runner: SpecialistPlanningStageRunner | None = None) -> None:
+    def __init__(
+        self, *, stage_runner: SpecialistPlanningStageRunner | None = None
+    ) -> None:
         self._stage_runner = stage_runner or SpecialistPlanningStageRunner()
 
     def run(
@@ -87,7 +91,9 @@ class SpecialistPlanningFanoutService:
         stage_results: tuple[SpecialistPlanningStageResult, ...],
     ) -> SpecialistPlanningResult:
         blocked_stage_states = tuple(
-            stage_result.planning_state for stage_result in stage_results if stage_result.blocked
+            stage_result.planning_state
+            for stage_result in stage_results
+            if stage_result.blocked
         )
         technical_decisions = _merge_unique_decisions(
             *(stage_result.technical_decisions for stage_result in stage_results)
@@ -96,7 +102,9 @@ class SpecialistPlanningFanoutService:
             *(stage_result.pm_decision_requests for stage_result in stage_results)
         )
         planning_state = (
-            PLANNING_STATE_BLOCKED if blocked_stage_states or pm_decision_requests else PLANNING_STATE_COMPLETED
+            PLANNING_STATE_BLOCKED
+            if blocked_stage_states or pm_decision_requests
+            else PLANNING_STATE_COMPLETED
         )
         block_reason = None
         if planning_state == PLANNING_STATE_BLOCKED:
@@ -105,7 +113,14 @@ class SpecialistPlanningFanoutService:
                 for stage_result in stage_results
                 if stage_result.blocked and stage_result.pm_decision_requests
             )
-        architect_stage = next((stage for stage in stage_results if isinstance(stage, ArchitectStageOutput)), None)
+        architect_stage = next(
+            (
+                stage
+                for stage in stage_results
+                if isinstance(stage, ArchitectStageOutput)
+            ),
+            None,
+        )
         architecture_summary = ()
         architecture_diagram = None
         if architect_stage is not None:
@@ -119,12 +134,20 @@ class SpecialistPlanningFanoutService:
         return SpecialistPlanningResult(
             planning_state=planning_state,
             stages=stage_results,
-            findings=_merge_unique(*(stage_result.findings for stage_result in stage_results)),
-            recommendations=_merge_unique(*(stage_result.recommendations for stage_result in stage_results)),
-            required_tasks=_merge_unique(*(stage_result.required_tasks for stage_result in stage_results)),
+            findings=_merge_unique(
+                *(stage_result.findings for stage_result in stage_results)
+            ),
+            recommendations=_merge_unique(
+                *(stage_result.recommendations for stage_result in stage_results)
+            ),
+            required_tasks=_merge_unique(
+                *(stage_result.required_tasks for stage_result in stage_results)
+            ),
             technical_decisions=technical_decisions,
             pm_decision_requests=pm_decision_requests,
-            acceptance_impacts=_merge_unique(*(stage_result.acceptance_impacts for stage_result in stage_results)),
+            acceptance_impacts=_merge_unique(
+                *(stage_result.acceptance_impacts for stage_result in stage_results)
+            ),
             blocked_stage_states=blocked_stage_states,
             block_reason=block_reason,
             architecture_summary=architecture_summary,

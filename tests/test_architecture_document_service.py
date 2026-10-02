@@ -21,7 +21,9 @@ def _build_session_factory(temp_dir: str):
     return create_session_factory(database_url)
 
 
-def test_internal_architecture_document_gate_creates_draft_stub_and_blocks_until_ready() -> None:
+def test_internal_architecture_document_gate_creates_draft_stub_and_blocks_until_ready() -> (
+    None
+):
     with TemporaryDirectory() as temp_dir:
         session_factory = _build_session_factory(temp_dir)
         with session_factory() as session:
@@ -59,9 +61,13 @@ def test_internal_architecture_document_gate_creates_draft_stub_and_blocks_until
             session.commit()
 
             service = ArchitectureDocumentService(
-                settings_factory=lambda: SimpleNamespace(admin_ui_base_url="http://localhost:4100")
+                settings_factory=lambda: SimpleNamespace(
+                    admin_ui_base_url="http://localhost:4100"
+                )
             )
-            with patch("orchestrator.core.knowledge.base._embed_texts", return_value=[]):
+            with patch(
+                "orchestrator.core.knowledge.base._embed_texts", return_value=[]
+            ):
                 gate = service.resolve_gate(
                     session=session,
                     project=project,
@@ -75,7 +81,10 @@ def test_internal_architecture_document_gate_creates_draft_stub_and_blocks_until
             assert gate.ready is False
             assert gate.document is not None
             assert gate.document.provider == "internal"
-            assert gate.document.canonical_url.endswith("/tenant-a/projects/project-a/architecture?documentId=" + gate.document.document_id)
+            assert gate.document.canonical_url.endswith(
+                "/tenant-a/projects/project-a/architecture?documentId="
+                + gate.document.document_id
+            )
 
             updated = service.update_document(
                 session=session,
@@ -100,7 +109,9 @@ def test_internal_architecture_document_gate_creates_draft_stub_and_blocks_until
             assert ready_gate.document.document_id == gate.document.document_id
 
 
-def test_confluence_architecture_document_gate_creates_provider_stub_and_blocks_until_ready() -> None:
+def test_confluence_architecture_document_gate_creates_provider_stub_and_blocks_until_ready() -> (
+    None
+):
     with TemporaryDirectory() as temp_dir:
         session_factory = _build_session_factory(temp_dir)
         with session_factory() as session:
@@ -129,7 +140,10 @@ def test_confluence_architecture_document_gate_creates_provider_stub_and_blocks_
                 environment={},
                 secret_refs={},
                 discord_config={},
-                architecture_docs_config={"provider": "confluence", "space_key": "ARCH"},
+                architecture_docs_config={
+                    "provider": "confluence",
+                    "space_key": "ARCH",
+                },
                 created_at=now,
                 updated_at=now,
             )
@@ -138,7 +152,9 @@ def test_confluence_architecture_document_gate_creates_provider_stub_and_blocks_
             session.commit()
 
             service = ArchitectureDocumentService(
-                settings_factory=lambda: SimpleNamespace(admin_ui_base_url="http://localhost:4100")
+                settings_factory=lambda: SimpleNamespace(
+                    admin_ui_base_url="http://localhost:4100"
+                )
             )
 
             fake_oauth = SimpleNamespace(
@@ -184,7 +200,10 @@ def test_confluence_architecture_document_gate_creates_provider_stub_and_blocks_
                 assert gate.document is not None
                 assert gate.document.provider == "confluence"
                 assert gate.document.provider_ref == "page-123"
-                assert gate.document.canonical_url == "https://example.atlassian.net/wiki/spaces/ARCH/pages/123"
+                assert (
+                    gate.document.canonical_url
+                    == "https://example.atlassian.net/wiki/spaces/ARCH/pages/123"
+                )
 
                 updated = service.update_document(
                     session=session,
@@ -246,7 +265,9 @@ def test_confluence_architecture_document_requires_space_key_configuration() -> 
             session.commit()
 
             service = ArchitectureDocumentService(
-                settings_factory=lambda: SimpleNamespace(admin_ui_base_url="http://localhost:4100")
+                settings_factory=lambda: SimpleNamespace(
+                    admin_ui_base_url="http://localhost:4100"
+                )
             )
             try:
                 service.resolve_gate(

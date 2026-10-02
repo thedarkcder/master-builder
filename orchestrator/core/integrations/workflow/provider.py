@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.core.issue_fanout.service import list_child_issue_previews_for_parent
 
 
@@ -26,7 +28,9 @@ class JiraWorkflowAdapter:
 
     @property
     def site_url(self) -> str | None:
-        value = str(getattr(self.oauth_context.connection, "site_url", "") or "").strip()
+        value = str(
+            getattr(self.oauth_context.connection, "site_url", "") or ""
+        ).strip()
         return value or None
 
     def get_issue_detail(self, *, issue_id_or_key: str):  # noqa: ANN201
@@ -58,10 +62,14 @@ class JiraWorkflowAdapter:
 @dataclass
 class JiraWorkflowConnectionProvider:
     oauth_context_resolver: Callable[..., Any] = tenant_atlassian_oauth_context
-    list_child_issue_previews_for_parent_fn: Callable[..., Any] = list_child_issue_previews_for_parent
+    list_child_issue_previews_for_parent_fn: Callable[..., Any] = (
+        list_child_issue_previews_for_parent
+    )
 
     def adapter_for(self, *, session, tenant, settings) -> JiraWorkflowAdapter:  # noqa: ANN001
-        oauth_context = self.oauth_context_resolver(session=session, tenant=tenant, settings=settings)
+        oauth_context = self.oauth_context_resolver(
+            session=session, tenant=tenant, settings=settings
+        )
         return JiraWorkflowAdapter(
             oauth_context=oauth_context,
             list_child_issue_previews_for_parent_fn=self.list_child_issue_previews_for_parent_fn,
@@ -70,7 +78,11 @@ class JiraWorkflowConnectionProvider:
 
 @dataclass
 class WorkflowIntegrationAdapterProvider:
-    jira_provider: JiraWorkflowConnectionProvider = field(default_factory=JiraWorkflowConnectionProvider)
+    jira_provider: JiraWorkflowConnectionProvider = field(
+        default_factory=JiraWorkflowConnectionProvider
+    )
 
     def jira(self, *, session, tenant, settings) -> JiraWorkflowAdapter:  # noqa: ANN001
-        return self.jira_provider.adapter_for(session=session, tenant=tenant, settings=settings)
+        return self.jira_provider.adapter_for(
+            session=session, tenant=tenant, settings=settings
+        )

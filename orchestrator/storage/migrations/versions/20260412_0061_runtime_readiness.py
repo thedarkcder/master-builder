@@ -21,7 +21,9 @@ def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     run_columns = {column["name"] for column in inspector.get_columns("runs")}
-    worker_columns = {column["name"] for column in inspector.get_columns("worker_runtime_states")}
+    worker_columns = {
+        column["name"] for column in inspector.get_columns("worker_runtime_states")
+    }
     added_required_runtime_kinds = False
     added_runtime_dependencies = False
     with op.batch_alter_table("runs") as batch_op:
@@ -47,7 +49,9 @@ def upgrade() -> None:
             )
             added_runtime_dependencies = True
     if "required_runtime_kinds_json" in run_columns or added_required_runtime_kinds:
-        op.execute("UPDATE runs SET required_runtime_kinds_json = '[]' WHERE required_runtime_kinds_json IS NULL")
+        op.execute(
+            "UPDATE runs SET required_runtime_kinds_json = '[]' WHERE required_runtime_kinds_json IS NULL"
+        )
     if "runtime_dependencies_json" in worker_columns or added_runtime_dependencies:
         op.execute(
             "UPDATE worker_runtime_states SET runtime_dependencies_json = '{}' WHERE runtime_dependencies_json IS NULL"

@@ -7,11 +7,15 @@ from urllib.request import Request as UrlRequest, urlopen
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
-from orchestrator.core.platform.secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
+from orchestrator.core.platform.secret_service import (
+    PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
+)
 from orchestrator.tools.discord_api import DiscordApiClient
 
 
-def discord_api_client(*, session: Session, settings, resolve_platform_secret_ref_fn) -> DiscordApiClient:  # noqa: ANN001
+def discord_api_client(
+    *, session: Session, settings, resolve_platform_secret_ref_fn
+) -> DiscordApiClient:  # noqa: ANN001
     token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
     if not token_ref:
         raise RuntimeError("Discord bot token secret ref is not configured")
@@ -23,7 +27,6 @@ def discord_api_client(*, session: Session, settings, resolve_platform_secret_re
     if not bot_token:
         raise RuntimeError(f"Discord bot token secret '{token_ref}' is missing")
     return DiscordApiClient(bot_token=bot_token)
-
 
 
 def send_discord_interaction_followup(
@@ -68,11 +71,15 @@ def send_discord_interaction_followup(
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8")
         normalized_body = error_body.casefold()
-        if exc.code == 404 and ("unknown webhook" in normalized_body or '"code": 10015' in normalized_body):
+        if exc.code == 404 and (
+            "unknown webhook" in normalized_body or '"code": 10015' in normalized_body
+        ):
             raise DiscordInteractionWebhookExpiredError(
                 f"Discord interaction follow-up webhook expired ({exc.code}): {error_body}"
             ) from exc
-        raise RuntimeError(f"Discord follow-up request failed ({exc.code}): {error_body}") from exc
+        raise RuntimeError(
+            f"Discord follow-up request failed ({exc.code}): {error_body}"
+        ) from exc
 
 
 def send_discord_interaction_callback(
@@ -101,4 +108,6 @@ def send_discord_interaction_callback(
             return
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8")
-        raise RuntimeError(f"Discord interaction callback failed ({exc.code}): {error_body}") from exc
+        raise RuntimeError(
+            f"Discord interaction callback failed ({exc.code}): {error_body}"
+        ) from exc

@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 
-from orchestrator.api.schemas import WebhookQueueJobPageRead, WebhookQueueJobRead, WebhookQueueSummaryRead
+from orchestrator.api.schemas import (
+    WebhookQueueJobPageRead,
+    WebhookQueueJobRead,
+    WebhookQueueSummaryRead,
+)
 from orchestrator.storage.models import WebhookJob
 
 _VALID_JOB_STATUSES = {"pending", "processing", "failed", "done"}
@@ -57,7 +61,9 @@ def _serialize_job(row: WebhookJob) -> WebhookQueueJobRead:
         tenant_id=row.tenant_id,
         project_id=row.project_id,
         subject_key=row.subject_key,
-        related_run_id=_normalized_string((row.context_json or {}).get("related_run_id")),
+        related_run_id=_normalized_string(
+            (row.context_json or {}).get("related_run_id")
+        ),
         dedupe_key=row.dedupe_key,
         request_id=row.request_id,
         event_type=row.event_type,
@@ -99,13 +105,17 @@ def list_webhook_queue_jobs(
             select(func.count(WebhookJob.job_id)).where(*filters)
         ).scalar_one()
     )
-    rows = session.execute(
-        select(WebhookJob)
-        .where(*filters)
-        .order_by(WebhookJob.created_at.desc(), WebhookJob.job_id.desc())
-        .limit(limit)
-        .offset(offset)
-    ).scalars().all()
+    rows = (
+        session.execute(
+            select(WebhookJob)
+            .where(*filters)
+            .order_by(WebhookJob.created_at.desc(), WebhookJob.job_id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        .scalars()
+        .all()
+    )
 
     summary_filters = _base_filters(
         transport=transport,
@@ -145,13 +155,19 @@ def retry_failed_webhook_job(
         )
     ).scalar_one_or_none()
     if persisted is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Webhook job not found"
+        )
     if persisted.status != "failed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Webhook job retry is only allowed for failed webhook jobs",
         )
-    if persisted.owner_id is not None or persisted.lease_expires_at is not None or persisted.completed_at is None:
+    if (
+        persisted.owner_id is not None
+        or persisted.lease_expires_at is not None
+        or persisted.completed_at is None
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Webhook job retry requires a terminal failed webhook job",

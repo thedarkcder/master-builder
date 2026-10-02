@@ -11,7 +11,10 @@ from orchestrator.core.platform.secret_service import (
 )
 from orchestrator.core.platform.secrets import decrypt_value, encrypt_value
 from orchestrator.storage.models import AtlassianOAuthConnection
-from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient, AtlassianOAuthClientConfig
+from orchestrator.tools.atlassian_oauth import (
+    AtlassianOAuthClient,
+    AtlassianOAuthClientConfig,
+)
 
 
 def resolve_secret_ref(
@@ -81,7 +84,9 @@ def refresh_atlassian_connection_tokens(
             encryption_key=settings.secrets_encryption_key,
         )
 
-    client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+    client = atlassian_oauth_client_fn(
+        session=session, settings=settings, tenant_id=tenant_id
+    )
     refresh_token = decrypt_value(
         ciphertext=connection.refresh_token_encrypted,
         encryption_key=settings.secrets_encryption_key,

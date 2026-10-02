@@ -47,7 +47,9 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
         self.session.get.assert_not_called()
 
     def test_skips_when_connection_missing(self) -> None:
-        tenant = SimpleNamespace(tenant_id="tenant-a", jira_config={"connection_id": ""})
+        tenant = SimpleNamespace(
+            tenant_id="tenant-a", jira_config={"connection_id": ""}
+        )
         send_stage_update_to_jira(
             session=self.session,
             tenant=tenant,
@@ -75,8 +77,14 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
         client = MagicMock()
         self.session.get.return_value = connection
         with (
-            patch("orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.core.worker.jira_stage_service.atlassian_oauth_client", return_value=client),
+            patch(
+                "orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.core.worker.jira_stage_service.atlassian_oauth_client",
+                return_value=client,
+            ),
         ):
             send_stage_update_to_jira(
                 session=self.session,
@@ -93,8 +101,14 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
         client = MagicMock()
         self.session.get.return_value = connection
         with (
-            patch("orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.core.worker.jira_stage_service.atlassian_oauth_client", return_value=client),
+            patch(
+                "orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.core.worker.jira_stage_service.atlassian_oauth_client",
+                return_value=client,
+            ),
         ):
             send_stage_update_to_jira(
                 session=self.session,

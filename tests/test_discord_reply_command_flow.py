@@ -3,11 +3,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.planner import (
+    DecisionPlannerQuestion,
+    DecisionPlannerResult,
+)
 from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
-from orchestrator.core.runtime.payload_models import InteractionAction, InteractionResponse
+from orchestrator.core.runtime.payload_models import (
+    InteractionAction,
+    InteractionResponse,
+)
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_reply_harness import DiscordCommandReplyHarness
 
@@ -16,11 +22,15 @@ pytestmark = pytest.mark.contract
 
 
 class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
-    def test_reply_updates_jira_from_dict_oauth_context_and_enqueues_retry(self) -> None:
+    def test_reply_updates_jira_from_dict_oauth_context_and_enqueues_retry(
+        self,
+    ) -> None:
         self._queue_run(run_id="run-failed-reply-1", issue_key="TP-88", status="failed")
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="Old summary", description="Objective: old")
+                return_value=SimpleNamespace(
+                    summary="Old summary", description="Objective: old"
+                )
             ),
             update_issue_summary_and_description=MagicMock(),
         )
@@ -50,7 +60,9 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         with (
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-88", summary="Retry from reply", status="To Do"),
+                return_value=JiraIssuePreview(
+                    key="TP-88", summary="Retry from reply", status="To Do"
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
@@ -61,8 +73,14 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     description="Objective: refreshed for retry.",
                 ),
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor.build_codex_runtime",
+                return_value=runtime,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -125,7 +143,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
 
-        with patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value={"access_token": "tok-only"}):
+        with patch(
+            "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+            return_value={"access_token": "tok-only"},
+        ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
                 json={
@@ -141,11 +162,15 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         self.assertNotIn("tok-only", response.json()["detail"])
         self.assertNotIn("Internal server error. Ref:", response.json()["detail"])
 
-    def test_reply_when_decision_gate_still_triggered_returns_recheck_not_retry(self) -> None:
+    def test_reply_when_decision_gate_still_triggered_returns_recheck_not_retry(
+        self,
+    ) -> None:
         self._queue_run(run_id="run-failed-reply-3", issue_key="TP-90", status="failed")
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="Old summary", description="Objective: old")
+                return_value=SimpleNamespace(
+                    summary="Old summary", description="Objective: old"
+                )
             ),
             update_issue_summary_and_description=MagicMock(),
         )
@@ -180,9 +205,16 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             captured_answer_summary=None,
         )
         with (
-            patch("orchestrator.api.discord.commands.run_controls.dispatch_run_control_command") as dispatch_mock,
-            patch("orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview") as preview_mock,
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.dispatch_run_control_command"
+            ) as dispatch_mock,
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview"
+            ) as preview_mock,
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -218,7 +250,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     ),
                 ),
             ),
-            patch("orchestrator.core.decision.engine.plan_decision_questions", return_value=planner_result),
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=planner_result,
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
                 return_value=(
@@ -230,7 +265,9 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     },
                 ),
             ),
-            patch("orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message") as build_message_mock,
+            patch(
+                "orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message"
+            ) as build_message_mock,
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
@@ -248,7 +285,9 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         self.assertEqual(response.json()["data"]["issue_key"], "TP-90")
         self.assertEqual(
             response.json()["data"]["questions"],
-            ["What entitlement/capability values are required for production and staging?"],
+            [
+                "What entitlement/capability values are required for production and staging?"
+            ],
         )
         self.assertEqual(
             response.json()["data"]["question_feedback"],
@@ -261,7 +300,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                 }
             ],
         )
-        self.assertIn("Config values were captured, but entitlement confirmation is still missing.", response.json()["message"])
+        self.assertIn(
+            "Config values were captured, but entitlement confirmation is still missing.",
+            response.json()["message"],
+        )
         oauth_client.update_issue_summary_and_description.assert_not_called()
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
@@ -270,7 +312,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
     def test_reply_question_returns_conversation_response_without_recheck(self) -> None:
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="HubSpot billing", description="Objective: clarify HubSpot subscription rules")
+                return_value=SimpleNamespace(
+                    summary="HubSpot billing",
+                    description="Objective: clarify HubSpot subscription rules",
+                )
             ),
             add_issue_comment=MagicMock(),
         )
@@ -296,11 +341,20 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         )
 
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.active_case_and_cycle_for_issue",
-                return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
+                return_value=(
+                    SimpleNamespace(case_id="case-1"),
+                    SimpleNamespace(cycle_id="cycle-1"),
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.list_cycle_answers",
@@ -339,21 +393,33 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         self.assertTrue(body["ok"])
         self.assertEqual(body["command"], "reply")
         self.assertTrue(body["data"]["conversation_response"])
-        self.assertIn("which HubSpot information the product should trust", body["message"])
+        self.assertIn(
+            "which HubSpot information the product should trust", body["message"]
+        )
         self.assertIn("which business statuses should make access", body["message"])
         self.assertNotIn("object-to-field", body["message"])
         self.assertNotIn("properties", body["message"])
         self.assertNotIn("plain English", body["message"])
         self.assertNotIn("Please reply with:", body["message"])
-        self.assertEqual(interpret_mock.call_args.kwargs["issue_summary"], "HubSpot billing")
-        self.assertEqual(interpret_mock.call_args.kwargs["issue_description"], "Objective: clarify HubSpot subscription rules")
+        self.assertEqual(
+            interpret_mock.call_args.kwargs["issue_summary"], "HubSpot billing"
+        )
+        self.assertEqual(
+            interpret_mock.call_args.kwargs["issue_description"],
+            "Objective: clarify HubSpot subscription rules",
+        )
         reply_recheck_mock.assert_not_called()
         oauth_client.add_issue_comment.assert_not_called()
 
-    def test_reply_capture_action_without_recheck_persists_without_rechecking(self) -> None:
+    def test_reply_capture_action_without_recheck_persists_without_rechecking(
+        self,
+    ) -> None:
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="HubSpot billing", description="Objective: clarify HubSpot subscription rules")
+                return_value=SimpleNamespace(
+                    summary="HubSpot billing",
+                    description="Objective: clarify HubSpot subscription rules",
+                )
             ),
             add_issue_comment=MagicMock(),
         )
@@ -364,11 +430,20 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         }
 
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.active_case_and_cycle_for_issue",
-                return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
+                return_value=(
+                    SimpleNamespace(case_id="case-1"),
+                    SimpleNamespace(cycle_id="cycle-1"),
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.list_cycle_answers",
@@ -393,9 +468,13 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
-                return_value=SimpleNamespace(evidence_id="evidence-1", effect_ids=("effect-1",)),
+                return_value=SimpleNamespace(
+                    evidence_id="evidence-1", effect_ids=("effect-1",)
+                ),
             ) as capture_mock,
-            patch("orchestrator.api.discord.commands.run_controls.publish_decision_effects") as publish_mock,
+            patch(
+                "orchestrator.api.discord.commands.run_controls.publish_decision_effects"
+            ) as publish_mock,
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
             ) as reply_recheck_mock,
@@ -423,11 +502,19 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         publish_mock.assert_called_once()
         reply_recheck_mock.assert_not_called()
 
-    def test_reply_uses_captured_evidence_id_for_decision_event_idempotency(self) -> None:
-        self._queue_run(run_id="run-failed-reply-idempotency", issue_key="TP-90", status="failed")
+    def test_reply_uses_captured_evidence_id_for_decision_event_idempotency(
+        self,
+    ) -> None:
+        self._queue_run(
+            run_id="run-failed-reply-idempotency", issue_key="TP-90", status="failed"
+        )
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="Old summary", description="Objective: old", labels=["agent:ready"])
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                    labels=["agent:ready"],
+                )
             ),
             add_issue_comment=MagicMock(),
         )
@@ -437,7 +524,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             "client": oauth_client,
         }
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
             ) as reply_recheck_mock,
@@ -501,11 +591,19 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         )
         self.assertEqual(decision_event.idempotency_key, "decision-reply:evidence-123")
 
-    def test_reply_when_only_gtd_is_blocking_does_not_surface_decision_gate_reason(self) -> None:
-        self._queue_run(run_id="run-failed-reply-gtd", issue_key="TP-90", status="failed")
+    def test_reply_when_only_gtd_is_blocking_does_not_surface_decision_gate_reason(
+        self,
+    ) -> None:
+        self._queue_run(
+            run_id="run-failed-reply-gtd", issue_key="TP-90", status="failed"
+        )
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="Old summary", description="Objective: old", labels=["agent:ready"])
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                    labels=["agent:ready"],
+                )
             ),
             update_issue_summary_and_description=MagicMock(),
         )
@@ -540,7 +638,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             captured_answer_summary=None,
         )
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -564,8 +665,12 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                                 ),
                                 gtd=GoodToDoValidationResult(
                                     valid=False,
-                                    missing_criteria=("Dependencies and risks identified",),
-                                    clarification_questions=("Which dependencies or risks may impact delivery?",),
+                                    missing_criteria=(
+                                        "Dependencies and risks identified",
+                                    ),
+                                    clarification_questions=(
+                                        "Which dependencies or risks may impact delivery?",
+                                    ),
                                 ),
                             ),
                         ),
@@ -576,7 +681,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     ),
                 ),
             ),
-            patch("orchestrator.core.decision.engine.plan_decision_questions", return_value=planner_result),
+            patch(
+                "orchestrator.core.decision.engine.plan_decision_questions",
+                return_value=planner_result,
+            ),
             patch(
                 "orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message",
                 return_value=(
@@ -599,16 +707,28 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         self.assertEqual(response.json()["command"], "reply")
         self.assertEqual(response.json()["data"]["classification"], "gtd")
         self.assertIsNone(response.json()["data"]["decision_gate_reason"])
-        self.assertIn("Dependencies and risks identified", response.json()["data"]["gtd_missing_criteria"])
-        self.assertIn("Which dependencies or risks may impact delivery?", response.json()["data"]["questions"])
+        self.assertIn(
+            "Dependencies and risks identified",
+            response.json()["data"]["gtd_missing_criteria"],
+        )
+        self.assertIn(
+            "Which dependencies or risks may impact delivery?",
+            response.json()["data"]["questions"],
+        )
         self.assertNotIn("Decision Gate reason:", response.json()["message"])
         oauth_client.update_issue_summary_and_description.assert_not_called()
         build_message_mock.assert_called_once()
 
-    def test_reply_without_retryable_run_queues_initial_run_after_clarification(self) -> None:
+    def test_reply_without_retryable_run_queues_initial_run_after_clarification(
+        self,
+    ) -> None:
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
-                return_value=SimpleNamespace(summary="Old summary", description="Objective: old", labels=["worker:linux"])
+                return_value=SimpleNamespace(
+                    summary="Old summary",
+                    description="Objective: old",
+                    labels=["worker:linux"],
+                )
             ),
             update_issue_summary_and_description=MagicMock(),
         )
@@ -642,7 +762,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         enqueue_result = SimpleNamespace(enqueued=True, run=queued_run, reason=None)
 
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -659,7 +782,9 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-91", summary="Run after reply", status="To Do"),
+                return_value=JiraIssuePreview(
+                    key="TP-91", summary="Run after reply", status="To Do"
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
@@ -700,7 +825,9 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             ["worker:linux", "agent:ready"],
         )
 
-    def test_reply_without_active_decision_cycle_returns_explicit_conflict(self) -> None:
+    def test_reply_without_active_decision_cycle_returns_explicit_conflict(
+        self,
+    ) -> None:
         oauth_client = SimpleNamespace(
             get_issue_detail=MagicMock(
                 return_value=SimpleNamespace(
@@ -723,7 +850,10 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         }
 
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 side_effect=ValueError("No active decision cycle exists for TP-92"),
@@ -739,6 +869,9 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             )
 
         self.assertEqual(response.status_code, 409)
-        self.assertIn("No active Decision Gate cycle exists for `TP-92`.", response.json()["detail"])
+        self.assertIn(
+            "No active Decision Gate cycle exists for `TP-92`.",
+            response.json()["detail"],
+        )
         self.assertIn("!run TP-92", response.json()["detail"])
         oauth_client.update_issue_summary_and_description.assert_not_called()

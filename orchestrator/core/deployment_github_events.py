@@ -5,9 +5,14 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.deployment_release_service import create_project_deployment_release
+from orchestrator.api.admin.deployment_release_service import (
+    create_project_deployment_release,
+)
 from orchestrator.api.deployment_schemas import ProjectDeploymentPolicyRead
-from orchestrator.api.schemas import ProjectDeploymentReleaseCreate, ProjectDeploymentReleaseRead
+from orchestrator.api.schemas import (
+    ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseRead,
+)
 from orchestrator.storage.models import Project, ProjectApp, Tenant
 
 
@@ -33,20 +38,26 @@ def create_deployment_releases_for_github_push(
 ) -> GitHubDeploymentReleaseResult:
     branch = _required_string(request.branch, "branch")
     commit_sha = _required_string(request.commit_sha, "commit_sha")
-    deployment_policy = ProjectDeploymentPolicyRead.model_validate(dict(project.deployment_config or {}))
+    deployment_policy = ProjectDeploymentPolicyRead.model_validate(
+        dict(project.deployment_config or {})
+    )
     if not deployment_policy.enabled:
         return GitHubDeploymentReleaseResult(created_releases=(), skipped_app_ids=())
     if deployment_policy.production_branch != branch:
         return GitHubDeploymentReleaseResult(created_releases=(), skipped_app_ids=())
-    apps = session.execute(
-        select(ProjectApp)
-        .where(
-            ProjectApp.tenant_id == tenant.tenant_id,
-            ProjectApp.project_id == project.project_id,
-            ProjectApp.source_path == ".",
+    apps = (
+        session.execute(
+            select(ProjectApp)
+            .where(
+                ProjectApp.tenant_id == tenant.tenant_id,
+                ProjectApp.project_id == project.project_id,
+                ProjectApp.source_path == ".",
+            )
+            .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
         )
-        .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     created: list[ProjectDeploymentReleaseRead] = []
     for app in apps:
@@ -58,7 +69,9 @@ def create_deployment_releases_for_github_push(
                 app_id=app.app_id,
                 git_ref=branch,
                 commit_sha=commit_sha,
-                reason=f"GitHub push {request.delivery_id}" if request.delivery_id else "GitHub push",
+                reason=f"GitHub push {request.delivery_id}"
+                if request.delivery_id
+                else "GitHub push",
             ),
             requested_by_user_id=None,
         )

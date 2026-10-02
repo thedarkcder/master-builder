@@ -46,7 +46,9 @@ def main() -> int:
         print("Dead code candidates detected (not allowlisted):")
         for line in violations:
             print(f"  {line}")
-        print("\nIf intentional, add a precise regex entry to scripts/quality/vulture_allowlist.txt.")
+        print(
+            "\nIf intentional, add a precise regex entry to scripts/quality/vulture_allowlist.txt."
+        )
         return 1
     if proc.returncode not in (0, 1):
         sys.stderr.write(proc.stderr)

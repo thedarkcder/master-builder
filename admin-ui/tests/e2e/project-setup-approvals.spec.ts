@@ -10,13 +10,13 @@ import {
 
 test("project plugin approvals ask for one clear approval without exposing schema fields", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
     github_repository: "thedarkcder/girl-power",
     jira_project_key: "GP",
   });
@@ -28,17 +28,17 @@ test("project plugin approvals ask for one clear approval without exposing schem
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
@@ -48,12 +48,12 @@ test("project plugin approvals ask for one clear approval without exposing schem
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/discord/allowlist-requests",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/installs",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/installs",
       handler: (route) =>
         fulfillJson(route, {
           installs: [],
@@ -61,14 +61,14 @@ test("project plugin approvals ask for one clear approval without exposing schem
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/install-requests",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/install-requests",
       handler: (route) =>
         fulfillJson(route, {
           requests: [
             {
               request_id: "request-hubspot-old",
-              tenant_id: "example",
-              project_id: "example-default",
+              tenant_id: "example-workspace",
+              project_id: "example-workspace-default",
               workflow_id: "workflow-old",
               run_id: "run-old",
               issue_key: "AP-247",
@@ -84,8 +84,8 @@ test("project plugin approvals ask for one clear approval without exposing schem
             },
             {
               request_id: "request-hubspot",
-              tenant_id: "example",
-              project_id: "example-default",
+              tenant_id: "example-workspace",
+              project_id: "example-workspace-default",
               workflow_id: "workflow-1",
               run_id: "run-1",
               issue_key: "AP-248",
@@ -111,7 +111,7 @@ test("project plugin approvals ask for one clear approval without exposing schem
     },
     {
       method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/install-requests/request-hubspot",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/install-requests/request-hubspot",
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as { status?: string };
         approvedPayloadSeen = payload.status === "approved";
@@ -119,8 +119,8 @@ test("project plugin approvals ask for one clear approval without exposing schem
         oldRequestStatus = payload.status ?? oldRequestStatus;
         await fulfillJson(route, {
           request_id: "request-hubspot",
-          tenant_id: "example",
-          project_id: "example-default",
+          tenant_id: "example-workspace",
+          project_id: "example-workspace-default",
           workflow_id: "workflow-1",
           run_id: "run-1",
           issue_key: "AP-248",
@@ -138,7 +138,7 @@ test("project plugin approvals ask for one clear approval without exposing schem
     },
   ]);
 
-  await page.goto("/example/projects/example-default/installs");
+  await page.goto("/example-workspace/projects/example-workspace-default/installs");
 
   await expect(page.getByRole("heading", { name: "Plugin Approvals" })).toBeVisible();
   await expect(page.getByText("HubSpot", { exact: true })).toHaveCount(1);

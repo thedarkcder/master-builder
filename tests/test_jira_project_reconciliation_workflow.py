@@ -7,14 +7,31 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from orchestrator.api.admin.workflows.execution_read_service import list_workflow_board_items
-from orchestrator.core.jira_project_reconciliation.dependencies import JiraProjectReconciliationHandlerDeps
-from orchestrator.core.jira_project_reconciliation.handlers import JiraProjectReconciliationAdvanceHandler
-from orchestrator.core.jira_project_reconciliation.retry import JiraProjectReconciliationOperationRetryHandler
-from orchestrator.core.workflow.advance import WorkflowAdvanceRequest, WorkflowTrigger, execute_workflow_advance
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.api.admin.workflows.execution_read_service import (
+    list_workflow_board_items,
+)
+from orchestrator.core.jira_project_reconciliation.dependencies import (
+    JiraProjectReconciliationHandlerDeps,
+)
+from orchestrator.core.jira_project_reconciliation.handlers import (
+    JiraProjectReconciliationAdvanceHandler,
+)
+from orchestrator.core.jira_project_reconciliation.retry import (
+    JiraProjectReconciliationOperationRetryHandler,
+)
+from orchestrator.core.workflow.advance import (
+    WorkflowAdvanceRequest,
+    WorkflowTrigger,
+    execute_workflow_advance,
+)
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
 from orchestrator.core.workflow.handler_registry import build_workflow_handler_registry
-from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.operation_retry_use_case import (
+    retry_workflow_operation_with_registered_handler,
+)
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
@@ -46,14 +63,18 @@ class _FakeGateway:
         self.label_replacements: list[tuple[str, list[str]]] = []
         self.label_call_counts: Counter[str] = Counter()
 
-    def search_project_issues_page(self, *, project_key: str, next_page_token: str | None, max_results: int):
+    def search_project_issues_page(
+        self, *, project_key: str, next_page_token: str | None, max_results: int
+    ):
         self.search_calls.append((project_key, next_page_token, max_results))
         start_at = int(next_page_token or "0")
-        issues = list(self.previews[start_at:start_at + max_results])
+        issues = list(self.previews[start_at : start_at + max_results])
         next_offset = start_at + len(issues)
         return SimpleNamespace(
             issues=issues,
-            next_page_token=str(next_offset) if next_offset < len(self.previews) else None,
+            next_page_token=str(next_offset)
+            if next_offset < len(self.previews)
+            else None,
         )
 
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
@@ -70,14 +91,16 @@ class _FakeGateway:
 
 class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="jira-project-reconciliation-workflow")
+        self.database_url = self._prepare_test_database(
+            name_prefix="jira-project-reconciliation-workflow"
+        )
         self.session_factory = create_session_factory(self.database_url)
         with self.session_factory() as session:
             now = _now()
             session.add(
                 Tenant(
-                    tenant_id="example",
-                    name="Route 25",
+                    tenant_id="example-workspace",
+                    name="Example Workspace",
                     is_enabled=True,
                     archived_at=None,
                     purge_after_at=None,
@@ -94,9 +117,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
             session.add(
                 Project(
-                    project_id="example-default",
-                    tenant_id="example",
-                    name="Route 25",
+                    project_id="example-workspace-default",
+                    tenant_id="example-workspace",
+                    name="Example Workspace",
                     github_repository="org/repo",
                     jira_project_key="MAB",
                     policy_overrides={},
@@ -114,14 +137,16 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
     def tearDown(self) -> None:
         self._cleanup_test_database()
 
-    def _request(self, *, request_id: str = "reconcile-1", max_items: int = 1000) -> WorkflowAdvanceRequest:
+    def _request(
+        self, *, request_id: str = "reconcile-1", max_items: int = 1000
+    ) -> WorkflowAdvanceRequest:
         return WorkflowAdvanceRequest(
             workflow_handler_key="jira_project_reconciliation",
-            tenant_id="example",
-            tenant=SimpleNamespace(tenant_id="example"),
-            project_id="example-default",
+            tenant_id="example-workspace",
+            tenant=SimpleNamespace(tenant_id="example-workspace"),
+            project_id="example-workspace-default",
             execution=WorkflowExecutionReference(
-                key="example-default",
+                key="example-workspace-default",
                 source=WorkflowSourceReference(
                     source_system="jira_project",
                     source_ref="MAB",
@@ -137,18 +162,30 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         )
         return build_workflow_handler_registry(
             advance_handlers={
-                "jira_project_reconciliation": JiraProjectReconciliationAdvanceHandler(deps=deps),
+                "jira_project_reconciliation": JiraProjectReconciliationAdvanceHandler(
+                    deps=deps
+                ),
             },
             operation_retry_handlers={
-                "jira_project_reconciliation": JiraProjectReconciliationOperationRetryHandler(deps=deps),
+                "jira_project_reconciliation": JiraProjectReconciliationOperationRetryHandler(
+                    deps=deps
+                ),
             },
         )
 
-    def test_full_scan_creates_missing_parent_workflows_and_persists_attempts(self) -> None:
+    def test_full_scan_creates_missing_parent_workflows_and_persists_attempts(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
             previews=[
-                JiraIssuePreview(key="MAB-100", summary="Tenant auth redesign", status="Backlog"),
-                JiraIssuePreview(key="MAB-101", summary="Build local auth verification", status="Backlog"),
+                JiraIssuePreview(
+                    key="MAB-100", summary="Tenant auth redesign", status="Backlog"
+                ),
+                JiraIssuePreview(
+                    key="MAB-101",
+                    summary="Build local auth verification",
+                    status="Backlog",
+                ),
             ],
             details={
                 "MAB-100": JiraIssueDetail(
@@ -179,7 +216,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
 
             result = execute_workflow_advance(
                 session=session,
@@ -191,55 +230,93 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             session.commit()
 
             reconciliation_workflow = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "jira_project_reconciliation")
+                select(WorkflowExecution).where(
+                    WorkflowExecution.workflow_type_key == "jira_project_reconciliation"
+                )
             ).scalar_one()
-            parent_workflows = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
-            ).scalars().all()
+            parent_workflows = (
+                session.execute(
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.workflow_type_key == "parent_planning"
+                    )
+                )
+                .scalars()
+                .all()
+            )
             operations = {
                 operation.operation_type: operation
                 for operation in session.execute(
-                    select(WorkflowOperation).where(WorkflowOperation.workflow_id == reconciliation_workflow.workflow_id)
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id
+                        == reconciliation_workflow.workflow_id
+                    )
                 ).scalars()
             }
-            attempts = session.execute(
-                select(WorkflowOperationAttempt).join(
-                    WorkflowOperation,
-                    WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id,
-                ).where(WorkflowOperation.workflow_id == reconciliation_workflow.workflow_id)
-            ).scalars().all()
-            work_items = session.execute(
-                select(WorkflowExecutableWorkItem).order_by(
-                    WorkflowExecutableWorkItem.item_kind,
-                    WorkflowExecutableWorkItem.issue_key,
+            attempts = (
+                session.execute(
+                    select(WorkflowOperationAttempt)
+                    .join(
+                        WorkflowOperation,
+                        WorkflowOperation.operation_id
+                        == WorkflowOperationAttempt.operation_id,
+                    )
+                    .where(
+                        WorkflowOperation.workflow_id
+                        == reconciliation_workflow.workflow_id
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
+            work_items = (
+                session.execute(
+                    select(WorkflowExecutableWorkItem).order_by(
+                        WorkflowExecutableWorkItem.item_kind,
+                        WorkflowExecutableWorkItem.issue_key,
+                    )
+                )
+                .scalars()
+                .all()
+            )
             board_items = list_workflow_board_items(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 limit=100,
                 offset=0,
             )
 
         assert result.handled is True
         assert reconciliation_workflow.status == "completed"
-        assert [workflow.workflow_id for workflow in parent_workflows] == ["parent_planning:MAB-100"]
+        assert [workflow.workflow_id for workflow in parent_workflows] == [
+            "parent_planning:MAB-100"
+        ]
         assert parent_workflows[0].source_external_id == "10001"
         assert parent_workflows[0].status == "queued"
         assert parent_workflows[0].started_at is None
-        assert [(item.item_kind, item.issue_key, item.parent_issue_key) for item in work_items] == [
+        assert [
+            (item.item_kind, item.issue_key, item.parent_issue_key)
+            for item in work_items
+        ] == [
             ("child", "MAB-101", "MAB-100"),
             ("parent", "MAB-100", None),
         ]
-        parent_board_item = next(item for item in board_items if item.source_ref == "MAB-100")
-        assert parent_board_item.work_item_id == f"parent:{parent_board_item.execution_id}"
+        parent_board_item = next(
+            item for item in board_items if item.source_ref == "MAB-100"
+        )
+        assert (
+            parent_board_item.work_item_id == f"parent:{parent_board_item.execution_id}"
+        )
         assert parent_board_item.startable is True
         assert parent_board_item.start_label == "Start planning"
-        assert [(child.issue_key, child.summary, child.status) for child in parent_board_item.children] == [
-            ("MAB-101", "Build local auth verification", "Backlog")
-        ]
-        assert parent_board_item.children[0].work_item_id == f"child:{parent_board_item.execution_id}:MAB-101"
+        assert [
+            (child.issue_key, child.summary, child.status)
+            for child in parent_board_item.children
+        ] == [("MAB-101", "Build local auth verification", "Backlog")]
+        assert (
+            parent_board_item.children[0].work_item_id
+            == f"child:{parent_board_item.execution_id}:MAB-101"
+        )
         assert parent_board_item.children[0].startable is True
         assert parent_board_item.children[0].start_blocked_reason is None
         assert gateway.label_replacements == [
@@ -255,7 +332,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         }
         assert {attempt.status for attempt in attempts} == {"completed"}
 
-    def test_board_does_not_derive_parent_cards_without_executable_work_item_projection(self) -> None:
+    def test_board_does_not_derive_parent_cards_without_executable_work_item_projection(
+        self,
+    ) -> None:
         now = _now()
         with self.session_factory() as session:
             session.add(
@@ -263,8 +342,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     workflow_id="parent_planning:MAB-999",
                     execution_id="exec-unprojected-parent",
                     workflow_type_key="parent_planning",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="jira",
                     source_ref="MAB-999",
                     source_external_id="19999",
@@ -291,15 +370,17 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
             board_items = list_workflow_board_items(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 limit=100,
                 offset=0,
             )
 
         assert board_items == []
 
-    def test_board_includes_latest_standalone_issue_execution_without_work_item_projection(self) -> None:
+    def test_board_includes_latest_standalone_issue_execution_without_work_item_projection(
+        self,
+    ) -> None:
         now = _now()
         later = now + timedelta(minutes=1)
         with self.session_factory() as session:
@@ -307,8 +388,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                 workflow_id="issue-execution-mab-404-old",
                 execution_id="exec-mab-404-old",
                 workflow_type_key="issue_execution",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 source_system="jira",
                 source_ref="MAB-404",
                 source_external_id="40401",
@@ -334,7 +415,7 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                 workflow_id="issue-execution-mab-404-latest",
                 execution_id="exec-mab-404-latest",
                 workflow_type_key="issue_execution",
-                tenant_id="example",
+                tenant_id="example-workspace",
                 project_id=None,
                 source_system="jira",
                 source_ref="MAB-404",
@@ -362,8 +443,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                 [
                     Run(
                         run_id="run-mab-404-old",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="MAB-404",
                         issue_summary="Old payment callback run",
                         repo_url="org/repo",
@@ -383,8 +464,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     ),
                     Run(
                         run_id="run-mab-404-latest",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="MAB-404",
                         issue_summary="Current payment callback run",
                         repo_url="org/repo",
@@ -409,8 +490,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
             board_items = list_workflow_board_items(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 limit=100,
                 offset=0,
             )
@@ -427,15 +508,17 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         assert item.latest_run.run_id == "run-mab-404-latest"
         assert item.display_name == "Current payment callback run"
 
-    def test_board_keeps_projected_children_startable_when_parent_is_waiting_for_input(self) -> None:
+    def test_board_keeps_projected_children_startable_when_parent_is_waiting_for_input(
+        self,
+    ) -> None:
         now = _now()
         with self.session_factory() as session:
             parent = WorkflowExecution(
                 workflow_id="parent_planning:MAB-460",
                 execution_id="exec-mab-460",
                 workflow_type_key="parent_planning",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 source_system="jira",
                 source_ref="MAB-460",
                 source_external_id="46001",
@@ -461,8 +544,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                 workflow_id="issue-execution-mab-461",
                 execution_id="exec-mab-461",
                 workflow_type_key="issue_execution",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 source_system="jira",
                 source_ref="MAB-461",
                 source_external_id="46101",
@@ -490,8 +573,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     WorkflowExecutableWorkItem(
                         work_item_id="parent:exec-mab-460",
                         item_kind="parent",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         parent_workflow_id=parent.workflow_id,
                         parent_execution_id=parent.execution_id,
                         issue_key="MAB-460",
@@ -510,8 +593,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     WorkflowExecutableWorkItem(
                         work_item_id="child:exec-mab-460:MAB-461",
                         item_kind="child",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         parent_workflow_id=parent.workflow_id,
                         parent_execution_id=parent.execution_id,
                         issue_key="MAB-461",
@@ -530,8 +613,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     WorkflowExecutableWorkItem(
                         work_item_id="child:exec-mab-460:MAB-462",
                         item_kind="child",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         parent_workflow_id=parent.workflow_id,
                         parent_execution_id=parent.execution_id,
                         issue_key="MAB-462",
@@ -549,8 +632,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     ),
                     Run(
                         run_id="run-mab-461",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="MAB-461",
                         issue_summary="Retry failed HubSpot child",
                         repo_url="org/repo",
@@ -575,8 +658,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
             board_items = list_workflow_board_items(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 limit=100,
                 offset=0,
             )
@@ -590,11 +673,15 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         assert children_by_key["MAB-462"].start_label == "Start"
         assert children_by_key["MAB-462"].start_blocked_reason is None
 
-    def test_limited_scan_updates_seen_projection_without_pruning_unseen_work_items(self) -> None:
+    def test_limited_scan_updates_seen_projection_without_pruning_unseen_work_items(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
             previews=[
                 JiraIssuePreview(key="MAB-300", summary="Seen issue", status="Backlog"),
-                JiraIssuePreview(key="MAB-301", summary="Unseen issue", status="Backlog"),
+                JiraIssuePreview(
+                    key="MAB-301", summary="Unseen issue", status="Backlog"
+                ),
             ],
             details={
                 "MAB-300": JiraIssueDetail(
@@ -619,8 +706,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     workflow_id="parent_planning:MAB-301",
                     execution_id="exec-existing-unseen",
                     workflow_type_key="parent_planning",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="jira",
                     source_ref="MAB-301",
                     source_external_id="10301",
@@ -647,8 +734,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                 WorkflowExecutableWorkItem(
                     work_item_id="parent:exec-existing-unseen",
                     item_kind="parent",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     parent_workflow_id="parent_planning:MAB-301",
                     parent_execution_id="exec-existing-unseen",
                     issue_key="MAB-301",
@@ -668,7 +755,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             session.commit()
 
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -678,9 +767,15 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-            work_items = session.execute(
-                select(WorkflowExecutableWorkItem).order_by(WorkflowExecutableWorkItem.issue_key.asc())
-            ).scalars().all()
+            work_items = (
+                session.execute(
+                    select(WorkflowExecutableWorkItem).order_by(
+                        WorkflowExecutableWorkItem.issue_key.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         assert [item.issue_key for item in work_items] == ["MAB-300", "MAB-301"]
         assert work_items[0].work_item_id.startswith("parent:")
@@ -689,7 +784,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
     def test_scan_fails_when_provider_repeats_a_full_page(self) -> None:
         class _RepeatingPageGateway(_FakeGateway):
-            def search_project_issues_page(self, *, project_key: str, next_page_token: str | None, max_results: int):
+            def search_project_issues_page(
+                self, *, project_key: str, next_page_token: str | None, max_results: int
+            ):
                 self.search_calls.append((project_key, next_page_token, max_results))
                 return SimpleNamespace(
                     issues=list(self.previews[:max_results]),
@@ -698,7 +795,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         gateway = _RepeatingPageGateway(
             previews=[
-                JiraIssuePreview(key=f"MAB-{index}", summary=f"Issue {index}", status="Backlog")
+                JiraIssuePreview(
+                    key=f"MAB-{index}", summary=f"Issue {index}", status="Backlog"
+                )
                 for index in range(1, 51)
             ],
             details={
@@ -720,7 +819,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             result = execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -733,9 +834,15 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         assert "repeated a full Jira issue page" in str(result.reason)
         assert gateway.search_calls == [("MAB", None, 50), ("MAB", "page-2", 50)]
 
-    def test_existing_parent_workflow_is_matched_by_stable_issue_id_without_duplicate_on_key_rename(self) -> None:
+    def test_existing_parent_workflow_is_matched_by_stable_issue_id_without_duplicate_on_key_rename(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
-            previews=[JiraIssuePreview(key="MAB-200", summary="Renamed issue key", status="Backlog")],
+            previews=[
+                JiraIssuePreview(
+                    key="MAB-200", summary="Renamed issue key", status="Backlog"
+                )
+            ],
             details={
                 "MAB-200": JiraIssueDetail(
                     key="MAB-200",
@@ -759,8 +866,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     workflow_id="parent_planning:MAB-100",
                     execution_id="exec-existing",
                     workflow_type_key="parent_planning",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="jira",
                     source_ref="MAB-100",
                     source_external_id="10001",
@@ -786,7 +893,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             session.commit()
 
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -796,18 +905,32 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-            parent_workflows = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
-            ).scalars().all()
+            parent_workflows = (
+                session.execute(
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.workflow_type_key == "parent_planning"
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         assert len(parent_workflows) == 1
         assert parent_workflows[0].workflow_id == "parent_planning:MAB-100"
         assert parent_workflows[0].source_ref == "MAB-200"
         assert parent_workflows[0].display_name == "Renamed issue key"
 
-    def test_release_ready_parent_source_deactivates_existing_planning_workflow(self) -> None:
+    def test_release_ready_parent_source_deactivates_existing_planning_workflow(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
-            previews=[JiraIssuePreview(key="MAB-300", summary="Release-ready parent", status="Ready to Release")],
+            previews=[
+                JiraIssuePreview(
+                    key="MAB-300",
+                    summary="Release-ready parent",
+                    status="Ready to Release",
+                )
+            ],
             details={
                 "MAB-300": JiraIssueDetail(
                     key="MAB-300",
@@ -832,8 +955,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                     workflow_id="parent_planning:MAB-300",
                     execution_id="exec-release-ready",
                     workflow_type_key="parent_planning",
-                    tenant_id="example",
-                    project_id="example-default",
+                    tenant_id="example-workspace",
+                    project_id="example-workspace-default",
                     source_system="jira",
                     source_ref="MAB-300",
                     source_external_id="30001",
@@ -859,7 +982,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             session.commit()
 
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -872,13 +997,22 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             parent_workflow = session.get(WorkflowExecution, "parent_planning:MAB-300")
 
         assert parent_workflow.status == "cancelled"
-        assert parent_workflow.last_error == "Source item is no longer eligible for MB parent planning."
+        assert (
+            parent_workflow.last_error
+            == "Source item is no longer eligible for MB parent planning."
+        )
 
-    def test_engineering_parent_source_reactivates_failed_or_waiting_board_workflows(self) -> None:
+    def test_engineering_parent_source_reactivates_failed_or_waiting_board_workflows(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
             previews=[
-                JiraIssuePreview(key="MAB-303", summary="Failed stale parent", status="Testing"),
-                JiraIssuePreview(key="MAB-304", summary="Waiting stale parent", status="Testing"),
+                JiraIssuePreview(
+                    key="MAB-303", summary="Failed stale parent", status="Testing"
+                ),
+                JiraIssuePreview(
+                    key="MAB-304", summary="Waiting stale parent", status="Testing"
+                ),
             ],
             details={
                 "MAB-303": JiraIssueDetail(
@@ -920,8 +1054,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
                         workflow_id=f"parent_planning:{issue_key}",
                         execution_id=f"exec-{issue_key.lower()}",
                         workflow_type_key="parent_planning",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         source_system="jira",
                         source_ref=issue_key,
                         source_external_id=issue_id,
@@ -947,7 +1081,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             session.commit()
 
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -960,16 +1096,26 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             workflows = {
                 workflow.source_ref: workflow
                 for workflow in session.execute(
-                    select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.workflow_type_key == "parent_planning"
+                    )
                 ).scalars()
             }
 
         assert workflows["MAB-303"].status == "running"
         assert workflows["MAB-304"].status == "running"
 
-    def test_release_ready_parent_source_does_not_create_planning_workflow(self) -> None:
+    def test_release_ready_parent_source_does_not_create_planning_workflow(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
-            previews=[JiraIssuePreview(key="MAB-301", summary="Already release-ready parent", status="Ready to Release")],
+            previews=[
+                JiraIssuePreview(
+                    key="MAB-301",
+                    summary="Already release-ready parent",
+                    status="Ready to Release",
+                )
+            ],
             details={
                 "MAB-301": JiraIssueDetail(
                     key="MAB-301",
@@ -989,7 +1135,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -999,15 +1147,27 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-            parent_workflows = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
-            ).scalars().all()
+            parent_workflows = (
+                session.execute(
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.workflow_type_key == "parent_planning"
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         assert parent_workflows == []
 
-    def test_in_progress_parent_source_remains_visible_for_engineering_work(self) -> None:
+    def test_in_progress_parent_source_remains_visible_for_engineering_work(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
-            previews=[JiraIssuePreview(key="MAB-302", summary="Already in engineering", status="Testing")],
+            previews=[
+                JiraIssuePreview(
+                    key="MAB-302", summary="Already in engineering", status="Testing"
+                )
+            ],
             details={
                 "MAB-302": JiraIssueDetail(
                     key="MAB-302",
@@ -1027,7 +1187,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -1037,16 +1199,30 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-            parent_workflows = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
-            ).scalars().all()
+            parent_workflows = (
+                session.execute(
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.workflow_type_key == "parent_planning"
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
-        assert [workflow.workflow_id for workflow in parent_workflows] == ["parent_planning:MAB-302"]
+        assert [workflow.workflow_id for workflow in parent_workflows] == [
+            "parent_planning:MAB-302"
+        ]
         assert parent_workflows[0].status == "running"
 
-    def test_repeated_sync_rereads_current_jira_state_before_board_eligibility(self) -> None:
+    def test_repeated_sync_rereads_current_jira_state_before_board_eligibility(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
-            previews=[JiraIssuePreview(key="MAB-400", summary="State changed parent", status="Backlog")],
+            previews=[
+                JiraIssuePreview(
+                    key="MAB-400", summary="State changed parent", status="Backlog"
+                )
+            ],
             details={
                 "MAB-400": JiraIssueDetail(
                     key="MAB-400",
@@ -1065,7 +1241,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -1104,13 +1282,24 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         assert gateway.detail_calls == ["MAB-400", "MAB-400"]
         assert refreshed_parent.status == "cancelled"
-        assert refreshed_parent.last_error == "Source item is no longer eligible for MB parent planning."
+        assert (
+            refreshed_parent.last_error
+            == "Source item is no longer eligible for MB parent planning."
+        )
 
-    def test_retry_after_label_failure_reuses_completed_scan_work_units_and_does_not_duplicate_parent_workflows(self) -> None:
+    def test_retry_after_label_failure_reuses_completed_scan_work_units_and_does_not_duplicate_parent_workflows(
+        self,
+    ) -> None:
         gateway = _FakeGateway(
             previews=[
-                JiraIssuePreview(key="MAB-100", summary="Tenant auth redesign", status="Backlog"),
-                JiraIssuePreview(key="MAB-101", summary="Build local auth verification", status="Backlog"),
+                JiraIssuePreview(
+                    key="MAB-100", summary="Tenant auth redesign", status="Backlog"
+                ),
+                JiraIssuePreview(
+                    key="MAB-101",
+                    summary="Build local auth verification",
+                    status="Backlog",
+                ),
             ],
             details={
                 "MAB-100": JiraIssueDetail(
@@ -1141,7 +1330,9 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         with self.session_factory() as session:
             registry = self._handler_registry(gateway=gateway)
-            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="jira_project_reconciliation"
+            )
 
             execute_workflow_advance(
                 session=session,
@@ -1153,11 +1344,14 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             session.commit()
 
             reconciliation_workflow = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "jira_project_reconciliation")
+                select(WorkflowExecution).where(
+                    WorkflowExecution.workflow_type_key == "jira_project_reconciliation"
+                )
             ).scalar_one()
             failed_operation = session.execute(
                 select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == reconciliation_workflow.workflow_id,
+                    WorkflowOperation.workflow_id
+                    == reconciliation_workflow.workflow_id,
                     WorkflowOperation.operation_type == "jira_label_reconciliation",
                 )
             ).scalar_one()
@@ -1177,10 +1371,18 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
             session.commit()
 
-            parent_workflows = session.execute(
-                select(WorkflowExecution).where(WorkflowExecution.workflow_type_key == "parent_planning")
-            ).scalars().all()
-            refreshed_workflow = session.get(WorkflowExecution, reconciliation_workflow.workflow_id)
+            parent_workflows = (
+                session.execute(
+                    select(WorkflowExecution).where(
+                        WorkflowExecution.workflow_type_key == "parent_planning"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            refreshed_workflow = session.get(
+                WorkflowExecution, reconciliation_workflow.workflow_id
+            )
 
         assert refreshed_workflow is not None
         assert refreshed_workflow.status == "completed"

@@ -13,13 +13,13 @@ import {
 
 test("project webhooks allow retrying failed jobs from the queue", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
     github_repository: "thedarkcder/girl-power",
     jira_project_key: "GP",
   });
@@ -30,17 +30,17 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
@@ -50,7 +50,7 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/discord/allowlist-requests",
       handler: (route) => fulfillJson(route, []),
     },
     {
@@ -63,10 +63,10 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
                 {
                   job_id: "job-failed-1",
                   transport: "jira_webhook",
-                  tenant_id: "example",
-                  project_id: "example-default",
-                  subject_key: "jira:example:MAB-229",
-                  related_run_id: "run-example-229",
+                  tenant_id: "example-workspace",
+                  project_id: "example-workspace-default",
+                  subject_key: "jira:example-workspace:MAB-229",
+                  related_run_id: "run-example-workspace-229",
                   dedupe_key: "delivery-1",
                   request_id: "request-1",
                   event_type: "jira:issue_updated",
@@ -85,10 +85,10 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
                 {
                   job_id: "job-failed-1",
                   transport: "jira_webhook",
-                  tenant_id: "example",
-                  project_id: "example-default",
-                  subject_key: "jira:example:MAB-229",
-                  related_run_id: "run-example-229",
+                  tenant_id: "example-workspace",
+                  project_id: "example-workspace-default",
+                  subject_key: "jira:example-workspace:MAB-229",
+                  related_run_id: "run-example-workspace-229",
                   dedupe_key: "delivery-1",
                   request_id: "request-1",
                   event_type: "jira:issue_updated",
@@ -125,10 +125,10 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
         return fulfillJson(route, {
           job_id: "job-failed-1",
           transport: "jira_webhook",
-          tenant_id: "example",
-          project_id: "example-default",
-          subject_key: "jira:example:MAB-229",
-          related_run_id: "run-example-229",
+          tenant_id: "example-workspace",
+          project_id: "example-workspace-default",
+          subject_key: "jira:example-workspace:MAB-229",
+          related_run_id: "run-example-workspace-229",
           dedupe_key: "delivery-1",
           request_id: "request-1",
           event_type: "jira:issue_updated",
@@ -146,7 +146,7 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
     },
   ]);
 
-  await page.goto("/example/projects/example-default/webhooks");
+  await page.goto("/example-workspace/projects/example-workspace-default/webhooks");
 
   await expect(page.getByRole("heading", { name: "Webhook Queue" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
@@ -168,18 +168,18 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
 
 test("project webhooks are hidden from non-platform admins", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
   });
   const principal = makeTenantUserPrincipal({
     memberships: [
       makeMembership({
-        tenant_id: "example",
+        tenant_id: "example-workspace",
         role: "tenant_admin",
         permission_keys: ["projects.manage", "technical.access"],
       }),
@@ -195,17 +195,17 @@ test("project webhooks are hidden from non-platform admins", async ({ page }) =>
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/project-navigation",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/project-navigation",
       handler: (route) => fulfillJson(route, [project]),
     },
   ]);
 
-  await page.goto("/example/projects/example-default/webhooks");
+  await page.goto("/example-workspace/projects/example-workspace-default/webhooks");
 
   await expect(page.getByRole("heading", { name: "Webhook Queue" })).toHaveCount(0);
   await expect(page.getByText("Capacity used today")).toBeVisible();

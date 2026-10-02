@@ -3,9 +3,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import sentinel
 
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
 from orchestrator.core.workflow.engine import WorkflowEngineState
-from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
+from orchestrator.core.workflow.runtime import (
+    WorkflowAdvanceRequest,
+    WorkflowTrigger,
+    build_workflow_runtime,
+)
 
 
 class FakeEngine:
@@ -67,11 +74,19 @@ def test_workflow_runtime_delegates_start_resume_query_and_retry(monkeypatch):
         workflow_handler_registry=sentinel.workflow_handler_registry,
     )
 
-    assert runtime.start_execution(workflow=workflow, run=run, claim_id="claim-123") is sentinel.started_run
-    assert runtime.resume_input(workflow=workflow, request=request) is sentinel.resumed_run
+    assert (
+        runtime.start_execution(workflow=workflow, run=run, claim_id="claim-123")
+        is sentinel.started_run
+    )
+    assert (
+        runtime.resume_input(workflow=workflow, request=request) is sentinel.resumed_run
+    )
     state = runtime.query_execution(workflow=workflow)
     assert state.workflow_id == "wf-123"
-    assert runtime.retry_operation(workflow=workflow, operation=operation) is sentinel.retry_handle
+    assert (
+        runtime.retry_operation(workflow=workflow, operation=operation)
+        is sentinel.retry_handle
+    )
 
     assert [name for name, _ in engine.calls] == ["start", "resume", "query", "retry"]
     for _, kwargs in engine.calls:
@@ -102,10 +117,15 @@ def test_workflow_runtime_delegates_attempt_creation(monkeypatch):
         runtime_kwargs_fn=sentinel.runtime_kwargs_fn,
     )
 
-    assert runtime.create_attempt(workflow_id="wf-123", bootstrap=bootstrap, commit=False) is enqueue_result
+    assert (
+        runtime.create_attempt(workflow_id="wf-123", bootstrap=bootstrap, commit=False)
+        is enqueue_result
+    )
 
 
-def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_type(monkeypatch):
+def test_workflow_runtime_delegates_advance_to_handler_resolved_from_workflow_type(
+    monkeypatch,
+):
     session = sentinel.session
     settings = sentinel.settings
     workflow_type = SimpleNamespace(

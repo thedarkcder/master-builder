@@ -15,7 +15,9 @@ class VoicePrewarmTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.voice.prewarm.ensure_transcription_provider_ready") as transcription_mock,
+            patch(
+                "orchestrator.core.voice.prewarm.ensure_transcription_provider_ready"
+            ) as transcription_mock,
             patch(
                 "orchestrator.core.voice.prewarm.ensure_voice_reply_provider_ready",
                 return_value=["alba", "jean"],
@@ -37,8 +39,12 @@ class VoicePrewarmTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.voice.prewarm.ensure_transcription_provider_ready") as transcription_mock,
-            patch("orchestrator.core.voice.prewarm.ensure_voice_reply_provider_ready") as tts_mock,
+            patch(
+                "orchestrator.core.voice.prewarm.ensure_transcription_provider_ready"
+            ) as transcription_mock,
+            patch(
+                "orchestrator.core.voice.prewarm.ensure_voice_reply_provider_ready"
+            ) as tts_mock,
         ):
             result = prewarm_voice_dependencies(settings=settings)
 

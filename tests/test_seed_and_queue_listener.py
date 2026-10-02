@@ -11,8 +11,12 @@ from orchestrator.core.worker import queue_listener
 
 class SeedMatchingTests(unittest.TestCase):
     def test_normalized_summary_and_similarity(self) -> None:
-        self.assertEqual(matching.normalized_summary_key("Fix login bug!!!"), "fix login bug")
-        self.assertGreater(matching.summary_similarity("fix login bug", "login bug fix"), 0.5)
+        self.assertEqual(
+            matching.normalized_summary_key("Fix login bug!!!"), "fix login bug"
+        )
+        self.assertGreater(
+            matching.summary_similarity("fix login bug", "login bug fix"), 0.5
+        )
         self.assertEqual(matching.summary_similarity("", "x"), 0.0)
 
     def test_select_seed_match(self) -> None:
@@ -61,10 +65,16 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
         stop_event = asyncio.Event()
 
         wake_event.set()
-        await queue_listener.wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event)
+        await queue_listener.wait_for_wake_or_stop(
+            wake_event=wake_event, stop_event=stop_event
+        )
 
         wake_event.clear()
-        waiter = asyncio.create_task(queue_listener.wait_for_wake_or_stop(wake_event=wake_event, stop_event=stop_event))
+        waiter = asyncio.create_task(
+            queue_listener.wait_for_wake_or_stop(
+                wake_event=wake_event, stop_event=stop_event
+            )
+        )
         stop_event.set()
         await waiter
 
@@ -160,7 +170,10 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             created.append(t)
             return t
 
-        with unittest.mock.patch("orchestrator.core.worker.queue_listener.threading.Thread", side_effect=fake_thread_factory):
+        with unittest.mock.patch(
+            "orchestrator.core.worker.queue_listener.threading.Thread",
+            side_effect=fake_thread_factory,
+        ):
             bridge = queue_listener.RunQueueNotificationBridge(
                 postgres_dsn="dsn",
                 wake_event=wake_event,
@@ -178,7 +191,9 @@ class QueueListenerTests(unittest.IsolatedAsyncioTestCase):
             bridge.stop()
             bridge._conn.close.assert_called_once()
 
-    def test_run_queue_notification_bridge_suppresses_shutdown_exception_logging(self) -> None:
+    def test_run_queue_notification_bridge_suppresses_shutdown_exception_logging(
+        self,
+    ) -> None:
         wake_event = SimpleNamespace(set=MagicMock())
         loop = SimpleNamespace(call_soon_threadsafe=MagicMock())
         logger = MagicMock()

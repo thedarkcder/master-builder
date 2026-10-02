@@ -7,13 +7,23 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.deployment_config_service import tenant_deployment_plane_to_schema
+from orchestrator.api.admin.deployment_config_service import (
+    tenant_deployment_plane_to_schema,
+)
 from orchestrator.api.admin.deployment_host_service import (
     resolve_active_deployment_host,
     resolve_default_active_deployment_host,
 )
-from orchestrator.core.deployment_host_queue import DeploymentHostCommandEnqueueRequest, enqueue_deployment_host_command
-from orchestrator.storage.models import DeploymentHostCommand, Project, ProjectDeploymentRelease, Tenant
+from orchestrator.core.deployment_host_queue import (
+    DeploymentHostCommandEnqueueRequest,
+    enqueue_deployment_host_command,
+)
+from orchestrator.storage.models import (
+    DeploymentHostCommand,
+    Project,
+    ProjectDeploymentRelease,
+    Tenant,
+)
 
 LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND = "sync_local_preview_routes"
 LOCAL_PREVIEW_ROUTE_SYNC_CAPABILITY = "local_preview_routes"
@@ -59,7 +69,11 @@ def _resolve_managed_host(*, session: Session, tenant: Tenant):
             infrastructure_provider=tenant_plane.infrastructure_provider,
             region=tenant_plane.region,
         )
-    capabilities = {str(item or "").strip().lower() for item in (host.capability_keys_json or []) if str(item or "").strip()}
+    capabilities = {
+        str(item or "").strip().lower()
+        for item in (host.capability_keys_json or [])
+        if str(item or "").strip()
+    }
     if LOCAL_PREVIEW_ROUTE_SYNC_CAPABILITY not in capabilities:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -80,8 +94,12 @@ def _command_payload(
         "action": action,
         "release_id": release.release_id,
         "deployment_uuid": deployment_uuid,
-        "application_uuid": _normalize_optional_string(provider_context.get("application_uuid")),
-        "route_bindings": list(route_bindings) if isinstance(route_bindings, list) else [],
+        "application_uuid": _normalize_optional_string(
+            provider_context.get("application_uuid")
+        ),
+        "route_bindings": list(route_bindings)
+        if isinstance(route_bindings, list)
+        else [],
     }
     return payload
 
@@ -91,15 +109,22 @@ def latest_local_preview_route_command(
     session: Session,
     release_id: str,
 ) -> LocalPreviewRouteCommandState:
-    command = session.execute(
-        select(DeploymentHostCommand)
-        .where(
-            DeploymentHostCommand.release_id == release_id,
-            DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
-            DeploymentHostCommand.status.in_(_REUSABLE_COMMAND_STATUSES),
+    command = (
+        session.execute(
+            select(DeploymentHostCommand)
+            .where(
+                DeploymentHostCommand.release_id == release_id,
+                DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
+                DeploymentHostCommand.status.in_(_REUSABLE_COMMAND_STATUSES),
+            )
+            .order_by(
+                DeploymentHostCommand.created_at.desc(),
+                DeploymentHostCommand.command_id.desc(),
+            )
         )
-        .order_by(DeploymentHostCommand.created_at.desc(), DeploymentHostCommand.command_id.desc())
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if command is None:
         return LocalPreviewRouteCommandState(command=None, deployment_uuid=None)
     payload = _coerce_dict(command.payload_json)
@@ -119,9 +144,13 @@ def ensure_local_preview_route_sync_command(
     force: bool = False,
 ) -> DeploymentHostCommand | None:
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
-    if release.release_kind != "run_preview" or not is_local_preview_proxy_base_domain(tenant_plane.base_domain):
+    if release.release_kind != "run_preview" or not is_local_preview_proxy_base_domain(
+        tenant_plane.base_domain
+    ):
         return None
-    latest = latest_local_preview_route_command(session=session, release_id=release.release_id)
+    latest = latest_local_preview_route_command(
+        session=session, release_id=release.release_id
+    )
     if latest.command is not None and latest.deployment_uuid == deployment_uuid:
         if not force or latest.command.status in _ACTIVE_COMMAND_STATUSES:
             return latest.command
@@ -153,17 +182,26 @@ def ensure_local_preview_route_cleanup_command(
     release: ProjectDeploymentRelease,
 ) -> DeploymentHostCommand | None:
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
-    if release.release_kind != "run_preview" or not is_local_preview_proxy_base_domain(tenant_plane.base_domain):
+    if release.release_kind != "run_preview" or not is_local_preview_proxy_base_domain(
+        tenant_plane.base_domain
+    ):
         return None
-    active_cleanup_command = session.execute(
-        select(DeploymentHostCommand)
-        .where(
-            DeploymentHostCommand.release_id == release.release_id,
-            DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
-            DeploymentHostCommand.status.in_(_ACTIVE_COMMAND_STATUSES),
+    active_cleanup_command = (
+        session.execute(
+            select(DeploymentHostCommand)
+            .where(
+                DeploymentHostCommand.release_id == release.release_id,
+                DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
+                DeploymentHostCommand.status.in_(_ACTIVE_COMMAND_STATUSES),
+            )
+            .order_by(
+                DeploymentHostCommand.created_at.desc(),
+                DeploymentHostCommand.command_id.desc(),
+            )
         )
-        .order_by(DeploymentHostCommand.created_at.desc(), DeploymentHostCommand.command_id.desc())
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if active_cleanup_command is not None:
         payload = _coerce_dict(active_cleanup_command.payload_json)
         if _normalize_optional_string(payload.get("action")) == "remove":
@@ -181,7 +219,9 @@ def ensure_local_preview_route_cleanup_command(
             release_id=release.release_id,
             payload_json=_command_payload(
                 release=release,
-                deployment_uuid=_normalize_optional_string(_coerce_dict(release.provider_context).get("deployment_uuid")),
+                deployment_uuid=_normalize_optional_string(
+                    _coerce_dict(release.provider_context).get("deployment_uuid")
+                ),
                 action="remove",
             ),
         ),

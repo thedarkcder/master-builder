@@ -30,7 +30,10 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual([segment.persona_id for segment in segments], ["pm", "engineer", "qa", "reviewer"])
+        self.assertEqual(
+            [segment.persona_id for segment in segments],
+            ["pm", "engineer", "qa", "reviewer"],
+        )
         transcript = _build_transcript_from_segments(segments)
         self.assertIn("PM: pm", transcript)
         self.assertIn("Dev: dev", transcript)
@@ -49,7 +52,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
         )
         self.assertEqual([segment.persona_id for segment in segments], ["qa"])
 
-    def test_collect_github_facts_includes_merged_pr_and_review_activity_in_window(self) -> None:
+    def test_collect_github_facts_includes_merged_pr_and_review_activity_in_window(
+        self,
+    ) -> None:
         client = SimpleNamespace(
             list_pull_requests=lambda **_: [
                 PullRequestSummary(
@@ -82,7 +87,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
                     review_id=201,
                     state="APPROVED",
                     body="Looks good",
-                    submitted_at="2026-03-28T09:45:00Z" if kwargs["pr_number"] == 101 else "2026-03-20T09:30:00Z",
+                    submitted_at="2026-03-28T09:45:00Z"
+                    if kwargs["pr_number"] == 101
+                    else "2026-03-20T09:30:00Z",
                     user_login="reviewer-1",
                 )
             ],
@@ -93,7 +100,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
                     path="src/app.py",
                     line=42,
                     state="commented",
-                    created_at="2026-03-28T09:50:00Z" if kwargs["pr_number"] == 101 else "2026-03-20T09:45:00Z",
+                    created_at="2026-03-28T09:50:00Z"
+                    if kwargs["pr_number"] == 101
+                    else "2026-03-20T09:45:00Z",
                     user_login="reviewer-2",
                 )
             ],
@@ -101,7 +110,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
                 PullRequestIssueComment(
                     comment_id=401,
                     body="Merged after validation",
-                    created_at="2026-03-28T10:00:00Z" if kwargs["pr_number"] == 101 else "2026-03-20T10:00:00Z",
+                    created_at="2026-03-28T10:00:00Z"
+                    if kwargs["pr_number"] == 101
+                    else "2026-03-20T10:00:00Z",
                     user_login="maintainer",
                 )
             ],
@@ -115,7 +126,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1", github_repository="example/repo"
+                ),
                 window_start_at=datetime(2026, 3, 28, 9, 0, tzinfo=UTC),
                 window_end_at=datetime(2026, 3, 28, 11, 0, tzinfo=UTC),
             )
@@ -123,7 +136,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
         self.assertEqual(facts["repo"], "example/repo")
         self.assertEqual(facts["pull_request_count"], 1)
         self.assertEqual(facts["prs_in_window"][0]["number"], 101)
-        self.assertEqual(facts["prs_in_window"][0]["merged_at"], "2026-03-28T10:14:00+00:00")
+        self.assertEqual(
+            facts["prs_in_window"][0]["merged_at"], "2026-03-28T10:14:00+00:00"
+        )
         self.assertEqual(facts["prs_in_window"][0]["review_count"], 1)
         self.assertEqual(facts["prs_in_window"][0]["review_comment_count"], 1)
         self.assertEqual(facts["prs_in_window"][0]["issue_comment_count"], 1)
@@ -185,7 +200,9 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
                 session=SimpleNamespace(),
                 settings=SimpleNamespace(secrets_encryption_key=""),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1", github_repository="example/repo"
+                ),
                 window_start_at=datetime(2026, 3, 28, 9, 0, tzinfo=UTC),
                 window_end_at=datetime(2026, 3, 28, 11, 0, tzinfo=UTC),
             )

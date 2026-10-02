@@ -36,8 +36,12 @@ class PrReadinessTests(unittest.TestCase):
                 review_summary_markdown=self._review_summary(),
                 required_workflows=("CI", "Security"),
                 workflow_checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
             )
         self.assertTrue(result.ready)
@@ -60,8 +64,12 @@ class PrReadinessTests(unittest.TestCase):
                 review_summary_markdown=None,
                 required_workflows=("CI", "Security"),
                 workflow_checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
             )
         self.assertFalse(result.ready)
@@ -84,8 +92,12 @@ class PrReadinessTests(unittest.TestCase):
                 review_summary_markdown="Good:\n- done\n",
                 required_workflows=("CI", "Security"),
                 workflow_checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
             )
         self.assertFalse(result.ready)
@@ -109,8 +121,12 @@ class PrReadinessTests(unittest.TestCase):
                 review_summary_markdown=self._review_summary(),
                 required_workflows=("CI", "Security"),
                 workflow_checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="in_progress", conclusion=None),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="in_progress", conclusion=None
+                    ),
                 ],
             )
         self.assertFalse(result.ready)
@@ -134,8 +150,12 @@ class PrReadinessTests(unittest.TestCase):
                 review_summary_markdown=self._review_summary(),
                 required_workflows=("CI", "Security"),
                 workflow_checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="failure"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="failure"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
             )
         self.assertFalse(result.ready)
@@ -158,7 +178,11 @@ class PrReadinessTests(unittest.TestCase):
             result = evaluate_pr_readiness(
                 review_summary_markdown=self._review_summary(),
                 required_workflows=("CI", "Security"),
-                workflow_checks=[WorkflowCheckSuite(name="CI", status="completed", conclusion="success")],
+                workflow_checks=[
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    )
+                ],
             )
         self.assertFalse(result.ready)
         self.assertEqual(result.state, "missing_checks")
@@ -188,7 +212,11 @@ class PrReadinessTests(unittest.TestCase):
             result = evaluate_pr_readiness(
                 review_summary_markdown=review_summary,
                 required_workflows=("CI",),
-                workflow_checks=[WorkflowCheckSuite(name="CI", status="completed", conclusion="success")],
+                workflow_checks=[
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    )
+                ],
             )
         self.assertTrue(result.ready)
         self.assertEqual(result.state, "ready")

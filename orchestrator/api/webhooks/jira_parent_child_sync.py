@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.webhooks.contracts import (
     create_jira_comment,
     extract_changed_fields,
@@ -11,9 +13,14 @@ from orchestrator.api.webhooks.contracts import (
     extract_status_transition,
     post_jira_comment,
 )
-from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
+from orchestrator.api.webhooks.jira_webhook_types import (
+    JiraWebhookContext,
+    jira_webhook_response,
+)
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.runtime.agents import classify_engineering_clarification_with_runtime
+from orchestrator.core.runtime.agents import (
+    classify_engineering_clarification_with_runtime,
+)
 from orchestrator.core.integrations.workflow.provider import (
     JiraWorkflowConnectionProvider,
     WorkflowIntegrationAdapterProvider,
@@ -46,7 +53,10 @@ def _build_workflow_integration_router() -> WorkflowIntegrationRouter:
         )
     )
 
-def _build_service_context(*, context: JiraWebhookContext) -> JiraParentChildSyncContext:
+
+def _build_service_context(
+    *, context: JiraWebhookContext
+) -> JiraParentChildSyncContext:
     return JiraParentChildSyncContext(
         request_id=context.request_id,
         tenant_id=context.tenant_id,
@@ -69,7 +79,9 @@ def _webhook_response_from_result(
     if not result.handled:
         return None
     if result.failed:
-        error = str(result.extra.get("error") or result.reason or "Jira parent workflow failed").strip()
+        error = str(
+            result.extra.get("error") or result.reason or "Jira parent workflow failed"
+        ).strip()
         raise RuntimeError(error)
     return jira_webhook_response(
         context,
@@ -89,7 +101,9 @@ def handle_parent_feature_sync(
     session: Session,
     settings,  # noqa: ANN001
 ) -> dict | None:
-    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
+    normalized_labels = {
+        str(label).strip().casefold() for label in context.issue_labels or []
+    }
     if (
         context.webhook_event not in {"issue_created", "issue_updated"}
         or "pm-parent" not in normalized_labels

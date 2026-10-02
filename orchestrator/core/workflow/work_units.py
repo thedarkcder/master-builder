@@ -17,7 +17,9 @@ from orchestrator.core.workflow.definition import (
     WorkflowWorkUnitDefinition,
     WorkflowWorkUnitKind,
 )
-from orchestrator.core.workflow.operation_heartbeat import WorkflowOperationAttemptHeartbeatController
+from orchestrator.core.workflow.operation_heartbeat import (
+    WorkflowOperationAttemptHeartbeatController,
+)
 from orchestrator.core.workflow.operation_logging import emit_workflow_operation_log
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.models import (
@@ -85,7 +87,9 @@ def _now() -> datetime:
 
 
 def _stable_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+    )
 
 
 def _input_fingerprint(value: object) -> str:
@@ -125,8 +129,12 @@ def _resolve_definition(
 ) -> tuple[WorkflowExecution, WorkflowDefinition, WorkflowWorkUnitDefinition]:
     workflow = session.get(WorkflowExecution, operation.workflow_id)
     if workflow is None:
-        raise WorkflowWorkUnitContractError(f"Workflow {operation.workflow_id} is missing for work unit {unit_key}.")
-    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+        raise WorkflowWorkUnitContractError(
+            f"Workflow {operation.workflow_id} is missing for work unit {unit_key}."
+        )
+    workflow_type = get_workflow_type(
+        session, workflow_type_key=workflow.workflow_type_key
+    )
     definition = workflow_type.work_unit(unit_key)
     if definition.step_key != operation.operation_type:
         raise WorkflowWorkUnitContractError(
@@ -143,8 +151,13 @@ def _validate_idempotency(
 ) -> str:
     normalized = str(idempotency_key or "").strip()
     if not normalized:
-        raise WorkflowWorkUnitContractError(f"Workflow work unit {definition.key} requires idempotency_key.")
-    if definition.kind in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}:
+        raise WorkflowWorkUnitContractError(
+            f"Workflow work unit {definition.key} requires idempotency_key."
+        )
+    if definition.kind in {
+        WorkflowWorkUnitKind.EXTERNAL_API,
+        WorkflowWorkUnitKind.SIDE_EFFECT,
+    }:
         if not definition.idempotency_policy.required:
             raise WorkflowWorkUnitContractError(
                 f"Workflow work unit {definition.key} performs side effects without required idempotency."
@@ -152,13 +165,17 @@ def _validate_idempotency(
     return normalized
 
 
-def _backoff_seconds(*, definition: WorkflowWorkUnitDefinition, attempt_number: int) -> int:
+def _backoff_seconds(
+    *, definition: WorkflowWorkUnitDefinition, attempt_number: int
+) -> int:
     policy = definition.retry_policy
     if attempt_number >= policy.max_attempts:
         return 0
     if policy.initial_interval_seconds <= 0:
         return 0
-    calculated = policy.initial_interval_seconds * (policy.backoff_coefficient ** max(0, attempt_number - 1))
+    calculated = policy.initial_interval_seconds * (
+        policy.backoff_coefficient ** max(0, attempt_number - 1)
+    )
     if policy.max_interval_seconds > 0:
         calculated = min(calculated, policy.max_interval_seconds)
     return int(calculated)
@@ -223,14 +240,18 @@ def _start_unit_attempt(
     work_unit: WorkflowOperationWorkUnit,
     operation_attempt: WorkflowOperationAttempt,
 ) -> WorkflowOperationWorkUnitAttempt:
-    next_attempt_number = int(
-        session.execute(
-            select(func.max(WorkflowOperationWorkUnitAttempt.attempt_number)).where(
-                WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id
-            )
-        ).scalar_one()
-        or 0
-    ) + 1
+    next_attempt_number = (
+        int(
+            session.execute(
+                select(func.max(WorkflowOperationWorkUnitAttempt.attempt_number)).where(
+                    WorkflowOperationWorkUnitAttempt.work_unit_id
+                    == work_unit.work_unit_id
+                )
+            ).scalar_one()
+            or 0
+        )
+        + 1
+    )
     timestamp = _now()
     unit_attempt = WorkflowOperationWorkUnitAttempt(
         work_unit_attempt_id=uuid4().hex,
@@ -260,9 +281,12 @@ def _unit_attempt_count_for_operation_attempt(
 ) -> int:
     return int(
         session.execute(
-            select(func.count(WorkflowOperationWorkUnitAttempt.work_unit_attempt_id)).where(
+            select(
+                func.count(WorkflowOperationWorkUnitAttempt.work_unit_attempt_id)
+            ).where(
                 WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
-                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id
+                == operation_attempt.attempt_id,
             )
         ).scalar_one()
         or 0
@@ -282,9 +306,15 @@ def run_work_unit(
     deserialize: Callable[[dict[str, object]], T] | None = None,
 ) -> T:
     if operation_attempt.operation_id != operation.operation_id:
-        raise WorkflowWorkUnitContractError("Workflow work unit attempt does not belong to the supplied operation.")
-    workflow, workflow_type, definition = _resolve_definition(session=session, operation=operation, unit_key=unit_key)
-    normalized_idempotency_key = _validate_idempotency(definition=definition, idempotency_key=idempotency_key)
+        raise WorkflowWorkUnitContractError(
+            "Workflow work unit attempt does not belong to the supplied operation."
+        )
+    workflow, workflow_type, definition = _resolve_definition(
+        session=session, operation=operation, unit_key=unit_key
+    )
+    normalized_idempotency_key = _validate_idempotency(
+        definition=definition, idempotency_key=idempotency_key
+    )
     fingerprint = _input_fingerprint(input_payload)
     work_unit = _get_or_create_work_unit(
         session=session,
@@ -297,12 +327,15 @@ def run_work_unit(
     output_loader = deserialize or _default_deserialize
     if work_unit.status == WORK_UNIT_STATUS_COMPLETED:
         if not isinstance(work_unit.output_json, dict):
-            raise WorkflowWorkUnitContractError(f"Completed work unit {unit_key} is missing persisted output.")
+            raise WorkflowWorkUnitContractError(
+                f"Completed work unit {unit_key} is missing persisted output."
+            )
         existing_reuse_attempt = session.execute(
             select(WorkflowOperationWorkUnitAttempt)
             .where(
                 WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
-                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id
+                == operation_attempt.attempt_id,
             )
             .limit(1)
         ).scalar_one_or_none()
@@ -341,7 +374,9 @@ def run_work_unit(
         raise WorkflowWorkUnitRetryExhaustedError(
             f"Workflow work unit {unit_key} exhausted {definition.retry_policy.max_attempts} attempts."
         )
-    unit_attempt = _start_unit_attempt(session=session, work_unit=work_unit, operation_attempt=operation_attempt)
+    unit_attempt = _start_unit_attempt(
+        session=session, work_unit=work_unit, operation_attempt=operation_attempt
+    )
     context = WorkflowWorkUnitContext(
         workflow=workflow,
         workflow_type=workflow_type,
@@ -377,13 +412,19 @@ def run_work_unit(
     except Exception as exc:
         timestamp = _now()
         message = str(exc) or exc.__class__.__name__
-        next_delay = _backoff_seconds(definition=definition, attempt_number=unit_attempt.attempt_number)
-        next_retry_at = timestamp + timedelta(seconds=next_delay) if next_delay > 0 else None
+        next_delay = _backoff_seconds(
+            definition=definition, attempt_number=unit_attempt.attempt_number
+        )
+        next_retry_at = (
+            timestamp + timedelta(seconds=next_delay) if next_delay > 0 else None
+        )
         retrying = (
             next_retry_at is not None
             and operation_unit_attempt_count + 1 < definition.retry_policy.max_attempts
         )
-        unit_attempt.status = WORK_UNIT_STATUS_RETRYING if retrying else WORK_UNIT_STATUS_FAILED
+        unit_attempt.status = (
+            WORK_UNIT_STATUS_RETRYING if retrying else WORK_UNIT_STATUS_FAILED
+        )
         unit_attempt.error_category = "work_unit_failure"
         unit_attempt.error_message = message
         unit_attempt.next_retry_at = next_retry_at
@@ -406,7 +447,9 @@ def run_work_unit(
                 "work_unit_kind": definition.kind.value,
                 "idempotency_key": normalized_idempotency_key,
                 "input_fingerprint": fingerprint,
-                "next_retry_at": next_retry_at.isoformat() if next_retry_at is not None else None,
+                "next_retry_at": next_retry_at.isoformat()
+                if next_retry_at is not None
+                else None,
             },
         )
         session.flush()
@@ -417,7 +460,9 @@ def run_work_unit(
     serializer = serialize or _default_serialize
     output_payload = serializer(result)
     if not isinstance(output_payload, dict):
-        raise WorkflowWorkUnitContractError(f"Workflow work unit {unit_key} serializer must return a JSON object.")
+        raise WorkflowWorkUnitContractError(
+            f"Workflow work unit {unit_key} serializer must return a JSON object."
+        )
     timestamp = _now()
     unit_attempt.status = WORK_UNIT_STATUS_COMPLETED
     unit_attempt.finished_at = timestamp
@@ -455,7 +500,9 @@ def seed_declared_work_units_for_operation_attempt(
     input_payload: object,
 ) -> list[WorkflowOperationWorkUnit]:
     if operation_attempt.operation_id != operation.operation_id:
-        raise WorkflowWorkUnitContractError("Workflow work unit attempt does not belong to the supplied operation.")
+        raise WorkflowWorkUnitContractError(
+            "Workflow work unit attempt does not belong to the supplied operation."
+        )
     seeded: list[WorkflowOperationWorkUnit] = []
     for definition in workflow_type.work_units:
         if definition.step_key != operation.operation_type:
@@ -484,7 +531,8 @@ def seed_declared_work_units_for_operation_attempt(
             select(WorkflowOperationWorkUnitAttempt)
             .where(
                 WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
-                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id
+                == operation_attempt.attempt_id,
             )
             .limit(1)
         ).scalar_one_or_none()
@@ -543,25 +591,35 @@ def _finish_work_units_for_operation_attempt(
     error_message: str | None,
 ) -> None:
     if operation_attempt.operation_id != operation.operation_id:
-        raise WorkflowWorkUnitContractError("Workflow work unit attempt does not belong to the supplied operation.")
-    timestamp = _now()
-    work_units = session.execute(
-        select(WorkflowOperationWorkUnit).where(
-            WorkflowOperationWorkUnit.operation_id == operation.operation_id,
-            WorkflowOperationWorkUnit.parent_attempt_id == operation_attempt.attempt_id,
+        raise WorkflowWorkUnitContractError(
+            "Workflow work unit attempt does not belong to the supplied operation."
         )
-    ).scalars().all()
+    timestamp = _now()
+    work_units = (
+        session.execute(
+            select(WorkflowOperationWorkUnit).where(
+                WorkflowOperationWorkUnit.operation_id == operation.operation_id,
+                WorkflowOperationWorkUnit.parent_attempt_id
+                == operation_attempt.attempt_id,
+            )
+        )
+        .scalars()
+        .all()
+    )
     for work_unit in work_units:
         if work_unit.status != WORK_UNIT_STATUS_COMPLETED:
             work_unit.status = status
             work_unit.error_category = error_category
             work_unit.error_message = error_message
             work_unit.updated_at = timestamp
-            work_unit.completed_at = timestamp if status == WORK_UNIT_STATUS_COMPLETED else None
+            work_unit.completed_at = (
+                timestamp if status == WORK_UNIT_STATUS_COMPLETED else None
+            )
         attempts = session.execute(
             select(WorkflowOperationWorkUnitAttempt).where(
                 WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
-                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id
+                == operation_attempt.attempt_id,
             )
         ).scalars()
         for attempt in attempts:

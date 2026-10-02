@@ -10,7 +10,9 @@ from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
     ChildFanoutExecutionInput,
     execute_child_fanout_step,
 )
-from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
+from orchestrator.core.projects.parent_planning_fanout_service import (
+    ParentPlanningFanoutService,
+)
 from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED
 from orchestrator.core.runtime.payload_models import PMDecisionRequest
 from orchestrator.core.workflow.step_runner import WorkflowStepAttempt
@@ -64,9 +66,13 @@ def _step_attempt() -> WorkflowStepAttempt:
 
 
 def test_parent_planning_fanout_service_requires_questions_for_blocked_result() -> None:
-    with pytest.raises(RuntimeError, match="blocked but did not return clarification questions"):
+    with pytest.raises(
+        RuntimeError, match="blocked but did not return clarification questions"
+    ):
         ParentPlanningFanoutService().blocked_planning_result(
-            planning_result=SimpleNamespace(planning_state="planning_needs_clarification", pm_decision_requests=()),
+            planning_result=SimpleNamespace(
+                planning_state="planning_needs_clarification", pm_decision_requests=()
+            ),
             planning_package={"child_ticket_specs": []},
         )
 
@@ -89,7 +95,9 @@ def test_parent_planning_fanout_service_returns_blocking_questions() -> None:
 
     assert result.completed is False
     assert result.changed_children == []
-    assert result.questions[0].question == "What audit retention window should v1 support?"
+    assert (
+        result.questions[0].question == "What audit retention window should v1 support?"
+    )
 
 
 def test_parent_planning_fanout_service_evaluates_refresh_seed_data() -> None:
@@ -132,7 +140,9 @@ def test_child_fanout_executor_uses_started_attempt_contract() -> None:
                 fanout_service=ParentPlanningFanoutService(),
                 parent_detail=SimpleNamespace(key="MAB-229"),
                 project_key="MAB",
-                planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()),
+                planning_result=SimpleNamespace(
+                    planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()
+                ),
                 planning_package={"planning_state": PLANNING_STATE_COMPLETED},
                 completion_summary="Fanout complete.",
             )
@@ -146,13 +156,18 @@ def test_child_fanout_executor_uses_started_attempt_contract() -> None:
 
 def test_child_fanout_executor_fails_attempt_when_seed_contract_is_invalid() -> None:
     lifecycle = _Lifecycle()
-    gateway = _AttemptAwareChildSyncGateway(seed_data={"requires_input": True, "questions": []})
+    gateway = _AttemptAwareChildSyncGateway(
+        seed_data={"requires_input": True, "questions": []}
+    )
 
     with patch(
         "orchestrator.core.parent_feature_workflow.child_fanout_execution.run_work_unit",
         side_effect=lambda _session, **kwargs: kwargs["execute"](None),
     ):
-        with pytest.raises(ChildFanoutExecutionError, match="blocked but did not return clarification questions"):
+        with pytest.raises(
+            ChildFanoutExecutionError,
+            match="blocked but did not return clarification questions",
+        ):
             execute_child_fanout_step(
                 request=ChildFanoutExecutionInput(
                     lifecycle=lifecycle,
@@ -161,7 +176,9 @@ def test_child_fanout_executor_fails_attempt_when_seed_contract_is_invalid() -> 
                     fanout_service=ParentPlanningFanoutService(),
                     parent_detail=SimpleNamespace(key="MAB-229"),
                     project_key="MAB",
-                    planning_result=SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()),
+                    planning_result=SimpleNamespace(
+                        planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=()
+                    ),
                     planning_package={"planning_state": PLANNING_STATE_COMPLETED},
                     completion_summary="Fanout complete.",
                 )

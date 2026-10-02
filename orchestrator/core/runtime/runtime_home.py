@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 
 from orchestrator.core.config import Settings
+from orchestrator.core.source_layout import require_source_checkout
 
 _SYNC_MANIFEST_NAME = ".repo-sync-manifest.json"
 _REPO_CODEX_EXCLUDED_NAMES = {
@@ -27,16 +28,12 @@ _REPO_CODEX_EXCLUDED_NAMES = {
 }
 _RUNTIME_OWNED_CODEX_NAMES = {
     "auth.json",
-    "cache",
     "installation-id",
     "installation-ids.json",
     "installation_id",
     "installation_ids.json",
     "installations",
-    "sessions",
     "state",
-    "temp",
-    "tmp",
 }
 _RUNTIME_STATEFUL_HOME_PATHS = (
     Path(".cache"),
@@ -47,7 +44,7 @@ _RUNTIME_STATEFUL_HOME_PATHS = (
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return require_source_checkout()
 
 
 def _repo_codex_dir() -> Path:
@@ -76,26 +73,41 @@ def resolve_runtime_home(*, settings: Settings) -> Path:
         return Path(configured_home).expanduser()
     normalized_home = str(os.environ.get("HOME") or "").strip()
     if _running_inside_container() and normalized_home:
-        return Path(normalized_home) / ".codex" / "runtime" / _runtime_scope(settings=settings)
+        return (
+            Path(normalized_home)
+            / ".codex"
+            / "runtime"
+            / _runtime_scope(settings=settings)
+        )
     base_home = Path(normalized_home).expanduser() if normalized_home else Path.home()
     return base_home / ".master-builder" / "runtime" / _runtime_scope(settings=settings)
 
 
 def prepare_runtime_home(*, settings: Settings, runtime_kind: str) -> Path:
+    if not _repo_codex_dir().is_dir():
+        raise RuntimeError(
+            "Required .codex runtime assets are missing; restore the full source checkout."
+        )
     runtime_home = resolve_runtime_home(settings=settings)
     runtime_home.mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_runtime_state(runtime_home=runtime_home, settings=settings, runtime_kind=runtime_kind)
+    _migrate_legacy_runtime_state(
+        runtime_home=runtime_home, settings=settings, runtime_kind=runtime_kind
+    )
     _sync_repo_codex_assets(runtime_home=runtime_home)
     return runtime_home
 
 
-def _migrate_legacy_runtime_state(*, runtime_home: Path, settings: Settings, runtime_kind: str) -> None:
+def _migrate_legacy_runtime_state(
+    *, runtime_home: Path, settings: Settings, runtime_kind: str
+) -> None:
     target_codex_dir = runtime_home / ".codex"
     target_codex_dir.mkdir(parents=True, exist_ok=True)
 
     home_value = str(os.environ.get("HOME") or "").strip()
     home_path = Path(home_value).expanduser() if home_value else None
-    dedicated_runtime_homes: list[Path] = [_legacy_repo_runtime_home(runtime_kind=runtime_kind)]
+    dedicated_runtime_homes: list[Path] = [
+        _legacy_repo_runtime_home(runtime_kind=runtime_kind)
+    ]
     if home_path is not None:
         dedicated_runtime_homes.append(home_path / runtime_kind)
 
@@ -103,7 +115,9 @@ def _migrate_legacy_runtime_state(*, runtime_home: Path, settings: Settings, run
         if source_home.resolve() == runtime_home.resolve() or not source_home.exists():
             continue
         _merge_home_state(source_home=source_home, target_home=runtime_home)
-        _merge_runtime_owned_codex_entries(source_codex_dir=source_home / ".codex", target_codex_dir=target_codex_dir)
+        _merge_runtime_owned_codex_entries(
+            source_codex_dir=source_home / ".codex", target_codex_dir=target_codex_dir
+        )
 
     if home_path is not None:
         legacy_shared_codex_dir = home_path / ".codex"
@@ -124,7 +138,9 @@ def _merge_home_state(*, source_home: Path, target_home: Path) -> None:
         _copy_path_if_missing(source_path=source_path, target_path=target_path)
 
 
-def _merge_runtime_owned_codex_entries(*, source_codex_dir: Path, target_codex_dir: Path) -> None:
+def _merge_runtime_owned_codex_entries(
+    *, source_codex_dir: Path, target_codex_dir: Path
+) -> None:
     if not source_codex_dir.is_dir():
         return
     for name in sorted(_RUNTIME_OWNED_CODEX_NAMES):
@@ -163,7 +179,9 @@ def _copy_path_if_missing(*, source_path: Path, target_path: Path) -> None:
 def _sync_repo_codex_assets(*, runtime_home: Path) -> None:
     source_dir = _repo_codex_dir()
     if not source_dir.is_dir():
-        return
+        raise RuntimeError(
+            "Required .codex runtime assets are missing; restore the full source checkout."
+        )
     target_dir = runtime_home / ".codex"
     target_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = target_dir / _SYNC_MANIFEST_NAME
@@ -188,7 +206,9 @@ def _sync_repo_codex_assets(*, runtime_home: Path) -> None:
         _prune_empty_parent_dirs(stale_path.parent, stop_dir=target_dir)
 
     manifest_payload = {"repo_managed_files": sorted(synced_files)}
-    manifest_path.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
 
 def _load_sync_manifest(*, manifest_path: Path) -> set[str]:
@@ -231,4 +251,6 @@ def _is_same_or_nested_path(*, maybe_child: Path, maybe_parent: Path) -> bool:
         parent_resolved = maybe_parent.resolve()
     except OSError:
         return False
-    return child_resolved == parent_resolved or parent_resolved in child_resolved.parents
+    return (
+        child_resolved == parent_resolved or parent_resolved in child_resolved.parents
+    )

@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 from orchestrator.core.review.pr_ready import PrReadinessResult
 from orchestrator.core.review.reviewer import ReviewAgentGate
-from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
+from orchestrator.tools.github_app import (
+    PullRequestDetails,
+    PullRequestFileChange,
+    WorkflowCheckSuite,
+)
 
 
 class _FakeGitHubClient:
@@ -61,8 +65,8 @@ class ReviewerGateTests(unittest.TestCase):
     def _gate(self, client: _FakeGitHubClient) -> ReviewAgentGate:
         return ReviewAgentGate(
             client,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
         )
 
     def _gate_with_demo_requirement(
@@ -80,8 +84,8 @@ class ReviewerGateTests(unittest.TestCase):
             client,
             require_demo_evidence=True,
             required_demo_capture_targets=required_targets,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             demo_artifact_public_base_url="https://cdn.example/qa-demos",
             demo_evidence_run_id_resolver=lambda _pr_url: current_run_id,
             demo_evidence_recordings_resolver=(lambda _run_id: expected_recordings)
@@ -96,8 +100,12 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ]
             )
         )
@@ -114,8 +122,12 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="queued", conclusion=None),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="queued", conclusion=None
+                    ),
                 ]
             )
         )
@@ -132,8 +144,12 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="failure"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="failure"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ]
             )
         )
@@ -150,8 +166,12 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
                     PullRequestFileChange(
@@ -176,8 +196,12 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 review_body="Good:\n- done\n",
             )
@@ -194,10 +218,18 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
-                files=[PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change")],
+                files=[
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    )
+                ],
             )
         )
         signal = gate.evaluate_pr(
@@ -211,13 +243,24 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="GirlPower/App/GirlPowerApp.swift", patch="+ change"),
-                    PullRequestFileChange(filename="tasks/lessons.md", patch="+ lesson"),
-                    PullRequestFileChange(filename="GirlPowerUITests/GirlPowerUITests.swift", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="GirlPower/App/GirlPowerApp.swift", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tasks/lessons.md", patch="+ lesson"
+                    ),
+                    PullRequestFileChange(
+                        filename="GirlPowerUITests/GirlPowerUITests.swift",
+                        patch="+ test",
+                    ),
                 ],
             )
         )
@@ -235,12 +278,20 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
             )
         )
@@ -257,12 +308,20 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -284,16 +343,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_without_required_target_and_count_markers(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_without_required_target_and_count_markers(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -319,16 +388,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_when_url_does_not_match_object_key(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_when_url_does_not_match_object_key(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -353,16 +432,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_from_unconfigured_artifact_host(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_from_unconfigured_artifact_host(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -376,11 +465,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser walkthrough [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://manual.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://manual.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             )
         )
@@ -393,16 +482,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_missing_required_target_marker(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_missing_required_target_marker(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -428,16 +527,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_missing_required_count_marker(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_missing_required_count_marker(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -470,16 +579,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_missing_required_recording_count_marker(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_missing_required_recording_count_marker(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -506,38 +625,48 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_accepts_structured_demo_evidence_covering_required_recording_count_marker(self) -> None:
+    def test_reviewer_accepts_structured_demo_evidence_covering_required_recording_count_marker(
+        self,
+    ) -> None:
         expected_recordings = (
             {
                 "name": "Browser happy path",
                 "capture_target": "browser",
                 "capture_reference": "https://preview.example",
-                "object_key": "example/example-default/run-1/qa-demo-1.webm",
+                "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
                 "content_sha256": "0" * 63 + "1",
                 "release_commit_sha": "b" * 40,
                 "release_context_sha256": "a" * 64,
-                "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+                "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
             },
             {
                 "name": "Browser edge case",
                 "capture_target": "browser",
                 "capture_reference": "https://preview.example",
-                "object_key": "example/example-default/run-1/qa-demo-2.webm",
+                "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-2.webm",
                 "content_sha256": "0" * 63 + "2",
                 "release_commit_sha": "b" * 40,
                 "release_context_sha256": "a" * 64,
-                "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-2.webm",
+                "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-2.webm",
             },
         )
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -551,17 +680,17 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=2 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                     "- Browser edge case [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-2.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-2.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000002; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-2.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-2.webm\n"
                 ),
             ),
             expected_recordings=expected_recordings,
@@ -575,16 +704,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertTrue(signal.ready)
         self.assertEqual(signal.state, "ready")
 
-    def test_reviewer_blocks_structured_demo_evidence_without_persisted_recording_resolver(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_without_persisted_recording_resolver(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -598,11 +737,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             )
         )
@@ -615,16 +754,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_that_does_not_match_persisted_run_recordings(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_that_does_not_match_persisted_run_recordings(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -638,11 +787,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             ),
             expected_recordings=(
@@ -650,11 +799,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "name": "Browser happy path",
                     "capture_target": "browser",
                     "capture_reference": "https://preview.example",
-                    "object_key": "example/example-default/run-1/qa-demo-1.webm",
+                    "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
                     "content_sha256": "f" * 64,
                     "release_commit_sha": "b" * 40,
                     "release_context_sha256": "a" * 64,
-                    "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+                    "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
                 },
             ),
         )
@@ -667,16 +816,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_when_persisted_run_recordings_are_missing(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_when_persisted_run_recordings_are_missing(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -690,11 +849,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             ),
             expected_recordings=None,
@@ -709,26 +868,36 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_relabeling_persisted_run_recording(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_relabeling_persisted_run_recording(
+        self,
+    ) -> None:
         expected_recording = {
             "name": "Browser happy path",
             "capture_target": "browser",
             "capture_reference": "https://preview.example",
-            "object_key": "example/example-default/run-1/qa-demo-1.webm",
+            "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
             "content_sha256": "0" * 63 + "1",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": "a" * 64,
-            "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+            "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
         }
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -742,11 +911,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser destructive misuse path [target=browser; reference=https://other-preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             ),
             expected_recordings=(expected_recording,),
@@ -760,26 +929,36 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_accepts_structured_demo_evidence_that_matches_persisted_run_recordings(self) -> None:
+    def test_reviewer_accepts_structured_demo_evidence_that_matches_persisted_run_recordings(
+        self,
+    ) -> None:
         expected_recording = {
             "name": "Browser happy path",
             "capture_target": "browser",
             "capture_reference": "https://preview.example",
-            "object_key": "example/example-default/run-1/qa-demo-1.webm",
+            "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
             "content_sha256": "0" * 63 + "1",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": "a" * 64,
-            "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+            "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
         }
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -793,11 +972,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             ),
             expected_recordings=(expected_recording,),
@@ -811,26 +990,36 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertTrue(signal.ready)
         self.assertEqual(signal.state, "ready")
 
-    def test_reviewer_blocks_structured_demo_evidence_until_durable_demo_proof_completes(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_until_durable_demo_proof_completes(
+        self,
+    ) -> None:
         expected_recording = {
             "name": "Browser happy path",
             "capture_target": "browser",
             "capture_reference": "https://preview.example",
-            "object_key": "example/example-default/run-1/qa-demo-1.webm",
+            "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
             "content_sha256": "0" * 63 + "1",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": "a" * 64,
-            "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+            "artifact_url": "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
         }
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -844,15 +1033,18 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
-                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm\n"
                 ),
             ),
             expected_recordings=(expected_recording,),
-            demo_proof_status={"status": "waiting_for_input", "demo_proof_state": "recording"},
+            demo_proof_status={
+                "status": "waiting_for_input",
+                "demo_proof_state": "recording",
+            },
         )
 
         signal = gate.evaluate_pr(
@@ -863,13 +1055,15 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_accepts_structured_demo_evidence_after_durable_demo_proof_completes(self) -> None:
-        artifact_url = "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm"
+    def test_reviewer_accepts_structured_demo_evidence_after_durable_demo_proof_completes(
+        self,
+    ) -> None:
+        artifact_url = "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm"
         expected_recording = {
             "name": "Browser happy path",
             "capture_target": "browser",
             "capture_reference": "https://preview.example",
-            "object_key": "example/example-default/run-1/qa-demo-1.webm",
+            "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
             "content_sha256": "0" * 63 + "1",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": "a" * 64,
@@ -878,12 +1072,20 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -897,7 +1099,7 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
@@ -924,13 +1126,13 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertEqual(signal.state, "ready")
 
     def test_reviewer_blocks_stale_demo_proof_from_previous_pr_head(self) -> None:
-        artifact_url = "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm"
+        artifact_url = "https://cdn.example/qa-demos/example-workspace/example-workspace-default/run-1/qa-demo-1.webm"
         old_release_commit_sha = "a" * 40
         current_head_sha = "b" * 40
         expected_recording = {
             "name": "Browser happy path",
             "artifact_url": artifact_url,
-            "object_key": "example/example-default/run-1/qa-demo-1.webm",
+            "object_key": "example-workspace/example-workspace-default/run-1/qa-demo-1.webm",
             "capture_target": "browser",
             "capture_reference": "https://preview.example",
             "content_sha256": f"{1:064x}",
@@ -940,12 +1142,20 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 head_sha=current_head_sha,
                 review_body=(
@@ -960,7 +1170,7 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "object_key=example-workspace/example-workspace-default/run-1/qa-demo-1.webm; "
                     "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
                     f"release_commit_sha={old_release_commit_sha}; "
                     "release_context_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc]: "
@@ -986,16 +1196,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_from_another_project_scope(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_from_another_project_scope(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -1023,16 +1243,26 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_blocks_structured_demo_evidence_from_another_run_in_same_project(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_from_another_run_in_same_project(
+        self,
+    ) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -1046,8 +1276,8 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=example/example-default/old-run/qa-demo-1.webm]: "
-                    "https://cdn.example/qa-demos/example/example-default/old-run/qa-demo-1.webm\n"
+                    "object_key=example-workspace/example-workspace-default/old-run/qa-demo-1.webm]: "
+                    "https://cdn.example/qa-demos/example-workspace/example-workspace-default/old-run/qa-demo-1.webm\n"
                 ),
             )
         )
@@ -1064,12 +1294,20 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="tests/test_reviewer_gate.py", patch="+ test"
+                    ),
                 ],
                 review_body=(
                     "Good:\n- implemented\n\n"
@@ -1099,12 +1337,20 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
-                    PullRequestFileChange(filename="orchestrator/core/reviewer.test.js", patch="+ test"),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.py", patch="+ change"
+                    ),
+                    PullRequestFileChange(
+                        filename="orchestrator/core/reviewer.test.js", patch="+ test"
+                    ),
                 ],
             )
         )
@@ -1118,11 +1364,18 @@ class ReviewerGateTests(unittest.TestCase):
         gate = self._gate(
             _FakeGitHubClient(
                 checks=[
-                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(
+                        name="CI", status="completed", conclusion="success"
+                    ),
+                    WorkflowCheckSuite(
+                        name="Security", status="completed", conclusion="success"
+                    ),
                 ],
                 files=[
-                    PullRequestFileChange(filename="src/main/java/com/example/Service.java", patch="+ change"),
+                    PullRequestFileChange(
+                        filename="src/main/java/com/example/Service.java",
+                        patch="+ change",
+                    ),
                     PullRequestFileChange(
                         filename="src/test/java/com/example/ServiceTest.java",
                         patch="+ test",
@@ -1147,7 +1400,9 @@ def _stub_readiness_evaluator(  # noqa: ANN001
 ):
     _ = tenant_id, project_id
     check_by_name = {check.name: check for check in workflow_checks}
-    missing_workflows = tuple(name for name in required_workflows if name not in check_by_name)
+    missing_workflows = tuple(
+        name for name in required_workflows if name not in check_by_name
+    )
     if missing_workflows:
         return PrReadinessResult(
             ready=False,
@@ -1194,7 +1449,14 @@ def _stub_readiness_evaluator(  # noqa: ANN001
             missing_review_sections=(),
         )
 
-    required_sections = ("Good:", "Risks:", "Must-fix:", "Tests:", "Questions:", "Follow-ups:")
+    required_sections = (
+        "Good:",
+        "Risks:",
+        "Must-fix:",
+        "Tests:",
+        "Questions:",
+        "Follow-ups:",
+    )
     missing_review_sections = tuple(
         section.rstrip(":")
         for section in required_sections

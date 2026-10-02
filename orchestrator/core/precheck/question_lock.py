@@ -58,13 +58,17 @@ def build_precheck_questions_block(
 
 def _extract_block(description: str) -> str | None:
     start_idx = description.find(PRECHECK_QUESTIONS_BLOCK_START)
-    end_idx = description.find(PRECHECK_QUESTIONS_BLOCK_END, start_idx + len(PRECHECK_QUESTIONS_BLOCK_START))
+    end_idx = description.find(
+        PRECHECK_QUESTIONS_BLOCK_END, start_idx + len(PRECHECK_QUESTIONS_BLOCK_START)
+    )
     if start_idx < 0 or end_idx <= start_idx:
         return None
     return description[start_idx : end_idx + len(PRECHECK_QUESTIONS_BLOCK_END)]
 
 
-def parse_locked_precheck_questions(*, issue_description: str | None) -> LockedPrecheckQuestions:
+def parse_locked_precheck_questions(
+    *, issue_description: str | None
+) -> LockedPrecheckQuestions:
     description = str(issue_description or "")
     block = _extract_block(description)
     if not block:
@@ -109,7 +113,9 @@ def parse_locked_precheck_questions(*, issue_description: str | None) -> LockedP
 def remove_precheck_questions_block(*, current_description: str) -> str:
     current = str(current_description or "").strip()
     start_idx = current.find(PRECHECK_QUESTIONS_BLOCK_START)
-    end_idx = current.find(PRECHECK_QUESTIONS_BLOCK_END, start_idx + len(PRECHECK_QUESTIONS_BLOCK_START))
+    end_idx = current.find(
+        PRECHECK_QUESTIONS_BLOCK_END, start_idx + len(PRECHECK_QUESTIONS_BLOCK_START)
+    )
     if start_idx < 0 or end_idx <= start_idx:
         return current
     end_marker_idx = end_idx + len(PRECHECK_QUESTIONS_BLOCK_END)
@@ -130,7 +136,9 @@ def upsert_precheck_questions_block(*, current_description: str, block: str) -> 
     if not current:
         return cleaned_block
     start_idx = current.find(PRECHECK_QUESTIONS_BLOCK_START)
-    end_idx = current.find(PRECHECK_QUESTIONS_BLOCK_END, start_idx + len(PRECHECK_QUESTIONS_BLOCK_START))
+    end_idx = current.find(
+        PRECHECK_QUESTIONS_BLOCK_END, start_idx + len(PRECHECK_QUESTIONS_BLOCK_START)
+    )
     if start_idx >= 0 and end_idx > start_idx:
         end_marker_idx = end_idx + len(PRECHECK_QUESTIONS_BLOCK_END)
         prefix = current[:start_idx].rstrip()

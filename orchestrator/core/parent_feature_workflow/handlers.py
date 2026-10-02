@@ -9,14 +9,24 @@ from orchestrator.core.integrations.atlassian.parent_child_sync_shared import (
     parent_board_entry_target_status as _parent_board_entry_target_status,
     project_key_for_issue as _project_key_for_issue,
 )
-from orchestrator.core.parent_feature_workflow.adapters import _JiraParentIssueGateway, _ParentBriefPlanner, _ParentChildSyncGateway
-from orchestrator.core.parent_feature_workflow.dependencies import ParentFeatureWorkflowHandlerDeps
+from orchestrator.core.parent_feature_workflow.adapters import (
+    _JiraParentIssueGateway,
+    _ParentBriefPlanner,
+    _ParentChildSyncGateway,
+)
+from orchestrator.core.parent_feature_workflow.dependencies import (
+    ParentFeatureWorkflowHandlerDeps,
+)
 from orchestrator.core.parent_feature_workflow.planning import (
     ParentFeaturePlanningWorkflow,
     ParentFeaturePlanningWorkflowDeps,
 )
-from orchestrator.core.projects.parent_planning_clarification_service import ParentPlanningClarificationService
-from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
+from orchestrator.core.projects.parent_planning_clarification_service import (
+    ParentPlanningClarificationService,
+)
+from orchestrator.core.projects.parent_planning_fanout_service import (
+    ParentPlanningFanoutService,
+)
 from orchestrator.core.workflow.runtime import (
     WorkflowAdvanceOutcome,
     WorkflowAdvanceRequest,
@@ -47,10 +57,14 @@ class ParentFeatureWorkflowAdvanceHandler:
             raise RuntimeError("Parent feature workflow advance requires request_id")
         issue_key = str(request.execution.source.source_ref or "").strip().upper()
         if request.execution.source.source_system != "jira" or not issue_key:
-            raise RuntimeError("Parent feature workflow requires a Jira execution reference")
+            raise RuntimeError(
+                "Parent feature workflow requires a Jira execution reference"
+            )
         issue_labels = request.execution.source.attributes.get("jira_issue_labels")
         if not isinstance(issue_labels, list):
-            raise RuntimeError("Parent feature workflow requires jira_issue_labels execution attribute")
+            raise RuntimeError(
+                "Parent feature workflow requires jira_issue_labels execution attribute"
+            )
         context = JiraParentChildSyncContext(
             request_id=request_id,
             tenant_id=request.tenant_id,

@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import DiscordCommandSyncStatusRead
 from orchestrator.core.config import get_settings
-from orchestrator.core.discord.command_sync_status import get_discord_command_sync_status
+from orchestrator.core.discord.command_sync_status import (
+    get_discord_command_sync_status,
+)
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.security import require_admin
 

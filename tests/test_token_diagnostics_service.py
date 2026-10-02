@@ -19,7 +19,9 @@ class TokenDiagnosticsServiceTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.database_url = f"sqlite:///{self.temp_dir.name}/token_diag.db"
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)

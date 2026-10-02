@@ -6,22 +6,25 @@ from orchestrator.core.precheck.policy import evaluate_precheck_policy
 
 
 def test_evaluate_precheck_policy_returns_decision_gate_and_gtd() -> None:
-    with patch(
-        "orchestrator.core.precheck.policy.invoke_runtime_json",
-        return_value={
-            "triggered": False,
-            "reason": "Decision Gate not required",
-            "missing_sections": [],
-            "questions": [],
-            "recommendation": "Proceed",
-            "tags": [],
-            "gtd_valid": True,
-            "gtd_missing_criteria": [],
-            "gtd_clarification_questions": [],
-        },
-    ), patch(
-        "orchestrator.core.precheck.policy.build_codex_runtime",
-        return_value=object(),
+    with (
+        patch(
+            "orchestrator.core.precheck.policy.invoke_runtime_json",
+            return_value={
+                "triggered": False,
+                "reason": "Decision Gate not required",
+                "missing_sections": [],
+                "questions": [],
+                "recommendation": "Proceed",
+                "tags": [],
+                "gtd_valid": True,
+                "gtd_missing_criteria": [],
+                "gtd_clarification_questions": [],
+            },
+        ),
+        patch(
+            "orchestrator.core.precheck.policy.build_codex_runtime",
+            return_value=object(),
+        ),
     ):
         result = evaluate_precheck_policy(
             issue_summary="TP-1",
@@ -37,22 +40,25 @@ def test_evaluate_precheck_policy_returns_decision_gate_and_gtd() -> None:
 
 
 def test_evaluate_precheck_policy_passes_recorded_answers_to_prompt() -> None:
-    with patch(
-        "orchestrator.core.precheck.policy.invoke_runtime_json",
-        return_value={
-            "triggered": False,
-            "reason": "Decision Gate not required",
-            "missing_sections": [],
-            "questions": [],
-            "recommendation": "Proceed",
-            "tags": [],
-            "gtd_valid": True,
-            "gtd_missing_criteria": [],
-            "gtd_clarification_questions": [],
-        },
-    ) as invoke_mock, patch(
-        "orchestrator.core.precheck.policy.build_codex_runtime",
-        return_value=object(),
+    with (
+        patch(
+            "orchestrator.core.precheck.policy.invoke_runtime_json",
+            return_value={
+                "triggered": False,
+                "reason": "Decision Gate not required",
+                "missing_sections": [],
+                "questions": [],
+                "recommendation": "Proceed",
+                "tags": [],
+                "gtd_valid": True,
+                "gtd_missing_criteria": [],
+                "gtd_clarification_questions": [],
+            },
+        ) as invoke_mock,
+        patch(
+            "orchestrator.core.precheck.policy.build_codex_runtime",
+            return_value=object(),
+        ),
     ):
         evaluate_precheck_policy(
             issue_summary="TP-1",
@@ -70,26 +76,32 @@ def test_evaluate_precheck_policy_passes_recorded_answers_to_prompt() -> None:
             issue_key="TP-1",
         )
 
-    assert "Production bundle ID is com.example.app." in invoke_mock.call_args.kwargs["user_prompt"]
+    assert (
+        "Production bundle ID is com.example.app."
+        in invoke_mock.call_args.kwargs["user_prompt"]
+    )
 
 
 def test_evaluate_precheck_policy_allows_declared_native_research_tools() -> None:
-    with patch(
-        "orchestrator.core.precheck.policy.invoke_runtime_json",
-        return_value={
-            "triggered": False,
-            "reason": "Decision Gate not required",
-            "missing_sections": [],
-            "questions": [],
-            "recommendation": "Proceed",
-            "tags": [],
-            "gtd_valid": True,
-            "gtd_missing_criteria": [],
-            "gtd_clarification_questions": [],
-        },
-    ) as invoke_mock, patch(
-        "orchestrator.core.precheck.policy.build_codex_runtime",
-        return_value=object(),
+    with (
+        patch(
+            "orchestrator.core.precheck.policy.invoke_runtime_json",
+            return_value={
+                "triggered": False,
+                "reason": "Decision Gate not required",
+                "missing_sections": [],
+                "questions": [],
+                "recommendation": "Proceed",
+                "tags": [],
+                "gtd_valid": True,
+                "gtd_missing_criteria": [],
+                "gtd_clarification_questions": [],
+            },
+        ) as invoke_mock,
+        patch(
+            "orchestrator.core.precheck.policy.build_codex_runtime",
+            return_value=object(),
+        ),
     ):
         evaluate_precheck_policy(
             issue_summary="TP-1",
@@ -99,26 +111,32 @@ def test_evaluate_precheck_policy_allows_declared_native_research_tools() -> Non
             issue_key="TP-1",
         )
 
-    assert invoke_mock.call_args.kwargs["allowed_native_tools"] == {"web.search", "web.fetch"}
+    assert invoke_mock.call_args.kwargs["allowed_native_tools"] == {
+        "web.search",
+        "web.fetch",
+    }
 
 
 def test_evaluate_precheck_policy_rejects_invalid_gtd_payload() -> None:
-    with patch(
-        "orchestrator.core.precheck.policy.invoke_runtime_json",
-        return_value={
-            "triggered": False,
-            "reason": "Decision Gate not required",
-            "missing_sections": [],
-            "questions": [],
-            "recommendation": "Proceed",
-            "tags": [],
-            "gtd_valid": False,
-            "gtd_missing_criteria": ["How to test missing"],
-            "gtd_clarification_questions": [],
-        },
-    ), patch(
-        "orchestrator.core.precheck.policy.build_codex_runtime",
-        return_value=object(),
+    with (
+        patch(
+            "orchestrator.core.precheck.policy.invoke_runtime_json",
+            return_value={
+                "triggered": False,
+                "reason": "Decision Gate not required",
+                "missing_sections": [],
+                "questions": [],
+                "recommendation": "Proceed",
+                "tags": [],
+                "gtd_valid": False,
+                "gtd_missing_criteria": ["How to test missing"],
+                "gtd_clarification_questions": [],
+            },
+        ),
+        patch(
+            "orchestrator.core.precheck.policy.build_codex_runtime",
+            return_value=object(),
+        ),
     ):
         with pytest.raises(RuntimeError, match="invalid GTD result"):
             evaluate_precheck_policy(

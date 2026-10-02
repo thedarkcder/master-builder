@@ -41,7 +41,9 @@ def _project_id_for_entry(*, entry: dict, project_rows: list[dict]) -> str | Non
     raw_channel_ids = _normalize_id_list(entry.get("channel_ids"))
     issue_keys = _normalize_id_list(entry.get("issue_keys"))
     for row in project_rows:
-        project_channel_id = str((row.get("discord_config") or {}).get("channel_id") or "").strip()
+        project_channel_id = str(
+            (row.get("discord_config") or {}).get("channel_id") or ""
+        ).strip()
         if project_channel_id and project_channel_id in raw_channel_ids:
             return str(row["project_id"])
     if issue_keys:
@@ -49,7 +51,9 @@ def _project_id_for_entry(*, entry: dict, project_rows: list[dict]) -> str | Non
             jira_key = str(row.get("jira_project_key") or "").strip().upper()
             if not jira_key:
                 continue
-            if any(_issue_project_key(issue_key) == jira_key for issue_key in issue_keys):
+            if any(
+                _issue_project_key(issue_key) == jira_key for issue_key in issue_keys
+            ):
                 return str(row["project_id"])
     return None
 
@@ -70,7 +74,9 @@ def upgrade() -> None:
         sa.column("is_archived", sa.Boolean()),
     )
 
-    tenant_rows = bind.execute(sa.select(tenants.c.tenant_id, tenants.c.discord_config)).all()
+    tenant_rows = bind.execute(
+        sa.select(tenants.c.tenant_id, tenants.c.discord_config)
+    ).all()
     project_rows_raw = bind.execute(
         sa.select(
             projects.c.project_id,
@@ -93,8 +99,12 @@ def upgrade() -> None:
     for tenant_row in tenant_rows:
         tenant_id = str(tenant_row.tenant_id)
         tenant_discord_config = dict(tenant_row.discord_config or {})
-        tenant_ask_thread_list = _normalize_id_list(tenant_discord_config.get("ask_thread_channel_ids"))
-        tenant_seed_thread_list = _normalize_id_list(tenant_discord_config.get("seed_followup_thread_channel_ids"))
+        tenant_ask_thread_list = _normalize_id_list(
+            tenant_discord_config.get("ask_thread_channel_ids")
+        )
+        tenant_seed_thread_list = _normalize_id_list(
+            tenant_discord_config.get("seed_followup_thread_channel_ids")
+        )
         tenant_ask_threads = set(tenant_ask_thread_list)
         tenant_seed_threads = set(tenant_seed_thread_list)
         if not tenant_ask_threads and not tenant_seed_threads:
@@ -117,18 +127,28 @@ def upgrade() -> None:
                 for raw_entry in seed_followups:
                     if not isinstance(raw_entry, dict):
                         continue
-                    project_id = _project_id_for_entry(entry=raw_entry, project_rows=tenant_projects)
+                    project_id = _project_id_for_entry(
+                        entry=raw_entry, project_rows=tenant_projects
+                    )
                     if not project_id:
                         continue
                     channel_ids = set(_normalize_id_list(raw_entry.get("channel_ids")))
-                    assigned_ask[project_id].update(channel_ids.intersection(tenant_ask_threads))
-                    assigned_seed[project_id].update(channel_ids.intersection(tenant_seed_threads))
+                    assigned_ask[project_id].update(
+                        channel_ids.intersection(tenant_ask_threads)
+                    )
+                    assigned_seed[project_id].update(
+                        channel_ids.intersection(tenant_seed_threads)
+                    )
 
         for project in tenant_projects:
             project_id = str(project["project_id"])
             project_discord_config = dict(project.get("discord_config") or {})
-            ask_threads = _normalize_id_list(project_discord_config.get("ask_thread_channel_ids"))
-            seed_threads = _normalize_id_list(project_discord_config.get("seed_followup_thread_channel_ids"))
+            ask_threads = _normalize_id_list(
+                project_discord_config.get("ask_thread_channel_ids")
+            )
+            seed_threads = _normalize_id_list(
+                project_discord_config.get("seed_followup_thread_channel_ids")
+            )
             changed = False
             for channel_id in sorted(assigned_ask.get(project_id, set())):
                 if channel_id not in ask_threads:
@@ -140,23 +160,39 @@ def upgrade() -> None:
                     changed = True
             if changed:
                 project_discord_config["ask_thread_channel_ids"] = ask_threads[-200:]
-                project_discord_config["seed_followup_thread_channel_ids"] = seed_threads[-200:]
+                project_discord_config["seed_followup_thread_channel_ids"] = (
+                    seed_threads[-200:]
+                )
                 bind.execute(
                     projects.update()
                     .where(projects.c.project_id == project_id)
                     .values(discord_config=project_discord_config)
                 )
 
-        assigned_ask_channels = set().union(*assigned_ask.values()) if assigned_ask else set()
-        assigned_seed_channels = set().union(*assigned_seed.values()) if assigned_seed else set()
-        remaining_ask_channels = [channel_id for channel_id in tenant_ask_thread_list if channel_id not in assigned_ask_channels]
-        remaining_seed_channels = [channel_id for channel_id in tenant_seed_thread_list if channel_id not in assigned_seed_channels]
+        assigned_ask_channels = (
+            set().union(*assigned_ask.values()) if assigned_ask else set()
+        )
+        assigned_seed_channels = (
+            set().union(*assigned_seed.values()) if assigned_seed else set()
+        )
+        remaining_ask_channels = [
+            channel_id
+            for channel_id in tenant_ask_thread_list
+            if channel_id not in assigned_ask_channels
+        ]
+        remaining_seed_channels = [
+            channel_id
+            for channel_id in tenant_seed_thread_list
+            if channel_id not in assigned_seed_channels
+        ]
         if remaining_ask_channels:
             tenant_discord_config["ask_thread_channel_ids"] = remaining_ask_channels
         else:
             tenant_discord_config.pop("ask_thread_channel_ids", None)
         if remaining_seed_channels:
-            tenant_discord_config["seed_followup_thread_channel_ids"] = remaining_seed_channels
+            tenant_discord_config["seed_followup_thread_channel_ids"] = (
+                remaining_seed_channels
+            )
         else:
             tenant_discord_config.pop("seed_followup_thread_channel_ids", None)
         bind.execute(

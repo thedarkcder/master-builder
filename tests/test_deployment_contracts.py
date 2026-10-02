@@ -85,7 +85,9 @@ from orchestrator.core.deployment_setup.artifacts import (
     validate_npm_lockfiles_for_deployment_branch as _validate_npm_lockfiles_for_deployment_branch,
 )
 from orchestrator.core.deployment_setup.planner import DeploymentPlannerResponse
-from orchestrator.core.deployment_setup.start import project_deployment_setup_workflow_id
+from orchestrator.core.deployment_setup.start import (
+    project_deployment_setup_workflow_id,
+)
 from orchestrator.temporal.activities.project_deployment_setup import (
     _create_initial_setup_release,
     _supersede_failed_deployment_setup_executions,
@@ -109,9 +111,13 @@ from orchestrator.tools.coolify_api import CoolifyApiError
 
 
 def _run_git_for_test(args: list[str], *, cwd: Path) -> str:
-    process = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
+    process = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=False
+    )
     if process.returncode != 0:
-        raise AssertionError((process.stderr or process.stdout or "git command failed").strip())
+        raise AssertionError(
+            (process.stderr or process.stdout or "git command failed").strip()
+        )
     return process.stdout
 
 
@@ -128,7 +134,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.temp_dir.cleanup()
         reset_db_engine_cache()
 
-    def test_deployment_reconciliation_loop_backs_off_during_database_recovery(self) -> None:
+    def test_deployment_reconciliation_loop_backs_off_during_database_recovery(
+        self,
+    ) -> None:
         recovery_error = SQLAlchemyOperationalError(
             "select 1",
             {},
@@ -156,8 +164,14 @@ class DeploymentContractTests(unittest.TestCase):
             return None
 
         with (
-            patch("orchestrator.core.deployment_runtime.asyncio.to_thread", side_effect=_to_thread),
-            patch("orchestrator.core.deployment_runtime.asyncio.wait_for", side_effect=_wait_for),
+            patch(
+                "orchestrator.core.deployment_runtime.asyncio.to_thread",
+                side_effect=_to_thread,
+            ),
+            patch(
+                "orchestrator.core.deployment_runtime.asyncio.wait_for",
+                side_effect=_wait_for,
+            ),
             patch("orchestrator.core.deployment_runtime.logger") as logger_mock,
         ):
             asyncio.run(
@@ -206,7 +220,9 @@ class DeploymentContractTests(unittest.TestCase):
                         "coolify_server_uuid": "server-1",
                         "coolify_destination_uuid": "destination-1",
                         "coolify_github_app_uuid": "github-app-1",
-                        "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                        "secret_refs": {
+                            "coolify_api_token": "platform/COOLIFY_API_TOKEN"
+                        },
                         "state": "active",
                     },
                     created_at=now,
@@ -251,7 +267,13 @@ class DeploymentContractTests(unittest.TestCase):
                         "enabled": True,
                         "environment_name": "production",
                         "source_strategy": "dockerfile",
-                        "domains": [{"key": "primary", "service_key": "web", "host": "web.apps.example.com"}],
+                        "domains": [
+                            {
+                                "key": "primary",
+                                "service_key": "web",
+                                "host": "web.apps.example.com",
+                            }
+                        ],
                         "resources": [],
                         "backup_policies": [],
                     },
@@ -271,7 +293,9 @@ class DeploymentContractTests(unittest.TestCase):
             normalize_string_map=lambda value: dict(value or {}),
             normalize_project_architecture_docs_config=lambda value: dict(value or {}),
             normalize_project_discord_config=lambda value: dict(value or {}),
-            with_preserved_discord_system_fields=lambda existing, incoming: dict(incoming or {}),
+            with_preserved_discord_system_fields=lambda existing, incoming: dict(
+                incoming or {}
+            ),
             resolve_project_discord_channel_binding=lambda **kwargs: {},
             sync_tenant_jira_project_keys=lambda **kwargs: None,
             ensure_project_repository_checkout=lambda **kwargs: None,
@@ -344,7 +368,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertFalse(logs.truncated)
         self.assertEqual(fake_client.deployment_uuid, "deployment-1")
 
-    def test_project_deployment_release_logs_falls_back_when_deployment_uuid_is_stale(self) -> None:
+    def test_project_deployment_release_logs_falls_back_when_deployment_uuid_is_stale(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -389,7 +415,9 @@ class DeploymentContractTests(unittest.TestCase):
                         body="Not Found",
                     )
 
-                def list_application_deployments(self, *, application_uuid: str, take: int = 1) -> list[dict[str, object]]:
+                def list_application_deployments(
+                    self, *, application_uuid: str, take: int = 1
+                ) -> list[dict[str, object]]:
                     self.application_uuid = application_uuid
                     self.take = take
                     return [
@@ -664,11 +692,15 @@ class DeploymentContractTests(unittest.TestCase):
                 }
             )
 
-    def test_run_preview_deployment_uses_pushed_execution_artifact_and_marks_mobile_delivery(self) -> None:
+    def test_run_preview_deployment_uses_pushed_execution_artifact_and_marks_mobile_delivery(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         commit_sha = "a" * 40
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha=commit_sha)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha=commit_sha
+            )
             session.add(
                 ProjectApp(
                     app_id="mobile-1",
@@ -703,7 +735,10 @@ class DeploymentContractTests(unittest.TestCase):
                 return SimpleNamespace(release_id="release-preview-1")
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release", side_effect=fake_create_release),
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release",
+                    side_effect=fake_create_release,
+                ),
                 patch(
                     "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release",
                     return_value=SimpleNamespace(release_id="release-existing"),
@@ -714,7 +749,10 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
@@ -725,14 +763,27 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(payload.commit_sha, commit_sha)
         self.assertEqual(payload.source_run_id, "run-1")
         self.assertEqual(payload.pr_number, 12)
-        self.assertEqual(payload.delivery_metadata["mobile_delivery"]["status"], "pending_fastlane_distribution")
-        self.assertIn("simulator/emulator recordings", payload.delivery_metadata["mobile_delivery"]["note"])
-        self.assertIn("Fastlane distribution is only required", payload.delivery_metadata["mobile_delivery"]["note"])
+        self.assertEqual(
+            payload.delivery_metadata["mobile_delivery"]["status"],
+            "pending_fastlane_distribution",
+        )
+        self.assertIn(
+            "simulator/emulator recordings",
+            payload.delivery_metadata["mobile_delivery"]["note"],
+        )
+        self.assertIn(
+            "Fastlane distribution is only required",
+            payload.delivery_metadata["mobile_delivery"]["note"],
+        )
 
-    def test_run_preview_generation_is_idempotent_for_existing_run_preview(self) -> None:
+    def test_run_preview_generation_is_idempotent_for_existing_run_preview(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             existing = ProjectDeploymentRelease(
                 release_id="release-existing",
                 tenant_id=tenant.tenant_id,
@@ -762,13 +813,18 @@ class DeploymentContractTests(unittest.TestCase):
             session.add(existing)
             session.commit()
 
-            with patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release:
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release"
+            ) as create_release:
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
@@ -777,10 +833,14 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result.release.release_id, "release-existing")
         create_release.assert_not_called()
 
-    def test_run_preview_generation_reuses_existing_branch_preview_for_same_commit(self) -> None:
+    def test_run_preview_generation_reuses_existing_branch_preview_for_same_commit(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, first_run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             second_run = self._add_preview_run_on_same_branch(
                 session=session,
                 now=now + timedelta(seconds=1),
@@ -820,15 +880,22 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
-                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release"
+                ) as create_release,
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release"
+                ) as destroy_release,
             ):
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
                     project=project,
                     run=second_run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
@@ -838,10 +905,14 @@ class DeploymentContractTests(unittest.TestCase):
         create_release.assert_not_called()
         destroy_release.assert_not_called()
 
-    def test_run_preview_generation_reuses_existing_demo_proof_lease_for_same_scope_and_commit(self) -> None:
+    def test_run_preview_generation_reuses_existing_demo_proof_lease_for_same_scope_and_commit(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="release-proof-existing",
@@ -879,15 +950,22 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
-                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release"
+                ) as create_release,
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release"
+                ) as destroy_release,
             ):
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                     proof_scope_id="run:run-1:" + "a" * 40,
                 )
@@ -898,12 +976,16 @@ class DeploymentContractTests(unittest.TestCase):
         create_release.assert_not_called()
         destroy_release.assert_not_called()
 
-    def test_run_preview_generation_rejects_existing_demo_proof_release_for_different_scope(self) -> None:
+    def test_run_preview_generation_rejects_existing_demo_proof_release_for_different_scope(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         requested_scope = "run:run-1:" + "a" * 40
         existing_scope = "run:other-run:" + "a" * 40
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="release-proof-owned-by-other-scope",
@@ -941,32 +1023,52 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
-                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release"
+                ) as create_release,
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release"
+                ) as destroy_release,
             ):
-                with self.assertRaisesRegex(RuntimeError, "already leased to another demo proof scope"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "already leased to another demo proof scope"
+                ):
                     create_run_preview_deployment(
                         session=session,
                         tenant=tenant,
                         project=project,
                         run=run,
-                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        settings=SimpleNamespace(
+                            project_repo_checkout_base_dir="/tmp/unused",
+                            secrets_encryption_key="unused",
+                        ),
                         pr_url="https://github.com/example/repo/pull/12",
                         proof_scope_id=requested_scope,
                         demo_proof_lease_required=True,
                     )
 
-            persisted = session.get(ProjectDeploymentRelease, "release-proof-owned-by-other-scope")
+            persisted = session.get(
+                ProjectDeploymentRelease, "release-proof-owned-by-other-scope"
+            )
 
         create_release.assert_not_called()
         destroy_release.assert_not_called()
-        self.assertEqual(persisted.delivery_metadata["demo_proof_lease"]["proof_scope_id"], existing_scope)
-        self.assertEqual(persisted.delivery_metadata["demo_proof_lease"]["state"], "active")
+        self.assertEqual(
+            persisted.delivery_metadata["demo_proof_lease"]["proof_scope_id"],
+            existing_scope,
+        )
+        self.assertEqual(
+            persisted.delivery_metadata["demo_proof_lease"]["state"], "active"
+        )
 
-    def test_run_preview_generation_derives_demo_proof_lease_scope_when_required(self) -> None:
+    def test_run_preview_generation_derives_demo_proof_lease_scope_when_required(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="b" * 40
+            )
             session.commit()
 
             with patch(
@@ -978,27 +1080,43 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                     demo_proof_lease_required=True,
                 )
 
         self.assertTrue(result.created)
         payload = create_release.call_args.kwargs["payload"]
-        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"], "run:run-1:" + "b" * 40)
-        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40)
-        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["state"], "active")
+        self.assertEqual(
+            payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"],
+            "run:run-1:" + "b" * 40,
+        )
+        self.assertEqual(
+            payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40
+        )
+        self.assertEqual(
+            payload.delivery_metadata["demo_proof_lease"]["state"], "active"
+        )
         self.assertIn("acquired_at", payload.delivery_metadata["demo_proof_lease"])
         self.assertIn("expires_at", payload.delivery_metadata["demo_proof_lease"])
-        expires_at = datetime.fromisoformat(payload.delivery_metadata["demo_proof_lease"]["expires_at"])
+        expires_at = datetime.fromisoformat(
+            payload.delivery_metadata["demo_proof_lease"]["expires_at"]
+        )
         self.assertGreater(expires_at, datetime.now(timezone.utc) + timedelta(hours=20))
         self.assertLess(expires_at, datetime.now(timezone.utc) + timedelta(hours=25))
 
-    def test_run_preview_generation_signals_demo_proof_lease_before_release_create(self) -> None:
+    def test_run_preview_generation_signals_demo_proof_lease_before_release_create(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         order: list[str] = []
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="b" * 40
+            )
             session.commit()
 
             def fake_release_create(**_kwargs):  # noqa: ANN202
@@ -1017,18 +1135,27 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                     demo_proof_lease_required=True,
                     demo_proof_lease_acquired_fn=fake_lease_acquired,
                 )
 
-        self.assertEqual(order, ["lease:run:run-1:" + "b" * 40 + ":" + "b" * 40, "release_create"])
+        self.assertEqual(
+            order, ["lease:run:run-1:" + "b" * 40 + ":" + "b" * 40, "release_create"]
+        )
 
-    def test_run_preview_generation_replaces_conflicting_demo_proof_lease_before_create(self) -> None:
+    def test_run_preview_generation_replaces_conflicting_demo_proof_lease_before_create(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, first_run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             second_run = self._add_preview_run_on_same_branch(
                 session=session,
                 now=now + timedelta(seconds=1),
@@ -1088,7 +1215,10 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=second_run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                     proof_scope_id="run:run-2:" + "b" * 40,
                 )
@@ -1103,15 +1233,26 @@ class DeploymentContractTests(unittest.TestCase):
             reason="demo_proof_lease_superseded",
         )
         payload = create_release.call_args.kwargs["payload"]
-        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"], "run:run-2:" + "b" * 40)
-        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40)
-        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["state"], "active")
+        self.assertEqual(
+            payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"],
+            "run:run-2:" + "b" * 40,
+        )
+        self.assertEqual(
+            payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40
+        )
+        self.assertEqual(
+            payload.delivery_metadata["demo_proof_lease"]["state"], "active"
+        )
 
-    def test_run_preview_generation_blocks_when_demo_proof_scope_has_multiple_active_leases(self) -> None:
+    def test_run_preview_generation_blocks_when_demo_proof_scope_has_multiple_active_leases(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         proof_scope_id = "run:run-1:" + "a" * 40
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             for release_id in ("release-proof-a", "release-proof-b"):
                 session.add(
                     ProjectDeploymentRelease(
@@ -1150,8 +1291,12 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
-                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release"
+                ) as create_release,
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release"
+                ) as destroy_release,
             ):
                 with self.assertRaisesRegex(RuntimeError, "multiple active releases"):
                     create_run_preview_deployment(
@@ -1159,7 +1304,10 @@ class DeploymentContractTests(unittest.TestCase):
                         tenant=tenant,
                         project=project,
                         run=run,
-                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        settings=SimpleNamespace(
+                            project_repo_checkout_base_dir="/tmp/unused",
+                            secrets_encryption_key="unused",
+                        ),
                         pr_url="https://github.com/example/repo/pull/12",
                         proof_scope_id=proof_scope_id,
                     )
@@ -1167,10 +1315,14 @@ class DeploymentContractTests(unittest.TestCase):
         create_release.assert_not_called()
         destroy_release.assert_not_called()
 
-    def test_run_preview_generation_replaces_existing_branch_preview_for_new_commit(self) -> None:
+    def test_run_preview_generation_replaces_existing_branch_preview_for_new_commit(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, first_run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             second_run = self._add_preview_run_on_same_branch(
                 session=session,
                 now=now + timedelta(seconds=1),
@@ -1224,7 +1376,10 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=second_run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
@@ -1242,11 +1397,15 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(payload.source_run_id, "run-2")
         self.assertEqual(payload.commit_sha, "b" * 40)
 
-    def test_run_preview_generation_does_not_destroy_active_demo_proof_lease_for_another_scope(self) -> None:
+    def test_run_preview_generation_does_not_destroy_active_demo_proof_lease_for_another_scope(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         existing_scope = "run:run-1:" + "a" * 40
         with self.session_factory() as session:
-            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, first_run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             second_run = self._add_preview_run_on_same_branch(
                 session=session,
                 now=now + timedelta(seconds=1),
@@ -1292,35 +1451,55 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release"
+                ) as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release"
+                ) as create_release,
             ):
-                with self.assertRaisesRegex(RuntimeError, "leased to another active demo proof scope"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "leased to another active demo proof scope"
+                ):
                     create_run_preview_deployment(
                         session=session,
                         tenant=tenant,
                         project=project,
                         run=second_run,
-                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        settings=SimpleNamespace(
+                            project_repo_checkout_base_dir="/tmp/unused",
+                            secrets_encryption_key="unused",
+                        ),
                         pr_url="https://github.com/example/repo/pull/12",
                         proof_scope_id="run:run-2:" + "b" * 40,
                         demo_proof_lease_required=True,
                     )
 
-            persisted = session.get(ProjectDeploymentRelease, "release-active-proof-owned")
+            persisted = session.get(
+                ProjectDeploymentRelease, "release-active-proof-owned"
+            )
 
         destroy_release.assert_not_called()
         create_release.assert_not_called()
         self.assertEqual(persisted.status, "live")
         self.assertIsNone(persisted.destroyed_at)
-        self.assertEqual(persisted.delivery_metadata["demo_proof_lease"]["proof_scope_id"], existing_scope)
-        self.assertEqual(persisted.delivery_metadata["demo_proof_lease"]["state"], "active")
+        self.assertEqual(
+            persisted.delivery_metadata["demo_proof_lease"]["proof_scope_id"],
+            existing_scope,
+        )
+        self.assertEqual(
+            persisted.delivery_metadata["demo_proof_lease"]["state"], "active"
+        )
 
-    def test_run_preview_generation_reuses_inflight_preview_with_pending_provider_route(self) -> None:
+    def test_run_preview_generation_reuses_inflight_preview_with_pending_provider_route(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
-            tenant.deployment_plane_config = {"base_domain": "192-168-0-118.sslip.io:8088"}
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
+            tenant.deployment_plane_config = {"base_domain": "192-0-2-10.sslip.io:8088"}
             existing = ProjectDeploymentRelease(
                 release_id="release-existing",
                 tenant_id=tenant.tenant_id,
@@ -1338,7 +1517,7 @@ class DeploymentContractTests(unittest.TestCase):
                 requested_by_user_id=None,
                 deployment_snapshot={},
                 provider_context={
-                    "base_domain": "192-168-0-118.sslip.io:8088",
+                    "base_domain": "192-0-2-10.sslip.io:8088",
                     "application_uuid": "app-existing",
                     "deployment_uuid": "deployment-existing",
                     "route_bindings": [
@@ -1370,16 +1549,26 @@ class DeploymentContractTests(unittest.TestCase):
                 return False
 
             with (
-                patch("orchestrator.core.deployment_previews.reconcile_deployment_release", side_effect=fake_reconcile),
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
-                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.reconcile_deployment_release",
+                    side_effect=fake_reconcile,
+                ),
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release"
+                ) as create_release,
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release"
+                ) as destroy_release,
             ):
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
@@ -1389,11 +1578,15 @@ class DeploymentContractTests(unittest.TestCase):
         create_release.assert_not_called()
         destroy_release.assert_not_called()
 
-    def test_run_preview_generation_recreates_when_existing_base_domain_is_stale(self) -> None:
+    def test_run_preview_generation_recreates_when_existing_base_domain_is_stale(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
-            tenant.deployment_plane_config = {"base_domain": "192-168-0-118.sslip.io:8088"}
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
+            tenant.deployment_plane_config = {"base_domain": "192-0-2-10.sslip.io:8088"}
             existing = ProjectDeploymentRelease(
                 release_id="release-existing",
                 tenant_id=tenant.tenant_id,
@@ -1410,7 +1603,10 @@ class DeploymentContractTests(unittest.TestCase):
                 pr_number=12,
                 requested_by_user_id=None,
                 deployment_snapshot={},
-                provider_context={"base_domain": "bsktpay-2.localhost:8088", "application_uuid": "old-app"},
+                provider_context={
+                    "base_domain": "example-tenant-2.localhost:8088",
+                    "application_uuid": "old-app",
+                },
                 delivery_metadata={},
                 last_error=None,
                 requested_at=now,
@@ -1429,7 +1625,10 @@ class DeploymentContractTests(unittest.TestCase):
                 return SimpleNamespace(release_id="release-new")
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release", side_effect=fake_create_release),
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release",
+                    side_effect=fake_create_release,
+                ),
                 patch(
                     "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release",
                     return_value=SimpleNamespace(release_id="release-existing"),
@@ -1440,18 +1639,25 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
         self.assertTrue(result.created)
         self.assertEqual(result.release.release_id, "release-new")
 
-    def test_run_preview_generation_recreates_when_existing_route_scheme_is_stale(self) -> None:
+    def test_run_preview_generation_recreates_when_existing_route_scheme_is_stale(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
-            tenant.deployment_plane_config = {"base_domain": "192-168-0-118.sslip.io:8088"}
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
+            tenant.deployment_plane_config = {"base_domain": "192-0-2-10.sslip.io:8088"}
             existing = ProjectDeploymentRelease(
                 release_id="release-existing",
                 tenant_id=tenant.tenant_id,
@@ -1469,7 +1675,7 @@ class DeploymentContractTests(unittest.TestCase):
                 requested_by_user_id=None,
                 deployment_snapshot={},
                 provider_context={
-                    "base_domain": "192-168-0-118.sslip.io:8088",
+                    "base_domain": "192-0-2-10.sslip.io:8088",
                     "application_uuid": "old-app",
                     "route_bindings": [
                         {
@@ -1477,7 +1683,7 @@ class DeploymentContractTests(unittest.TestCase):
                             "service_name": "Web",
                             "service_kind": "website",
                             "scheme": "https",
-                            "host": "web.production.run.align.192-168-0-118.sslip.io",
+                            "host": "web.production.run.align.192-0-2-10.sslip.io",
                             "proxy_port": 8088,
                             "url_kind": "generated",
                         }
@@ -1501,7 +1707,10 @@ class DeploymentContractTests(unittest.TestCase):
                 return SimpleNamespace(release_id="release-new")
 
             with (
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release", side_effect=fake_create_release),
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release",
+                    side_effect=fake_create_release,
+                ),
                 patch(
                     "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release",
                     return_value=SimpleNamespace(release_id="release-existing"),
@@ -1512,17 +1721,24 @@ class DeploymentContractTests(unittest.TestCase):
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
         self.assertTrue(result.created)
         self.assertEqual(result.release.release_id, "release-new")
 
-    def test_run_preview_generation_retires_existing_active_preview_before_force_regenerate(self) -> None:
+    def test_run_preview_generation_retires_existing_active_preview_before_force_regenerate(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="release-existing",
@@ -1540,7 +1756,10 @@ class DeploymentContractTests(unittest.TestCase):
                     pr_number=12,
                     requested_by_user_id=None,
                     deployment_snapshot={},
-                    provider_context={"base_domain": "bsktpay-2.localhost:8088", "application_uuid": "old-app"},
+                    provider_context={
+                        "base_domain": "example-tenant-2.localhost:8088",
+                        "application_uuid": "old-app",
+                    },
                     delivery_metadata={},
                     last_error=None,
                     requested_at=now,
@@ -1566,7 +1785,10 @@ class DeploymentContractTests(unittest.TestCase):
                         tenant=tenant,
                         project=project,
                         run=run,
-                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        settings=SimpleNamespace(
+                            project_repo_checkout_base_dir="/tmp/unused",
+                            secrets_encryption_key="unused",
+                        ),
                         pr_url="https://github.com/example/repo/pull/12",
                         force=True,
                     )
@@ -1576,11 +1798,15 @@ class DeploymentContractTests(unittest.TestCase):
         destroy_mock.assert_called_once()
         create_release.assert_called_once()
 
-    def test_run_preview_generation_retires_stale_active_preview_before_recreate(self) -> None:
+    def test_run_preview_generation_retires_stale_active_preview_before_recreate(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
-            tenant.deployment_plane_config = {"base_domain": "192-168-0-118.sslip.io:8088"}
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
+            tenant.deployment_plane_config = {"base_domain": "192-0-2-10.sslip.io:8088"}
             session.add(
                 ProjectDeploymentRelease(
                     release_id="release-existing",
@@ -1599,7 +1825,7 @@ class DeploymentContractTests(unittest.TestCase):
                     requested_by_user_id=None,
                     deployment_snapshot={},
                     provider_context={
-                        "base_domain": "192-168-0-118.sslip.io:8088",
+                        "base_domain": "192-0-2-10.sslip.io:8088",
                         "application_uuid": "old-app",
                         "route_bindings": [
                             {
@@ -1607,7 +1833,7 @@ class DeploymentContractTests(unittest.TestCase):
                                 "service_name": "Web",
                                 "service_kind": "website",
                                 "scheme": "https",
-                                "host": "web.production.run.align.192-168-0-118.sslip.io",
+                                "host": "web.production.run.align.192-0-2-10.sslip.io",
                                 "proxy_port": 8088,
                                 "url_kind": "generated",
                             }
@@ -1638,7 +1864,10 @@ class DeploymentContractTests(unittest.TestCase):
                         tenant=tenant,
                         project=project,
                         run=run,
-                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        settings=SimpleNamespace(
+                            project_repo_checkout_base_dir="/tmp/unused",
+                            secrets_encryption_key="unused",
+                        ),
                         pr_url="https://github.com/example/repo/pull/12",
                     )
 
@@ -1650,7 +1879,9 @@ class DeploymentContractTests(unittest.TestCase):
     def test_run_preview_generation_force_bypasses_existing_preview(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             existing = ProjectDeploymentRelease(
                 release_id="release-existing",
                 tenant_id=tenant.tenant_id,
@@ -1667,7 +1898,10 @@ class DeploymentContractTests(unittest.TestCase):
                 pr_number=12,
                 requested_by_user_id=None,
                 deployment_snapshot={},
-                provider_context={"base_domain": "bsktpay-2.localhost:8088", "application_uuid": "old-app"},
+                provider_context={
+                    "base_domain": "example-tenant-2.localhost:8088",
+                    "application_uuid": "old-app",
+                },
                 delivery_metadata={},
                 last_error=None,
                 requested_at=now,
@@ -1693,7 +1927,10 @@ class DeploymentContractTests(unittest.TestCase):
                         tenant=tenant,
                         project=project,
                         run=run,
-                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        settings=SimpleNamespace(
+                            project_repo_checkout_base_dir="/tmp/unused",
+                            secrets_encryption_key="unused",
+                        ),
                         pr_url="https://github.com/example/repo/pull/12",
                         force=True,
                     )
@@ -1703,7 +1940,9 @@ class DeploymentContractTests(unittest.TestCase):
         destroy_mock.assert_called_once()
         create_release.assert_called_once()
 
-    def test_run_preview_release_does_not_reuse_coolify_app_from_stale_base_domain(self) -> None:
+    def test_run_preview_release_does_not_reuse_coolify_app_from_stale_base_domain(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         captured: dict[str, object] = {}
@@ -1725,7 +1964,10 @@ class DeploymentContractTests(unittest.TestCase):
                     pr_number=12,
                     requested_by_user_id=None,
                     deployment_snapshot={},
-                    provider_context={"base_domain": "bsktpay-2.localhost:8088", "application_uuid": "old-app"},
+                    provider_context={
+                        "base_domain": "example-tenant-2.localhost:8088",
+                        "application_uuid": "old-app",
+                    },
                     delivery_metadata={},
                     last_error=None,
                     requested_at=now,
@@ -1739,7 +1981,9 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             def fake_submit(**kwargs):
-                captured["existing_application_uuid"] = kwargs["existing_application_uuid"]
+                captured["existing_application_uuid"] = kwargs[
+                    "existing_application_uuid"
+                ]
                 return {
                     "api_base_url": "https://builder.apps.example.com/api/v1",
                     "application_uuid": "new-app",
@@ -1749,7 +1993,10 @@ class DeploymentContractTests(unittest.TestCase):
                     "route_bindings": [],
                 }
 
-            with patch("orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release", side_effect=fake_submit):
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
+                side_effect=fake_submit,
+            ):
                 release = create_project_deployment_release(
                     session=session,
                     tenant_id="tenant-1",
@@ -1767,7 +2014,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIsNone(captured["existing_application_uuid"])
         self.assertEqual(release.provider_context["application_uuid"], "new-app")
 
-    def test_run_preview_release_does_not_reuse_coolify_app_from_stale_route_scheme(self) -> None:
+    def test_run_preview_release_does_not_reuse_coolify_app_from_stale_route_scheme(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         captured: dict[str, object] = {}
@@ -1776,7 +2025,7 @@ class DeploymentContractTests(unittest.TestCase):
             assert tenant is not None
             tenant.deployment_plane_config = {
                 **dict(tenant.deployment_plane_config or {}),
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
             }
             session.add(
                 ProjectDeploymentRelease(
@@ -1796,7 +2045,7 @@ class DeploymentContractTests(unittest.TestCase):
                     requested_by_user_id=None,
                     deployment_snapshot={},
                     provider_context={
-                        "base_domain": "192-168-0-118.sslip.io:8088",
+                        "base_domain": "192-0-2-10.sslip.io:8088",
                         "application_uuid": "old-app",
                         "route_bindings": [
                             {
@@ -1804,7 +2053,7 @@ class DeploymentContractTests(unittest.TestCase):
                                 "service_name": "Web",
                                 "service_kind": "website",
                                 "scheme": "https",
-                                "host": "web.production.run.align.192-168-0-118.sslip.io",
+                                "host": "web.production.run.align.192-0-2-10.sslip.io",
                                 "proxy_port": 8088,
                                 "url_kind": "generated",
                             }
@@ -1823,7 +2072,9 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             def fake_submit(**kwargs):
-                captured["existing_application_uuid"] = kwargs["existing_application_uuid"]
+                captured["existing_application_uuid"] = kwargs[
+                    "existing_application_uuid"
+                ]
                 return {
                     "api_base_url": "https://builder.apps.example.com/api/v1",
                     "application_uuid": "new-app",
@@ -1833,7 +2084,10 @@ class DeploymentContractTests(unittest.TestCase):
                     "route_bindings": [],
                 }
 
-            with patch("orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release", side_effect=fake_submit):
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
+                side_effect=fake_submit,
+            ):
                 release = create_project_deployment_release(
                     session=session,
                     tenant_id="tenant-1",
@@ -1851,7 +2105,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIsNone(captured["existing_application_uuid"])
         self.assertEqual(release.provider_context["application_uuid"], "new-app")
 
-    def test_run_preview_release_reuses_coolify_app_for_current_route_scheme(self) -> None:
+    def test_run_preview_release_reuses_coolify_app_for_current_route_scheme(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         captured: dict[str, object] = {}
@@ -1860,7 +2116,7 @@ class DeploymentContractTests(unittest.TestCase):
             assert tenant is not None
             tenant.deployment_plane_config = {
                 **dict(tenant.deployment_plane_config or {}),
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
             }
             session.add(
                 ProjectDeploymentRelease(
@@ -1880,7 +2136,7 @@ class DeploymentContractTests(unittest.TestCase):
                     requested_by_user_id=None,
                     deployment_snapshot={},
                     provider_context={
-                        "base_domain": "192-168-0-118.sslip.io:8088",
+                        "base_domain": "192-0-2-10.sslip.io:8088",
                         "application_uuid": "old-app",
                         "route_bindings": [
                             {
@@ -1888,7 +2144,7 @@ class DeploymentContractTests(unittest.TestCase):
                                 "service_name": "Web",
                                 "service_kind": "website",
                                 "scheme": "http",
-                                "host": "web-production-run-ap-123-run-1.align.192-168-0-118.sslip.io",
+                                "host": "web-production-run-ap-123-run-1.align.192-0-2-10.sslip.io",
                                 "proxy_port": 8088,
                                 "internal_url": "http://host.docker.internal:8088",
                                 "url_kind": "generated",
@@ -1908,7 +2164,9 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             def fake_submit(**kwargs):
-                captured["existing_application_uuid"] = kwargs["existing_application_uuid"]
+                captured["existing_application_uuid"] = kwargs[
+                    "existing_application_uuid"
+                ]
                 return {
                     "api_base_url": "https://builder.apps.example.com/api/v1",
                     "application_uuid": "old-app",
@@ -1918,7 +2176,10 @@ class DeploymentContractTests(unittest.TestCase):
                     "route_bindings": [],
                 }
 
-            with patch("orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release", side_effect=fake_submit):
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
+                side_effect=fake_submit,
+            ):
                 release = create_project_deployment_release(
                     session=session,
                     tenant_id="tenant-1",
@@ -1936,7 +2197,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(captured["existing_application_uuid"], "old-app")
         self.assertEqual(release.provider_context["application_uuid"], "old-app")
 
-    def test_run_preview_release_does_not_reuse_failed_coolify_app_for_current_route_scheme(self) -> None:
+    def test_run_preview_release_does_not_reuse_failed_coolify_app_for_current_route_scheme(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         captured: dict[str, object] = {}
@@ -1945,7 +2208,7 @@ class DeploymentContractTests(unittest.TestCase):
             assert tenant is not None
             tenant.deployment_plane_config = {
                 **dict(tenant.deployment_plane_config or {}),
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
             }
             session.add(
                 ProjectDeploymentRelease(
@@ -1965,7 +2228,7 @@ class DeploymentContractTests(unittest.TestCase):
                     requested_by_user_id=None,
                     deployment_snapshot={},
                     provider_context={
-                        "base_domain": "192-168-0-118.sslip.io:8088",
+                        "base_domain": "192-0-2-10.sslip.io:8088",
                         "application_uuid": "failed-app",
                         "route_bindings": [
                             {
@@ -1973,7 +2236,7 @@ class DeploymentContractTests(unittest.TestCase):
                                 "service_name": "Web",
                                 "service_kind": "website",
                                 "scheme": "http",
-                                "host": "web-production-run-ap-123-run-1.align.192-168-0-118.sslip.io",
+                                "host": "web-production-run-ap-123-run-1.align.192-0-2-10.sslip.io",
                                 "proxy_port": 8088,
                                 "internal_url": "http://host.docker.internal:8088",
                                 "url_kind": "generated",
@@ -1993,7 +2256,9 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             def fake_submit(**kwargs):
-                captured["existing_application_uuid"] = kwargs["existing_application_uuid"]
+                captured["existing_application_uuid"] = kwargs[
+                    "existing_application_uuid"
+                ]
                 return {
                     "api_base_url": "https://builder.apps.example.com/api/v1",
                     "application_uuid": "new-app",
@@ -2003,7 +2268,10 @@ class DeploymentContractTests(unittest.TestCase):
                     "route_bindings": [],
                 }
 
-            with patch("orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release", side_effect=fake_submit):
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
+                side_effect=fake_submit,
+            ):
                 release = create_project_deployment_release(
                     session=session,
                     tenant_id="tenant-1",
@@ -2021,7 +2289,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIsNone(captured["existing_application_uuid"])
         self.assertEqual(release.provider_context["application_uuid"], "new-app")
 
-    def test_run_preview_coolify_application_name_is_release_scoped_for_fresh_resources(self) -> None:
+    def test_run_preview_coolify_application_name_is_release_scoped_for_fresh_resources(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         project_app = ProjectApp(
             app_id="app-1",
@@ -2053,14 +2323,20 @@ class DeploymentContractTests(unittest.TestCase):
             source_run_id="run-1",
         )
 
-        first_name = _coolify_application_name(project_app=project_app, payload=payload, release_id="11111111-release")
-        second_name = _coolify_application_name(project_app=project_app, payload=payload, release_id="22222222-release")
+        first_name = _coolify_application_name(
+            project_app=project_app, payload=payload, release_id="11111111-release"
+        )
+        second_name = _coolify_application_name(
+            project_app=project_app, payload=payload, release_id="22222222-release"
+        )
 
         self.assertNotEqual(first_name, second_name)
         self.assertIn("11111111", first_name)
         self.assertLessEqual(len(first_name), 63)
 
-    def test_destroy_run_preview_release_for_replacement_deletes_existing_coolify_app(self) -> None:
+    def test_destroy_run_preview_release_for_replacement_deletes_existing_coolify_app(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -2097,7 +2373,9 @@ class DeploymentContractTests(unittest.TestCase):
             )
             session.commit()
 
-            with patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls:
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+            ) as coolify_client_cls:
                 with patch(
                     "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"
                 ) as cleanup_mock:
@@ -2114,12 +2392,16 @@ class DeploymentContractTests(unittest.TestCase):
                         )
 
         coolify_client_cls.assert_called_once()
-        coolify_client_cls.return_value.delete_application.assert_called_once_with(application_uuid="old-app")
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(
+            application_uuid="old-app"
+        )
         cleanup_mock.assert_called_once()
         self.assertEqual(updated.status, "destroyed")
         self.assertEqual(updated.provider_context["status_before_destroy"], "live")
         self.assertEqual(updated.provider_context["destroy_reason"], "preview_replaced")
-        self.assertNotIn("application_retained_for_replacement", updated.provider_context)
+        self.assertNotIn(
+            "application_retained_for_replacement", updated.provider_context
+        )
 
     def test_destroy_run_preview_release_marks_demo_proof_lease_destroyed(self) -> None:
         self._seed_tenant_project_app()
@@ -2167,9 +2449,16 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-                patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
-                patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+                patch(
+                    "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                    return_value="token",
+                ),
+                patch(
+                    "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+                ) as coolify_client_cls,
+                patch(
+                    "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"
+                ),
             ):
                 updated = destroy_project_deployment_preview_release(
                     session=session,
@@ -2179,16 +2468,27 @@ class DeploymentContractTests(unittest.TestCase):
                     reason="qa_demo_complete",
                 )
 
-        coolify_client_cls.return_value.delete_application.assert_called_once_with(application_uuid="proof-preview-app")
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(
+            application_uuid="proof-preview-app"
+        )
         self.assertEqual(updated.status, "destroyed")
-        self.assertEqual(updated.delivery_metadata["demo_proof_lease"]["state"], "destroyed")
-        self.assertEqual(updated.delivery_metadata["demo_proof_lease"]["destroy_reason"], "qa_demo_complete")
+        self.assertEqual(
+            updated.delivery_metadata["demo_proof_lease"]["state"], "destroyed"
+        )
+        self.assertEqual(
+            updated.delivery_metadata["demo_proof_lease"]["destroy_reason"],
+            "qa_demo_complete",
+        )
         self.assertIn("destroyed_at", updated.delivery_metadata["demo_proof_lease"])
 
-    def test_run_preview_generation_stops_after_destroyed_failed_preview_retry_limit(self) -> None:
+    def test_run_preview_generation_stops_after_destroyed_failed_preview_retry_limit(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             for index in range(2):
                 session.add(
                     ProjectDeploymentRelease(
@@ -2220,7 +2520,9 @@ class DeploymentContractTests(unittest.TestCase):
                 )
             session.commit()
 
-            with patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release:
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release"
+            ) as create_release:
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
@@ -2275,32 +2577,50 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
-            patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+            ) as coolify_client_cls,
+            patch(
+                "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"
+            ),
         ):
             processed = reconcile_deployment_releases_once(
                 session_factory=self.session_factory,
-                settings=SimpleNamespace(deployment_reconcile_batch_size=25, run_preview_release_ttl_seconds=86400),
+                settings=SimpleNamespace(
+                    deployment_reconcile_batch_size=25,
+                    run_preview_release_ttl_seconds=86400,
+                ),
             )
 
         self.assertEqual(processed, 1)
-        coolify_client_cls.return_value.delete_application.assert_called_once_with(application_uuid="failed-app")
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(
+            application_uuid="failed-app"
+        )
         with self.session_factory() as session:
             release = session.get(ProjectDeploymentRelease, "failed-preview-cleanup")
             assert release is not None
             self.assertEqual(release.status, "destroyed")
-            self.assertEqual(release.provider_context["status_before_destroy"], "failed")
-            self.assertEqual(release.provider_context["destroy_reason"], "preview_terminal_cleanup")
+            self.assertEqual(
+                release.provider_context["status_before_destroy"], "failed"
+            )
+            self.assertEqual(
+                release.provider_context["destroy_reason"], "preview_terminal_cleanup"
+            )
 
-    def test_stale_preview_cleanup_records_route_cleanup_conflict_without_destroying_release(self) -> None:
+    def test_stale_preview_cleanup_records_route_cleanup_conflict_without_destroying_release(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-1")
             assert tenant is not None
             deployment_plane = dict(tenant.deployment_plane_config or {})
-            deployment_plane["base_domain"] = "192-168-0-118.sslip.io:8088"
+            deployment_plane["base_domain"] = "192-0-2-10.sslip.io:8088"
             tenant.deployment_plane_config = deployment_plane
             session.add(
                 ProjectDeploymentRelease(
@@ -2326,7 +2646,7 @@ class DeploymentContractTests(unittest.TestCase):
                                 "service_name": "Web",
                                 "service_kind": "website",
                                 "scheme": "http",
-                                "host": "web.preview.192-168-0-118.sslip.io",
+                                "host": "web.preview.192-0-2-10.sslip.io",
                                 "proxy_port": 8088,
                                 "port": "8000",
                                 "internal_url": "http://host.docker.internal:8088",
@@ -2348,7 +2668,9 @@ class DeploymentContractTests(unittest.TestCase):
 
             with patch(
                 "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command",
-                side_effect=HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Managed host inactive"),
+                side_effect=HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="Managed host inactive"
+                ),
             ):
                 result = cleanup_stale_run_preview_deployments(
                     session=session,
@@ -2357,12 +2679,18 @@ class DeploymentContractTests(unittest.TestCase):
                 session.commit()
 
             self.assertEqual(result.destroyed_release_ids, ())
-            self.assertEqual(result.failed_release_ids, ("failed-preview-cleanup-conflict",))
-            release = session.get(ProjectDeploymentRelease, "failed-preview-cleanup-conflict")
+            self.assertEqual(
+                result.failed_release_ids, ("failed-preview-cleanup-conflict",)
+            )
+            release = session.get(
+                ProjectDeploymentRelease, "failed-preview-cleanup-conflict"
+            )
             assert release is not None
             self.assertEqual(release.status, "failed")
             self.assertIsNone(release.destroyed_at)
-            self.assertEqual(release.last_error, "Preview cleanup failed: Managed host inactive")
+            self.assertEqual(
+                release.last_error, "Preview cleanup failed: Managed host inactive"
+            )
 
     def test_reconciler_cleans_expired_live_run_preview_provider_resource(self) -> None:
         self._seed_tenant_project_app()
@@ -2399,22 +2727,38 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
-            patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+            ) as coolify_client_cls,
+            patch(
+                "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"
+            ),
         ):
             processed = reconcile_deployment_releases_once(
                 session_factory=self.session_factory,
-                settings=SimpleNamespace(deployment_reconcile_batch_size=25, run_preview_release_ttl_seconds=3600),
+                settings=SimpleNamespace(
+                    deployment_reconcile_batch_size=25,
+                    run_preview_release_ttl_seconds=3600,
+                ),
             )
 
         self.assertEqual(processed, 1)
-        coolify_client_cls.return_value.delete_application.assert_called_once_with(application_uuid="expired-live-app")
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(
+            application_uuid="expired-live-app"
+        )
         with self.session_factory() as session:
-            release = session.get(ProjectDeploymentRelease, "expired-live-preview-cleanup")
+            release = session.get(
+                ProjectDeploymentRelease, "expired-live-preview-cleanup"
+            )
             assert release is not None
             self.assertEqual(release.status, "destroyed")
-            self.assertEqual(release.provider_context["destroy_reason"], "preview_ttl_expired")
+            self.assertEqual(
+                release.provider_context["destroy_reason"], "preview_ttl_expired"
+            )
 
     def test_reconciler_cleans_live_demo_proof_preview_when_lease_expires(self) -> None:
         self._seed_tenant_project_app()
@@ -2458,13 +2802,23 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
         with (
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
-            patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+            ) as coolify_client_cls,
+            patch(
+                "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"
+            ),
         ):
             processed = reconcile_deployment_releases_once(
                 session_factory=self.session_factory,
-                settings=SimpleNamespace(deployment_reconcile_batch_size=25, run_preview_release_ttl_seconds=86400),
+                settings=SimpleNamespace(
+                    deployment_reconcile_batch_size=25,
+                    run_preview_release_ttl_seconds=86400,
+                ),
             )
 
         self.assertEqual(processed, 1)
@@ -2472,12 +2826,18 @@ class DeploymentContractTests(unittest.TestCase):
             application_uuid="expired-demo-proof-app"
         )
         with self.session_factory() as session:
-            release = session.get(ProjectDeploymentRelease, "expired-demo-proof-preview-cleanup")
+            release = session.get(
+                ProjectDeploymentRelease, "expired-demo-proof-preview-cleanup"
+            )
             assert release is not None
             self.assertEqual(release.status, "destroyed")
-            self.assertEqual(release.provider_context["destroy_reason"], "demo_proof_lease_expired")
+            self.assertEqual(
+                release.provider_context["destroy_reason"], "demo_proof_lease_expired"
+            )
 
-    def test_reconciler_keeps_unexpired_live_run_preview_provider_resource(self) -> None:
+    def test_reconciler_keeps_unexpired_live_run_preview_provider_resource(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -2511,10 +2871,15 @@ class DeploymentContractTests(unittest.TestCase):
             )
             session.commit()
 
-        with patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls:
+        with patch(
+            "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+        ) as coolify_client_cls:
             processed = reconcile_deployment_releases_once(
                 session_factory=self.session_factory,
-                settings=SimpleNamespace(deployment_reconcile_batch_size=25, run_preview_release_ttl_seconds=3600),
+                settings=SimpleNamespace(
+                    deployment_reconcile_batch_size=25,
+                    run_preview_release_ttl_seconds=3600,
+                ),
             )
 
         self.assertEqual(processed, 0)
@@ -2562,7 +2927,9 @@ class DeploymentContractTests(unittest.TestCase):
             )
             session.commit()
 
-            with patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls:
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+            ) as coolify_client_cls:
                 updated = destroy_project_deployment_preview_release(
                     session=session,
                     tenant_id="tenant-1",
@@ -2574,7 +2941,9 @@ class DeploymentContractTests(unittest.TestCase):
         coolify_client_cls.assert_not_called()
         self.assertEqual(updated.status, "destroyed")
 
-    def test_destroy_run_preview_release_repairs_stale_demo_proof_lease_on_idempotent_cleanup(self) -> None:
+    def test_destroy_run_preview_release_repairs_stale_demo_proof_lease_on_idempotent_cleanup(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -2620,7 +2989,9 @@ class DeploymentContractTests(unittest.TestCase):
             )
             session.commit()
 
-            with patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls:
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+            ) as coolify_client_cls:
                 updated = destroy_project_deployment_preview_release(
                     session=session,
                     tenant_id="tenant-1",
@@ -2631,13 +3002,17 @@ class DeploymentContractTests(unittest.TestCase):
 
         coolify_client_cls.assert_not_called()
         self.assertEqual(updated.status, "destroyed")
-        self.assertEqual(updated.delivery_metadata["demo_proof_lease"]["state"], "destroyed")
+        self.assertEqual(
+            updated.delivery_metadata["demo_proof_lease"]["state"], "destroyed"
+        )
         self.assertEqual(
             updated.delivery_metadata["demo_proof_lease"]["destroy_reason"],
             "demo_proof_lease_expired",
         )
 
-    def test_destroy_run_preview_release_for_replacement_no_longer_retains_existing_coolify_app(self) -> None:
+    def test_destroy_run_preview_release_for_replacement_no_longer_retains_existing_coolify_app(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -2675,9 +3050,16 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             with (
-                patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-                patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
-                patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+                patch(
+                    "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                    return_value="token",
+                ),
+                patch(
+                    "orchestrator.api.admin.deployment_release_service.CoolifyApiClient"
+                ) as coolify_client_cls,
+                patch(
+                    "orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"
+                ),
             ):
                 updated = destroy_project_deployment_preview_release(
                     session=session,
@@ -2687,14 +3069,20 @@ class DeploymentContractTests(unittest.TestCase):
                     reason="preview_replaced",
                 )
 
-        coolify_client_cls.return_value.delete_application.assert_called_once_with(application_uuid="old-app")
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(
+            application_uuid="old-app"
+        )
         self.assertEqual(updated.status, "destroyed")
-        self.assertNotIn("application_retained_for_replacement", updated.provider_context)
+        self.assertNotIn(
+            "application_retained_for_replacement", updated.provider_context
+        )
 
     def test_run_preview_generation_retries_after_failed_preview_release(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="release-failed",
@@ -2730,23 +3118,33 @@ class DeploymentContractTests(unittest.TestCase):
                 self.assertEqual(payload.source_run_id, "run-1")
                 return SimpleNamespace(release_id="release-new")
 
-            with patch("orchestrator.core.deployment_previews.create_project_deployment_release", side_effect=fake_create_release):
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release",
+                side_effect=fake_create_release,
+            ):
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
         self.assertTrue(result.created)
         self.assertEqual(result.release.release_id, "release-new")
 
-    def test_run_preview_generation_stops_after_failed_preview_retry_limit(self) -> None:
+    def test_run_preview_generation_stops_after_failed_preview_retry_limit(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             for index in range(2):
                 session.add(
                     ProjectDeploymentRelease(
@@ -2778,7 +3176,9 @@ class DeploymentContractTests(unittest.TestCase):
                 )
             session.commit()
 
-            with patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release:
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release"
+            ) as create_release:
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
@@ -2798,10 +3198,14 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result.release.release_id, "release-failed-1")
         self.assertEqual(result.release.status, "failed")
 
-    def test_run_preview_generation_force_bypasses_failed_preview_retry_limit(self) -> None:
+    def test_run_preview_generation_force_bypasses_failed_preview_retry_limit(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             for index in range(2):
                 session.add(
                     ProjectDeploymentRelease(
@@ -2855,10 +3259,14 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertTrue(result.created)
         self.assertEqual(result.release.release_id, "release-new-after-force")
 
-    def test_run_preview_generation_reconciles_inflight_preview_before_reuse(self) -> None:
+    def test_run_preview_generation_reconciles_inflight_preview_before_reuse(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="a" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="release-stale",
@@ -2901,15 +3309,24 @@ class DeploymentContractTests(unittest.TestCase):
                 return SimpleNamespace(release_id="release-new")
 
             with (
-                patch("orchestrator.core.deployment_previews.reconcile_deployment_release", side_effect=fake_reconcile),
-                patch("orchestrator.core.deployment_previews.create_project_deployment_release", side_effect=fake_create_release),
+                patch(
+                    "orchestrator.core.deployment_previews.reconcile_deployment_release",
+                    side_effect=fake_reconcile,
+                ),
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release",
+                    side_effect=fake_create_release,
+                ),
             ):
                 result = create_run_preview_deployment(
                     session=session,
                     tenant=tenant,
                     project=project,
                     run=run,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                     pr_url="https://github.com/example/repo/pull/12",
                 )
 
@@ -2929,13 +3346,20 @@ class DeploymentContractTests(unittest.TestCase):
                     run_model=Run,
                     tenant_model=Tenant,
                     project_model=Project,
-                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                    ),
                 )
 
         self.assertEqual(raised.exception.status_code, status.HTTP_409_CONFLICT)
-        self.assertEqual(raised.exception.detail, "Preview generation requires a succeeded run")
+        self.assertEqual(
+            raised.exception.detail, "Preview generation requires a succeeded run"
+        )
 
-    def test_run_preview_release_uses_config_override_without_mutating_app_config(self) -> None:
+    def test_run_preview_release_uses_config_override_without_mutating_app_config(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         original_branch = "mb/deploy/project-1/main-aaaaaaaaaaaa"
@@ -2976,7 +3400,10 @@ class DeploymentContractTests(unittest.TestCase):
 
             def fake_submit(**kwargs):
                 captured["project_deployment"] = kwargs["project_deployment"]
-                return {"application_uuid": "coolify-app-1", "deployment_uuid": "deployment-1"}
+                return {
+                    "application_uuid": "coolify-app-1",
+                    "deployment_uuid": "deployment-1",
+                }
 
             with patch(
                 "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
@@ -3014,7 +3441,9 @@ class DeploymentContractTests(unittest.TestCase):
     def test_pr_merge_cleanup_destroys_matching_preview_releases_only(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, _run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            tenant, project, _run = self._seed_preview_run(
+                session=session, now=now, commit_sha="b" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="preview-release-1",
@@ -3063,7 +3492,9 @@ class DeploymentContractTests(unittest.TestCase):
     def test_preview_release_read_includes_source_ticket_context(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
-            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            tenant, project, run = self._seed_preview_run(
+                session=session, now=now, commit_sha="b" * 40
+            )
             session.add(
                 ProjectDeploymentRelease(
                     release_id="preview-release-ticket-context",
@@ -3101,12 +3532,18 @@ class DeploymentContractTests(unittest.TestCase):
                 app_id="app-1",
             )
 
-        preview = next(release for release in releases if release.release_id == "preview-release-ticket-context")
+        preview = next(
+            release
+            for release in releases
+            if release.release_id == "preview-release-ticket-context"
+        )
         self.assertEqual(preview.source_run_id, run.run_id)
         self.assertEqual(preview.source_issue_key, "AP-123")
         self.assertEqual(preview.source_issue_summary, "Preview issue")
 
-    def test_successful_deployment_setup_supersedes_previous_failed_setup_executions(self) -> None:
+    def test_successful_deployment_setup_supersedes_previous_failed_setup_executions(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -3178,11 +3615,15 @@ class DeploymentContractTests(unittest.TestCase):
             )
             session.commit()
 
-            old_workflow = session.get(WorkflowExecution, "project_deployment_setup:old")
+            old_workflow = session.get(
+                WorkflowExecution, "project_deployment_setup:old"
+            )
             assert old_workflow is not None
             self.assertEqual(superseded, 1)
             self.assertEqual(old_workflow.status, "superseded")
-            self.assertEqual(old_workflow.source_workflow_id, "project_deployment_setup:new")
+            self.assertEqual(
+                old_workflow.source_workflow_id, "project_deployment_setup:new"
+            )
 
     def test_deployment_config_write_separates_volumes_from_resources(self) -> None:
         with self.assertRaises(ValidationError):
@@ -3201,7 +3642,9 @@ class DeploymentContractTests(unittest.TestCase):
 
         config = ProjectDeploymentConfigWrite.model_validate(
             {
-                "resources": [{"key": "db", "kind": "postgres", "name": "Primary database"}],
+                "resources": [
+                    {"key": "db", "kind": "postgres", "name": "Primary database"}
+                ],
                 "volumes": [
                     {
                         "key": "app-data",
@@ -3249,9 +3692,13 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(config.services[0].key, "web")
         self.assertEqual(config.services[0].kind, "website")
 
-    def test_docker_compose_deployment_config_requires_committed_artifact_source(self) -> None:
+    def test_docker_compose_deployment_config_requires_committed_artifact_source(
+        self,
+    ) -> None:
         with self.assertRaises(ValidationError):
-            ProjectDeploymentConfigWrite.model_validate({"source_strategy": "docker_compose"})
+            ProjectDeploymentConfigWrite.model_validate(
+                {"source_strategy": "docker_compose"}
+            )
 
         config = ProjectDeploymentConfigWrite.model_validate(
             {
@@ -3265,8 +3712,13 @@ class DeploymentContractTests(unittest.TestCase):
         )
 
         self.assertEqual(config.source_branch, "main")
-        self.assertEqual(config.deployment_branch, "mb/deploy/project/main-1d9c38525261")
-        self.assertEqual(config.deployment_compose_path, ".master-builder/deployments/docker-compose.yml")
+        self.assertEqual(
+            config.deployment_branch, "mb/deploy/project/main-1d9c38525261"
+        )
+        self.assertEqual(
+            config.deployment_compose_path,
+            ".master-builder/deployments/docker-compose.yml",
+        )
 
     def test_nixpacks_deployment_config_maps_to_coolify_build_pack(self) -> None:
         config = ProjectDeploymentConfigWrite.model_validate(
@@ -3277,19 +3729,34 @@ class DeploymentContractTests(unittest.TestCase):
         )
 
         self.assertEqual(config.source_strategy, "nixpacks")
-        self.assertEqual(ProjectDeploymentConfigRead.model_validate(config.model_dump()).source_strategy, "nixpacks")
+        self.assertEqual(
+            ProjectDeploymentConfigRead.model_validate(
+                config.model_dump()
+            ).source_strategy,
+            "nixpacks",
+        )
         self.assertEqual(_coolify_build_pack(config.source_strategy), "nixpacks")
 
     def test_host_worker_rewrites_local_coolify_api_url(self) -> None:
-        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=False):
+        with patch(
+            "orchestrator.api.admin.deployment_release_service.Path.exists",
+            return_value=False,
+        ):
             self.assertEqual(
-                _normalize_local_coolify_api_base_url("http://host.docker.internal:8000/api/v1"),
+                _normalize_local_coolify_api_base_url(
+                    "http://host.docker.internal:8000/api/v1"
+                ),
                 "http://localhost:8000/api/v1",
             )
 
-        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=True):
+        with patch(
+            "orchestrator.api.admin.deployment_release_service.Path.exists",
+            return_value=True,
+        ):
             self.assertEqual(
-                _normalize_local_coolify_api_base_url("http://host.docker.internal:8000/api/v1"),
+                _normalize_local_coolify_api_base_url(
+                    "http://host.docker.internal:8000/api/v1"
+                ),
                 "http://host.docker.internal:8000/api/v1",
             )
 
@@ -3302,13 +3769,19 @@ class DeploymentContractTests(unittest.TestCase):
             }
         )
 
-        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=False):
+        with patch(
+            "orchestrator.api.admin.deployment_release_service.Path.exists",
+            return_value=False,
+        ):
             self.assertEqual(
                 _runtime_coolify_api_base_url(tenant_plane=tenant_plane),
                 "http://localhost:8000/api/v1",
             )
 
-        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=True):
+        with patch(
+            "orchestrator.api.admin.deployment_release_service.Path.exists",
+            return_value=True,
+        ):
             self.assertEqual(
                 _runtime_coolify_api_base_url(tenant_plane=tenant_plane),
                 "http://host.docker.internal:8000/api/v1",
@@ -3323,7 +3796,9 @@ class DeploymentContractTests(unittest.TestCase):
             / "versions"
             / "20260509_0120_split_deployment_volumes.py"
         )
-        spec = importlib.util.spec_from_file_location("split_deployment_volumes_migration", migration_path)
+        spec = importlib.util.spec_from_file_location(
+            "split_deployment_volumes_migration", migration_path
+        )
         assert spec is not None and spec.loader is not None
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
@@ -3367,7 +3842,9 @@ class DeploymentContractTests(unittest.TestCase):
             / "versions"
             / "20260509_0121_split_deployment_services.py"
         )
-        spec = importlib.util.spec_from_file_location("split_deployment_services_migration", migration_path)
+        spec = importlib.util.spec_from_file_location(
+            "split_deployment_services_migration", migration_path
+        )
         assert spec is not None and spec.loader is not None
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
@@ -3415,7 +3892,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(config["deployment_plan"]["services"][0]["key"], "api")
         self.assertEqual(config["deployment_plan"]["services"][0]["kind"], "api")
 
-    def test_deployment_service_cleanup_migration_removes_legacy_service_resource_kinds(self) -> None:
+    def test_deployment_service_cleanup_migration_removes_legacy_service_resource_kinds(
+        self,
+    ) -> None:
         migration_path = (
             Path(__file__).resolve().parents[1]
             / "orchestrator"
@@ -3424,7 +3903,9 @@ class DeploymentContractTests(unittest.TestCase):
             / "versions"
             / "20260509_0122_cleanup_legacy_service_resources.py"
         )
-        spec = importlib.util.spec_from_file_location("cleanup_legacy_service_resources_migration", migration_path)
+        spec = importlib.util.spec_from_file_location(
+            "cleanup_legacy_service_resources_migration", migration_path
+        )
         assert spec is not None and spec.loader is not None
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
@@ -3442,7 +3923,10 @@ class DeploymentContractTests(unittest.TestCase):
                         "key": "dejavu",
                         "kind": "service",
                         "name": "dejavu",
-                        "config": {"service_type": "admin_ui", "compose_service": "dejavu"},
+                        "config": {
+                            "service_type": "admin_ui",
+                            "compose_service": "dejavu",
+                        },
                     },
                     {
                         "key": "web",
@@ -3455,12 +3939,24 @@ class DeploymentContractTests(unittest.TestCase):
         )
 
         self.assertTrue(changed)
-        self.assertEqual(config["resources"], [{"key": "kafka", "kind": "kafka", "name": "kafka", "config": {"compose_service": "kafka"}}])
+        self.assertEqual(
+            config["resources"],
+            [
+                {
+                    "key": "kafka",
+                    "kind": "kafka",
+                    "name": "kafka",
+                    "config": {"compose_service": "kafka"},
+                }
+            ],
+        )
         self.assertEqual(config["services"][0]["key"], "web")
         self.assertEqual(config["services"][0]["kind"], "website")
         self.assertEqual(config["services"][0]["compose_service"], "web")
 
-    def test_deployment_config_write_accepts_environment_literals_and_secret_refs(self) -> None:
+    def test_deployment_config_write_accepts_environment_literals_and_secret_refs(
+        self,
+    ) -> None:
         config = ProjectDeploymentConfigWrite.model_validate(
             {
                 "environment": {"NODE_ENV": "production"},
@@ -3469,17 +3965,23 @@ class DeploymentContractTests(unittest.TestCase):
         )
 
         self.assertEqual(config.environment, {"NODE_ENV": "production"})
-        self.assertEqual(config.secret_refs, {"DATABASE_URL": "tenant/tenant-1/DATABASE_URL"})
+        self.assertEqual(
+            config.secret_refs, {"DATABASE_URL": "tenant/tenant-1/DATABASE_URL"}
+        )
 
     def test_app_deployment_config_cannot_be_disabled(self) -> None:
         with self.assertRaises(ValidationError):
             ProjectDeploymentConfigWrite.model_validate({"enabled": False})
 
-        read_config = ProjectDeploymentConfigRead.model_validate({"enabled": False, "environment_name": "production"})
+        read_config = ProjectDeploymentConfigRead.model_validate(
+            {"enabled": False, "environment_name": "production"}
+        )
 
         self.assertIs(read_config.enabled, True)
 
-    def test_app_deployment_config_storage_does_not_persist_enabled_override(self) -> None:
+    def test_app_deployment_config_storage_does_not_persist_enabled_override(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         service = self._admin_project_service()
 
@@ -3489,7 +3991,9 @@ class DeploymentContractTests(unittest.TestCase):
                 tenant_id="tenant-1",
                 project_id="project-1",
                 app_id="app-1",
-                payload=ProjectDeploymentConfigWrite(enabled=True, environment_name="production"),
+                payload=ProjectDeploymentConfigWrite(
+                    enabled=True, environment_name="production"
+                ),
             )
 
             app = session.get(ProjectApp, "app-1")
@@ -3546,13 +4050,24 @@ class DeploymentContractTests(unittest.TestCase):
                         "secret_refs": {"DATABASE_URL": "tenant/tenant-1/DATABASE_URL"},
                     }
                 },
-                "resources": [{"key": "db-primary", "kind": "postgres", "name": "Primary database"}],
+                "resources": [
+                    {
+                        "key": "db-primary",
+                        "kind": "postgres",
+                        "name": "Primary database",
+                    }
+                ],
             }
         )
 
         self.assertEqual(config.production_branch, "main")
-        self.assertEqual(config.branch_settings["main"].environment, {"APP_MODE": "production"})
-        self.assertEqual(config.branch_settings["main"].secret_refs, {"DATABASE_URL": "tenant/tenant-1/DATABASE_URL"})
+        self.assertEqual(
+            config.branch_settings["main"].environment, {"APP_MODE": "production"}
+        )
+        self.assertEqual(
+            config.branch_settings["main"].secret_refs,
+            {"DATABASE_URL": "tenant/tenant-1/DATABASE_URL"},
+        )
         self.assertEqual(config.resources[0].key, "db-primary")
 
     def test_project_deployment_policy_accepts_preview_pr_events(self) -> None:
@@ -3584,14 +4099,18 @@ class DeploymentContractTests(unittest.TestCase):
                 session=session,
                 tenant_id="tenant-1",
                 project_id="project-1",
-                payload=ProjectDeploymentPolicyWrite(enabled=True, production_branch="main"),
+                payload=ProjectDeploymentPolicyWrite(
+                    enabled=True, production_branch="main"
+                ),
             )
             service.update_project_app_deployment_config(
                 session=session,
                 tenant_id="tenant-1",
                 project_id="project-1",
                 app_id="app-1",
-                payload=ProjectDeploymentConfigWrite(enabled=True, environment_name="production"),
+                payload=ProjectDeploymentConfigWrite(
+                    enabled=True, environment_name="production"
+                ),
             )
 
             project = session.get(Project, "project-1")
@@ -3615,7 +4134,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertNotIn("production_branch", app.deployment_config)
             self.assertNotIn("auto_deploy_enabled", app.deployment_config)
 
-    def test_complete_project_deployment_setup_saves_policy_and_starts_durable_workflow(self) -> None:
+    def test_complete_project_deployment_setup_saves_policy_and_starts_durable_workflow(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         service = self._admin_project_service()
 
@@ -3632,13 +4153,18 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.temporal.workflow_engine.connect_temporal_client", side_effect=_connect_temporal),
+            patch(
+                "orchestrator.temporal.workflow_engine.connect_temporal_client",
+                side_effect=_connect_temporal,
+            ),
         ):
             result = service.complete_project_deployment_setup(
                 session=session,
                 tenant_id="tenant-1",
                 project_id="project-1",
-                payload=ProjectDeploymentPolicyWrite(enabled=True, production_branch="main"),
+                payload=ProjectDeploymentPolicyWrite(
+                    enabled=True, production_branch="main"
+                ),
                 requested_by_user_id="admin",
             )
 
@@ -3653,20 +4179,34 @@ class DeploymentContractTests(unittest.TestCase):
             assert workflow is not None
             self.assertEqual(workflow.workflow_type_key, "project_deployment_setup")
             self.assertEqual(workflow.status, "queued")
-            operations = session.execute(
-                select(WorkflowOperation).where(WorkflowOperation.workflow_id == result.workflow_id)
-            ).scalars().all()
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == result.workflow_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
             self.assertEqual(
                 {operation.operation_type for operation in operations},
-                {"repo_deployment_analysis", "deployment_configuration", "initial_release"},
+                {
+                    "repo_deployment_analysis",
+                    "deployment_configuration",
+                    "initial_release",
+                },
             )
             setup_run = session.get(ProjectAppAnalysisRun, result.workflow_id)
             self.assertIsNone(setup_run)
             self.assertEqual(captured["payload"].workflow_id, result.workflow_id)
 
     def test_project_deployment_setup_workflow_id_is_unique_per_setup_run(self) -> None:
-        first = project_deployment_setup_workflow_id(tenant_id="tenant-1", project_id="project-1")
-        second = project_deployment_setup_workflow_id(tenant_id="tenant-1", project_id="project-1")
+        first = project_deployment_setup_workflow_id(
+            tenant_id="tenant-1", project_id="project-1"
+        )
+        second = project_deployment_setup_workflow_id(
+            tenant_id="tenant-1", project_id="project-1"
+        )
 
         self.assertNotEqual(first, second)
         self.assertTrue(first.startswith("project_deployment_setup:"))
@@ -3690,7 +4230,9 @@ class DeploymentContractTests(unittest.TestCase):
 
             self.assertEqual(exc.exception.status_code, status.HTTP_409_CONFLICT)
 
-    def test_deployment_config_write_rejects_raw_secret_like_environment_values(self) -> None:
+    def test_deployment_config_write_rejects_raw_secret_like_environment_values(
+        self,
+    ) -> None:
         with self.assertRaises(ValidationError):
             ProjectDeploymentConfigWrite.model_validate(
                 {
@@ -3717,9 +4259,13 @@ class DeploymentContractTests(unittest.TestCase):
 
         resource_config = config.model_dump()["resources"][0]["config"]
         self.assertNotIn("postgres_password", resource_config)
-        self.assertEqual(resource_config["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD")
+        self.assertEqual(
+            resource_config["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD"
+        )
 
-    def test_deployment_environment_values_merge_project_and_app_config_and_resolve_secret_refs(self) -> None:
+    def test_deployment_environment_values_merge_project_and_app_config_and_resolve_secret_refs(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         project = Project(
             project_id="project-1",
@@ -3735,8 +4281,13 @@ class DeploymentContractTests(unittest.TestCase):
                 "production_branch": "main",
                 "branch_settings": {
                     "main": {
-                        "environment": {"BRANCH_LEVEL": "enabled", "APP_MODE": "branch-default"},
-                        "secret_refs": {"BRANCH_SECRET": "tenant/tenant-1/BRANCH_SECRET"},
+                        "environment": {
+                            "BRANCH_LEVEL": "enabled",
+                            "APP_MODE": "branch-default",
+                        },
+                        "secret_refs": {
+                            "BRANCH_SECRET": "tenant/tenant-1/BRANCH_SECRET"
+                        },
                     }
                 },
             },
@@ -3756,7 +4307,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.session_factory() as session,
             patch(
                 "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
-                side_effect=lambda **kwargs: f"value-for-{kwargs['secret_ref'].split('/')[-1]}",
+                side_effect=lambda **kwargs: (
+                    f"value-for-{kwargs['secret_ref'].split('/')[-1]}"
+                ),
             ),
         ):
             values = build_deployment_environment_values(
@@ -3945,7 +4498,10 @@ class DeploymentContractTests(unittest.TestCase):
             )
 
             self.assertIsNone(session.get(ProjectApp, "app-1"))
-            self.assertEqual(session.get(Project, "project-1").deployment_config, {"enabled": True, "production_branch": "main"})  # type: ignore[union-attr]
+            self.assertEqual(
+                session.get(Project, "project-1").deployment_config,
+                {"enabled": True, "production_branch": "main"},
+            )  # type: ignore[union-attr]
 
     def test_delete_project_app_rejects_active_deployment(self) -> None:
         self._seed_tenant_project_app()
@@ -4005,7 +4561,10 @@ class DeploymentContractTests(unittest.TestCase):
                     commit_sha="abcdef1",
                     requested_by_user_id=None,
                     deployment_snapshot={},
-                    provider_context={"deployment_uuid": "deployment-1", "application_uuid": "app-uuid-1"},
+                    provider_context={
+                        "deployment_uuid": "deployment-1",
+                        "application_uuid": "app-uuid-1",
+                    },
                     last_error=None,
                     requested_at=now,
                     started_at=now,
@@ -4050,14 +4609,18 @@ class DeploymentContractTests(unittest.TestCase):
         with self.session_factory() as session:
             with patch(
                 "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
-                side_effect=HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="provider down"),
+                side_effect=HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY, detail="provider down"
+                ),
             ):
                 with self.assertRaises(HTTPException):
                     create_project_deployment_release(
                         session=session,
                         tenant_id="tenant-1",
                         project_id="project-1",
-                        payload=ProjectDeploymentReleaseCreate(app_id="app-1", git_ref="main", commit_sha="abcdef1"),
+                        payload=ProjectDeploymentReleaseCreate(
+                            app_id="app-1", git_ref="main", commit_sha="abcdef1"
+                        ),
                         requested_by_user_id="admin",
                     )
 
@@ -4066,7 +4629,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(releases[0].status, "failed")
             self.assertEqual(releases[0].last_error, "provider down")
 
-    def test_release_retry_reuses_prior_provider_resource_when_latest_attempt_failed_before_submission(self) -> None:
+    def test_release_retry_reuses_prior_provider_resource_when_latest_attempt_failed_before_submission(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -4127,7 +4692,9 @@ class DeploymentContractTests(unittest.TestCase):
         captured: dict[str, object] = {}
 
         def fake_provider_submit(**kwargs: object) -> dict[str, object]:
-            captured["existing_application_uuid"] = kwargs.get("existing_application_uuid")
+            captured["existing_application_uuid"] = kwargs.get(
+                "existing_application_uuid"
+            )
             return {
                 "application_uuid": "application-existing",
                 "deployment_uuid": "deployment-retry",
@@ -4145,13 +4712,17 @@ class DeploymentContractTests(unittest.TestCase):
                 session=session,
                 tenant_id="tenant-1",
                 project_id="project-1",
-                payload=ProjectDeploymentReleaseCreate(app_id="app-1", git_ref="main", commit_sha="abcdef2"),
+                payload=ProjectDeploymentReleaseCreate(
+                    app_id="app-1", git_ref="main", commit_sha="abcdef2"
+                ),
                 requested_by_user_id="admin",
             )
 
         self.assertEqual(captured["existing_application_uuid"], "application-existing")
 
-    def test_project_level_release_does_not_reuse_unscoped_legacy_provider_state(self) -> None:
+    def test_project_level_release_does_not_reuse_unscoped_legacy_provider_state(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -4184,7 +4755,9 @@ class DeploymentContractTests(unittest.TestCase):
 
         def fake_provider_submit(**kwargs: object) -> dict[str, object]:
             captured["existing_service_uuid"] = kwargs.get("existing_service_uuid")
-            captured["existing_application_uuid"] = kwargs.get("existing_application_uuid")
+            captured["existing_application_uuid"] = kwargs.get(
+                "existing_application_uuid"
+            )
             return {
                 "application_uuid": "new-app-uuid",
                 "deployment_uuid": "new-deployment-uuid",
@@ -4202,7 +4775,9 @@ class DeploymentContractTests(unittest.TestCase):
                 session=session,
                 tenant_id="tenant-1",
                 project_id="project-1",
-                payload=ProjectDeploymentReleaseCreate(app_id="app-1", git_ref="main", commit_sha="abcdef1"),
+                payload=ProjectDeploymentReleaseCreate(
+                    app_id="app-1", git_ref="main", commit_sha="abcdef1"
+                ),
                 requested_by_user_id="admin",
             )
 
@@ -4252,7 +4827,9 @@ class DeploymentContractTests(unittest.TestCase):
             )
 
             self.assertEqual(len(result.created_releases), 1)
-            release = session.get(ProjectDeploymentRelease, result.created_releases[0].release_id)
+            release = session.get(
+                ProjectDeploymentRelease, result.created_releases[0].release_id
+            )
             assert release is not None
             self.assertEqual(release.git_ref, "main")
             self.assertEqual(release.commit_sha, "abcdef1234567890")
@@ -4353,7 +4930,9 @@ class DeploymentContractTests(unittest.TestCase):
                 ),
             )
 
-            self.assertEqual([release.app_id for release in result.created_releases], ["app-1"])
+            self.assertEqual(
+                [release.app_id for release in result.created_releases], ["app-1"]
+            )
 
     def test_github_push_does_not_create_release_for_non_matching_branch(self) -> None:
         self._seed_tenant_project_app()
@@ -4379,7 +4958,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(result.created_releases, ())
             self.assertEqual(result.skipped_app_ids, ())
 
-    def test_project_deployment_setup_initial_release_uses_generated_artifact_branch(self) -> None:
+    def test_project_deployment_setup_initial_release_uses_generated_artifact_branch(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         with self.session_factory() as session:
             project = session.get(Project, "project-1")
@@ -4441,14 +5022,18 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(release.commit_sha, "abcdef1234567890")
             self.assertEqual(release.app_id, "app-1")
 
-    def test_project_deployment_setup_validates_committed_npm_lockfiles_without_resolving_dependencies(self) -> None:
+    def test_project_deployment_setup_validates_committed_npm_lockfiles_without_resolving_dependencies(
+        self,
+    ) -> None:
         with TemporaryDirectory() as temp_dir:
             repo_dir = Path(temp_dir)
             service_dir = repo_dir / "web" / "admin"
             service_dir.mkdir(parents=True)
             _run_git_for_test(["init"], cwd=repo_dir)
             _run_git_for_test(["config", "user.name", "Test Bot"], cwd=repo_dir)
-            _run_git_for_test(["config", "user.email", "test@example.com"], cwd=repo_dir)
+            _run_git_for_test(
+                ["config", "user.email", "test@example.com"], cwd=repo_dir
+            )
             (service_dir / "package.json").write_text(
                 (
                     '{"name":"admin","devDependencies":'
@@ -4456,8 +5041,13 @@ class DeploymentContractTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (service_dir / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
-            _run_git_for_test(["add", "web/admin/package.json", "web/admin/package-lock.json"], cwd=repo_dir)
+            (service_dir / "package-lock.json").write_text(
+                '{"lockfileVersion":3}\n', encoding="utf-8"
+            )
+            _run_git_for_test(
+                ["add", "web/admin/package.json", "web/admin/package-lock.json"],
+                cwd=repo_dir,
+            )
             _run_git_for_test(["commit", "-m", "add npm app"], cwd=repo_dir)
 
             lockfiles = _validate_npm_lockfiles_for_deployment_branch(
@@ -4472,7 +5062,9 @@ class DeploymentContractTests(unittest.TestCase):
             repo_dir = Path(temp_dir)
             _run_git_for_test(["init"], cwd=repo_dir)
             _run_git_for_test(["config", "user.name", "Test Bot"], cwd=repo_dir)
-            _run_git_for_test(["config", "user.email", "test@example.com"], cwd=repo_dir)
+            _run_git_for_test(
+                ["config", "user.email", "test@example.com"], cwd=repo_dir
+            )
             _run_git_for_test(["checkout", "-b", "main"], cwd=repo_dir)
             (repo_dir / "README.md").write_text("source\n", encoding="utf-8")
             service_dir = repo_dir / "web" / "admin"
@@ -4484,10 +5076,22 @@ class DeploymentContractTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (service_dir / "package-lock.json").write_text('{"lockfileVersion":3}\n', encoding="utf-8")
-            _run_git_for_test(["add", "README.md", "web/admin/package.json", "web/admin/package-lock.json"], cwd=repo_dir)
+            (service_dir / "package-lock.json").write_text(
+                '{"lockfileVersion":3}\n', encoding="utf-8"
+            )
+            _run_git_for_test(
+                [
+                    "add",
+                    "README.md",
+                    "web/admin/package.json",
+                    "web/admin/package-lock.json",
+                ],
+                cwd=repo_dir,
+            )
             _run_git_for_test(["commit", "-m", "source"], cwd=repo_dir)
-            source_commit = _run_git_for_test(["rev-parse", "HEAD"], cwd=repo_dir).strip()
+            source_commit = _run_git_for_test(
+                ["rev-parse", "HEAD"], cwd=repo_dir
+            ).strip()
             _run_git_for_test(["remote", "add", "origin", str(repo_dir)], cwd=repo_dir)
 
             branch, _commit, compose_path = _ensure_deployment_compose_artifact(
@@ -4501,16 +5105,24 @@ class DeploymentContractTests(unittest.TestCase):
             )
 
             self.assertEqual(branch, f"mb/deploy/project-1/main-{source_commit[:12]}")
-            self.assertEqual(compose_path, ".master-builder/deployments/docker-compose.yml")
+            self.assertEqual(
+                compose_path, ".master-builder/deployments/docker-compose.yml"
+            )
             self.assertEqual(
                 (repo_dir / ".env").read_text(encoding="utf-8"),
                 "# Generated by Master Builder. Runtime values are managed by Coolify.\n",
             )
-            staged_files = _run_git_for_test(["show", "--name-only", "--format=", "HEAD"], cwd=repo_dir)
-            self.assertIn(".master-builder/deployments/docker-compose.yml", staged_files)
+            staged_files = _run_git_for_test(
+                ["show", "--name-only", "--format=", "HEAD"], cwd=repo_dir
+            )
+            self.assertIn(
+                ".master-builder/deployments/docker-compose.yml", staged_files
+            )
             self.assertIn(".env", staged_files)
 
-    def test_project_deployment_setup_compose_does_not_embed_proxy_route_labels(self) -> None:
+    def test_project_deployment_setup_compose_does_not_embed_proxy_route_labels(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         plan = DeploymentPlannerResponse.model_validate(
             {
@@ -4547,7 +5159,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("traefik.", normalized)
         self.assertNotIn("coolify:", normalized)
 
-    def test_project_deployment_setup_rejects_npm_service_without_package_json(self) -> None:
+    def test_project_deployment_setup_rejects_npm_service_without_package_json(
+        self,
+    ) -> None:
         with TemporaryDirectory() as temp_dir:
             repo_dir = Path(temp_dir)
             (repo_dir / "web" / "admin").mkdir(parents=True)
@@ -4595,11 +5209,16 @@ class DeploymentContractTests(unittest.TestCase):
                     session=session,
                     tenant_id="tenant-1",
                     project_id="project-1",
-                    payload=ProjectDeploymentReleaseCreate(app_id="app-1", git_ref="main", commit_sha="abcdef1"),
+                    payload=ProjectDeploymentReleaseCreate(
+                        app_id="app-1", git_ref="main", commit_sha="abcdef1"
+                    ),
                     requested_by_user_id="admin",
                 )
             self.assertEqual(raised.exception.status_code, status.HTTP_409_CONFLICT)
-            self.assertIn("Tenant deployment plane is missing Coolify configuration fields", str(raised.exception.detail))
+            self.assertIn(
+                "Tenant deployment plane is missing Coolify configuration fields",
+                str(raised.exception.detail),
+            )
             self.assertEqual(session.query(ProjectDeploymentRelease).count(), 0)
 
     def test_internal_coolify_release_submits_docker_compose_app(self) -> None:
@@ -4609,11 +5228,15 @@ class DeploymentContractTests(unittest.TestCase):
                 self.env_payload: dict[str, object] | None = None
                 self.started_application_uuid: str | None = None
 
-            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+            def create_private_github_app_application(
+                self, *, payload: dict[str, object]
+            ) -> str:
                 self.application_payload = payload
                 return "application-1"
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 self.env_payload = payload
                 return {"application_uuid": application_uuid, **payload}
 
@@ -4672,7 +5295,9 @@ class DeploymentContractTests(unittest.TestCase):
             start_command=None,
             env_schema_json={},
             secret_schema_json={},
-            deployment_config={"deployment_compose_path": ".master-builder/deployments/docker-compose.yml"},
+            deployment_config={
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml"
+            },
             status="ready",
             created_at=now,
             updated_at=now,
@@ -4682,7 +5307,7 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "eu-west",
-                "base_domain": "bsktpay-2.localhost:8088",
+                "base_domain": "example-tenant-2.localhost:8088",
                 "platform_subdomain": "builder",
                 "api_base_url": "https://builder.apps.example.com/api/v1",
                 "coolify_project_uuid": "coolify-project-1",
@@ -4720,7 +5345,10 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
             patch(
                 "orchestrator.api.admin.deployment_release_service._load_normalized_compose_for_release",
                 return_value=CoolifyComposeNormalizationResult(
@@ -4728,7 +5356,10 @@ class DeploymentContractTests(unittest.TestCase):
                     exposed_ports_by_service={"web": ["3000"]},
                 ),
             ),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             result = submit_internal_coolify_release(
                 session=session,
@@ -4737,7 +5368,9 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1"
+                ),
                 existing_application_uuid=None,
                 existing_service_uuid=None,
             )
@@ -4747,38 +5380,54 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result["coolify_resource_type"], "application")
         self.assertEqual(
             result["route_bindings"][0]["host"],
-            "web.development.main.project-1.bsktpay-2.localhost",
+            "web.development.main.project-1.example-tenant-2.localhost",
         )
         self.assertEqual(result["route_bindings"][0]["proxy_port"], 8088)
-        self.assertEqual(result["route_bindings"][0]["internal_url"], "http://host.docker.internal:8088")
+        self.assertEqual(
+            result["route_bindings"][0]["internal_url"],
+            "http://host.docker.internal:8088",
+        )
         self.assertEqual(result["route_bindings"][0]["service_key"], "web")
         assert fake_client.application_payload is not None
         self.assertEqual(fake_client.application_payload["name"], "development")
         self.assertEqual(fake_client.application_payload["build_pack"], "dockercompose")
-        self.assertEqual(fake_client.application_payload["git_repository"], "example/repo")
+        self.assertEqual(
+            fake_client.application_payload["git_repository"], "example/repo"
+        )
         self.assertEqual(
             fake_client.application_payload["docker_compose_location"],
             "/.master-builder/deployments/docker-compose.yml",
         )
         self.assertEqual(
             fake_client.application_payload["docker_compose_domains"],
-            [{"name": "web", "domain": "http://web.development.main.project-1.bsktpay-2.localhost"}],
+            [
+                {
+                    "name": "web",
+                    "domain": "http://web.development.main.project-1.example-tenant-2.localhost",
+                }
+            ],
         )
         self.assertNotIn("docker_compose_raw", fake_client.application_payload)
         self.assertEqual(fake_client.started_application_uuid, "application-1")
 
-    def test_internal_coolify_release_submits_nixpacks_app_with_required_ports(self) -> None:
+    def test_internal_coolify_release_submits_nixpacks_app_with_required_ports(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.application_payload: dict[str, object] | None = None
                 self.environment_payload: dict[str, object] | None = None
                 self.started_application_uuid: str | None = None
 
-            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+            def create_private_github_app_application(
+                self, *, payload: dict[str, object]
+            ) -> str:
                 self.application_payload = payload
                 return "application-1"
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 self.environment_payload = payload
                 return {"application_uuid": application_uuid, **payload}
 
@@ -4787,7 +5436,10 @@ class DeploymentContractTests(unittest.TestCase):
                 return "deployment-1"
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
+                return {
+                    "uuid": application_uuid,
+                    "fqdn": "https://web.project-1.apps.example.com",
+                }
 
         now = datetime.now(timezone.utc)
         tenant = Tenant(
@@ -4843,7 +5495,7 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "eu-west",
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
                 "platform_subdomain": "builder",
                 "api_base_url": "https://builder.apps.example.com/api/v1",
                 "coolify_project_uuid": "coolify-project-1",
@@ -4874,8 +5526,14 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             result = submit_internal_coolify_release(
                 session=session,
@@ -4884,7 +5542,9 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1", release_kind="run_preview"
+                ),
                 existing_application_uuid=None,
                 existing_service_uuid=None,
                 release_id="release-1",
@@ -4916,32 +5576,48 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(environment_payload_by_key[key]["is_literal"])
             self.assertFalse(environment_payload_by_key[key]["is_preview"])
         self.assertNotIn("NIXPACKS_NODE_VERSION", environment_payload_by_key)
-        self.assertEqual(fake_client.application_payload["build_command"], "npm run build:web")
+        self.assertEqual(
+            fake_client.application_payload["build_command"], "npm run build:web"
+        )
         self.assertNotIn("dockerfile_location", fake_client.application_payload)
         self.assertEqual(result["route_bindings"][0]["service_key"], "web")
         self.assertEqual(
             result["route_bindings"][0]["host"],
-            "web-web-main-release-1.project-1.192-168-0-118.sslip.io",
+            "web-web-main-release-1.project-1.192-0-2-10.sslip.io",
         )
-        self.assertNotEqual(result["route_bindings"][0]["host"], "web.project-1.apps.example.com")
+        self.assertNotEqual(
+            result["route_bindings"][0]["host"], "web.project-1.apps.example.com"
+        )
         self.assertEqual(result["route_bindings"][0]["port"], "19006")
         self.assertEqual(result["route_bindings"][0]["proxy_port"], 8088)
-        self.assertEqual(result["route_bindings"][0]["internal_url"], "http://host.docker.internal:8088")
+        self.assertEqual(
+            result["route_bindings"][0]["internal_url"],
+            "http://host.docker.internal:8088",
+        )
 
-    def test_internal_coolify_release_updates_nixpacks_app_without_create_only_fields(self) -> None:
+    def test_internal_coolify_release_updates_nixpacks_app_without_create_only_fields(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.application_patch_payload: dict[str, object] | None = None
                 self.started_application_uuid: str | None = None
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
+                return {
+                    "uuid": application_uuid,
+                    "fqdn": "https://web.project-1.apps.example.com",
+                }
 
-            def update_application(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def update_application(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 self.application_patch_payload = payload
                 return {"application_uuid": application_uuid, **payload}
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 return {"application_uuid": application_uuid, **payload}
 
             def start_application(self, *, application_uuid: str) -> str:
@@ -5002,7 +5678,7 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "eu-west",
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
                 "platform_subdomain": "builder",
                 "api_base_url": "https://builder.apps.example.com/api/v1",
                 "coolify_project_uuid": "coolify-project-1",
@@ -5033,8 +5709,14 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             result = submit_internal_coolify_release(
                 session=session,
@@ -5043,7 +5725,9 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1", release_kind="run_preview"
+                ),
                 existing_application_uuid="application-existing",
                 existing_service_uuid=None,
                 release_id="release-existing",
@@ -5053,8 +5737,12 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result["deployment_uuid"], "deployment-2")
         self.assertEqual(fake_client.started_application_uuid, "application-existing")
         assert fake_client.application_patch_payload is not None
-        self.assertEqual(fake_client.application_patch_payload["build_pack"], "nixpacks")
-        self.assertEqual(fake_client.application_patch_payload["ports_exposes"], "19006")
+        self.assertEqual(
+            fake_client.application_patch_payload["build_pack"], "nixpacks"
+        )
+        self.assertEqual(
+            fake_client.application_patch_payload["ports_exposes"], "19006"
+        )
         self.assertEqual(fake_client.application_patch_payload["domains"], "")
         self.assertEqual(
             fake_client.application_patch_payload["start_command"],
@@ -5067,23 +5755,32 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("destination_uuid", fake_client.application_patch_payload)
         self.assertNotIn("github_app_uuid", fake_client.application_patch_payload)
 
-    def test_internal_coolify_release_repairs_persisted_legacy_expo_web_start_command(self) -> None:
+    def test_internal_coolify_release_repairs_persisted_legacy_expo_web_start_command(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.application_payload: dict[str, object] | None = None
 
-            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+            def create_private_github_app_application(
+                self, *, payload: dict[str, object]
+            ) -> str:
                 self.application_payload = payload
                 return "application-1"
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 return {"application_uuid": application_uuid, **payload}
 
             def start_application(self, *, application_uuid: str) -> str:
                 return "deployment-1"
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
+                return {
+                    "uuid": application_uuid,
+                    "fqdn": "https://web.project-1.apps.example.com",
+                }
 
         now = datetime.now(timezone.utc)
         tenant = Tenant(
@@ -5170,8 +5867,14 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             submit_internal_coolify_release(
                 session=session,
@@ -5180,17 +5883,27 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1", release_kind="run_preview"
+                ),
                 existing_application_uuid=None,
                 existing_service_uuid=None,
                 release_id="release-legacy-1",
             )
 
         assert fake_client.application_payload is not None
-        self.assertEqual(fake_client.application_payload["start_command"], LEGACY_EXPO_WEB_START_COMMAND)
-        self.assertEqual(fake_client.application_payload["install_command"], LEGACY_EXPO_CLI_INSTALL_COMMAND)
+        self.assertEqual(
+            fake_client.application_payload["start_command"],
+            LEGACY_EXPO_WEB_START_COMMAND,
+        )
+        self.assertEqual(
+            fake_client.application_payload["install_command"],
+            LEGACY_EXPO_CLI_INSTALL_COMMAND,
+        )
 
-    def test_legacy_expo_release_repairs_canonical_start_with_stale_native_build_install(self) -> None:
+    def test_legacy_expo_release_repairs_canonical_start_with_stale_native_build_install(
+        self,
+    ) -> None:
         project_app = ProjectApp(
             app_id="app-1",
             tenant_id="tenant-1",
@@ -5229,41 +5942,63 @@ class DeploymentContractTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            _coolify_start_command(project_app=project_app, project_deployment=project_deployment),
+            _coolify_start_command(
+                project_app=project_app, project_deployment=project_deployment
+            ),
             LEGACY_EXPO_WEB_START_COMMAND,
         )
         self.assertEqual(
-            _coolify_install_command(project_app=project_app, project_deployment=project_deployment),
+            _coolify_install_command(
+                project_app=project_app, project_deployment=project_deployment
+            ),
             LEGACY_EXPO_CLI_INSTALL_COMMAND,
         )
-        self.assertTrue(LEGACY_EXPO_CLI_INSTALL_COMMAND.startswith("rm -f yarn.lock && "))
+        self.assertTrue(
+            LEGACY_EXPO_CLI_INSTALL_COMMAND.startswith("rm -f yarn.lock && ")
+        )
         self.assertIn(
             "npm install --legacy-peer-deps --loglevel=info && "
             "npm install --legacy-peer-deps --loglevel=info --no-save",
             LEGACY_EXPO_CLI_INSTALL_COMMAND,
         )
-        self.assertEqual(LEGACY_EXPO_RELEASE_ENVIRONMENT["NPM_CONFIG_FETCH_RETRIES"], "5")
-        self.assertEqual(LEGACY_EXPO_RELEASE_ENVIRONMENT["NPM_CONFIG_NETWORK_TIMEOUT"], "120000")
+        self.assertEqual(
+            LEGACY_EXPO_RELEASE_ENVIRONMENT["NPM_CONFIG_FETCH_RETRIES"], "5"
+        )
+        self.assertEqual(
+            LEGACY_EXPO_RELEASE_ENVIRONMENT["NPM_CONFIG_NETWORK_TIMEOUT"], "120000"
+        )
         self.assertLessEqual(len(LEGACY_EXPO_CLI_INSTALL_COMMAND), 255)
-        self.assertNotEqual(LEGACY_EXPO_CLI_INSTALL_COMMAND, LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS)
+        self.assertNotEqual(
+            LEGACY_EXPO_CLI_INSTALL_COMMAND,
+            LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS,
+        )
 
-    def test_internal_coolify_release_repairs_invalid_legacy_expo_web_host_command(self) -> None:
+    def test_internal_coolify_release_repairs_invalid_legacy_expo_web_host_command(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.application_payload: dict[str, object] | None = None
 
-            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+            def create_private_github_app_application(
+                self, *, payload: dict[str, object]
+            ) -> str:
                 self.application_payload = payload
                 return "application-1"
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 return {"application_uuid": application_uuid, **payload}
 
             def start_application(self, *, application_uuid: str) -> str:
                 return "deployment-1"
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
+                return {
+                    "uuid": application_uuid,
+                    "fqdn": "https://web.project-1.apps.example.com",
+                }
 
         now = datetime.now(timezone.utc)
         tenant = Tenant(
@@ -5350,8 +6085,14 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             submit_internal_coolify_release(
                 session=session,
@@ -5360,33 +6101,50 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1", release_kind="run_preview"
+                ),
                 existing_application_uuid=None,
                 existing_service_uuid=None,
                 release_id="release-legacy-2",
             )
 
         assert fake_client.application_payload is not None
-        self.assertEqual(fake_client.application_payload["start_command"], LEGACY_EXPO_WEB_START_COMMAND)
-        self.assertEqual(fake_client.application_payload["install_command"], LEGACY_EXPO_CLI_INSTALL_COMMAND)
+        self.assertEqual(
+            fake_client.application_payload["start_command"],
+            LEGACY_EXPO_WEB_START_COMMAND,
+        )
+        self.assertEqual(
+            fake_client.application_payload["install_command"],
+            LEGACY_EXPO_CLI_INSTALL_COMMAND,
+        )
 
-    def test_internal_coolify_release_repairs_legacy_expo_web_start_command_without_openssl_provider(self) -> None:
+    def test_internal_coolify_release_repairs_legacy_expo_web_start_command_without_openssl_provider(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.application_payload: dict[str, object] | None = None
 
-            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+            def create_private_github_app_application(
+                self, *, payload: dict[str, object]
+            ) -> str:
                 self.application_payload = payload
                 return "application-1"
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 return {"application_uuid": application_uuid, **payload}
 
             def start_application(self, *, application_uuid: str) -> str:
                 return "deployment-1"
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
+                return {
+                    "uuid": application_uuid,
+                    "fqdn": "https://web.project-1.apps.example.com",
+                }
 
         now = datetime.now(timezone.utc)
         tenant = Tenant(
@@ -5473,8 +6231,14 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             submit_internal_coolify_release(
                 session=session,
@@ -5483,15 +6247,23 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1", release_kind="run_preview"
+                ),
                 existing_application_uuid=None,
                 existing_service_uuid=None,
                 release_id="release-legacy-3",
             )
 
         assert fake_client.application_payload is not None
-        self.assertEqual(fake_client.application_payload["start_command"], LEGACY_EXPO_WEB_START_COMMAND)
-        self.assertEqual(fake_client.application_payload["install_command"], LEGACY_EXPO_CLI_INSTALL_COMMAND)
+        self.assertEqual(
+            fake_client.application_payload["start_command"],
+            LEGACY_EXPO_WEB_START_COMMAND,
+        )
+        self.assertEqual(
+            fake_client.application_payload["install_command"],
+            LEGACY_EXPO_CLI_INSTALL_COMMAND,
+        )
 
     def test_internal_coolify_nixpacks_release_requires_exposed_port(self) -> None:
         now = datetime.now(timezone.utc)
@@ -5576,7 +6348,10 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
         ):
             with self.assertRaises(HTTPException) as raised:
                 submit_internal_coolify_release(
@@ -5586,16 +6361,22 @@ class DeploymentContractTests(unittest.TestCase):
                     project_app=project_app,
                     tenant_plane=tenant_plane,
                     project_deployment=project_deployment,
-                    payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                    payload=ProjectDeploymentReleaseCreate(
+                        git_ref="main", commit_sha="abcdef1", release_kind="run_preview"
+                    ),
                     existing_application_uuid=None,
                     existing_service_uuid=None,
                     release_id="release-missing-port",
                 )
 
         self.assertEqual(raised.exception.status_code, status.HTTP_409_CONFLICT)
-        self.assertIn("Project app must define exposed_port", str(raised.exception.detail))
+        self.assertIn(
+            "Project app must define exposed_port", str(raised.exception.detail)
+        )
 
-    def test_release_read_derives_generated_service_url_from_route_binding(self) -> None:
+    def test_release_read_derives_generated_service_url_from_route_binding(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         release = ProjectDeploymentRelease(
             release_id="release-1",
@@ -5617,7 +6398,7 @@ class DeploymentContractTests(unittest.TestCase):
                         "service_name": "Web",
                         "service_kind": "website",
                         "scheme": "http",
-                        "host": "web.development.main.project-1.bsktpay-2.localhost",
+                        "host": "web.development.main.project-1.example-tenant-2.localhost",
                         "proxy_port": 8088,
                         "internal_url": "http://host.docker.internal:8088",
                         "url_kind": "generated",
@@ -5635,21 +6416,28 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(
             service_urls[0].url,
-            "http://web.development.main.project-1.bsktpay-2.localhost:8088",
+            "http://web.development.main.project-1.example-tenant-2.localhost:8088",
         )
-        self.assertEqual(service_urls[0].host, "web.development.main.project-1.bsktpay-2.localhost")
+        self.assertEqual(
+            service_urls[0].host,
+            "web.development.main.project-1.example-tenant-2.localhost",
+        )
         self.assertEqual(service_urls[0].proxy_port, 8088)
-        self.assertEqual(service_urls[0].internal_url, "http://host.docker.internal:8088")
+        self.assertEqual(
+            service_urls[0].internal_url, "http://host.docker.internal:8088"
+        )
 
-    def test_route_verification_uses_internal_probe_url_with_public_host_header(self) -> None:
+    def test_route_verification_uses_internal_probe_url_with_public_host_header(
+        self,
+    ) -> None:
         service_url = ProjectDeploymentServiceUrlRead.model_validate(
             {
                 "service_key": "web",
                 "service_name": "Web",
                 "service_kind": "website",
-                "url": "http://web.development.main.project-1.bsktpay-2.localhost:8088",
+                "url": "http://web.development.main.project-1.example-tenant-2.localhost:8088",
                 "url_kind": "generated",
-                "host": "web.development.main.project-1.bsktpay-2.localhost",
+                "host": "web.development.main.project-1.example-tenant-2.localhost",
                 "proxy_port": 8088,
                 "internal_url": "http://host.docker.internal:8088",
             }
@@ -5672,15 +6460,23 @@ class DeploymentContractTests(unittest.TestCase):
             captured["timeout"] = timeout
             return FakeResponse()
 
-        with patch("orchestrator.api.admin.deployment_release_service.urlopen", side_effect=fake_urlopen):
+        with patch(
+            "orchestrator.api.admin.deployment_release_service.urlopen",
+            side_effect=fake_urlopen,
+        ):
             result = _fetch_route_activation(service_url)
 
         self.assertIsNone(result)
         self.assertEqual(captured["url"], "http://localhost:8088")
-        self.assertEqual(captured["host"], "web.development.main.project-1.bsktpay-2.localhost")
+        self.assertEqual(
+            captured["host"],
+            "web.development.main.project-1.example-tenant-2.localhost",
+        )
         self.assertEqual(captured["timeout"], 5)
 
-    def test_release_route_verification_fails_provider_miss_without_marking_live(self) -> None:
+    def test_release_route_verification_fails_provider_miss_without_marking_live(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         release = ProjectDeploymentRelease(
             release_id="release-1",
@@ -5702,7 +6498,7 @@ class DeploymentContractTests(unittest.TestCase):
                         "service_name": "Web",
                         "service_kind": "website",
                         "scheme": "http",
-                        "host": "web.development.main.project-1.bsktpay-2.localhost",
+                        "host": "web.development.main.project-1.example-tenant-2.localhost",
                         "proxy_port": 8088,
                         "url_kind": "generated",
                     }
@@ -5715,7 +6511,9 @@ class DeploymentContractTests(unittest.TestCase):
             updated_at=now,
         )
 
-        result = verify_release_route_bindings(release, fetch_url_fn=lambda _url: "provider route not active")
+        result = verify_release_route_bindings(
+            release, fetch_url_fn=lambda _url: "provider route not active"
+        )
 
         self.assertFalse(result.ok)
         self.assertIn("provider route not active", result.error or "")
@@ -5742,7 +6540,7 @@ class DeploymentContractTests(unittest.TestCase):
                         "service_name": "API",
                         "service_kind": "api",
                         "scheme": "http",
-                        "host": "api.development.main.project-1.bsktpay-2.localhost",
+                        "host": "api.development.main.project-1.example-tenant-2.localhost",
                         "proxy_port": 8088,
                         "url_kind": "generated",
                     }
@@ -5759,7 +6557,9 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
 
-    def test_reconcile_run_preview_enqueues_local_route_sync_command_when_provider_route_is_inactive(self) -> None:
+    def test_reconcile_run_preview_enqueues_local_route_sync_command_when_provider_route_is_inactive(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -5775,9 +6575,11 @@ class DeploymentContractTests(unittest.TestCase):
                     "provider": "internal_coolify",
                     "infrastructure_provider": "hetzner",
                     "region": "local",
-                    "base_domain": "192-168-0-118.sslip.io:8088",
+                    "base_domain": "192-0-2-10.sslip.io:8088",
                     "api_base_url": "http://host.docker.internal:8000/api/v1",
-                    "secret_refs": {"coolify_api_token": "tenant/tenant-1/COOLIFY_API_TOKEN"},
+                    "secret_refs": {
+                        "coolify_api_token": "tenant/tenant-1/COOLIFY_API_TOKEN"
+                    },
                     "state": "active",
                     "managed_host_id": "host-1",
                 },
@@ -5859,7 +6661,7 @@ class DeploymentContractTests(unittest.TestCase):
                             "service_name": "Admin Website",
                             "service_kind": "website",
                             "scheme": "http",
-                            "host": "admin.preview.192-168-0-118.sslip.io",
+                            "host": "admin.preview.192-0-2-10.sslip.io",
                             "proxy_port": 8088,
                             "port": "80",
                             "internal_url": "http://host.docker.internal:8088",
@@ -5894,7 +6696,14 @@ class DeploymentContractTests(unittest.TestCase):
                 available_at=now,
                 attempt_count=1,
                 payload_json={"deployment_uuid": "deployment-1", "action": "upsert"},
-                result_json={"targets": [{"service_key": "admin-website", "upstream_url": "http://172.20.0.10:80"}]},
+                result_json={
+                    "targets": [
+                        {
+                            "service_key": "admin-website",
+                            "upstream_url": "http://172.20.0.10:80",
+                        }
+                    ]
+                },
                 last_error=None,
                 claimed_at=now,
                 started_at=now,
@@ -5909,7 +6718,10 @@ class DeploymentContractTests(unittest.TestCase):
                 pass
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -5922,7 +6734,9 @@ class DeploymentContractTests(unittest.TestCase):
                 ),
                 patch(
                     "orchestrator.core.deployment_runtime.verify_release_route_bindings",
-                    return_value=SimpleNamespace(ok=False, error="provider route not active"),
+                    return_value=SimpleNamespace(
+                        ok=False, error="provider route not active"
+                    ),
                 ),
             ):
                 updated = reconcile_deployment_release(session=session, release=release)
@@ -5930,9 +6744,16 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(updated)
             session.refresh(release)
             self.assertEqual(release.status, "route_activating")
-            commands = session.execute(
-                select(DeploymentHostCommand).order_by(DeploymentHostCommand.created_at, DeploymentHostCommand.command_id)
-            ).scalars().all()
+            commands = (
+                session.execute(
+                    select(DeploymentHostCommand).order_by(
+                        DeploymentHostCommand.created_at,
+                        DeploymentHostCommand.command_id,
+                    )
+                )
+                .scalars()
+                .all()
+            )
             self.assertEqual(len(commands), 2)
             command = commands[-1]
             self.assertEqual(command.kind, "sync_local_preview_routes")
@@ -5941,7 +6762,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(command.payload_json["deployment_uuid"], "deployment-1")
             self.assertEqual(command.payload_json["action"], "upsert")
 
-    def test_reconcile_defers_finished_unhealthy_run_preview_to_route_verification(self) -> None:
+    def test_reconcile_defers_finished_unhealthy_run_preview_to_route_verification(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -5951,9 +6774,11 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "local",
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
                 "api_base_url": "http://host.docker.internal:8000/api/v1",
-                "secret_refs": {"coolify_api_token": "tenant/tenant-1/COOLIFY_API_TOKEN"},
+                "secret_refs": {
+                    "coolify_api_token": "tenant/tenant-1/COOLIFY_API_TOKEN"
+                },
                 "state": "active",
                 "managed_host_id": "host-1",
             }
@@ -5996,7 +6821,7 @@ class DeploymentContractTests(unittest.TestCase):
                             "service_name": "Web",
                             "service_kind": "website",
                             "scheme": "http",
-                            "host": "web.preview.192-168-0-118.sslip.io",
+                            "host": "web.preview.192-0-2-10.sslip.io",
                             "proxy_port": 8088,
                             "port": "8000",
                             "internal_url": "http://host.docker.internal:8088",
@@ -6023,7 +6848,10 @@ class DeploymentContractTests(unittest.TestCase):
                 pass
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -6037,7 +6865,9 @@ class DeploymentContractTests(unittest.TestCase):
                 ),
                 patch(
                     "orchestrator.core.deployment_runtime.verify_release_route_bindings",
-                    return_value=SimpleNamespace(ok=False, error="provider route not active"),
+                    return_value=SimpleNamespace(
+                        ok=False, error="provider route not active"
+                    ),
                 ),
             ):
                 updated = reconcile_deployment_release(session=session, release=release)
@@ -6048,15 +6878,21 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(release.last_error, "provider route not active")
             command = session.execute(
                 select(DeploymentHostCommand).where(
-                    DeploymentHostCommand.release_id == "release-finished-unhealthy-routed-preview"
+                    DeploymentHostCommand.release_id
+                    == "release-finished-unhealthy-routed-preview"
                 )
             ).scalar_one()
             self.assertEqual(command.kind, "sync_local_preview_routes")
             self.assertEqual(command.status, "queued")
-            self.assertEqual(command.payload_json["deployment_uuid"], "deployment-finished-unhealthy-routed-preview")
+            self.assertEqual(
+                command.payload_json["deployment_uuid"],
+                "deployment-finished-unhealthy-routed-preview",
+            )
             self.assertEqual(command.payload_json["action"], "upsert")
 
-    def test_reconcile_run_preview_fails_when_local_route_sync_command_failed(self) -> None:
+    def test_reconcile_run_preview_fails_when_local_route_sync_command_failed(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
@@ -6072,9 +6908,11 @@ class DeploymentContractTests(unittest.TestCase):
                     "provider": "internal_coolify",
                     "infrastructure_provider": "hetzner",
                     "region": "local",
-                    "base_domain": "192-168-0-118.sslip.io:8088",
+                    "base_domain": "192-0-2-10.sslip.io:8088",
                     "api_base_url": "http://host.docker.internal:8000/api/v1",
-                    "secret_refs": {"coolify_api_token": "tenant/tenant-1/COOLIFY_API_TOKEN"},
+                    "secret_refs": {
+                        "coolify_api_token": "tenant/tenant-1/COOLIFY_API_TOKEN"
+                    },
                     "state": "active",
                     "managed_host_id": "host-1",
                 },
@@ -6156,7 +6994,7 @@ class DeploymentContractTests(unittest.TestCase):
                             "service_name": "Admin Website",
                             "service_kind": "website",
                             "scheme": "http",
-                            "host": "admin.preview.192-168-0-118.sslip.io",
+                            "host": "admin.preview.192-0-2-10.sslip.io",
                             "proxy_port": 8088,
                             "port": "80",
                             "internal_url": "http://host.docker.internal:8088",
@@ -6206,7 +7044,10 @@ class DeploymentContractTests(unittest.TestCase):
                 pass
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -6219,7 +7060,9 @@ class DeploymentContractTests(unittest.TestCase):
                 ),
                 patch(
                     "orchestrator.core.deployment_runtime.verify_release_route_bindings",
-                    return_value=SimpleNamespace(ok=False, error="provider route not active"),
+                    return_value=SimpleNamespace(
+                        ok=False, error="provider route not active"
+                    ),
                 ),
             ):
                 updated = reconcile_deployment_release(session=session, release=release)
@@ -6227,7 +7070,10 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(updated)
             session.refresh(release)
             self.assertEqual(release.status, "failed")
-            self.assertEqual(release.last_error, "Local preview route sync failed: proxy write failed")
+            self.assertEqual(
+                release.last_error,
+                "Local preview route sync failed: proxy write failed",
+            )
 
     def test_reconcile_fails_release_when_provider_progress_is_stale(self) -> None:
         self._seed_tenant_project_app()
@@ -6271,10 +7117,15 @@ class DeploymentContractTests(unittest.TestCase):
                 pass
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._settings_from_session",
-                    return_value=SimpleNamespace(deployment_release_stale_timeout_seconds=300),
+                    return_value=SimpleNamespace(
+                        deployment_release_stale_timeout_seconds=300
+                    ),
                 ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
@@ -6293,9 +7144,13 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(updated)
             session.refresh(release)
             self.assertEqual(release.status, "failed")
-            self.assertIn("remained in progress status 'queued'", release.last_error or "")
+            self.assertIn(
+                "remained in progress status 'queued'", release.last_error or ""
+            )
 
-    def test_reconcile_fails_release_when_provider_logs_are_stale_despite_fresh_provider_update(self) -> None:
+    def test_reconcile_fails_release_when_provider_logs_are_stale_despite_fresh_provider_update(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         stale_at = now - timedelta(seconds=900)
@@ -6337,10 +7192,15 @@ class DeploymentContractTests(unittest.TestCase):
                 pass
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._settings_from_session",
-                    return_value=SimpleNamespace(deployment_release_stale_timeout_seconds=300),
+                    return_value=SimpleNamespace(
+                        deployment_release_stale_timeout_seconds=300
+                    ),
                 ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
@@ -6360,9 +7220,13 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(updated)
             session.refresh(release)
             self.assertEqual(release.status, "failed")
-            self.assertIn("remained in progress status 'in_progress'", release.last_error or "")
+            self.assertIn(
+                "remained in progress status 'in_progress'", release.last_error or ""
+            )
 
-    def test_reconcile_records_failure_reason_when_finished_deployment_has_unhealthy_application(self) -> None:
+    def test_reconcile_records_failure_reason_when_finished_deployment_has_unhealthy_application(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -6403,7 +7267,10 @@ class DeploymentContractTests(unittest.TestCase):
                 pass
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -6426,7 +7293,9 @@ class DeploymentContractTests(unittest.TestCase):
                 "Deployment provider reported status 'finished', but application status was 'exited:unhealthy'.",
             )
 
-    def test_reconcile_fails_run_preview_when_provider_uses_stale_legacy_expo_start_command(self) -> None:
+    def test_reconcile_fails_run_preview_when_provider_uses_stale_legacy_expo_start_command(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -6472,14 +7341,19 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             class _FakeClient:
-                def get_application(self, *, application_uuid: str) -> dict[str, object]:
+                def get_application(
+                    self, *, application_uuid: str
+                ) -> dict[str, object]:
                     return {
                         "uuid": application_uuid,
                         "start_command": LEGACY_EXPO_WEB_START_COMMAND_WITHOUT_OPENSSL,
                     }
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -6497,10 +7371,14 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(updated)
             session.refresh(release)
             self.assertEqual(release.status, "failed")
-            self.assertIn("uses stale legacy Expo start command", release.last_error or "")
+            self.assertIn(
+                "uses stale legacy Expo start command", release.last_error or ""
+            )
             self.assertIn(LEGACY_EXPO_WEB_START_COMMAND, release.last_error or "")
 
-    def test_reconcile_fails_run_preview_when_provider_uses_stale_legacy_expo_install_command(self) -> None:
+    def test_reconcile_fails_run_preview_when_provider_uses_stale_legacy_expo_install_command(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -6546,7 +7424,9 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             class _FakeClient:
-                def get_application(self, *, application_uuid: str) -> dict[str, object]:
+                def get_application(
+                    self, *, application_uuid: str
+                ) -> dict[str, object]:
                     return {
                         "uuid": application_uuid,
                         "start_command": LEGACY_EXPO_WEB_START_COMMAND,
@@ -6554,7 +7434,10 @@ class DeploymentContractTests(unittest.TestCase):
                     }
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -6572,10 +7455,14 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertTrue(updated)
             session.refresh(release)
             self.assertEqual(release.status, "failed")
-            self.assertIn("uses stale legacy Expo install command", release.last_error or "")
+            self.assertIn(
+                "uses stale legacy Expo install command", release.last_error or ""
+            )
             self.assertIn(LEGACY_EXPO_CLI_INSTALL_COMMAND, release.last_error or "")
 
-    def test_reconcile_treats_provider_application_contract_timeout_as_transient(self) -> None:
+    def test_reconcile_treats_provider_application_contract_timeout_as_transient(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -6621,11 +7508,18 @@ class DeploymentContractTests(unittest.TestCase):
             session.commit()
 
             class _FakeClient:
-                def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                    raise CoolifyApiError(f"Coolify API request timed out for GET /applications/{application_uuid}")
+                def get_application(
+                    self, *, application_uuid: str
+                ) -> dict[str, object]:
+                    raise CoolifyApiError(
+                        f"Coolify API request timed out for GET /applications/{application_uuid}"
+                    )
 
             with (
-                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_client_for_tenant",
+                    return_value=_FakeClient(),
+                ),
                 patch(
                     "orchestrator.core.deployment_runtime._coolify_observation_for_release",
                     return_value=CoolifyDeploymentObservation(
@@ -6649,7 +7543,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(release.status, "live")
             self.assertIsNone(release.last_error)
 
-    def test_reconcile_batch_rolls_back_failed_release_before_next_release(self) -> None:
+    def test_reconcile_batch_rolls_back_failed_release_before_next_release(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -6729,7 +7625,10 @@ class DeploymentContractTests(unittest.TestCase):
             release.last_error = "provider failed"
             return True
 
-        with patch("orchestrator.core.deployment_runtime.reconcile_deployment_release", side_effect=fake_reconcile):
+        with patch(
+            "orchestrator.core.deployment_runtime.reconcile_deployment_release",
+            side_effect=fake_reconcile,
+        ):
             processed = reconcile_deployment_releases_once(
                 session_factory=self.session_factory,
                 settings=SimpleNamespace(),
@@ -6746,7 +7645,9 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(good_release.status, "failed")
             self.assertEqual(good_release.last_error, "provider failed")
 
-    def test_docker_compose_generated_routes_require_explicit_public_service(self) -> None:
+    def test_docker_compose_generated_routes_require_explicit_public_service(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         tenant = Tenant(
             tenant_id="tenant-1",
@@ -6801,7 +7702,7 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "eu-west",
-                "base_domain": "bsktpay-2.localhost:8088",
+                "base_domain": "example-tenant-2.localhost:8088",
                 "platform_subdomain": "builder",
                 "api_base_url": "https://builder.apps.example.com/api/v1",
                 "coolify_project_uuid": "coolify-project-1",
@@ -6857,9 +7758,13 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(set(routes), {"web"})
         self.assertEqual(set(ports), {"web"})
-        self.assertEqual([route_binding["service_key"] for route_binding in route_bindings], ["web"])
+        self.assertEqual(
+            [route_binding["service_key"] for route_binding in route_bindings], ["web"]
+        )
 
-    def test_coolify_generated_routes_are_provider_domains_not_compose_labels(self) -> None:
+    def test_coolify_generated_routes_are_provider_domains_not_compose_labels(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         tenant = Tenant(
             tenant_id="tenant-1",
@@ -6914,7 +7819,7 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "eu-west",
-                "base_domain": "bsktpay-2.localhost:8088",
+                "base_domain": "example-tenant-2.localhost:8088",
                 "platform_subdomain": "builder",
                 "api_base_url": "https://builder.apps.example.com/api/v1",
                 "coolify_project_uuid": "coolify-project-1",
@@ -6962,12 +7867,17 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(
             routes["customer-api"],
-            "http://customer-api.production.main.project-1.bsktpay-2.localhost",
+            "http://customer-api.production.main.project-1.example-tenant-2.localhost",
         )
         self.assertEqual(ports["customer-api"], "8080")
-        self.assertEqual(route_bindings[0]["host"], "customer-api.production.main.project-1.bsktpay-2.localhost")
+        self.assertEqual(
+            route_bindings[0]["host"],
+            "customer-api.production.main.project-1.example-tenant-2.localhost",
+        )
         self.assertEqual(route_bindings[0]["proxy_port"], 8088)
-        self.assertEqual(route_bindings[0]["internal_url"], "http://host.docker.internal:8088")
+        self.assertEqual(
+            route_bindings[0]["internal_url"], "http://host.docker.internal:8088"
+        )
 
     def test_coolify_generated_routes_use_http_for_local_lan_proxy_domain(self) -> None:
         now = datetime.now(timezone.utc)
@@ -7024,7 +7934,7 @@ class DeploymentContractTests(unittest.TestCase):
                 "provider": "internal_coolify",
                 "infrastructure_provider": "hetzner",
                 "region": "local",
-                "base_domain": "192-168-0-118.sslip.io:8088",
+                "base_domain": "192-0-2-10.sslip.io:8088",
                 "platform_subdomain": "builder",
                 "api_base_url": "http://host.docker.internal:8000/api/v1",
                 "coolify_project_uuid": "coolify-project-1",
@@ -7066,7 +7976,7 @@ class DeploymentContractTests(unittest.TestCase):
             project_app=project_app,
             tenant_plane=tenant_plane,
             project_deployment=project_deployment,
-            git_ref="mb/deploy/bsktpay-2-default/feature-ap-293-67d699cd48e2",
+            git_ref="mb/deploy/example-tenant-2-default/feature-ap-293-67d699cd48e2",
             exposed_ports_by_service={"admin-website": ["3000"]},
             release_id="release-12345678",
             release_kind="run_preview",
@@ -7074,13 +7984,13 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(
             routes["admin-website"],
-            "http://admin-website-production-mb-deploy-bsktpay-2-default-69fbc75a54.align.192-168-0-118.sslip.io",
+            "http://admin-website-production-mb-deploy-example-tenant-2-4bb4797529.align.192-0-2-10.sslip.io",
         )
         self.assertEqual(ports["admin-website"], "3000")
         self.assertEqual(route_bindings[0]["scheme"], "http")
         self.assertEqual(
             route_bindings[0]["host"],
-            "admin-website-production-mb-deploy-bsktpay-2-default-69fbc75a54.align.192-168-0-118.sslip.io",
+            "admin-website-production-mb-deploy-example-tenant-2-4bb4797529.align.192-0-2-10.sslip.io",
         )
         self.assertLessEqual(len(route_bindings[0]["host"].split(".")[0]), 63)
         self.assertEqual(route_bindings[0]["host"].split(".")[1], "align")
@@ -7091,17 +8001,23 @@ class DeploymentContractTests(unittest.TestCase):
             "http://host.docker.internal:8088",
         )
 
-    def test_internal_coolify_release_restarts_existing_docker_compose_application(self) -> None:
+    def test_internal_coolify_release_restarts_existing_docker_compose_application(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.application_patch_payload: dict[str, object] | None = None
                 self.started_application_uuid: str | None = None
 
-            def update_application(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def update_application(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 self.application_patch_payload = payload
                 return {"application_uuid": application_uuid, **payload}
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 return {"application_uuid": application_uuid, **payload}
 
             def start_application(self, *, application_uuid: str) -> str:
@@ -7155,7 +8071,9 @@ class DeploymentContractTests(unittest.TestCase):
             start_command=None,
             env_schema_json={},
             secret_schema_json={},
-            deployment_config={"deployment_compose_path": ".master-builder/deployments/docker-compose.yml"},
+            deployment_config={
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml"
+            },
             status="ready",
             created_at=now,
             updated_at=now,
@@ -7204,7 +8122,10 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
             patch(
                 "orchestrator.api.admin.deployment_release_service._load_normalized_compose_for_release",
                 return_value=CoolifyComposeNormalizationResult(
@@ -7212,7 +8133,10 @@ class DeploymentContractTests(unittest.TestCase):
                     exposed_ports_by_service={"web": ["3000"]},
                 ),
             ),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             result = submit_internal_coolify_release(
                 session=session,
@@ -7221,7 +8145,9 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1"
+                ),
                 existing_application_uuid="application-existing",
                 existing_service_uuid=None,
             )
@@ -7230,15 +8156,21 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result["deployment_uuid"], "deployment-2")
         self.assertEqual(fake_client.started_application_uuid, "application-existing")
         assert fake_client.application_patch_payload is not None
-        self.assertEqual(fake_client.application_patch_payload["build_pack"], "dockercompose")
-        self.assertNotIn("docker_compose_domains", fake_client.application_patch_payload)
+        self.assertEqual(
+            fake_client.application_patch_payload["build_pack"], "dockercompose"
+        )
+        self.assertNotIn(
+            "docker_compose_domains", fake_client.application_patch_payload
+        )
         self.assertNotIn("project_uuid", fake_client.application_patch_payload)
         self.assertNotIn("environment_name", fake_client.application_patch_payload)
         self.assertNotIn("server_uuid", fake_client.application_patch_payload)
         self.assertNotIn("destination_uuid", fake_client.application_patch_payload)
         self.assertNotIn("github_app_uuid", fake_client.application_patch_payload)
 
-    def test_internal_coolify_release_recreates_missing_existing_docker_compose_application(self) -> None:
+    def test_internal_coolify_release_recreates_missing_existing_docker_compose_application(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def __init__(self) -> None:
                 self.update_called = False
@@ -7251,15 +8183,21 @@ class DeploymentContractTests(unittest.TestCase):
                     '{"message":"Application not found"}'
                 )
 
-            def update_application(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def update_application(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 self.update_called = True
                 return {"application_uuid": application_uuid, **payload}
 
-            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+            def create_private_github_app_application(
+                self, *, payload: dict[str, object]
+            ) -> str:
                 self.created_payload = payload
                 return "application-new"
 
-            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+            def bulk_update_application_envs(
+                self, *, application_uuid: str, payload: dict[str, object]
+            ) -> dict[str, object]:
                 return {"application_uuid": application_uuid, **payload}
 
             def start_application(self, *, application_uuid: str) -> str:
@@ -7310,7 +8248,9 @@ class DeploymentContractTests(unittest.TestCase):
             start_command=None,
             env_schema_json={},
             secret_schema_json={},
-            deployment_config={"deployment_compose_path": ".master-builder/deployments/docker-compose.yml"},
+            deployment_config={
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml"
+            },
             status="ready",
             created_at=now,
             updated_at=now,
@@ -7359,7 +8299,10 @@ class DeploymentContractTests(unittest.TestCase):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch(
+                "orchestrator.api.admin.deployment_release_service._resolve_secret_value",
+                return_value="token",
+            ),
             patch(
                 "orchestrator.api.admin.deployment_release_service._load_normalized_compose_for_release",
                 return_value=CoolifyComposeNormalizationResult(
@@ -7367,7 +8310,10 @@ class DeploymentContractTests(unittest.TestCase):
                     exposed_ports_by_service={"web": ["3000"]},
                 ),
             ),
-            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+            patch(
+                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient",
+                return_value=fake_client,
+            ),
         ):
             result = submit_internal_coolify_release(
                 session=session,
@@ -7376,7 +8322,9 @@ class DeploymentContractTests(unittest.TestCase):
                 project_app=project_app,
                 tenant_plane=tenant_plane,
                 project_deployment=project_deployment,
-                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1"),
+                payload=ProjectDeploymentReleaseCreate(
+                    git_ref="main", commit_sha="abcdef1"
+                ),
                 existing_application_uuid="application-stale",
                 existing_service_uuid=None,
             )
@@ -7419,7 +8367,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(client.service_uuid, "service-1")
         self.assertEqual(observation.status, "running:unknown")
 
-    def test_release_reconciliation_keeps_application_uuid_over_numeric_provider_application_id(self) -> None:
+    def test_release_reconciliation_keeps_application_uuid_over_numeric_provider_application_id(
+        self,
+    ) -> None:
         class FakeCoolifyClient:
             def get_deployment(self, *, deployment_uuid: str) -> dict[str, object]:
                 self.deployment_uuid = deployment_uuid
@@ -7442,7 +8392,10 @@ class DeploymentContractTests(unittest.TestCase):
             source_strategy="nixpacks",
             git_ref="main",
             commit_sha="abcdef1",
-            provider_context={"deployment_uuid": "deployment-1", "application_uuid": "app-uuid-1"},
+            provider_context={
+                "deployment_uuid": "deployment-1",
+                "application_uuid": "app-uuid-1",
+            },
             deployment_snapshot={},
             requested_at=now,
             created_at=now,
@@ -7463,7 +8416,10 @@ class DeploymentContractTests(unittest.TestCase):
                     "deployment_uuid": deployment_uuid,
                     "status": "in_progress",
                     "updated_at": "2026-06-15T21:46:43.000000Z",
-                    "application": {"uuid": "application-1", "status": "exited:unhealthy"},
+                    "application": {
+                        "uuid": "application-1",
+                        "status": "exited:unhealthy",
+                    },
                     "logs": (
                         "["
                         '{"timestamp":"2026-06-15T21:40:34.000000Z","output":"install complete"},'
@@ -7484,7 +8440,10 @@ class DeploymentContractTests(unittest.TestCase):
             source_strategy="nixpacks",
             git_ref="main",
             commit_sha="abcdef1",
-            provider_context={"deployment_uuid": "deployment-1", "application_uuid": "app-uuid-1"},
+            provider_context={
+                "deployment_uuid": "deployment-1",
+                "application_uuid": "app-uuid-1",
+            },
             deployment_snapshot={},
             requested_at=now,
             created_at=now,
@@ -7495,8 +8454,14 @@ class DeploymentContractTests(unittest.TestCase):
         observation = _coolify_observation_for_release(client=client, release=release)
 
         assert observation is not None
-        self.assertEqual(observation.provider_updated_at, datetime(2026, 6, 15, 21, 46, 43, tzinfo=timezone.utc))
-        self.assertEqual(observation.provider_log_updated_at, datetime(2026, 6, 15, 21, 40, 34, tzinfo=timezone.utc))
+        self.assertEqual(
+            observation.provider_updated_at,
+            datetime(2026, 6, 15, 21, 46, 43, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            observation.provider_log_updated_at,
+            datetime(2026, 6, 15, 21, 40, 34, tzinfo=timezone.utc),
+        )
 
     def test_release_reconciliation_does_not_store_success_logs_as_error(self) -> None:
         class FakeCoolifyClient:
@@ -7505,7 +8470,10 @@ class DeploymentContractTests(unittest.TestCase):
                 return {
                     "deployment_uuid": deployment_uuid,
                     "status": "finished",
-                    "application": {"uuid": "application-1", "status": "running:unknown"},
+                    "application": {
+                        "uuid": "application-1",
+                        "status": "running:unknown",
+                    },
                     "logs": "successful build logs are not an error",
                 }
 
@@ -7536,7 +8504,9 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(observation.status, "finished")
         self.assertIsNone(observation.last_error)
 
-    def test_release_reconciliation_does_not_fail_in_progress_release_from_stale_application_status(self) -> None:
+    def test_release_reconciliation_does_not_fail_in_progress_release_from_stale_application_status(
+        self,
+    ) -> None:
         next_status = _resolve_release_observation_transition(
             current_status="deploying",
             observed_status="in_progress",
@@ -7545,7 +8515,9 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(next_status, "deploying")
 
-    def test_release_reconciliation_requires_successful_deployment_for_live(self) -> None:
+    def test_release_reconciliation_requires_successful_deployment_for_live(
+        self,
+    ) -> None:
         next_status = _resolve_release_observation_transition(
             current_status="deploying",
             observed_status="in_progress",
@@ -7578,7 +8550,9 @@ class DeploymentContractTests(unittest.TestCase):
 
         self.assertEqual(stale_application_status, "live")
 
-    def test_release_status_update_allows_provider_terminal_jump_from_provisioning(self) -> None:
+    def test_release_status_update_allows_provider_terminal_jump_from_provisioning(
+        self,
+    ) -> None:
         self._seed_tenant_project_app()
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:

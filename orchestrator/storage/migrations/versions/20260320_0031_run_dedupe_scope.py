@@ -25,13 +25,18 @@ _RUN_DEDUPE_SCOPE_LOCK_KEY = 202603200031
 def _has_column(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def _drop_index_if_exists(index_name: str) -> None:
@@ -76,7 +81,9 @@ def _rebuild_run_locks() -> None:
         sa.Column("run_id", sa.String(length=64), nullable=False),
         sa.Column("locked_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("tenant_id", "issue_key", "dedupe_scope"),
     )
     op.create_index("ix_run_locks_v2_run_id", "run_locks_v2", ["run_id"], unique=True)
@@ -146,10 +153,14 @@ def downgrade() -> None:
             sa.Column("run_id", sa.String(length=64), nullable=False),
             sa.Column("locked_at", sa.DateTime(timezone=True), nullable=False),
             sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("tenant_id", "issue_key"),
         )
-        op.create_index("ix_run_locks_legacy_run_id", "run_locks_legacy", ["run_id"], unique=True)
+        op.create_index(
+            "ix_run_locks_legacy_run_id", "run_locks_legacy", ["run_id"], unique=True
+        )
         bind.execute(
             text(
                 """

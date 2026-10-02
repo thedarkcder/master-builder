@@ -29,7 +29,10 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_permission,
 )
-from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.access import (
+    PERMISSION_PROJECTS_MANAGE,
+    PERMISSION_WORKSPACE_MANAGE,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Tenant
@@ -37,7 +40,9 @@ from orchestrator.storage.models import Project, Tenant
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-@router.post("/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart)
+@router.post(
+    "/tenants/{tenant_id}/github/install/start", response_model=GitHubInstallStart
+)
 def start_github_install(
     tenant_id: str,
     return_to: str = Query(default="edit", pattern="^(edit|wizard)$"),
@@ -47,17 +52,23 @@ def start_github_install(
     if principal.is_platform_super_admin:
         require_admin(principal=principal)
     else:
-        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+        require_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_key=PERMISSION_WORKSPACE_MANAGE,
+        )
     return start_github_install_impl(
         tenant=session.get(Tenant, tenant_id),
         tenant_id=tenant_id,
         return_to=return_to,
         session=session,
         settings=get_settings(),
-        resolve_platform_secret_ref_fn=lambda db_session, secret_ref, encryption_key: resolve_platform_secret_ref(
-            db_session,
-            secret_ref=secret_ref,
-            encryption_key=encryption_key,
+        resolve_platform_secret_ref_fn=lambda db_session, secret_ref, encryption_key: (
+            resolve_platform_secret_ref(
+                db_session,
+                secret_ref=secret_ref,
+                encryption_key=encryption_key,
+            )
         ),
     )
 
@@ -79,7 +90,10 @@ def github_install_callback(
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
-@router.get("/tenants/{tenant_id}/github/repositories", response_model=list[GitHubRepositoryRead])
+@router.get(
+    "/tenants/{tenant_id}/github/repositories",
+    response_model=list[GitHubRepositoryRead],
+)
 def list_tenant_github_repositories(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
@@ -105,7 +119,10 @@ def list_tenant_github_repositories(
     )
 
 
-@router.get("/tenants/{tenant_id}/projects/{project_id}/github/branches", response_model=list[GitHubBranchRead])
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/github/branches",
+    response_model=list[GitHubBranchRead],
+)
 def list_project_github_branches(
     tenant_id: str,
     project_id: str,
@@ -142,7 +159,11 @@ def test_github_connection(
     if principal.is_platform_super_admin:
         require_admin(principal=principal)
     else:
-        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+        require_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_key=PERMISSION_WORKSPACE_MANAGE,
+        )
     return test_github_connection_impl(
         session=session,
         tenant_id=tenant_id,

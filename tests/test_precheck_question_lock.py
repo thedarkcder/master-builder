@@ -57,7 +57,9 @@ def test_remove_precheck_questions_block_ignores_earlier_unrelated_end_marker() 
     assert "Locked question one?" not in updated
 
 
-def test_upsert_precheck_questions_block_replaces_real_block_after_unrelated_end_marker() -> None:
+def test_upsert_precheck_questions_block_replaces_real_block_after_unrelated_end_marker() -> (
+    None
+):
     description = "\n".join(
         [
             "Prefix line.",
@@ -69,7 +71,9 @@ def test_upsert_precheck_questions_block_replaces_real_block_after_unrelated_end
     )
     replacement = _sample_block(reason="New reason")
 
-    updated = upsert_precheck_questions_block(current_description=description, block=replacement)
+    updated = upsert_precheck_questions_block(
+        current_description=description, block=replacement
+    )
 
     assert updated.count(PRECHECK_QUESTIONS_BLOCK_START) == 1
     assert "Decision Gate reason: New reason" in updated

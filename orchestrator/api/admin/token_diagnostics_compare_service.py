@@ -14,7 +14,9 @@ from orchestrator.storage.models import Project
 
 
 def _normalize_project_ids(project_ids: str) -> list[str]:
-    values = [value.strip() for value in str(project_ids or "").split(",") if value.strip()]
+    values = [
+        value.strip() for value in str(project_ids or "").split(",") if value.strip()
+    ]
     deduped: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -42,17 +44,25 @@ def get_token_stage_diagnostics_compare(
 ) -> TokenStageDiagnosticsCompareRead:
     normalized_tenant = str(tenant_id).strip()
     if not normalized_tenant:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id is required"
+        )
 
     ids = _normalize_project_ids(project_ids)
     if not ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="project_ids is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="project_ids is required"
+        )
 
-    projects = session.execute(
-        select(Project)
-        .where(Project.tenant_id == normalized_tenant)
-        .where(Project.project_id.in_(ids))
-    ).scalars().all()
+    projects = (
+        session.execute(
+            select(Project)
+            .where(Project.tenant_id == normalized_tenant)
+            .where(Project.project_id.in_(ids))
+        )
+        .scalars()
+        .all()
+    )
     project_lookup = {str(project.project_id): project for project in projects}
 
     missing_ids = [project_id for project_id in ids if project_id not in project_lookup]

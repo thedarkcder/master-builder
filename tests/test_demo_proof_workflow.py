@@ -99,7 +99,9 @@ def test_demo_proof_release_failure_waits_for_cleanup_before_blocking() -> None:
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_service_verification_failure_attaches_evidence_before_cleanup() -> None:
+def test_demo_proof_service_verification_failure_attaches_evidence_before_cleanup() -> (
+    None
+):
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_SERVICES_VERIFYING,
         event="ServiceVerificationFailed",
@@ -140,7 +142,9 @@ def test_demo_proof_cleanup_only_request_waits_for_cleanup_before_completing() -
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_pr_evidence_attach_failure_waits_for_cleanup_before_blocking() -> None:
+def test_demo_proof_pr_evidence_attach_failure_waits_for_cleanup_before_blocking() -> (
+    None
+):
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_PR_ATTACHING,
         event="PREvidenceAttachFailed",
@@ -158,7 +162,9 @@ def test_demo_proof_pr_evidence_attach_failure_waits_for_cleanup_before_blocking
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_failure_pr_evidence_attach_failure_waits_for_cleanup_before_blocking() -> None:
+def test_demo_proof_failure_pr_evidence_attach_failure_waits_for_cleanup_before_blocking() -> (
+    None
+):
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
         event="PRFailureEvidenceAttachFailed",
@@ -176,7 +182,9 @@ def test_demo_proof_failure_pr_evidence_attach_failure_waits_for_cleanup_before_
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_recording_failure_with_evidence_reports_failure_then_blocks() -> None:
+def test_demo_proof_recording_failure_with_evidence_reports_failure_then_blocks() -> (
+    None
+):
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_REQUESTED,
         event="DemoProofRequested",
@@ -211,7 +219,9 @@ def test_demo_proof_recording_failure_with_evidence_reports_failure_then_blocks(
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking() -> None:
+def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking() -> (
+    None
+):
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_RECORDING,
         event="RecordingFailed",
@@ -253,7 +263,9 @@ def test_demo_proof_recording_deferred_can_resume_on_next_worker() -> None:
 
 
 def test_demo_proof_terminal_state_rejects_late_non_duplicate_event() -> None:
-    with pytest.raises(WorkflowTransitionError, match="terminal demo proof state blocked"):
+    with pytest.raises(
+        WorkflowTransitionError, match="terminal demo proof state blocked"
+    ):
         transition_demo_proof_state(
             current_state=DEMO_PROOF_STATE_BLOCKED,
             event="PreviewCleanupRequested",
@@ -280,7 +292,9 @@ def test_preview_lease_happy_path_reaches_destroyed() -> None:
 
 
 def test_preview_lease_rejects_recording_before_live() -> None:
-    with pytest.raises(WorkflowTransitionError, match="Cannot apply PreviewLeaseRecordingStarted"):
+    with pytest.raises(
+        WorkflowTransitionError, match="Cannot apply PreviewLeaseRecordingStarted"
+    ):
         transition_preview_lease_state(
             current_state=PREVIEW_LEASE_STATE_REQUESTED,
             event="PreviewLeaseRecordingStarted",

@@ -11,7 +11,9 @@ class AtlassianOAuthError(RuntimeError):
 
 
 class AtlassianOAuthHttpError(AtlassianOAuthError):
-    def __init__(self, message: str, *, status_code: int, error_prefix: str, error_body: str):
+    def __init__(
+        self, message: str, *, status_code: int, error_prefix: str, error_body: str
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.error_prefix = error_prefix

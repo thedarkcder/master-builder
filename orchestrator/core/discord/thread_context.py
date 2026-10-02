@@ -26,7 +26,13 @@ def get_thread_issue_key(*, discord_config: dict | None, channel_id: str) -> str
     return ""
 
 
-def put_thread_issue_key(*, discord_config: dict | None, channel_id: str, issue_key: str, max_entries: int = 500) -> dict:
+def put_thread_issue_key(
+    *,
+    discord_config: dict | None,
+    channel_id: str,
+    issue_key: str,
+    max_entries: int = 500,
+) -> dict:
     updated = dict(discord_config or {})
     normalized_channel_id = str(channel_id or "").strip()
     normalized_issue_key = normalize_issue_key(issue_key)
@@ -35,7 +41,9 @@ def put_thread_issue_key(*, discord_config: dict | None, channel_id: str, issue_
     raw_map = updated.get(THREAD_ISSUE_BY_CHANNEL_ID_KEY)
     issue_map = dict(raw_map) if isinstance(raw_map, dict) else {}
     issue_map[normalized_channel_id] = normalized_issue_key
-    updated[THREAD_ISSUE_BY_CHANNEL_ID_KEY] = dict(list(issue_map.items())[-max_entries:])
+    updated[THREAD_ISSUE_BY_CHANNEL_ID_KEY] = dict(
+        list(issue_map.items())[-max_entries:]
+    )
     return updated
 
 

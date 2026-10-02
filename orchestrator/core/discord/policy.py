@@ -54,7 +54,11 @@ def normalize_allowlist_requests(discord_config: dict | None) -> list[dict]:
                 "requested_at": str(item.get("requested_at") or "").strip(),
                 "channel_id": str(item.get("channel_id") or "").strip() or None,
                 "reason": str(item.get("reason") or "").strip() or None,
-                "permissions": [str(value).strip() for value in (item.get("permissions") or []) if str(value).strip()],
+                "permissions": [
+                    str(value).strip()
+                    for value in (item.get("permissions") or [])
+                    if str(value).strip()
+                ],
             }
         )
     return normalized
@@ -95,9 +99,14 @@ def channel_ids_from_discord_config(discord_config: dict | None) -> set[str]:
 
     raw_live_voice_room_links = discord_config.get("live_voice_room_links")
     if isinstance(raw_live_voice_room_links, dict):
-        for voice_channel_id, linked_text_channel_id in raw_live_voice_room_links.items():
+        for (
+            voice_channel_id,
+            linked_text_channel_id,
+        ) in raw_live_voice_room_links.items():
             normalized_voice_channel_id = str(voice_channel_id or "").strip()
-            normalized_linked_text_channel_id = str(linked_text_channel_id or "").strip()
+            normalized_linked_text_channel_id = str(
+                linked_text_channel_id or ""
+            ).strip()
             if normalized_voice_channel_id:
                 allowed.add(normalized_voice_channel_id)
             if normalized_linked_text_channel_id:
@@ -119,10 +128,15 @@ def can_execute_sensitive_command(
         return False, f"'{command_name}' requires a project-mapped Discord channel"
     if user_id in project_allowlist:
         return True, None
-    return False, f"'{command_name}' requires an allowlisted Discord user for this project"
+    return (
+        False,
+        f"'{command_name}' requires an allowlisted Discord user for this project",
+    )
 
 
-def is_channel_allowed(*, channel_id: str | None, allowed_channel_ids: set[str]) -> bool:
+def is_channel_allowed(
+    *, channel_id: str | None, allowed_channel_ids: set[str]
+) -> bool:
     if not channel_id:
         return True
     if not allowed_channel_ids:

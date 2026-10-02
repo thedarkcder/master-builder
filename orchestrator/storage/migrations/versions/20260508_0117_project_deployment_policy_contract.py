@@ -29,7 +29,9 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -55,7 +57,11 @@ def _normalize_branch(value: Any) -> str | None:
 def _expanded_policy(current: dict[str, Any]) -> dict[str, Any]:
     enabled = bool(current.get("enabled") is True)
     branch = _normalize_branch(current.get("production_branch"))
-    secret_refs = current.get("secret_refs") if isinstance(current.get("secret_refs"), dict) else {}
+    secret_refs = (
+        current.get("secret_refs")
+        if isinstance(current.get("secret_refs"), dict)
+        else {}
+    )
     branch_settings: dict[str, Any] = {}
     if branch is not None and secret_refs:
         branch_settings[branch] = {"environment": {}, "secret_refs": secret_refs}
@@ -63,9 +69,12 @@ def _expanded_policy(current: dict[str, Any]) -> dict[str, Any]:
         "enabled": enabled,
         "preview_prs_enabled": False,
         "provider": "internal_coolify",
-        "generated_domain_policy": current.get("generated_domain_policy") or "production",
+        "generated_domain_policy": current.get("generated_domain_policy")
+        or "production",
         "branch_settings": branch_settings,
-        "resources": current.get("resources") if isinstance(current.get("resources"), list) else [],
+        "resources": current.get("resources")
+        if isinstance(current.get("resources"), list)
+        else [],
     }
     if enabled and branch is not None:
         policy["production_branch"] = branch
@@ -76,7 +85,9 @@ def _expanded_policy(current: dict[str, Any]) -> dict[str, Any]:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if not (_table_exists("projects") and _column_exists("projects", "deployment_config")):
+    if not (
+        _table_exists("projects") and _column_exists("projects", "deployment_config")
+    ):
         return
 
     projects_table = sa.table(
@@ -84,12 +95,20 @@ def upgrade() -> None:
         sa.column("project_id", sa.String()),
         sa.column("deployment_config", sa.JSON()),
     )
-    rows = bind.execute(sa.text("SELECT project_id, deployment_config FROM projects")).mappings().all()
+    rows = (
+        bind.execute(sa.text("SELECT project_id, deployment_config FROM projects"))
+        .mappings()
+        .all()
+    )
     for row in rows:
         bind.execute(
             projects_table.update()
             .where(projects_table.c.project_id == row["project_id"])
-            .values(deployment_config=_expanded_policy(_coerce_dict(row["deployment_config"])))
+            .values(
+                deployment_config=_expanded_policy(
+                    _coerce_dict(row["deployment_config"])
+                )
+            )
         )
 
 

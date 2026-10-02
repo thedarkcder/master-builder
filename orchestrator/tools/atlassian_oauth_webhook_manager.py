@@ -13,7 +13,9 @@ class AtlassianOAuthWebhookManager:
     def __init__(
         self,
         *,
-        request_json: Callable[[str, str, str, dict[str, Any] | None], dict[str, Any] | list[Any]],
+        request_json: Callable[
+            [str, str, str, dict[str, Any] | None], dict[str, Any] | list[Any]
+        ],
     ) -> None:
         self._request_json = request_json
 
@@ -106,12 +108,16 @@ class AtlassianOAuthWebhookManager:
 def _extract_created_webhook_ids(payload: dict[str, Any] | list[Any]) -> list[int]:
     candidates: list[object] = []
     if isinstance(payload, dict):
-        candidates.extend([payload.get("createdWebhookId"), payload.get("createdWebhookIds")])
+        candidates.extend(
+            [payload.get("createdWebhookId"), payload.get("createdWebhookIds")]
+        )
         registration_results = payload.get("webhookRegistrationResult")
         if isinstance(registration_results, list):
             for item in registration_results:
                 if isinstance(item, dict):
-                    candidates.extend([item.get("createdWebhookId"), item.get("createdWebhookIds")])
+                    candidates.extend(
+                        [item.get("createdWebhookId"), item.get("createdWebhookIds")]
+                    )
 
     normalized_ids: list[int] = []
     for candidate in candidates:
@@ -147,7 +153,9 @@ def _summarize_webhook_registration_failure(payload: dict[str, Any] | list[Any])
 
     error_messages = payload.get("errorMessages")
     if isinstance(error_messages, list) and error_messages:
-        joined = "; ".join(str(item).strip() for item in error_messages if str(item).strip())
+        joined = "; ".join(
+            str(item).strip() for item in error_messages if str(item).strip()
+        )
         if joined:
             return f"errorMessages: {joined}"
 
@@ -164,7 +172,9 @@ def _summarize_webhook_registration_failure(payload: dict[str, Any] | list[Any])
                 continue
             item_errors = item.get("errors")
             if isinstance(item_errors, list) and item_errors:
-                joined = "; ".join(str(part).strip() for part in item_errors if str(part).strip())
+                joined = "; ".join(
+                    str(part).strip() for part in item_errors if str(part).strip()
+                )
                 if joined:
                     item_summaries.append(joined)
         if item_summaries:

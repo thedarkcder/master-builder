@@ -12,7 +12,9 @@ def _resolve_registered_executor():
     if executor is not None:
         return executor
     try:
-        from orchestrator.api.discord.ingress.executor import register_discord_command_executor
+        from orchestrator.api.discord.ingress.executor import (
+            register_discord_command_executor,
+        )
     except Exception:  # noqa: BLE001
         register_discord_command_executor = None
     if register_discord_command_executor is not None:

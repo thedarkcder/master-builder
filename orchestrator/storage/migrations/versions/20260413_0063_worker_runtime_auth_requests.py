@@ -41,9 +41,14 @@ def upgrade() -> None:
             ),
             sa.PrimaryKeyConstraint("request_id"),
         )
-    existing_indexes = {
-        index["name"] for index in inspector.get_indexes("worker_runtime_auth_requests")
-    } if "worker_runtime_auth_requests" in set(sa.inspect(bind).get_table_names()) else set()
+    existing_indexes = (
+        {
+            index["name"]
+            for index in inspector.get_indexes("worker_runtime_auth_requests")
+        }
+        if "worker_runtime_auth_requests" in set(sa.inspect(bind).get_table_names())
+        else set()
+    )
     if "ix_worker_runtime_auth_requests_scope" not in existing_indexes:
         op.create_index(
             "ix_worker_runtime_auth_requests_scope",
@@ -59,6 +64,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_worker_runtime_auth_requests_requested_at", table_name="worker_runtime_auth_requests")
-    op.drop_index("ix_worker_runtime_auth_requests_scope", table_name="worker_runtime_auth_requests")
+    op.drop_index(
+        "ix_worker_runtime_auth_requests_requested_at",
+        table_name="worker_runtime_auth_requests",
+    )
+    op.drop_index(
+        "ix_worker_runtime_auth_requests_scope",
+        table_name="worker_runtime_auth_requests",
+    )
     op.drop_table("worker_runtime_auth_requests")

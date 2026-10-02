@@ -32,18 +32,22 @@ def _quote_identifier(identifier: str) -> str:
 
 
 def _existing_tables() -> tuple[str, ...]:
-    rows = op.get_bind().execute(
-        text(
-            """
+    rows = (
+        op.get_bind()
+        .execute(
+            text(
+                """
             SELECT tablename
             FROM pg_tables
             WHERE schemaname = current_schema()
               AND tablename = ANY(:table_names)
             ORDER BY tablename
             """
-        ),
-        {"table_names": list(_TENANT_TABLES)},
-    ).scalars()
+            ),
+            {"table_names": list(_TENANT_TABLES)},
+        )
+        .scalars()
+    )
     return tuple(rows)
 
 

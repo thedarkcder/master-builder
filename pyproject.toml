@@ -1,20 +1,20 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77,<85", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "master-builder"
 version = "0.1.0"
 description = "Multi-tenant agent orchestrator service"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "alembic>=1.13.0",
-  "cryptography>=43.0.0",
+  "cryptography>=50.0.2,<51",
   "fastembed>=0.3.6",
   "fastapi>=0.115.0",
-  "hikari>=2.5.0",
-  "hikari-wave>=0.7.0a1",
   "jinja2>=3.1.0",
   "logguard>=2.0.0",
   "minio>=7.2.7",
@@ -23,17 +23,18 @@ dependencies = [
   "opentelemetry-exporter-otlp>=1.33.0",
   "opentelemetry-instrumentation-fastapi>=0.54b0",
   "opentelemetry-sdk>=1.33.0",
-  "pypdf>=5.4.0",
+  "pypdf>=6.19.0,<7",
   "psycopg[binary]>=3.2.0",
-  "PyJWT>=2.8.0",
+  "PyJWT>=2.15.1,<3",
+  "PyYAML>=6.0.3,<7",
   "python-docx>=1.1.2",
-  "pydantic-settings>=2.5.0",
+  "pydantic-settings>=2.15.0,<3",
   "scipy>=1.13.1",
   "sentry-sdk[fastapi]>=2.14.0",
   "sqlalchemy>=2.0.34",
   "temporalio>=1.9.0",
   "typing-extensions>=4.12.2",
-  "pillow>=11.1.0",
+  "pillow>=12.3.0,<13",
   "pytesseract>=0.3.13",
   "uvicorn>=0.30.0",
   "websockets>=15.0,<17",

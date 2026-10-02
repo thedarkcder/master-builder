@@ -7,15 +7,30 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from orchestrator.api.auth_body_limit import AuthBodyLimitMiddleware
+from orchestrator.api.routes.qa_artifacts import router as qa_artifacts_router
 
 from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.api.routes.admin_auth import router as admin_auth_router
-from orchestrator.api.routes.admin_agent_runtimes import router as admin_agent_runtimes_router
-from orchestrator.api.routes.admin_architecture_documents import router as admin_architecture_documents_router
-from orchestrator.api.routes.admin_atlassian_confluence import router as admin_atlassian_confluence_router
-from orchestrator.api.routes.admin_atlassian_jira import router as admin_atlassian_jira_router
-from orchestrator.api.routes.admin_atlassian_oauth import router as admin_atlassian_oauth_router
-from orchestrator.api.routes.admin_atlassian_webhooks import router as admin_atlassian_webhooks_router
+from orchestrator.api.routes.admin_agent_runtimes import (
+    router as admin_agent_runtimes_router,
+)
+from orchestrator.api.routes.admin_architecture_documents import (
+    router as admin_architecture_documents_router,
+)
+from orchestrator.api.routes.admin_atlassian_confluence import (
+    router as admin_atlassian_confluence_router,
+)
+from orchestrator.api.routes.admin_atlassian_jira import (
+    router as admin_atlassian_jira_router,
+)
+from orchestrator.api.routes.admin_atlassian_oauth import (
+    router as admin_atlassian_oauth_router,
+)
+from orchestrator.api.routes.admin_atlassian_webhooks import (
+    router as admin_atlassian_webhooks_router,
+)
 from orchestrator.api.routes.admin_codex import router as admin_codex_router
 from orchestrator.api.routes.admin_discord_commands import (
     router as admin_discord_commands_router,
@@ -26,23 +41,35 @@ from orchestrator.api.routes.admin_discord_allowlist import (
 from orchestrator.api.routes.admin_discord_install import (
     router as admin_discord_install_router,
 )
-from orchestrator.api.routes.admin_deployment_hosts import router as admin_deployment_hosts_router
+from orchestrator.api.routes.admin_deployment_hosts import (
+    router as admin_deployment_hosts_router,
+)
 from orchestrator.api.routes.admin_github import router as admin_github_router
 from orchestrator.api.routes.admin_knowledge import router as admin_knowledge_router
-from orchestrator.api.routes.admin_observability import router as admin_observability_router
+from orchestrator.api.routes.admin_observability import (
+    router as admin_observability_router,
+)
 from orchestrator.api.routes.admin_ready import router as admin_ready_router
 from orchestrator.api.routes.admin_release import router as admin_release_router
 from orchestrator.api.admin.runs.routes import router as admin_runs_router
 from orchestrator.api.admin.workflows.routes import router as admin_workflows_router
-from orchestrator.api.admin.workflows.operation_stale_recovery_service import recover_stale_workflow_operation_attempts
-from orchestrator.api.admin.workflows.use_cases import restart_workflow_operation as restart_workflow_operation_use_case
+from orchestrator.api.admin.workflows.operation_stale_recovery_service import (
+    recover_stale_workflow_operation_attempts,
+)
+from orchestrator.api.admin.workflows.use_cases import (
+    restart_workflow_operation as restart_workflow_operation_use_case,
+)
 from orchestrator.api.routes.admin_secrets import router as admin_secrets_router
-from orchestrator.api.routes.admin_tenant_settings import router as admin_tenant_settings_router
+from orchestrator.api.routes.admin_tenant_settings import (
+    router as admin_tenant_settings_router,
+)
 from orchestrator.api.routes.admin_tenants import router as admin_tenants_router
 from orchestrator.api.routes.admin_tokens import router as admin_tokens_router
 from orchestrator.api.routes.app_auth import router as app_auth_router
 from orchestrator.api.routes.discord import router as discord_router
-from orchestrator.api.routes.internal_deployment_hosts import router as internal_deployment_hosts_router
+from orchestrator.api.routes.internal_deployment_hosts import (
+    router as internal_deployment_hosts_router,
+)
 from orchestrator.api.routes.runs import router as runs_router
 from orchestrator.api.routes.start_engineering import router as start_engineering_router
 from orchestrator.api.routes.webhook import router as webhook_router
@@ -55,16 +82,28 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.discord.commands_sync import sync_discord_guild_commands
 from orchestrator.core.observability.error import emit_hard_error
 from orchestrator.core.observability.logging import configure_logging
-from orchestrator.core.observability.observability_stream import initialize_observability_streaming, shutdown_observability_streaming
+from orchestrator.core.observability.log_redaction import redact_log_text
+from orchestrator.core.observability.observability_stream import (
+    initialize_observability_streaming,
+    shutdown_observability_streaming,
+)
 from orchestrator.core.observability.metrics import platform_metrics
 from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.core.sentry import initialize_sentry
-from orchestrator.core.observability.otel_telemetry import initialize_telemetry, shutdown_telemetry
-from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
-from orchestrator.core.workflow.type_catalog import validate_persisted_workflow_definitions
+from orchestrator.core.observability.otel_telemetry import (
+    initialize_telemetry,
+    shutdown_telemetry,
+)
+from orchestrator.core.workflow.execution_snapshot_startup import (
+    ensure_execution_snapshot_startup_bootstrap,
+)
+from orchestrator.core.workflow.type_catalog import (
+    validate_persisted_workflow_definitions,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.migrations import run_migrations
+from orchestrator.core.source_layout import require_source_checkout
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +122,16 @@ def create_app() -> FastAPI:
         default_agent_id="api",
     )
     initialize_sentry(settings=settings)
-    cors_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+    cors_origins = [
+        origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()
+    ]
     admin_ui_origin = str(settings.admin_ui_base_url or "").strip().rstrip("/")
     if admin_ui_origin and admin_ui_origin not in cors_origins:
         cors_origins.append(admin_ui_origin)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        require_source_checkout()
         if settings.auto_migrate_on_startup:
             run_migrations()
         session_factory = create_session_factory()
@@ -102,7 +144,11 @@ def create_app() -> FastAPI:
             validate_persisted_workflow_definitions(session=session)
         recover_stale_workflow_operation_attempts(
             session_factory=session_factory,
-            stale_timeout_seconds=int(getattr(settings, "workflow_operation_attempt_stale_timeout_seconds", 300)),
+            stale_timeout_seconds=int(
+                getattr(
+                    settings, "workflow_operation_attempt_stale_timeout_seconds", 300
+                )
+            ),
             actor="api-startup",
             restart_workflow_operation_fn=restart_workflow_operation_use_case,
         )
@@ -116,10 +162,17 @@ def create_app() -> FastAPI:
             shutdown_telemetry()
 
     app = FastAPI(title="master-builder orchestrator", lifespan=lifespan)
+    app.add_middleware(AuthBodyLimitMiddleware)
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[host.strip() for host in settings.trusted_hosts.split(",")],
+        www_redirect=False,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_origin_regex=str(getattr(settings, "cors_origin_regex", "") or "").strip() or None,
+        allow_origin_regex=str(getattr(settings, "cors_origin_regex", "") or "").strip()
+        or None,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -149,7 +202,7 @@ def create_app() -> FastAPI:
                     route_label = str(route.path)
             client_ip = request.client.host if request.client is not None else "-"
             message = (
-                f"{client_ip} {request.method} {request.url.path} "
+                f"{client_ip} {request.method} {redact_log_text(request.url.path)} "
                 f"Status: {status_code} Time: {duration_ms}ms"
             )
             logger.info(
@@ -160,7 +213,7 @@ def create_app() -> FastAPI:
                     "metadata": {
                         "client_ip": client_ip,
                         "http_method": request.method,
-                        "http_path": request.url.path,
+                        "http_path": redact_log_text(request.url.path),
                         "status_code": status_code,
                         "duration_ms": duration_ms,
                     },
@@ -178,7 +231,11 @@ def create_app() -> FastAPI:
     async def unhandled_exception_handler(request: Request, exc: Exception):
         error_ref = uuid4().hex[:8]
         route = request.scope.get("route")
-        route_label = str(route.path) if route is not None and getattr(route, "path", None) else "__unmatched__"
+        route_label = (
+            str(route.path)
+            if route is not None and getattr(route, "path", None)
+            else "__unmatched__"
+        )
         platform_metrics.record_api_exception(
             method=request.method,
             route=route_label,
@@ -187,14 +244,14 @@ def create_app() -> FastAPI:
         logger.exception(
             "api_unhandled_exception method=%s path=%s error_ref=%s error=%s",
             request.method,
-            request.url.path,
+            redact_log_text(request.url.path),
             error_ref,
             exc,
             extra={
                 "event_type": "api_unhandled_exception",
                 "metadata": {
                     "method": request.method,
-                    "path": request.url.path,
+                    "path": redact_log_text(request.url.path),
                     "error_ref": error_ref,
                 },
             },
@@ -205,7 +262,7 @@ def create_app() -> FastAPI:
             exc=exc,
             context={
                 "method": request.method,
-                "path": request.url.path,
+                "path": redact_log_text(request.url.path),
             },
         )
         return JSONResponse(
@@ -217,7 +274,11 @@ def create_app() -> FastAPI:
     async def http_exception_handler(request: Request, exc: HTTPException):
         if exc.status_code >= 500:
             route = request.scope.get("route")
-            route_label = str(route.path) if route is not None and getattr(route, "path", None) else "__unmatched__"
+            route_label = (
+                str(route.path)
+                if route is not None and getattr(route, "path", None)
+                else "__unmatched__"
+            )
             platform_metrics.record_api_exception(
                 method=request.method,
                 route=route_label,
@@ -226,7 +287,7 @@ def create_app() -> FastAPI:
             logger.error(
                 "api_http_exception_5xx method=%s path=%s status=%s detail=%s",
                 request.method,
-                request.url.path,
+                redact_log_text(request.url.path),
                 exc.status_code,
                 exc.detail,
             )
@@ -260,6 +321,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_secrets_router)
     app.include_router(admin_tokens_router)
     app.include_router(app_auth_router)
+    app.include_router(qa_artifacts_router)
     app.include_router(discord_router)
     app.include_router(internal_deployment_hosts_router)
     app.include_router(runs_router)

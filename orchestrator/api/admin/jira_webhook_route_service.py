@@ -17,7 +17,9 @@ def get_jira_webhook_diagnostics(
 ):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     return build_jira_webhook_diagnostics_fn(
         tenant_id=tenant_id,
         within_minutes=within_minutes,
@@ -39,7 +41,9 @@ def run_tenant_jira_webhook_action(
 ):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     result = provision_jira_webhook_fn(
         session=session,
         tenant=tenant,
@@ -47,7 +51,9 @@ def run_tenant_jira_webhook_action(
         replace_existing=replace_existing,
     )
     if not result.ok:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=result.details)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=result.details
+        )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=result.model_dump(),

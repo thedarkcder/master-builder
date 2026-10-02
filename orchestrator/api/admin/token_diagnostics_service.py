@@ -58,7 +58,9 @@ def _coalesce_delta(stored: int | None, computed: int) -> int:
     return max(0, stored)
 
 
-def _build_delta(prev: tuple[int, int, int] | None, current: tuple[int, int, int]) -> tuple[int, int, int]:
+def _build_delta(
+    prev: tuple[int, int, int] | None, current: tuple[int, int, int]
+) -> tuple[int, int, int]:
     if prev is None:
         return current
     prev_input, prev_cached, prev_output = prev
@@ -70,7 +72,10 @@ def _build_delta(prev: tuple[int, int, int] | None, current: tuple[int, int, int
 
 
 def _is_spike(delta_input: int, delta_uncached: int) -> bool:
-    return delta_input >= _STAGE_SPIKE_THRESHOLD or delta_uncached >= _UNCACHED_SPIKE_THRESHOLD
+    return (
+        delta_input >= _STAGE_SPIKE_THRESHOLD
+        or delta_uncached >= _UNCACHED_SPIKE_THRESHOLD
+    )
 
 
 def _load_rows(
@@ -117,7 +122,9 @@ def _load_rows(
     if only_with_test_stage:
         query = query.where(
             RunTokenUsage.run_id.in_(
-                select(RunTokenUsage.run_id).where(RunTokenUsage.stage == "test").distinct()
+                select(RunTokenUsage.run_id)
+                .where(RunTokenUsage.stage == "test")
+                .distinct()
             )
         )
     return (
@@ -153,16 +160,28 @@ def get_token_stage_diagnostics(
     tenant_id = str(tenant_id).strip()
     project_id = str(project_id).strip()
     if not tenant_id or not project_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id and project_id are required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id and project_id are required",
+        )
 
     if page < 1:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="page must be >= 1")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="page must be >= 1"
+        )
     if page_size < 1:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="page_size must be >= 1")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="page_size must be >= 1"
+        )
     if start_date and end_date and start_date > end_date:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be <= end_date")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be <= end_date",
+        )
     if start_date and end_date and (end_date - start_date) > _MAX_DATE_SPAN:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="date range max is 180 days")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="date range max is 180 days"
+        )
 
     rows = _load_rows(
         session=session,
@@ -179,7 +198,12 @@ def get_token_stage_diagnostics(
         only_with_test_stage=only_with_test_stage,
     )
     run_ids = {str(row.run_id) for row in rows if row.run_id}
-    run_records = {run.run_id: run for run in session.execute(select(Run).where(Run.run_id.in_(run_ids))).scalars().all()}
+    run_records = {
+        run.run_id: run
+        for run in session.execute(select(Run).where(Run.run_id.in_(run_ids)))
+        .scalars()
+        .all()
+    }
 
     stage_sums: dict[str, dict[str, list[int]]] = {
         key: {"delta": [], "uncached": [], "base": [], "retry": []}
@@ -208,9 +232,16 @@ def get_token_stage_diagnostics(
         cached_input_tokens = _to_non_negative_int(row.cached_input_tokens)
         output_tokens = _to_non_negative_int(row.output_tokens)
 
-        chain_key = (run_id, str(row.invocation_id or "default"), stage_name, row.attempt)
+        chain_key = (
+            run_id,
+            str(row.invocation_id or "default"),
+            stage_name,
+            row.attempt,
+        )
         prev = chain_prev.get(chain_key)
-        prev_input, prev_cached, prev_output = prev if prev is not None else (None, None, None)
+        prev_input, prev_cached, prev_output = (
+            prev if prev is not None else (None, None, None)
+        )
         delta_input_raw, delta_uncached_raw, delta_output_raw = _build_delta(
             prev=(prev_input, prev_cached, prev_output) if prev is not None else None,
             current=(input_tokens, cached_input_tokens, output_tokens),
@@ -235,14 +266,22 @@ def get_token_stage_diagnostics(
         )
         uncached_input_tokens = max(0, input_tokens - cached_input_tokens)
         issue_bucket["input"] = int(issue_bucket["input"]) + input_tokens
-        issue_bucket["uncached_input"] = int(issue_bucket["uncached_input"]) + uncached_input_tokens
+        issue_bucket["uncached_input"] = (
+            int(issue_bucket["uncached_input"]) + uncached_input_tokens
+        )
         issue_bucket["output"] = int(issue_bucket["output"]) + output_tokens
-        issue_bucket["total_io"] = int(issue_bucket["total_io"]) + input_tokens + output_tokens
-        issue_bucket["delta_total_io"] = int(issue_bucket["delta_total_io"]) + delta_input + delta_output
+        issue_bucket["total_io"] = (
+            int(issue_bucket["total_io"]) + input_tokens + output_tokens
+        )
+        issue_bucket["delta_total_io"] = (
+            int(issue_bucket["delta_total_io"]) + delta_input + delta_output
+        )
         run_id_set = issue_bucket["run_ids"]
         if isinstance(run_id_set, set):
             run_id_set.add(run_id)
-        attempt_bucket = row.attempt if row.attempt is not None and row.attempt > 0 else 1
+        attempt_bucket = (
+            row.attempt if row.attempt is not None and row.attempt > 0 else 1
+        )
         bucket = heatmap_buckets.setdefault(
             (stage_name, attempt_bucket),
             {"delta_sum": 0, "uncached_sum": 0, "count": 0},
@@ -251,7 +290,8 @@ def get_token_stage_diagnostics(
         bucket["uncached_sum"] += delta_uncached
         bucket["count"] += 1
         stage_attempt_delta[(run_id, stage_name, attempt_bucket)] = (
-            stage_attempt_delta.get((run_id, stage_name, attempt_bucket), 0) + delta_input
+            stage_attempt_delta.get((run_id, stage_name, attempt_bucket), 0)
+            + delta_input
         )
         if stage_name == "dev":
             dev_attempt_seen.add((run_id, attempt_bucket))
@@ -269,7 +309,9 @@ def get_token_stage_diagnostics(
             )
             entry["count"] = int(entry["count"]) + 1
             entry["delta"] = float(entry["delta"]) + float(delta_input)
-            entry["uncached_delta"] = float(entry["uncached_delta"]) + float(delta_uncached)
+            entry["uncached_delta"] = float(entry["uncached_delta"]) + float(
+                delta_uncached
+            )
 
         if row.runtime_ms is not None and row.runtime_ms >= 0:
             scatter.append(
@@ -308,7 +350,9 @@ def get_token_stage_diagnostics(
             stage=stage_name,
             spike_count=int(values["count"]),
             avg_delta=values["delta"] / values["count"] if values["count"] else 0.0,
-            avg_uncached_delta=values["uncached_delta"] / values["count"] if values["count"] else 0.0,
+            avg_uncached_delta=values["uncached_delta"] / values["count"]
+            if values["count"]
+            else 0.0,
         )
         for (command_signature, stage_name), values in heavy_command_stats.items()
     ]
@@ -317,14 +361,20 @@ def get_token_stage_diagnostics(
         TokenStageHeatmapCellRead(
             stage=stage_name,
             attempt=attempt_bucket,
-            avg_delta=float(values["delta_sum"]) / float(values["count"]) if values["count"] else 0.0,
-            avg_uncached_delta=float(values["uncached_sum"]) / float(values["count"]) if values["count"] else 0.0,
+            avg_delta=float(values["delta_sum"]) / float(values["count"])
+            if values["count"]
+            else 0.0,
+            avg_uncached_delta=float(values["uncached_sum"]) / float(values["count"])
+            if values["count"]
+            else 0.0,
             sample_count=int(values["count"]),
         )
         for (stage_name, attempt_bucket), values in heatmap_buckets.items()
     ]
     stage_order = {name: index for index, name in enumerate(_KNOWN_STAGES)}
-    heatmap_cells.sort(key=lambda cell: (stage_order.get(cell.stage, 999), cell.attempt))
+    heatmap_cells.sort(
+        key=lambda cell: (stage_order.get(cell.stage, 999), cell.attempt)
+    )
     issue_stage_usage = [
         TokenIssueStageUsageRead(
             issue_key=issue_key_value,
@@ -334,7 +384,9 @@ def get_token_stage_diagnostics(
             output=int(values["output"]),
             total_io=int(values["total_io"]),
             delta_total_io=int(values["delta_total_io"]),
-            run_count=len(values["run_ids"]) if isinstance(values["run_ids"], set) else 0,
+            run_count=len(values["run_ids"])
+            if isinstance(values["run_ids"], set)
+            else 0,
         )
         for (issue_key_value, stage_name), values in issue_stage_totals.items()
     ]
@@ -348,7 +400,11 @@ def get_token_stage_diagnostics(
 
     repeated_test_delta = 0
     repeated_test_waste = 0
-    for (run_id, stage_name, attempt_number), delta_value in stage_attempt_delta.items():
+    for (
+        run_id,
+        stage_name,
+        attempt_number,
+    ), delta_value in stage_attempt_delta.items():
         if stage_name != "test" or attempt_number <= 1:
             continue
         repeated_test_delta += max(0, delta_value)

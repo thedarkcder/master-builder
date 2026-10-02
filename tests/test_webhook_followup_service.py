@@ -15,7 +15,11 @@ from orchestrator.core.communications import (
     DiscordSeedWithThreadAction,
     DiscordThreadReplyAction,
 )
-from orchestrator.core.observability.otel import current_log_context, reset_log_context, set_log_context
+from orchestrator.core.observability.otel import (
+    current_log_context,
+    reset_log_context,
+    set_log_context,
+)
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -39,11 +43,15 @@ class RecordingExecutor:
 
 
 class DiscordWebhookFollowupServiceTests(unittest.TestCase):
-    def _assert_thread_delivery_with_ack(self, transport: RecordingExecutor, action_type: type[object]) -> None:
+    def _assert_thread_delivery_with_ack(
+        self, transport: RecordingExecutor, action_type: type[object]
+    ) -> None:
         self.assertEqual(len(transport.actions), 2)
         self.assertIsInstance(transport.actions[0], action_type)
         self.assertIsInstance(transport.actions[1], DiscordInteractionFollowupAction)
-        self.assertIn("Posted response in a follow-up thread", transport.actions[1].content)
+        self.assertIn(
+            "Posted response in a follow-up thread", transport.actions[1].content
+        )
 
     def _build_service(
         self,
@@ -61,24 +69,32 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             execute_command_ingress=execute_command_ingress,
             command_request_factory=lambda **kwargs: SimpleNamespace(**kwargs),
             build_command_followup_message=lambda **_kwargs: "formatted followup",
-            ask_confirmation_components=lambda request_id: [{"type": 1, "request_id": request_id}],
-            ask_reply_components=ask_reply_components or (lambda: [{"type": 1, "custom_id": "ask.reply.open"}]),
+            ask_confirmation_components=lambda request_id: [
+                {"type": 1, "request_id": request_id}
+            ],
+            ask_reply_components=ask_reply_components
+            or (lambda: [{"type": 1, "custom_id": "ask.reply.open"}]),
             transport_executor=transport_executor,
-            consume_pending_ask_action=consume_pending_ask_action or (lambda **_kwargs: None),
+            consume_pending_ask_action=consume_pending_ask_action
+            or (lambda **_kwargs: None),
         )
         return service, transport_executor
 
     def test_command_followup_uses_ask_thread_transport_for_initial_ask(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="ask",
                 message="Done",
-                data={"issue_key": "example-46"},
+                data={"issue_key": "DEMO-46"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -92,11 +108,13 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         )
 
         self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
-        self.assertEqual(transport.actions[0].issue_key, "example-46")
+        self.assertEqual(transport.actions[0].issue_key, "DEMO-46")
 
     def test_command_followup_passes_issue_key_to_thread_transport(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="run",
@@ -104,7 +122,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 data={"issue_key": "MAB-159"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -121,9 +141,13 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertEqual(transport.actions[0].issue_key, "MAB-159")
         self.assertEqual(transport.actions[0].followup_context_type, "ask_thread")
 
-    def test_command_followup_marks_decision_gate_threads_with_explicit_context(self) -> None:
+    def test_command_followup_marks_decision_gate_threads_with_explicit_context(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             side_effect=HTTPException(
                 status_code=409,
@@ -133,7 +157,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 ),
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -152,15 +178,19 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_command_followup_uses_thread_reply_transport_when_replying(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="runs",
                 message="Done",
-                data={"issue_key": "example-46"},
+                data={"issue_key": "DEMO-46"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -177,18 +207,26 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertEqual(len(transport.actions), 1)
         self.assertIsInstance(transport.actions[0], DiscordThreadReplyAction)
 
-    def test_command_followup_thread_reply_failure_falls_back_to_interaction_reply_reference(self) -> None:
+    def test_command_followup_thread_reply_failure_falls_back_to_interaction_reply_reference(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="ask",
                 message="Done",
-                data={"issue_key": "example-46"},
+                data={"issue_key": "DEMO-46"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
-        transport.fail_once(DiscordThreadReplyAction, DiscordApiError("thread unavailable"))
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
+        transport.fail_once(
+            DiscordThreadReplyAction, DiscordApiError("thread unavailable")
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -208,19 +246,30 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertEqual(transport.actions[1].reply_to_message_id, "123456789012345678")
         self.assertEqual(transport.actions[1].channel_id, "c-1")
 
-    def test_command_followup_unknown_interaction_webhook_falls_back_to_channel_send(self) -> None:
+    def test_command_followup_unknown_interaction_webhook_falls_back_to_channel_send(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="runs",
                 message="Done",
-                data={"issue_key": "example-46"},
+                data={"issue_key": "DEMO-46"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
-        transport.fail_once(DiscordAskWithThreadAction, DiscordApiError("thread unavailable"))
-        transport.fail_once(DiscordInteractionFollowupAction, DiscordInteractionWebhookExpiredError("Unknown Webhook"))
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
+        transport.fail_once(
+            DiscordAskWithThreadAction, DiscordApiError("thread unavailable")
+        )
+        transport.fail_once(
+            DiscordInteractionFollowupAction,
+            DiscordInteractionWebhookExpiredError("Unknown Webhook"),
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -238,11 +287,15 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertIsInstance(transport.actions[1], DiscordInteractionFollowupAction)
         self.assertIsInstance(transport.actions[2], DiscordThreadReplyAction)
         self.assertEqual(transport.actions[2].channel_id, "c-1")
-        self.assertTrue(transport.actions[2].reply_to_message_id.startswith("interaction-"))
+        self.assertTrue(
+            transport.actions[2].reply_to_message_id.startswith("interaction-")
+        )
 
     def test_command_followup_ask_confirmation_incomplete_payload(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="ask",
@@ -250,7 +303,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 data={"requires_confirmation": True, "summary": "Review command"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -267,9 +322,13 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         sent_content = transport.actions[0].content
         self.assertIn("ask confirmation payload was incomplete", sent_content)
 
-    def test_command_followup_ask_confirmation_uses_thread_transport_with_components(self) -> None:
+    def test_command_followup_ask_confirmation_uses_thread_transport_with_components(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="ask",
@@ -282,7 +341,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 },
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -296,13 +357,23 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         )
 
         self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
-        self.assertEqual(transport.actions[0].components, [{"type": 1, "request_id": "req-1"}])
+        self.assertEqual(
+            transport.actions[0].components, [{"type": 1, "request_id": "req-1"}]
+        )
 
-    def test_command_followup_falls_back_to_reply_components_when_thread_send_fails(self) -> None:
+    def test_command_followup_falls_back_to_reply_components_when_thread_send_fails(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        execute = MagicMock(return_value=SimpleNamespace(command="ask", message="Done", data={}))
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        execute = MagicMock(
+            return_value=SimpleNamespace(command="ask", message="Done", data={})
+        )
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
         transport.fail_once(DiscordAskWithThreadAction, DiscordApiError("boom"))
 
         asyncio.run(
@@ -319,13 +390,22 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertEqual(len(transport.actions), 2)
         self.assertIsInstance(transport.actions[0], DiscordAskWithThreadAction)
         self.assertIsInstance(transport.actions[1], DiscordInteractionFollowupAction)
-        self.assertEqual(transport.actions[1].components, [{"type": 1, "custom_id": "ask.reply.open"}])
+        self.assertEqual(
+            transport.actions[1].components,
+            [{"type": 1, "custom_id": "ask.reply.open"}],
+        )
 
     def test_command_followup_http_exception_formats_detail_as_rejection(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        execute = MagicMock(side_effect=HTTPException(status_code=400, detail="bad request"))
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        execute = MagicMock(
+            side_effect=HTTPException(status_code=400, detail="bad request")
+        )
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -344,9 +424,15 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_run_followup_http_exception_formats_as_start_rejection(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        execute = MagicMock(side_effect=HTTPException(status_code=409, detail="Decision Gate required"))
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        execute = MagicMock(
+            side_effect=HTTPException(status_code=409, detail="Decision Gate required")
+        )
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -365,11 +451,21 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertIn("Could not start run: Decision Gate required", sent_content)
         self.assertNotIn("Command failed", sent_content)
 
-    def test_command_followup_http_exception_preserves_issue_context_for_thread_binding(self) -> None:
+    def test_command_followup_http_exception_preserves_issue_context_for_thread_binding(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        execute = MagicMock(side_effect=HTTPException(status_code=409, detail="Good To Do still needs clarification"))
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        execute = MagicMock(
+            side_effect=HTTPException(
+                status_code=409, detail="Good To Do still needs clarification"
+            )
+        )
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -386,11 +482,21 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         self.assertEqual(transport.actions[0].issue_key, "GP-114")
 
-    def test_command_followup_http_exception_extracts_issue_key_from_command_text(self) -> None:
+    def test_command_followup_http_exception_extracts_issue_key_from_command_text(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        execute = MagicMock(side_effect=HTTPException(status_code=409, detail="Good To Do still needs clarification"))
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        execute = MagicMock(
+            side_effect=HTTPException(
+                status_code=409, detail="Good To Do still needs clarification"
+            )
+        )
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -408,7 +514,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_command_followup_without_issue_context_binds_none(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="help",
@@ -416,7 +524,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 data={},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -434,7 +544,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_command_followup_response_issue_key_overrides_command_hint(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="run",
@@ -442,7 +554,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 data={"issue_key": "GP-200"},
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -461,9 +575,13 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_command_followup_disabled_tenant(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=False, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=False, tenant_id="tenant-1"
+        )
         execute = MagicMock()
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -484,11 +602,17 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_command_followup_unexpected_error_emits_reference(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(side_effect=RuntimeError("explode"))
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
-        with patch("orchestrator.api.webhooks.followup_execution.emit_hard_error") as emit_mock:
+        with patch(
+            "orchestrator.api.webhooks.followup_execution.emit_hard_error"
+        ) as emit_mock:
             asyncio.run(
                 service.run_discord_command_followup(
                     tenant_id="tenant-1",
@@ -505,7 +629,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         sent_content = transport.actions[0].content
         self.assertIn("Ref:", sent_content)
 
-    def test_command_followup_resets_log_context_when_settings_factory_fails(self) -> None:
+    def test_command_followup_resets_log_context_when_settings_factory_fails(
+        self,
+    ) -> None:
         session = MagicMock()
         execute = MagicMock()
 
@@ -517,7 +643,11 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
             execute_command_ingress=execute,
             settings_factory=_fail_settings,
         )
-        parent_tokens = set_log_context(correlation_id="parent-cid", tenant_id="parent-tenant", agent_id="parent-agent")
+        parent_tokens = set_log_context(
+            correlation_id="parent-cid",
+            tenant_id="parent-tenant",
+            agent_id="parent-agent",
+        )
         try:
             with self.assertRaises(RuntimeError):
                 asyncio.run(
@@ -541,7 +671,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_command_followup_issues_requires_input_creates_seed_thread(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
         execute = MagicMock(
             return_value=SimpleNamespace(
                 command="issues",
@@ -553,7 +685,9 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
                 },
             )
         )
-        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+        service, transport = self._build_service(
+            session=session, execute_command_ingress=execute
+        )
 
         asyncio.run(
             service.run_discord_command_followup(
@@ -567,12 +701,21 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         )
 
         self._assert_thread_delivery_with_ack(transport, DiscordSeedWithThreadAction)
-        self.assertEqual([question.question for question in transport.actions[0].questions], ["Which issue key?"])
+        self.assertEqual(
+            [question.question for question in transport.actions[0].questions],
+            ["Which issue key?"],
+        )
 
     def test_ask_confirmation_rejects_non_owner(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        pending = {"user_id": "u-owner", "channel_id": "c-1", "proposed_command": "!issues TEST-1"}
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        pending = {
+            "user_id": "u-owner",
+            "channel_id": "c-1",
+            "proposed_command": "!issues TEST-1",
+        }
         execute = MagicMock()
         service, transport = self._build_service(
             session=session,
@@ -600,8 +743,14 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_ask_confirmation_reject_decision(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        pending = {"user_id": "u-1", "channel_id": "c-1", "proposed_command": "!issues TEST-1"}
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        pending = {
+            "user_id": "u-1",
+            "channel_id": "c-1",
+            "proposed_command": "!issues TEST-1",
+        }
         execute = MagicMock()
         service, transport = self._build_service(
             session=session,
@@ -629,8 +778,14 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_ask_confirmation_blocks_recursive_ask(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        pending = {"user_id": "u-1", "channel_id": "c-1", "proposed_command": "!ask again"}
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        pending = {
+            "user_id": "u-1",
+            "channel_id": "c-1",
+            "proposed_command": "!ask again",
+        }
         execute = MagicMock()
         service, transport = self._build_service(
             session=session,
@@ -656,10 +811,18 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         content = transport.actions[0].content
         self.assertIn("recursive ask actions are not allowed", content)
 
-    def test_ask_confirmation_blocks_recursive_ask_with_irregular_whitespace(self) -> None:
+    def test_ask_confirmation_blocks_recursive_ask_with_irregular_whitespace(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        pending = {"user_id": "u-1", "channel_id": "c-1", "proposed_command": "!   ask   again"}
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        pending = {
+            "user_id": "u-1",
+            "channel_id": "c-1",
+            "proposed_command": "!   ask   again",
+        }
         execute = MagicMock()
         service, transport = self._build_service(
             session=session,
@@ -687,9 +850,17 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
     def test_ask_confirmation_executes_and_formats_response(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
-        pending = {"user_id": "u-1", "channel_id": "c-1", "proposed_command": "!issues TEST-1"}
-        execute = MagicMock(return_value=SimpleNamespace(command="issues", message="done", data={}))
+        session.get.return_value = SimpleNamespace(
+            is_enabled=True, tenant_id="tenant-1"
+        )
+        pending = {
+            "user_id": "u-1",
+            "channel_id": "c-1",
+            "proposed_command": "!issues TEST-1",
+        }
+        execute = MagicMock(
+            return_value=SimpleNamespace(command="issues", message="done", data={})
+        )
         service, transport = self._build_service(
             session=session,
             execute_command_ingress=execute,

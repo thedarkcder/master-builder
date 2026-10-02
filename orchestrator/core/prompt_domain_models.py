@@ -28,7 +28,12 @@ from orchestrator.core.runtime.payload_models import (
     VoiceEntryRoute,
     WorkerCapabilityRequirement,
 )
-from orchestrator.core.workflow.runner import DevResult, PmPlan, ReviewResult, TestResult
+from orchestrator.core.workflow.runner import (
+    DevResult,
+    PmPlan,
+    ReviewResult,
+    TestResult,
+)
 from orchestrator.core.workflow.runner import QaResult
 
 

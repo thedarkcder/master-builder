@@ -8,14 +8,21 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from orchestrator.core.observability.repository import configure_product_event_repository_for_tests
+from orchestrator.core.observability.repository import (
+    configure_product_event_repository_for_tests,
+)
 from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     touch_run_heartbeat,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import AgentLifecycleEvent, Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import (
+    AgentLifecycleEvent,
+    Run,
+    Tenant,
+    WorkflowExecution,
+)
 from tests.test_support.product_events import RecordingProductEventRepository
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
@@ -99,7 +106,9 @@ class WorkerRunHealthTests(unittest.TestCase):
             refreshed = session.get(Run, "run-heartbeat")
             assert refreshed is not None
             assert refreshed.last_heartbeat_at is not None
-            self.assertEqual(refreshed.last_heartbeat_at.replace(tzinfo=timezone.utc), now)
+            self.assertEqual(
+                refreshed.last_heartbeat_at.replace(tzinfo=timezone.utc), now
+            )
 
     def test_touch_run_heartbeat_rejects_dispatching_runs(self) -> None:
         now = datetime.now(timezone.utc)
@@ -138,7 +147,9 @@ class WorkerRunHealthTests(unittest.TestCase):
             assert refreshed is not None
             self.assertIsNone(refreshed.last_heartbeat_at)
 
-    def test_recover_stale_running_runs_marks_failed_and_preserves_fresh_runs(self) -> None:
+    def test_recover_stale_running_runs_marks_failed_and_preserves_fresh_runs(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         stale_heartbeat = now - timedelta(minutes=20)
         stale_started = now - timedelta(minutes=18)
@@ -194,7 +205,10 @@ class WorkerRunHealthTests(unittest.TestCase):
                 now=now,
             )
 
-            self.assertEqual({item.run_id for item in recovered}, {"run-stale-heartbeat", "run-stale-no-heartbeat"})
+            self.assertEqual(
+                {item.run_id for item in recovered},
+                {"run-stale-heartbeat", "run-stale-no-heartbeat"},
+            )
 
             stale_run = session.get(Run, "run-stale-heartbeat")
             assert stale_run is not None
@@ -223,17 +237,32 @@ class WorkerRunHealthTests(unittest.TestCase):
             self.assertEqual(fresh_workflow.status, "running")
 
             stale_logs = [
-                row for row in self._product_event_repository.inserted
+                row
+                for row in self._product_event_repository.inserted
                 if row.run_id == "run-stale-heartbeat"
             ]
             self.assertTrue(stale_logs)
             self.assertIn("runtime_log", {row.event_kind for row in stale_logs})
-            self.assertTrue(any(row.payload_json.get("command") == "workflow.stale_recovery" for row in stale_logs))
+            self.assertTrue(
+                any(
+                    row.payload_json.get("command") == "workflow.stale_recovery"
+                    for row in stale_logs
+                )
+            )
 
-            stale_events = session.execute(
-                select(AgentLifecycleEvent).where(AgentLifecycleEvent.run_id == "run-stale-heartbeat")
-            ).scalars().all()
-            self.assertEqual({event.event_type for event in stale_events}, {"RUN_FAILED", "TASK_FAILED"})
+            stale_events = (
+                session.execute(
+                    select(AgentLifecycleEvent).where(
+                        AgentLifecycleEvent.run_id == "run-stale-heartbeat"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            self.assertEqual(
+                {event.event_type for event in stale_events},
+                {"RUN_FAILED", "TASK_FAILED"},
+            )
 
     def test_recover_stale_running_runs_preserves_active_child_exclusions(self) -> None:
         now = datetime.now(timezone.utc)

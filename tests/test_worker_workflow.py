@@ -21,7 +21,12 @@ from orchestrator.core.workflow.runner import (
     WorkflowResult,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant, WorkflowExecution
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    Project,
+    Tenant,
+    WorkflowExecution,
+)
 from orchestrator.core.worker.repo_setup_service import RetryableRepoSetupError
 from orchestrator.core.worker.repo_setup_service import TerminalRepoSetupError
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -151,7 +156,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
     @classmethod
     def bootstrap_template_database(cls) -> None:
         now = datetime.now(timezone.utc)
-        session_factory = create_session_factory(database_url=cls._template_database_url)
+        session_factory = create_session_factory(
+            database_url=cls._template_database_url
+        )
         with session_factory() as session:
             session.add(
                 Tenant(
@@ -213,7 +220,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
+        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = (
+            self.repo_checkout_base_dir
+        )
         os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
         os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
         get_settings.cache_clear()
@@ -290,9 +299,7 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         return result.run.run_id
 
     def _seed_checked_out_repo(self) -> None:
-        repo_git_dir = (
-            f"{self.repo_checkout_base_dir}/tenant-worker/tenant-worker-default/repo/.git"
-        )
+        repo_git_dir = f"{self.repo_checkout_base_dir}/tenant-worker/tenant-worker-default/repo/.git"
         os.makedirs(repo_git_dir, exist_ok=True)
 
     def _run_workspaces_dir(self, run_id: str) -> Path:
@@ -365,13 +372,18 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "succeeded")
-            self.assertEqual(processed.pr_url, "https://github.com/example/repo/pull/99")
+            self.assertEqual(
+                processed.pr_url, "https://github.com/example/repo/pull/99"
+            )
             self.assertIsNotNone(processed.started_at)
             self.assertIsNotNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
             self.assertEqual(processed.plan["workflow"]["outcome"], "success")
             self.assertEqual(processed.plan["workflow"]["attempts"], 1)
-            self.assertEqual(processed.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan", "build", "validate"])
+            self.assertEqual(
+                processed.plan["stages"]["pm"]["artifact"]["plan_steps"],
+                ["plan", "build", "validate"],
+            )
             self.assertEqual(processed.plan["stages"]["pm"]["status"], "completed")
             stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
@@ -394,7 +406,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         self.assertIn("TASK_STARTED", event_types)
         self.assertIn("TASK_COMPLETED", event_types)
 
-    def test_process_next_queued_run_requeues_when_branch_snapshot_is_stale(self) -> None:
+    def test_process_next_queued_run_requeues_when_branch_snapshot_is_stale(
+        self,
+    ) -> None:
         run_id = self._queue_run("TP-3001")
         runner = _SuccessRunner()
 
@@ -416,12 +430,21 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsNone(processed.pr_url)
-            self.assertTrue(processed.plan["context"]["execution_context"]["stale_branch_snapshot"])
-            self.assertIn("Branch snapshot stale", processed.plan["workflow"]["requeue_reason"])
+            self.assertTrue(
+                processed.plan["context"]["execution_context"]["stale_branch_snapshot"]
+            )
+            self.assertIn(
+                "Branch snapshot stale", processed.plan["workflow"]["requeue_reason"]
+            )
             stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
-                ["repo_setup_ready", "lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
+                [
+                    "repo_setup_ready",
+                    "lock_acquired",
+                    "plan_posted",
+                    "run_requeued_stale_snapshot",
+                ],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
             workflow = session.get(WorkflowExecution, processed.workflow_id)
@@ -460,7 +483,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         self.assertIn("TASK_FAILED", event_types)
         self.assertIn("TEST_FAILED", event_types)
 
-    def test_process_next_queued_run_requeues_when_pm_requires_different_worker_capability(self) -> None:
+    def test_process_next_queued_run_requeues_when_pm_requires_different_worker_capability(
+        self,
+    ) -> None:
         run_id = self._queue_run("TP-3020")
 
         with self.session_factory() as session:
@@ -473,11 +498,19 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             self.assertIsNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
             self.assertEqual(processed.plan["workflow"]["requeue_target"], "macos")
-            self.assertEqual(processed.plan["context"]["execution_context"]["required_worker_label"], "worker:macos")
+            self.assertEqual(
+                processed.plan["context"]["execution_context"]["required_worker_label"],
+                "worker:macos",
+            )
             stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
-                ["repo_setup_ready", "lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
+                [
+                    "repo_setup_ready",
+                    "lock_acquired",
+                    "plan_posted",
+                    "run_requeued_capability_mismatch",
+                ],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
             workflow = session.get(WorkflowExecution, processed.workflow_id)
@@ -491,7 +524,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         self.assertIn("TASK_STARTED", event_types)
         self.assertNotIn("TASK_FAILED", event_types)
 
-    def test_process_next_queued_run_requeues_generic_requeue_without_terminal_failure(self) -> None:
+    def test_process_next_queued_run_requeues_generic_requeue_without_terminal_failure(
+        self,
+    ) -> None:
         run_id = self._queue_run("TP-3021")
 
         with self.session_factory() as session:
@@ -506,15 +541,21 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             self.assertIsInstance(processed.plan, dict)
             self.assertEqual(processed.plan["workflow"]["outcome"], "requeue")
             self.assertIsNone(processed.plan["workflow"]["requeue_target"])
-            self.assertIn("Remote branch moved", processed.plan["workflow"]["requeue_reason"])
-            self.assertNotIn("stale_branch_snapshot", processed.plan["context"]["execution_context"])
+            self.assertIn(
+                "Remote branch moved", processed.plan["workflow"]["requeue_reason"]
+            )
+            self.assertNotIn(
+                "stale_branch_snapshot", processed.plan["context"]["execution_context"]
+            )
             workflow = session.get(WorkflowExecution, processed.workflow_id)
             self.assertIsNotNone(workflow)
             assert workflow is not None
             self.assertEqual(workflow.status, "queued")
             self.assertEqual(workflow.active_run_id, run_id)
 
-    def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
+    def test_process_next_queued_run_missing_project_mapping_releases_run_lock(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             enqueue_result = enqueue_run(
                 session,
@@ -549,7 +590,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             assert workflow is not None
             self.assertEqual(workflow.status, "failed")
 
-    def test_process_next_queued_run_uses_tenant_jira_site_url_for_stage_links(self) -> None:
+    def test_process_next_queued_run_uses_tenant_jira_site_url_for_stage_links(
+        self,
+    ) -> None:
         run_id = self._queue_run("TP-555")
         now = datetime.now(timezone.utc)
 
@@ -588,7 +631,9 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
                 stage_updates[0]["discord_message"],
             )
 
-    def test_process_next_queued_run_prepares_execution_repo_before_workflow(self) -> None:
+    def test_process_next_queued_run_prepares_execution_repo_before_workflow(
+        self,
+    ) -> None:
         run_id = self._queue_run("TP-556")
         runner = _SuccessRunner()
 
@@ -601,10 +646,14 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         self.repo_setup_mock.assert_called()
         repo_setup_kwargs = self.repo_setup_mock.call_args.kwargs
         self.assertEqual(repo_setup_kwargs["tenant"].tenant_id, "tenant-worker")
-        self.assertEqual(repo_setup_kwargs["project"].project_id, "tenant-worker-default")
+        self.assertEqual(
+            repo_setup_kwargs["project"].project_id, "tenant-worker-default"
+        )
         self.assertEqual(repo_setup_kwargs["workspace_key"], "worker-a")
 
-    def test_process_next_queued_run_requeues_when_repo_setup_is_retryable(self) -> None:
+    def test_process_next_queued_run_requeues_when_repo_setup_is_retryable(
+        self,
+    ) -> None:
         run_id = self._queue_run("TP-557")
         runner = _SuccessRunner()
         self.repo_setup_mock.side_effect = RetryableRepoSetupError("fetch race")
@@ -615,10 +664,17 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "queued")
             self.assertIsNone(processed.last_error)
-            self.assertEqual(processed.plan["context"]["execution_context"]["repo_setup_attempts"], 1)
-            self.assertEqual(processed.plan["context"]["execution_context"]["repo_setup_last_error"], "fetch race")
+            self.assertEqual(
+                processed.plan["context"]["execution_context"]["repo_setup_attempts"], 1
+            )
+            self.assertEqual(
+                processed.plan["context"]["execution_context"]["repo_setup_last_error"],
+                "fetch race",
+            )
             stage_updates = processed.plan["events"]["stage_updates"]
-            self.assertEqual([entry["stage"] for entry in stage_updates], ["run_requeued_repo_setup"])
+            self.assertEqual(
+                [entry["stage"] for entry in stage_updates], ["run_requeued_repo_setup"]
+            )
 
         self.assertIsNone(runner.last_request)
 

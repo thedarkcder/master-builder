@@ -49,7 +49,9 @@ class WebhookJobQueueTests(unittest.TestCase):
         reset_db_engine_cache()
 
     @staticmethod
-    def _request(*, issue_key: str, delivery_id: str, request_id: str) -> WebhookJobEnqueueRequest:
+    def _request(
+        *, issue_key: str, delivery_id: str, request_id: str
+    ) -> WebhookJobEnqueueRequest:
         return WebhookJobEnqueueRequest(
             transport=WEBHOOK_TRANSPORT_JIRA,
             request_id=request_id,
@@ -63,7 +65,9 @@ class WebhookJobQueueTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _discord_request(*, delivery_id: str, request_id: str) -> WebhookJobEnqueueRequest:
+    def _discord_request(
+        *, delivery_id: str, request_id: str
+    ) -> WebhookJobEnqueueRequest:
         return WebhookJobEnqueueRequest(
             transport=WEBHOOK_TRANSPORT_DISCORD_COMMAND,
             request_id=request_id,
@@ -81,12 +85,16 @@ class WebhookJobQueueTests(unittest.TestCase):
         with self.session_factory() as session:
             enqueue_webhook_job(
                 session,
-                request=self._request(issue_key="TP-1", delivery_id="delivery-1", request_id="request-1"),
+                request=self._request(
+                    issue_key="TP-1", delivery_id="delivery-1", request_id="request-1"
+                ),
                 now=now,
             )
             enqueue_webhook_job(
                 session,
-                request=self._request(issue_key="TP-2", delivery_id="delivery-2", request_id="request-2"),
+                request=self._request(
+                    issue_key="TP-2", delivery_id="delivery-2", request_id="request-2"
+                ),
                 now=now + timedelta(seconds=1),
             )
             session.add(
@@ -119,12 +127,16 @@ class WebhookJobQueueTests(unittest.TestCase):
         with self.session_factory() as session:
             first = enqueue_webhook_job(
                 session,
-                request=self._request(issue_key="TP-4", delivery_id="delivery-4a", request_id="request-4a"),
+                request=self._request(
+                    issue_key="TP-4", delivery_id="delivery-4a", request_id="request-4a"
+                ),
                 now=now,
             ).job
             second = enqueue_webhook_job(
                 session,
-                request=self._request(issue_key="TP-4", delivery_id="delivery-4b", request_id="request-4b"),
+                request=self._request(
+                    issue_key="TP-4", delivery_id="delivery-4b", request_id="request-4b"
+                ),
                 now=now + timedelta(seconds=1),
             ).job
             session.commit()
@@ -141,21 +153,31 @@ class WebhookJobQueueTests(unittest.TestCase):
             self.assertEqual(claim.batch.subject_key, "jira:tenant-1:TP-4")
             self.assertEqual(claim.batch.job_ids, (first.job_id, second.job_id))
             self.assertEqual(claim.batch.primary_job.job_id, first.job_id)
-            self.assertEqual(tuple(job.job_id for job in claim.batch.related_jobs), (second.job_id,))
+            self.assertEqual(
+                tuple(job.job_id for job in claim.batch.related_jobs), (second.job_id,)
+            )
             self.assertEqual(session.get(WebhookJob, first.job_id).owner_id, "worker-1")
-            self.assertEqual(session.get(WebhookJob, second.job_id).owner_id, "worker-1")
+            self.assertEqual(
+                session.get(WebhookJob, second.job_id).owner_id, "worker-1"
+            )
 
-    def test_claim_next_subject_batch_claims_single_job_for_non_coalesced_transport(self) -> None:
+    def test_claim_next_subject_batch_claims_single_job_for_non_coalesced_transport(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             first = enqueue_webhook_job(
                 session,
-                request=self._discord_request(delivery_id="discord-delivery-1", request_id="discord-request-1"),
+                request=self._discord_request(
+                    delivery_id="discord-delivery-1", request_id="discord-request-1"
+                ),
                 now=now,
             ).job
             second = enqueue_webhook_job(
                 session,
-                request=self._discord_request(delivery_id="discord-delivery-2", request_id="discord-request-2"),
+                request=self._discord_request(
+                    delivery_id="discord-delivery-2", request_id="discord-request-2"
+                ),
                 now=now + timedelta(seconds=1),
             ).job
             session.commit()
@@ -174,7 +196,9 @@ class WebhookJobQueueTests(unittest.TestCase):
             self.assertIsNone(session.get(WebhookJob, second.job_id).owner_id)
             self.assertEqual(session.get(WebhookJob, second.job_id).status, "pending")
 
-    def test_acquire_subject_claim_does_not_steal_live_lease_from_other_owner(self) -> None:
+    def test_acquire_subject_claim_does_not_steal_live_lease_from_other_owner(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -195,6 +219,8 @@ class WebhookJobQueueTests(unittest.TestCase):
             )
 
             self.assertFalse(acquired)
-            claim = session.get(WebhookSubjectClaim, {"subject_key": "jira:tenant-1:TP-3"})
+            claim = session.get(
+                WebhookSubjectClaim, {"subject_key": "jira:tenant-1:TP-3"}
+            )
             self.assertIsNotNone(claim)
             self.assertEqual(claim.owner_id, "other-worker")

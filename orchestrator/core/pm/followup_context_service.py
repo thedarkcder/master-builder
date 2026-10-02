@@ -83,11 +83,15 @@ def upsert_followup_context(
     ]
     identifier_filters = []
     if normalized_thread_channel_id:
-        identifier_filters = [FollowupContext.thread_channel_id == normalized_thread_channel_id]
+        identifier_filters = [
+            FollowupContext.thread_channel_id == normalized_thread_channel_id
+        ]
     elif normalized_request_id:
         identifier_filters = [FollowupContext.request_id == normalized_request_id]
     elif normalized_root_message_id:
-        identifier_filters = [FollowupContext.root_message_id == normalized_root_message_id]
+        identifier_filters = [
+            FollowupContext.root_message_id == normalized_root_message_id
+        ]
     elif normalized_issue_key:
         identifier_filters = [FollowupContext.issue_key == normalized_issue_key]
     existing = None
@@ -137,7 +141,9 @@ def upsert_followup_context(
     existing.run_id = normalized_run_id
     existing.metadata_json = dict(metadata or {})
     existing.updated_at = now
-    existing.closed_at = None if normalized_status == ACTIVE_FOLLOWUP_CONTEXT_STATUS else now
+    existing.closed_at = (
+        None if normalized_status == ACTIVE_FOLLOWUP_CONTEXT_STATUS else now
+    )
     return existing
 
 
@@ -168,8 +174,12 @@ def resolve_followup_context_match(
     if normalized_request_id:
         identifier_filters.append(FollowupContext.request_id == normalized_request_id)
     if normalized_root_message_id:
-        identifier_filters.append(FollowupContext.root_message_id == normalized_root_message_id)
-    identifier_filters.append(FollowupContext.thread_channel_id == normalized_channel_id)
+        identifier_filters.append(
+            FollowupContext.root_message_id == normalized_root_message_id
+        )
+    identifier_filters.append(
+        FollowupContext.thread_channel_id == normalized_channel_id
+    )
     if not identifier_filters:
         return FollowupContextResolution(status="no_match")
 
@@ -180,17 +190,33 @@ def resolve_followup_context_match(
     )
     if normalized_context_types:
         query = query.where(FollowupContext.context_type.in_(normalized_context_types))
-    rows = session.execute(query.order_by(FollowupContext.updated_at.desc())).scalars().all()
+    rows = (
+        session.execute(query.order_by(FollowupContext.updated_at.desc()))
+        .scalars()
+        .all()
+    )
     if not rows:
         return FollowupContextResolution(status="no_match")
 
     scored_rows: list[tuple[int, datetime, FollowupContext]] = []
     for row in rows:
-        if normalized_request_id and str(getattr(row, "request_id", "") or "").strip() != normalized_request_id:
+        if (
+            normalized_request_id
+            and str(getattr(row, "request_id", "") or "").strip()
+            != normalized_request_id
+        ):
             continue
-        if normalized_root_message_id and str(getattr(row, "root_message_id", "") or "").strip() != normalized_root_message_id:
+        if (
+            normalized_root_message_id
+            and str(getattr(row, "root_message_id", "") or "").strip()
+            != normalized_root_message_id
+        ):
             continue
-        if not normalized_root_message_id and str(getattr(row, "thread_channel_id", "") or "").strip() != normalized_channel_id:
+        if (
+            not normalized_root_message_id
+            and str(getattr(row, "thread_channel_id", "") or "").strip()
+            != normalized_channel_id
+        ):
             continue
         if normalized_user_id:
             row_owner_user_id = str(getattr(row, "owner_user_id", "") or "").strip()
@@ -202,11 +228,18 @@ def resolve_followup_context_match(
             score += 100
         if normalized_root_message_id:
             score += 80
-        if str(getattr(row, "thread_channel_id", "") or "").strip() == normalized_channel_id:
+        if (
+            str(getattr(row, "thread_channel_id", "") or "").strip()
+            == normalized_channel_id
+        ):
             score += 60
         if str(getattr(row, "channel_id", "") or "").strip() == normalized_channel_id:
             score += 20
-        if normalized_user_id and str(getattr(row, "owner_user_id", "") or "").strip() == normalized_user_id:
+        if (
+            normalized_user_id
+            and str(getattr(row, "owner_user_id", "") or "").strip()
+            == normalized_user_id
+        ):
             score += 10
         scored_rows.append((score, getattr(row, "updated_at", _now()), row))
 
@@ -215,10 +248,14 @@ def resolve_followup_context_match(
 
     scored_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
     top_score = scored_rows[0][0]
-    top_rows = tuple(row for score, _updated_at, row in scored_rows if score == top_score)
+    top_rows = tuple(
+        row for score, _updated_at, row in scored_rows if score == top_score
+    )
     if len(top_rows) > 1:
         return FollowupContextResolution(status="ambiguous", matches=top_rows)
-    return FollowupContextResolution(status="matched", context=top_rows[0], matches=top_rows)
+    return FollowupContextResolution(
+        status="matched", context=top_rows[0], matches=top_rows
+    )
 
 
 def resolve_followup_context(
@@ -266,7 +303,9 @@ def resolve_discord_interaction_subject_scope(
     resolve_project_for_discord_channel=None,
 ) -> tuple[str | None, str | None, str]:  # noqa: ANN001
     channel_id = str(payload.get("channel_id") or "").strip()
-    user_id = str(((payload.get("member") or {}).get("user") or {}).get("id") or "").strip()
+    user_id = str(
+        ((payload.get("member") or {}).get("user") or {}).get("id") or ""
+    ).strip()
     if not user_id:
         user_id = str((payload.get("user") or {}).get("id") or "").strip()
 
@@ -304,8 +343,12 @@ def resolve_discord_interaction_subject_scope(
             user_id=user_id,
         )
         if resolution.status == "matched" and resolution.context is not None:
-            project_id = str(getattr(resolution.context, "project_id", "") or "").strip() or None
-            context_id = str(getattr(resolution.context, "context_id", "") or "").strip()
+            project_id = (
+                str(getattr(resolution.context, "project_id", "") or "").strip() or None
+            )
+            context_id = str(
+                getattr(resolution.context, "context_id", "") or ""
+            ).strip()
             if context_id:
                 return tenant_id, project_id, f"discord_followup:{context_id}"
     if tenant_id and channel_id:
@@ -347,7 +390,9 @@ def close_followup_contexts(
         query = query.where(FollowupContext.request_id == normalized_request_id)
     normalized_thread_channel_id = str(thread_channel_id or "").strip()
     if normalized_thread_channel_id:
-        query = query.where(FollowupContext.thread_channel_id == normalized_thread_channel_id)
+        query = query.where(
+            FollowupContext.thread_channel_id == normalized_thread_channel_id
+        )
     rows = session.execute(query).scalars().all()
     if not rows:
         return 0
@@ -405,7 +450,10 @@ def resolve_followup_reaction(
     if not normalized_text or normalized_text.startswith("!"):
         return None
     if followup_context is not None:
-        if followup_context.context_type == FOLLOWUP_CONTEXT_DECISION_GATE and followup_context.issue_key:
+        if (
+            followup_context.context_type == FOLLOWUP_CONTEXT_DECISION_GATE
+            and followup_context.issue_key
+        ):
             return FollowupReaction(
                 kind="command",
                 command_text="!reply",

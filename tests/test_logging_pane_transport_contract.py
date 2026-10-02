@@ -34,9 +34,15 @@ def test_old_log_transport_modules_are_removed() -> None:
     root = Path(__file__).resolve().parents[1]
     assert not (root / "orchestrator" / "core" / "run_logs.py").exists()
     assert not (root / "orchestrator" / "core" / "log_event_bus.py").exists()
-    assert not (root / "orchestrator" / "api" / "admin" / "live_telemetry_service.py").exists()
-    assert not (root / "orchestrator" / "api" / "admin" / "codex_logs_service.py").exists()
-    assert not (root / "orchestrator" / "api" / "admin" / "run_event_stream_service.py").exists()
+    assert not (
+        root / "orchestrator" / "api" / "admin" / "live_telemetry_service.py"
+    ).exists()
+    assert not (
+        root / "orchestrator" / "api" / "admin" / "codex_logs_service.py"
+    ).exists()
+    assert not (
+        root / "orchestrator" / "api" / "admin" / "run_event_stream_service.py"
+    ).exists()
     assert not (root / "orchestrator" / "storage" / "run_event_stream.py").exists()
     assert not (root / "ops" / "observability" / "loki-config.yaml").exists()
 
@@ -44,10 +50,18 @@ def test_old_log_transport_modules_are_removed() -> None:
 def test_stack_config_uses_clickhouse_not_redis_or_loki() -> None:
     root = Path(__file__).resolve().parents[1]
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
-    prod_compose = (root / "deploy" / "hetzner" / "docker-compose.prod.yml").read_text(encoding="utf-8")
-    datasources = (root / "ops" / "observability" / "grafana" / "provisioning" / "datasources" / "datasources.yaml").read_text(
+    prod_compose = (root / "deploy" / "hetzner" / "docker-compose.prod.yml").read_text(
         encoding="utf-8"
     )
+    datasources = (
+        root
+        / "ops"
+        / "observability"
+        / "grafana"
+        / "provisioning"
+        / "datasources"
+        / "datasources.yaml"
+    ).read_text(encoding="utf-8")
     assert "clickhouse" in compose
     assert "redis" not in compose.lower()
     assert "loki" not in compose.lower()
@@ -79,11 +93,23 @@ def test_deployment_docs_do_not_require_redis_or_loki() -> None:
 
 def test_grafana_provisions_clickhouse_prometheus_tempo_and_dashboards() -> None:
     root = Path(__file__).resolve().parents[1]
-    datasources = (root / "ops" / "observability" / "grafana" / "provisioning" / "datasources" / "datasources.yaml").read_text(
-        encoding="utf-8"
-    )
+    datasources = (
+        root
+        / "ops"
+        / "observability"
+        / "grafana"
+        / "provisioning"
+        / "datasources"
+        / "datasources.yaml"
+    ).read_text(encoding="utf-8")
     dashboard_provider = (
-        root / "ops" / "observability" / "grafana" / "provisioning" / "dashboards" / "dashboards.yaml"
+        root
+        / "ops"
+        / "observability"
+        / "grafana"
+        / "provisioning"
+        / "dashboards"
+        / "dashboards.yaml"
     ).read_text(encoding="utf-8")
     dashboard = (
         root

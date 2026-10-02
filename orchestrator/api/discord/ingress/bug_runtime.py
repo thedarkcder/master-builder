@@ -9,7 +9,9 @@ from orchestrator.api.discord.bug.attachments import (
     resolve_discord_channel_name as _resolve_discord_channel_name_impl,
     upload_discord_attachments_to_jira as _upload_discord_attachments_to_jira_impl,
 )
-from orchestrator.api.discord.bug.issue_create_service import create_discord_bug_issue as _create_discord_bug_issue_impl
+from orchestrator.api.discord.bug.issue_create_service import (
+    create_discord_bug_issue as _create_discord_bug_issue_impl,
+)
 from orchestrator.api.discord.bug.service import (
     build_discord_bug_description as _build_discord_bug_description_impl,
     normalize_discord_attachments as _normalize_discord_attachments_impl,
@@ -18,11 +20,12 @@ from orchestrator.api.discord.ingress import jira_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
-    resolve_platform_secret_ref,
 )
 
 
-def resolve_discord_channel_name(*, session: Session, tenant, channel_id: str | None) -> str | None:  # noqa: ANN001
+def resolve_discord_channel_name(
+    *, session: Session, tenant, channel_id: str | None
+) -> str | None:  # noqa: ANN001
     settings = get_settings()
     return _resolve_discord_channel_name_impl(
         session=session,
@@ -33,15 +36,12 @@ def resolve_discord_channel_name(*, session: Session, tenant, channel_id: str | 
     )
 
 
-
-def download_discord_attachment(*, url: str, bot_token: str | None = None) -> tuple[bytes, str | None]:
-    return _download_discord_attachment_impl(url=url, bot_token=bot_token)
-
+def download_discord_attachment(*, url: str) -> tuple[bytes, str | None]:
+    return _download_discord_attachment_impl(url=url)
 
 
 def normalize_discord_attachments(raw_attachments: object) -> list[dict[str, str]]:
     return _normalize_discord_attachments_impl(raw_attachments)
-
 
 
 def build_discord_bug_description(
@@ -63,7 +63,6 @@ def build_discord_bug_description(
     )
 
 
-
 def create_discord_bug_issue(
     *,
     session: Session,
@@ -77,14 +76,9 @@ def create_discord_bug_issue(
     selected_project_key: str | None = None,
 ) -> tuple[str, dict]:  # noqa: ANN001
     settings = get_settings()
-    bot_token = resolve_platform_secret_ref(
-        session,
-        secret_ref=PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
-        encryption_key=settings.secrets_encryption_key,
-    )
 
     def _download_attachment(*, url: str) -> tuple[bytes, str | None]:
-        return download_discord_attachment(url=url, bot_token=bot_token)
+        return download_discord_attachment(url=url)
 
     def _upload_attachments(
         *,

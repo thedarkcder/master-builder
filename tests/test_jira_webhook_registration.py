@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient, AtlassianOAuthClientConfig, AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth import (
+    AtlassianOAuthClient,
+    AtlassianOAuthClientConfig,
+    AtlassianOAuthError,
+)
 from orchestrator.tools.atlassian_oauth_webhook_manager import (
     _extract_created_webhook_ids,
     _is_transient_webhook_error,
@@ -20,7 +24,9 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         )
 
     def test_register_webhook_accepts_created_webhook_id_list(self) -> None:
-        with patch.object(self.client, "_request_json", return_value={"createdWebhookId": [1001]}):
+        with patch.object(
+            self.client, "_request_json", return_value={"createdWebhookId": [1001]}
+        ):
             result = self.client.register_webhook(
                 access_token="token",
                 cloud_id="cloud",
@@ -31,7 +37,9 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         self.assertEqual(result, [1001])
 
     def test_register_webhook_accepts_single_created_webhook_id(self) -> None:
-        with patch.object(self.client, "_request_json", return_value={"createdWebhookId": 1002}):
+        with patch.object(
+            self.client, "_request_json", return_value={"createdWebhookId": 1002}
+        ):
             result = self.client.register_webhook(
                 access_token="token",
                 cloud_id="cloud",
@@ -59,8 +67,12 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         self.assertEqual(result, [2001, 2002])
 
     def test_register_webhook_raises_when_no_ids_returned(self) -> None:
-        with patch.object(self.client, "_request_json", return_value={"failedWebhookRegistration": []}):
-            with self.assertRaisesRegex(AtlassianOAuthError, "did not return any webhook IDs"):
+        with patch.object(
+            self.client, "_request_json", return_value={"failedWebhookRegistration": []}
+        ):
+            with self.assertRaisesRegex(
+                AtlassianOAuthError, "did not return any webhook IDs"
+            ):
                 self.client.register_webhook(
                     access_token="token",
                     cloud_id="cloud",
@@ -91,12 +103,18 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
 
     def test_delete_webhooks_noop_for_empty_ids(self) -> None:
         with patch.object(self.client, "_request_json") as request_mock:
-            self.client.delete_webhooks(access_token="token", cloud_id="cloud", webhook_ids=[])
+            self.client.delete_webhooks(
+                access_token="token", cloud_id="cloud", webhook_ids=[]
+            )
         request_mock.assert_not_called()
 
     def test_delete_webhooks_calls_api_when_ids_present(self) -> None:
-        with patch.object(self.client, "_request_json", return_value={}) as request_mock:
-            self.client.delete_webhooks(access_token="token", cloud_id="cloud", webhook_ids=[1001, 1002])
+        with patch.object(
+            self.client, "_request_json", return_value={}
+        ) as request_mock:
+            self.client.delete_webhooks(
+                access_token="token", cloud_id="cloud", webhook_ids=[1001, 1002]
+            )
         request_mock.assert_called_once()
 
     def test_register_webhook_retries_on_transient_gateway_error(self) -> None:
@@ -119,12 +137,16 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         self.assertEqual(result, [1003])
         self.assertEqual(request_mock.call_count, 2)
 
-    def test_register_webhook_retries_on_transient_gateway_error_colon_format(self) -> None:
+    def test_register_webhook_retries_on_transient_gateway_error_colon_format(
+        self,
+    ) -> None:
         with patch.object(
             self.client,
             "_request_json",
             side_effect=[
-                AtlassianOAuthError("Unable to provision Jira webhook: 502: Bad Gateway"),
+                AtlassianOAuthError(
+                    "Unable to provision Jira webhook: 502: Bad Gateway"
+                ),
                 {"createdWebhookId": 1004},
             ],
         ) as request_mock:
@@ -143,7 +165,9 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         with patch.object(
             self.client,
             "_request_json",
-            side_effect=AtlassianOAuthError("Jira API request failed (400): Invalid payload"),
+            side_effect=AtlassianOAuthError(
+                "Jira API request failed (400): Invalid payload"
+            ),
         ) as request_mock:
             with self.assertRaisesRegex(AtlassianOAuthError, "Invalid payload"):
                 self.client.register_webhook(
@@ -165,12 +189,18 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         )
         self.assertEqual(ids, [1001, 1002, 1003])
 
-        self.assertTrue(_is_transient_webhook_error(AtlassianOAuthError("failed 503 upstream")))
-        self.assertFalse(_is_transient_webhook_error(AtlassianOAuthError("failed 400 bad request")))
+        self.assertTrue(
+            _is_transient_webhook_error(AtlassianOAuthError("failed 503 upstream"))
+        )
+        self.assertFalse(
+            _is_transient_webhook_error(AtlassianOAuthError("failed 400 bad request"))
+        )
 
         self.assertIn(
             "errorMessages",
-            _summarize_webhook_registration_failure({"errorMessages": ["bad", "config"]}),
+            _summarize_webhook_registration_failure(
+                {"errorMessages": ["bad", "config"]}
+            ),
         )
         self.assertIn(
             "errors",
@@ -178,9 +208,13 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         )
         self.assertIn(
             "webhookRegistrationResult errors",
-            _summarize_webhook_registration_failure({"webhookRegistrationResult": [{"errors": ["Only one URL"]}]}),
+            _summarize_webhook_registration_failure(
+                {"webhookRegistrationResult": [{"errors": ["Only one URL"]}]}
+            ),
         )
-        self.assertIn("response keys", _summarize_webhook_registration_failure({"foo": "bar"}))
+        self.assertIn(
+            "response keys", _summarize_webhook_registration_failure({"foo": "bar"})
+        )
 
 
 if __name__ == "__main__":

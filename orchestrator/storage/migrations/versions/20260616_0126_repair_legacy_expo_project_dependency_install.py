@@ -40,13 +40,18 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def canonical_legacy_expo_project_dependency_install(payload: Any) -> tuple[Any, bool]:
     if not isinstance(payload, dict):
         return payload, False
-    if payload.get("install_command") != LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_BUT_WITHOUT_PROJECT_DEPS:
+    if (
+        payload.get("install_command")
+        != LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_BUT_WITHOUT_PROJECT_DEPS
+    ):
         return payload, False
     updated = dict(payload)
     updated["install_command"] = LEGACY_EXPO_CLI_INSTALL_COMMAND
@@ -54,7 +59,10 @@ def canonical_legacy_expo_project_dependency_install(payload: Any) -> tuple[Any,
 
 
 def upgrade() -> None:
-    if not (_table_exists("project_apps") and _column_exists("project_apps", "deployment_config")):
+    if not (
+        _table_exists("project_apps")
+        and _column_exists("project_apps", "deployment_config")
+    ):
         return
 
     bind = op.get_bind()
@@ -63,9 +71,15 @@ def upgrade() -> None:
         sa.column("app_id", sa.String()),
         sa.column("deployment_config", sa.JSON()),
     )
-    rows = bind.execute(sa.text("SELECT app_id, deployment_config FROM project_apps")).mappings().all()
+    rows = (
+        bind.execute(sa.text("SELECT app_id, deployment_config FROM project_apps"))
+        .mappings()
+        .all()
+    )
     for row in rows:
-        updated, changed = canonical_legacy_expo_project_dependency_install(row["deployment_config"])
+        updated, changed = canonical_legacy_expo_project_dependency_install(
+            row["deployment_config"]
+        )
         if not changed:
             continue
         bind.execute(

@@ -8,7 +8,9 @@ from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.core.communications.execution_admission_format import present_jira_admission
+from orchestrator.core.communications.execution_admission_format import (
+    present_jira_admission,
+)
 
 
 @dataclass(frozen=True)
@@ -30,17 +32,22 @@ def plan_jira_comment_flow(
     if deleted_response is not None:
         return JiraCommentPlan(content=deleted_response)
 
-    invalid_comment_response = jira_webhook_comment_flow.stage_handle_invalid_comment_command(
-        context=context
+    invalid_comment_response = (
+        jira_webhook_comment_flow.stage_handle_invalid_comment_command(context=context)
     )
     if invalid_comment_response is not None:
         return JiraCommentPlan(content=invalid_comment_response)
 
-    removed_history_entries = jira_webhook_comment_flow.stage_handle_comment_event_memory(
-        context=context,
-        session=session,
+    removed_history_entries = (
+        jira_webhook_comment_flow.stage_handle_comment_event_memory(
+            context=context,
+            session=session,
+        )
     )
-    if context.project is None and context.webhook_event in jira_webhook_comment_flow.JIRA_COMMENT_EVENTS:
+    if (
+        context.project is None
+        and context.webhook_event in jira_webhook_comment_flow.JIRA_COMMENT_EVENTS
+    ):
         admission = build_execution_admission_block(
             reason=ExecutionAdmissionReason.PROJECT_NOT_MAPPED,
         )
@@ -68,10 +75,12 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
-    comment_clarify_response = jira_webhook_comment_flow.stage_handle_comment_clarify_command(
-        context=context,
-        session=session,
-        settings=settings,
+    comment_clarify_response = (
+        jira_webhook_comment_flow.stage_handle_comment_clarify_command(
+            context=context,
+            session=session,
+            settings=settings,
+        )
     )
     if comment_clarify_response is not None:
         return JiraCommentPlan(
@@ -90,10 +99,12 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
-    engineering_reply_response = jira_webhook_comment_flow.stage_handle_comment_engineering_clarification_reply(
-        context=context,
-        session=session,
-        settings=settings,
+    engineering_reply_response = (
+        jira_webhook_comment_flow.stage_handle_comment_engineering_clarification_reply(
+            context=context,
+            session=session,
+            settings=settings,
+        )
     )
     if engineering_reply_response is not None:
         return JiraCommentPlan(
@@ -101,10 +112,12 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
-    pm_interview_reply_response = jira_webhook_comment_flow.stage_handle_comment_pm_interview_reply(
-        context=context,
-        session=session,
-        settings=settings,
+    pm_interview_reply_response = (
+        jira_webhook_comment_flow.stage_handle_comment_pm_interview_reply(
+            context=context,
+            session=session,
+            settings=settings,
+        )
     )
     if pm_interview_reply_response is not None:
         return JiraCommentPlan(
@@ -112,10 +125,12 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
-    comment_reply_response = jira_webhook_comment_flow.stage_handle_comment_decision_reply(
-        context=context,
-        session=session,
-        settings=settings,
+    comment_reply_response = (
+        jira_webhook_comment_flow.stage_handle_comment_decision_reply(
+            context=context,
+            session=session,
+            settings=settings,
+        )
     )
     if comment_reply_response is not None:
         return JiraCommentPlan(
@@ -123,9 +138,11 @@ def plan_jira_comment_flow(
             removed_history_entries=removed_history_entries,
         )
 
-    comment_without_command_response = jira_webhook_comment_flow.stage_handle_comment_without_command(
-        context=context,
-        removed_history_entries=removed_history_entries,
+    comment_without_command_response = (
+        jira_webhook_comment_flow.stage_handle_comment_without_command(
+            context=context,
+            removed_history_entries=removed_history_entries,
+        )
     )
     if comment_without_command_response is not None:
         return JiraCommentPlan(

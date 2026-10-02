@@ -7,7 +7,9 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.types import PrecheckOutcome
-from orchestrator.core.development.self_executable_contract import resolve_self_executable_planning_contract
+from orchestrator.core.development.self_executable_contract import (
+    resolve_self_executable_planning_contract,
+)
 from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs.service import EnqueueRunResult, enqueue_run
 from orchestrator.core.workflow.operation_service import (
@@ -17,7 +19,13 @@ from orchestrator.core.workflow.operation_service import (
     start_workflow_operation_attempt,
     upsert_workflow_operation,
 )
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import (
+    Project,
+    Run,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+)
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 DEVELOPMENT_START_OPERATION = "development_start"
@@ -38,14 +46,13 @@ _RUN_STATUSES_BLOCKING_START = {
 
 
 class StartWorkIssueGateway(Protocol):
-    def load_issue_detail(self, issue_key: str) -> JiraIssueDetail:
-        ...
+    def load_issue_detail(self, issue_key: str) -> JiraIssueDetail: ...
 
-    def load_child_details(self, *, project_key: str, parent_issue_key: str) -> list[JiraIssueDetail]:
-        ...
+    def load_child_details(
+        self, *, project_key: str, parent_issue_key: str
+    ) -> list[JiraIssueDetail]: ...
 
-    def transition_issue(self, *, issue_key: str, target_status: str) -> None:
-        ...
+    def transition_issue(self, *, issue_key: str, target_status: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -79,7 +86,11 @@ def _normalized_status(value: object) -> str:
 
 
 def _labels(issue: JiraIssueDetail) -> set[str]:
-    return {str(label or "").strip().casefold() for label in issue.labels if str(label or "").strip()}
+    return {
+        str(label or "").strip().casefold()
+        for label in issue.labels
+        if str(label or "").strip()
+    }
 
 
 def _project_key_for_issue(issue_key: str) -> str:
@@ -153,7 +164,9 @@ class StartWorkUseCase:
             child_issues=child_issues,
         )
         if not targets:
-            raise ValueError(f"No executable engineering work found for {source_issue_key}")
+            raise ValueError(
+                f"No executable engineering work found for {source_issue_key}"
+            )
 
         operation = self._operation_for_source_workflow(
             source_workflow=source_workflow,
@@ -161,7 +174,11 @@ class StartWorkUseCase:
             actor=actor,
             reason=reason,
         )
-        if operation is not None and str(operation.status or "").strip().lower() == OPERATION_STATUS_COMPLETED:
+        if (
+            operation is not None
+            and str(operation.status or "").strip().lower()
+            == OPERATION_STATUS_COMPLETED
+        ):
             return self._start_targets(
                 source_issue_key=source_issue_key,
                 targets=targets,
@@ -173,7 +190,11 @@ class StartWorkUseCase:
                 promote_targets=promote_targets,
             )
 
-        attempt = start_workflow_operation_attempt(self._session, operation=operation) if operation is not None else None
+        attempt = (
+            start_workflow_operation_attempt(self._session, operation=operation)
+            if operation is not None
+            else None
+        )
         try:
             result = self._start_targets(
                 source_issue_key=source_issue_key,
@@ -220,12 +241,24 @@ class StartWorkUseCase:
         workflow = self._session.get(WorkflowExecution, normalized_workflow_id)
         if workflow is None:
             raise ValueError(f"Source workflow not found: {normalized_workflow_id}")
-        if workflow.tenant_id != tenant.tenant_id or _normalized_key(workflow.source_ref) != issue_key:
-            raise ValueError("Source workflow does not match the supplied tenant and issue")
+        if (
+            workflow.tenant_id != tenant.tenant_id
+            or _normalized_key(workflow.source_ref) != issue_key
+        ):
+            raise ValueError(
+                "Source workflow does not match the supplied tenant and issue"
+            )
         if str(workflow.workflow_type_key or "").strip() != "parent_planning":
-            raise ValueError("Start work source workflow must be a parent planning workflow")
-        if require_completed and str(workflow.status or "").strip().lower() != "completed":
-            raise ValueError("Parent planning must be completed before development can start")
+            raise ValueError(
+                "Start work source workflow must be a parent planning workflow"
+            )
+        if (
+            require_completed
+            and str(workflow.status or "").strip().lower() != "completed"
+        ):
+            raise ValueError(
+                "Parent planning must be completed before development can start"
+            )
         return workflow
 
     def _operation_for_source_workflow(
@@ -259,7 +292,9 @@ class StartWorkUseCase:
         child_issues: list[JiraIssueDetail],
     ) -> tuple[JiraIssueDetail, ...]:
         if _is_pm_parent(source_issue):
-            executable_children = tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
+            executable_children = tuple(
+                issue for issue in child_issues if _is_clean_engineering_issue(issue)
+            )
             if executable_children:
                 return executable_children
             contract = self._self_executable_contract_resolver(
@@ -279,7 +314,9 @@ class StartWorkUseCase:
                 )
             return ()
 
-        executable_children = tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
+        executable_children = tuple(
+            issue for issue in child_issues if _is_clean_engineering_issue(issue)
+        )
         if executable_children:
             return executable_children
         if _is_clean_engineering_issue(source_issue):
@@ -303,8 +340,13 @@ class StartWorkUseCase:
         promoted: list[str] = []
         normalized_target_status = _normalized(target_status) or "To Do"
         for issue in targets:
-            if promote_targets and _normalized_status(issue.status) not in _ACTIONABLE_STATUSES:
-                self._issue_gateway.transition_issue(issue_key=issue.key, target_status=normalized_target_status)
+            if (
+                promote_targets
+                and _normalized_status(issue.status) not in _ACTIONABLE_STATUSES
+            ):
+                self._issue_gateway.transition_issue(
+                    issue_key=issue.key, target_status=normalized_target_status
+                )
                 promoted.append(issue.key)
             existing_run = self._existing_run_for_issue(tenant=tenant, issue=issue)
             if existing_run is not None:
@@ -317,7 +359,9 @@ class StartWorkUseCase:
                     )
                 )
                 continue
-            enqueue_result = self._enqueue_issue_run(tenant=tenant, project=project, issue=issue)
+            enqueue_result = self._enqueue_issue_run(
+                tenant=tenant, project=project, issue=issue
+            )
             if enqueue_result.enqueued:
                 queued.append(
                     StartWorkIssueResult(
@@ -344,7 +388,9 @@ class StartWorkUseCase:
             attempt_id=attempt_id,
         )
 
-    def _enqueue_issue_run(self, *, tenant: Tenant, project: Project, issue: JiraIssueDetail) -> EnqueueRunResult:
+    def _enqueue_issue_run(
+        self, *, tenant: Tenant, project: Project, issue: JiraIssueDetail
+    ) -> EnqueueRunResult:
         return self._enqueue_run_fn(
             self._session,
             tenant_id=tenant.tenant_id,
@@ -359,7 +405,9 @@ class StartWorkUseCase:
             max_concurrent_runs=None,
         )
 
-    def _existing_run_for_issue(self, *, tenant: Tenant, issue: JiraIssueDetail) -> Run | None:
+    def _existing_run_for_issue(
+        self, *, tenant: Tenant, issue: JiraIssueDetail
+    ) -> Run | None:
         return self._session.execute(
             select(Run)
             .where(
@@ -391,7 +439,9 @@ def _skip_reason(reason: EnqueueFailureReason | None) -> str:
     return reason.value
 
 
-def latest_start_work_operation(*, session: Session, workflow_id: str) -> WorkflowOperation | None:
+def latest_start_work_operation(
+    *, session: Session, workflow_id: str
+) -> WorkflowOperation | None:
     return session.execute(
         select(WorkflowOperation)
         .where(

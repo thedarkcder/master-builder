@@ -92,18 +92,22 @@ def _existing_tables(table_names: Iterable[str]) -> tuple[str, ...]:
     names = tuple(sorted(set(table_names)))
     if not names:
         return ()
-    rows = op.get_bind().execute(
-        text(
-            """
+    rows = (
+        op.get_bind()
+        .execute(
+            text(
+                """
             SELECT tablename
             FROM pg_tables
             WHERE schemaname = current_schema()
               AND tablename = ANY(:table_names)
             ORDER BY tablename
             """
-        ),
-        {"table_names": list(names)},
-    ).scalars()
+            ),
+            {"table_names": list(names)},
+        )
+        .scalars()
+    )
     return tuple(rows)
 
 
@@ -135,7 +139,9 @@ def _direct_policy(table_name: str) -> _Policy:
     return _Policy(
         table_name=table_name,
         policy_name=f"{table_name}_tenant_isolation",
-        using_expression=_tenant_access_expression(f"{_quote_identifier(table_name)}.tenant_id"),
+        using_expression=_tenant_access_expression(
+            f"{_quote_identifier(table_name)}.tenant_id"
+        ),
     )
 
 
@@ -284,15 +290,25 @@ WITH CHECK {check_expression}""",
 
 def _protected_tables() -> tuple[str, ...]:
     direct = _direct_tenant_tables()
-    annotated = tuple(_DERIVED_TENANT_SCOPES) + tuple(_CUSTOM_DERIVED_POLICY_REASONS) + tuple(_IDENTITY_POLICY_REASONS)
+    annotated = (
+        tuple(_DERIVED_TENANT_SCOPES)
+        + tuple(_CUSTOM_DERIVED_POLICY_REASONS)
+        + tuple(_IDENTITY_POLICY_REASONS)
+    )
     return _existing_tables(set(direct) | set(annotated))
 
 
 def _comment_protected_tables() -> None:
     for table_name, (_scope_sql, reason) in _DERIVED_TENANT_SCOPES.items():
-        op.execute(f"COMMENT ON TABLE {_quote_identifier(table_name)} IS 'tenant_rls:protected; {reason}'")
-    for table_name, reason in (_CUSTOM_DERIVED_POLICY_REASONS | _IDENTITY_POLICY_REASONS).items():
-        op.execute(f"COMMENT ON TABLE {_quote_identifier(table_name)} IS 'tenant_rls:protected; {reason}'")
+        op.execute(
+            f"COMMENT ON TABLE {_quote_identifier(table_name)} IS 'tenant_rls:protected; {reason}'"
+        )
+    for table_name, reason in (
+        _CUSTOM_DERIVED_POLICY_REASONS | _IDENTITY_POLICY_REASONS
+    ).items():
+        op.execute(
+            f"COMMENT ON TABLE {_quote_identifier(table_name)} IS 'tenant_rls:protected; {reason}'"
+        )
 
 
 def upgrade() -> None:

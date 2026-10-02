@@ -19,7 +19,9 @@ from orchestrator.storage.models import (
 )
 
 
-def latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
+def latest_checkpoint_for_kind(
+    *, session, workflow_id: str, checkpoint_kind: str
+) -> WorkflowCheckpoint | None:  # noqa: ANN001
     normalized_kind = str(checkpoint_kind or "").strip().lower()
     accepted_kinds = (
         ("pm",)
@@ -34,7 +36,9 @@ def latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: st
             WorkflowCheckpoint.workflow_id == workflow_id,
             WorkflowCheckpoint.checkpoint_kind.in_(accepted_kinds),
         )
-        .order_by(desc(WorkflowCheckpoint.updated_at), desc(WorkflowCheckpoint.created_at))
+        .order_by(
+            desc(WorkflowCheckpoint.updated_at), desc(WorkflowCheckpoint.created_at)
+        )
         .limit(1)
     ).scalar_one_or_none()
 
@@ -52,11 +56,15 @@ def pending_input_request(*, session, workflow_id: str) -> RunHumanInputRequest 
 
 
 def workflow_checkpoint_kinds(*, session, workflow_id: str) -> list[str]:  # noqa: ANN001
-    checkpoint_kinds = session.execute(
-        select(WorkflowCheckpoint.checkpoint_kind)
-        .where(WorkflowCheckpoint.workflow_id == workflow_id)
-        .order_by(desc(WorkflowCheckpoint.created_at))
-    ).scalars().all()
+    checkpoint_kinds = (
+        session.execute(
+            select(WorkflowCheckpoint.checkpoint_kind)
+            .where(WorkflowCheckpoint.workflow_id == workflow_id)
+            .order_by(desc(WorkflowCheckpoint.created_at))
+        )
+        .scalars()
+        .all()
+    )
     seen: set[str] = set()
     ordered: list[str] = []
     for kind in checkpoint_kinds:
@@ -67,42 +75,61 @@ def workflow_checkpoint_kinds(*, session, workflow_id: str) -> list[str]:  # noq
     return ordered
 
 
-def active_followup_contexts(*, session, tenant_id: str, issue_key: str) -> list[FollowupContext]:  # noqa: ANN001
+def active_followup_contexts(
+    *, session, tenant_id: str, issue_key: str
+) -> list[FollowupContext]:  # noqa: ANN001
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_issue_key = str(issue_key or "").strip().upper()
     if not normalized_tenant_id or not normalized_issue_key:
         return []
-    return session.execute(
-        select(FollowupContext)
-        .where(
-            FollowupContext.tenant_id == normalized_tenant_id,
-            FollowupContext.issue_key == normalized_issue_key,
-            FollowupContext.status == "active",
+    return (
+        session.execute(
+            select(FollowupContext)
+            .where(
+                FollowupContext.tenant_id == normalized_tenant_id,
+                FollowupContext.issue_key == normalized_issue_key,
+                FollowupContext.status == "active",
+            )
+            .order_by(desc(FollowupContext.updated_at))
         )
-        .order_by(desc(FollowupContext.updated_at))
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def workflow_runs(*, session, workflow_id: str) -> list[Run]:  # noqa: ANN001
-    return session.execute(
-        select(Run)
-        .where(Run.workflow_id == workflow_id)
-        .order_by(Run.attempt_number.asc())
-    ).scalars().all()
+    return (
+        session.execute(
+            select(Run)
+            .where(Run.workflow_id == workflow_id)
+            .order_by(Run.attempt_number.asc())
+        )
+        .scalars()
+        .all()
+    )
 
 
 def workflow_operations(*, session, workflow_id: str) -> list[WorkflowOperation]:  # noqa: ANN001
-    return session.execute(
-        select(WorkflowOperation)
-        .where(WorkflowOperation.workflow_id == workflow_id)
-        .order_by(desc(WorkflowOperation.created_at))
-    ).scalars().all()
+    return (
+        session.execute(
+            select(WorkflowOperation)
+            .where(WorkflowOperation.workflow_id == workflow_id)
+            .order_by(desc(WorkflowOperation.created_at))
+        )
+        .scalars()
+        .all()
+    )
 
 
-def workflow_operation_attempts_by_operation(*, session, workflow_id: str) -> dict[str, list[WorkflowOperationAttempt]]:  # noqa: ANN001
+def workflow_operation_attempts_by_operation(
+    *, session, workflow_id: str
+) -> dict[str, list[WorkflowOperationAttempt]]:  # noqa: ANN001
     rows = session.execute(
         select(WorkflowOperationAttempt, WorkflowOperation)
-        .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id,
+        )
         .where(WorkflowOperation.workflow_id == workflow_id)
         .order_by(WorkflowOperationAttempt.attempt_number.asc())
     ).all()
@@ -122,7 +149,10 @@ def workflow_work_units_by_operation(
 ]:  # noqa: ANN001
     work_unit_rows = session.execute(
         select(WorkflowOperationWorkUnit, WorkflowOperation)
-        .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationWorkUnit.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.operation_id == WorkflowOperationWorkUnit.operation_id,
+        )
         .where(WorkflowOperation.workflow_id == workflow_id)
         .order_by(WorkflowOperationWorkUnit.created_at.asc())
     ).all()
@@ -133,25 +163,37 @@ def workflow_work_units_by_operation(
         work_unit_ids.append(work_unit.work_unit_id)
     attempts_by_work_unit: dict[str, list[WorkflowOperationWorkUnitAttempt]] = {}
     if work_unit_ids:
-        attempt_rows = session.execute(
-            select(WorkflowOperationWorkUnitAttempt)
-            .where(WorkflowOperationWorkUnitAttempt.work_unit_id.in_(work_unit_ids))
-            .order_by(WorkflowOperationWorkUnitAttempt.attempt_number.asc())
-        ).scalars().all()
+        attempt_rows = (
+            session.execute(
+                select(WorkflowOperationWorkUnitAttempt)
+                .where(WorkflowOperationWorkUnitAttempt.work_unit_id.in_(work_unit_ids))
+                .order_by(WorkflowOperationWorkUnitAttempt.attempt_number.asc())
+            )
+            .scalars()
+            .all()
+        )
         for attempt in attempt_rows:
             attempts_by_work_unit.setdefault(attempt.work_unit_id, []).append(attempt)
     return work_units_by_operation, attempts_by_work_unit
 
 
-def workflow_operation_attempts(*, session, operation_id: str) -> list[WorkflowOperationAttempt]:  # noqa: ANN001
-    return session.execute(
-        select(WorkflowOperationAttempt)
-        .where(WorkflowOperationAttempt.operation_id == operation_id)
-        .order_by(desc(WorkflowOperationAttempt.attempt_number))
-    ).scalars().all()
+def workflow_operation_attempts(
+    *, session, operation_id: str
+) -> list[WorkflowOperationAttempt]:  # noqa: ANN001
+    return (
+        session.execute(
+            select(WorkflowOperationAttempt)
+            .where(WorkflowOperationAttempt.operation_id == operation_id)
+            .order_by(desc(WorkflowOperationAttempt.attempt_number))
+        )
+        .scalars()
+        .all()
+    )
 
 
-def audit_events_by_operation(*, session, workflow_id: str) -> dict[str, list[ProductEvent]]:  # noqa: ANN001
+def audit_events_by_operation(
+    *, session, workflow_id: str
+) -> dict[str, list[ProductEvent]]:  # noqa: ANN001
     del session
     rows = list_product_events(
         event_class="audit_evidence",
@@ -177,14 +219,18 @@ def latest_run_for_workflow(*, session, workflow_id: str) -> Run | None:  # noqa
     ).scalar_one_or_none()
 
 
-def latest_resumable_checkpoint(*, session, workflow_id: str) -> WorkflowCheckpoint | None:  # noqa: ANN001
+def latest_resumable_checkpoint(
+    *, session, workflow_id: str
+) -> WorkflowCheckpoint | None:  # noqa: ANN001
     return session.execute(
         select(WorkflowCheckpoint)
         .where(
             WorkflowCheckpoint.workflow_id == workflow_id,
             WorkflowCheckpoint.checkpoint_kind.in_(("pm", "execution", "orchestrated")),
         )
-        .order_by(desc(WorkflowCheckpoint.updated_at), desc(WorkflowCheckpoint.created_at))
+        .order_by(
+            desc(WorkflowCheckpoint.updated_at), desc(WorkflowCheckpoint.created_at)
+        )
         .limit(1)
     ).scalar_one_or_none()
 

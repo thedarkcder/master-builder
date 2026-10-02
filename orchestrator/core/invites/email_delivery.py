@@ -7,7 +7,9 @@ from orchestrator.core.platform.email_delivery import EmailMessagePayload, deliv
 logger = logging.getLogger(__name__)
 
 
-def send_tenant_invite_email(*, email: str, full_name: str | None, invite_url: str, tenant_name: str) -> None:
+def send_tenant_invite_email(
+    *, email: str, full_name: str | None, invite_url: str, tenant_name: str
+) -> None:
     greeting_name = (full_name or email).strip()
     subject = f"You've been invited to join {tenant_name} on Master Builder"
     text_body = (

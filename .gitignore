@@ -30,3 +30,16 @@ admin-ui/.next-playwright
 .DS_Store
 .runtime-home/
 .codex/tmp/
+
+# Local execution artifacts and operator state must never enter source releases.
+/tmp/
+*.log
+*.pid
+*.tsbuildinfo
+*.bkp
+/before-deploy-click.png
+.vscode/
+.idea/
+
+# Python distribution build staging (wheel/sdist are in dist/).
+/build/

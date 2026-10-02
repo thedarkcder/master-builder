@@ -8,7 +8,9 @@ import wave
 from orchestrator.core.discord.live_voice_audio import wav_duration_seconds
 
 
-def _build_wav_bytes(*, sample_rate_hz: int, channels: int, duration_seconds: float) -> bytes:
+def _build_wav_bytes(
+    *, sample_rate_hz: int, channels: int, duration_seconds: float
+) -> bytes:
     frame_count = int(sample_rate_hz * duration_seconds)
     samples = [0] * frame_count * channels
     buffer = io.BytesIO()
@@ -22,7 +24,9 @@ def _build_wav_bytes(*, sample_rate_hz: int, channels: int, duration_seconds: fl
 
 class LiveVoiceAudioTests(unittest.TestCase):
     def test_wav_duration_seconds_reads_header_duration(self) -> None:
-        wav_bytes = _build_wav_bytes(sample_rate_hz=48_000, channels=2, duration_seconds=0.25)
+        wav_bytes = _build_wav_bytes(
+            sample_rate_hz=48_000, channels=2, duration_seconds=0.25
+        )
 
         self.assertAlmostEqual(wav_duration_seconds(wav_bytes), 0.25, places=3)
 

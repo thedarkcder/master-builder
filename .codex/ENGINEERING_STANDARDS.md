@@ -82,7 +82,7 @@ For bug fixes, incident fixes, and risky workflows:
 
 ## 2) Execution gate: “Good To Do” requirement
 
-Agents must only work on items that are “Good To Do”. Before coding, confirm:
+For configured Jira automation, agents must only execute tickets that are “Good To Do”. Public issues, pull requests and direct maintainer tasks are authorized work without private Jira access; their stated requirements must satisfy the same engineering checks. Before coding, confirm:
 - Objective is clear in 1–2 sentences.
 - Acceptance criteria exists (or is proposed and confirmed).
 - Component/repo is clear.

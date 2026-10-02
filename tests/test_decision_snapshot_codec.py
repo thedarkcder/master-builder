@@ -65,7 +65,9 @@ def test_decision_result_snapshot_round_trip() -> None:
 
 
 def test_build_question_set_is_deterministic() -> None:
-    question_set = build_question_set(pre_check=_precheck(), classification="decision_gate")
+    question_set = build_question_set(
+        pre_check=_precheck(), classification="decision_gate"
+    )
     assert len(question_set) == 1
     assert question_set[0]["id"].startswith("dg_")
 

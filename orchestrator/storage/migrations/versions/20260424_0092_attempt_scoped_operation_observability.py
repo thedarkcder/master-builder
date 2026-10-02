@@ -21,7 +21,8 @@ depends_on = None
 
 def _has_check_constraint(table_name: str, constraint_name: str) -> bool:
     return constraint_name in {
-        constraint["name"] for constraint in sa.inspect(op.get_bind()).get_check_constraints(table_name)
+        constraint["name"]
+        for constraint in sa.inspect(op.get_bind()).get_check_constraints(table_name)
     }
 
 
@@ -62,7 +63,9 @@ def _backfill_attempt_ids(table_name: str) -> None:
         sa.Column("attempt_number", sa.Integer),
     )
 
-    primary_key_column = events.c.event_id if table_name == "audit_events" else events.c.stream_offset
+    primary_key_column = (
+        events.c.event_id if table_name == "audit_events" else events.c.stream_offset
+    )
     rows = bind.execute(
         sa.select(
             primary_key_column.label("row_id"),
@@ -105,13 +108,18 @@ def _backfill_attempt_ids(table_name: str) -> None:
 def upgrade() -> None:
     _backfill_attempt_ids("observability_stream_events")
     _backfill_attempt_ids("audit_events")
-    if not _has_check_constraint("observability_stream_events", "ck_observability_stream_events_operation_requires_attempt"):
+    if not _has_check_constraint(
+        "observability_stream_events",
+        "ck_observability_stream_events_operation_requires_attempt",
+    ):
         with op.batch_alter_table("observability_stream_events") as batch_op:
             batch_op.create_check_constraint(
                 "ck_observability_stream_events_operation_requires_attempt",
                 "operation_id IS NULL OR attempt_id IS NOT NULL",
             )
-    if not _has_check_constraint("audit_events", "ck_audit_events_operation_requires_attempt"):
+    if not _has_check_constraint(
+        "audit_events", "ck_audit_events_operation_requires_attempt"
+    ):
         with op.batch_alter_table("audit_events") as batch_op:
             batch_op.create_check_constraint(
                 "ck_audit_events_operation_requires_attempt",
@@ -121,6 +129,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     with op.batch_alter_table("audit_events") as batch_op:
-        batch_op.drop_constraint("ck_audit_events_operation_requires_attempt", type_="check")
+        batch_op.drop_constraint(
+            "ck_audit_events_operation_requires_attempt", type_="check"
+        )
     with op.batch_alter_table("observability_stream_events") as batch_op:
-        batch_op.drop_constraint("ck_observability_stream_events_operation_requires_attempt", type_="check")
+        batch_op.drop_constraint(
+            "ck_observability_stream_events_operation_requires_attempt", type_="check"
+        )

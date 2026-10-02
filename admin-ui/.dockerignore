@@ -1,3 +1,10 @@
+.git
 node_modules
 .next
-npm-debug.log*
+.next-playwright
+.env
+.env.*
+*.log
+*.tsbuildinfo
+test-results
+playwright-report

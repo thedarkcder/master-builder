@@ -17,7 +17,9 @@ class SecretsTests(unittest.TestCase):
             encrypt_value(plaintext="hello", encryption_key="not-a-fernet-key")
 
     def test_encrypt_with_blank_key_fails(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Secrets encryption key is not configured"):
+        with self.assertRaisesRegex(
+            ValueError, "Secrets encryption key is not configured"
+        ):
             encrypt_value(plaintext="hello", encryption_key="   ")
 
 

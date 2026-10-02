@@ -54,7 +54,13 @@ from orchestrator.core.knowledge.sources import (
     update_project_knowledge_source,
 )
 from orchestrator.core.security import require_admin
-from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeAsset, KnowledgeSource, Project, Tenant
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    KnowledgeAsset,
+    KnowledgeSource,
+    Project,
+    Tenant,
+)
 from orchestrator.api.admin.route_helpers import (
     atlassian_oauth_client,
     refresh_atlassian_connection_tokens,
@@ -63,10 +69,14 @@ from orchestrator.api.admin.route_helpers import (
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-def _project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
+def _project_for_tenant_or_404(
+    *, session: Session, tenant_id: str, project_id: str
+) -> Project:
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     return project
 
 
@@ -119,8 +129,12 @@ def _knowledge_fact_to_schema(fact) -> KnowledgeFactRead:  # noqa: ANN001
         tenant_id=fact.tenant_id,
         project_id=fact.project_id,
         fact_type=str(getattr(fact, "fact_type", "") or "decision_slot"),
-        fact_key=str(getattr(fact, "fact_key", "") or getattr(fact, "slot_name", "") or ""),
-        fact_value=str(getattr(fact, "fact_value", "") or getattr(fact, "slot_value", "") or ""),
+        fact_key=str(
+            getattr(fact, "fact_key", "") or getattr(fact, "slot_name", "") or ""
+        ),
+        fact_value=str(
+            getattr(fact, "fact_value", "") or getattr(fact, "slot_value", "") or ""
+        ),
         approval_state=str(getattr(fact, "approval_state", "") or "approved"),
         confidence=float(getattr(fact, "confidence", 0.0) or 0.0),
         is_inferred=bool(getattr(fact, "is_inferred", False)),
@@ -144,7 +158,9 @@ def _knowledge_source_to_schema(source: KnowledgeSource) -> KnowledgeSourceRead:
         config_json=dict(source.config_json or {}),
         config_summary=build_knowledge_source_summary(source=source),
         supports_sync_now=connector_supports_sync_now(source.connector_type),
-        supports_scheduled_sync=connector_supports_scheduled_sync(source.connector_type),
+        supports_scheduled_sync=connector_supports_scheduled_sync(
+            source.connector_type
+        ),
         last_synced_at=source.last_synced_at,
         last_error=source.last_error,
         created_at=source.created_at,
@@ -166,7 +182,9 @@ def _knowledge_asset_for_project_or_404(
         or asset.project_id != project_id
         or str(asset.status or "").strip() == "deleted"
     ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found"
+        )
     return asset
 
 
@@ -184,7 +202,9 @@ def _knowledge_source_for_project_or_404(
         source_id=source_id,
     )
     if source is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge source not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge source not found"
+        )
     return source
 
 
@@ -198,7 +218,9 @@ def list_project_knowledge_sources_route(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeSourcePageRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     items = list_project_knowledge_sources(
         session=session,
         tenant_id=tenant_id,
@@ -224,8 +246,12 @@ def create_project_knowledge_source_route(
 ) -> KnowledgeSourceRead:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    project = _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    project = _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     try:
         source = create_project_knowledge_source(
             session=session,
@@ -238,7 +264,9 @@ def create_project_knowledge_source_route(
             config_json=dict(payload.config_json or {}),
         )
     except KnowledgeSourceValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return _knowledge_source_to_schema(source)
 
 
@@ -256,8 +284,12 @@ def update_project_knowledge_source_route(
 ) -> KnowledgeSourceRead:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    project = _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    project = _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     source = _knowledge_source_for_project_or_404(
         session=session,
         tenant_id=tenant_id,
@@ -273,10 +305,14 @@ def update_project_knowledge_source_route(
             display_name=payload.display_name,
             status=payload.status,
             sync_mode=payload.sync_mode,
-            config_json=dict(payload.config_json) if payload.config_json is not None else None,
+            config_json=dict(payload.config_json)
+            if payload.config_json is not None
+            else None,
         )
     except KnowledgeSourceValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return _knowledge_source_to_schema(source)
 
 
@@ -291,7 +327,9 @@ def delete_project_knowledge_source_route(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     source = _knowledge_source_for_project_or_404(
         session=session,
         tenant_id=tenant_id,
@@ -315,8 +353,12 @@ def sync_project_knowledge_source_route(
 ) -> KnowledgeSyncResultRead:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    project = _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    project = _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     source = _knowledge_source_for_project_or_404(
         session=session,
         tenant_id=tenant_id,
@@ -333,9 +375,13 @@ def sync_project_knowledge_source_route(
             settings=settings,
         )
     except KnowledgeSourceValidationError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except KnowledgeSourceSyncUnsupportedError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return KnowledgeSyncResultRead(
         ok=sync_result.ok,
         synced_assets=sync_result.synced_assets,
@@ -345,7 +391,8 @@ def sync_project_knowledge_source_route(
         unchanged_assets=sync_result.unchanged_assets,
         deleted_assets=sync_result.deleted_assets,
         failed_assets=sync_result.failed_assets,
-        details=sync_result.details or f"Processed {source.connector_type} source {source.display_name}",
+        details=sync_result.details
+        or f"Processed {source.connector_type} source {source.display_name}",
     )
 
 
@@ -364,7 +411,9 @@ def list_project_knowledge_assets(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeAssetPageRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     assets, total = list_knowledge_assets_page(
         session=session,
         tenant_id=tenant_id,
@@ -393,9 +442,13 @@ def get_project_knowledge_stats(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeAssetStatsRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     return KnowledgeAssetStatsRead(
-        **get_knowledge_asset_stats(session=session, tenant_id=tenant_id, project_id=project_id)
+        **get_knowledge_asset_stats(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
     )
 
 
@@ -410,7 +463,9 @@ def get_project_knowledge_asset(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeAssetDetailRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     asset = _knowledge_asset_for_project_or_404(
         session=session,
         tenant_id=tenant_id,
@@ -443,7 +498,9 @@ def list_project_knowledge_chunks(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeChunkPageRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     _knowledge_asset_for_project_or_404(
         session=session,
         tenant_id=tenant_id,
@@ -478,7 +535,9 @@ def debug_project_knowledge_search(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeDebugSearchRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     matches = search_knowledge_debug(
         session=session,
         tenant_id=tenant_id,
@@ -519,7 +578,9 @@ def create_project_knowledge_asset(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeAssetRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     binary_content = decode_base64_content(payload.content_base64)
     source_timestamp = parse_source_timestamp(payload.source_timestamp)
     asset = create_knowledge_asset(
@@ -548,7 +609,9 @@ def delete_project_knowledge_asset(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     deleted = delete_knowledge_asset(
         session=session,
         tenant_id=tenant_id,
@@ -556,7 +619,9 @@ def delete_project_knowledge_asset(
         asset_id=asset_id,
     )
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge asset not found"
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -572,7 +637,9 @@ def update_project_knowledge_asset_status(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> KnowledgeAssetRead:
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     asset = _knowledge_asset_for_project_or_404(
         session=session,
         tenant_id=tenant_id,
@@ -612,8 +679,12 @@ def sync_project_knowledge_from_jira_route(
 ) -> KnowledgeSyncResultRead:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    project = _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    project = _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     source = session.execute(
         select(KnowledgeSource)
         .where(
@@ -632,19 +703,32 @@ def sync_project_knowledge_from_jira_route(
             session=session,
         )
 
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant Atlassian connection is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant Atlassian connection is not configured",
+        )
     connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Atlassian connection was not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Atlassian connection was not found",
+        )
     access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=get_settings(),
         tenant_id=tenant_id,
     )
-    jira_client = atlassian_oauth_client(session=session, settings=get_settings(), tenant_id=tenant_id, project_id=project_id)
+    jira_client = atlassian_oauth_client(
+        session=session,
+        settings=get_settings(),
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
     sync_result = sync_project_knowledge_from_jira(
         session=session,
         tenant_id=tenant_id,
@@ -663,5 +747,6 @@ def sync_project_knowledge_from_jira_route(
         unchanged_assets=sync_result.unchanged_assets,
         deleted_assets=sync_result.deleted_assets,
         failed_assets=sync_result.failed_assets,
-        details=sync_result.details or f"Processed Jira project {project.jira_project_key}",
+        details=sync_result.details
+        or f"Processed Jira project {project.jira_project_key}",
     )

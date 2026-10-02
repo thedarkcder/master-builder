@@ -10,22 +10,37 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.deployment_release_service import create_project_deployment_release
-from orchestrator.api.admin.deployment_release_service import deployment_release_routes_match_base_domain
-from orchestrator.api.admin.deployment_release_service import destroy_project_deployment_preview_release
-from orchestrator.api.admin.deployment_release_service import project_deployment_release_to_schema
+from orchestrator.api.admin.deployment_release_service import (
+    create_project_deployment_release,
+)
+from orchestrator.api.admin.deployment_release_service import (
+    deployment_release_routes_match_base_domain,
+)
+from orchestrator.api.admin.deployment_release_service import (
+    destroy_project_deployment_preview_release,
+)
+from orchestrator.api.admin.deployment_release_service import (
+    project_deployment_release_to_schema,
+)
 from orchestrator.api.deployment_schemas import ProjectDeploymentPolicyRead
-from orchestrator.api.schemas import ProjectDeploymentReleaseCreate, ProjectDeploymentReleaseRead
+from orchestrator.api.schemas import (
+    ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseRead,
+)
 from orchestrator.core.deployment_runtime import reconcile_deployment_release
 from orchestrator.core.deployment_setup.artifacts import (
     checkout_branch_commit,
     ensure_deployment_compose_artifact,
     run_git,
 )
-from orchestrator.core.deployment_setup.compose_normalizer import normalize_generated_compose_for_coolify
+from orchestrator.core.deployment_setup.compose_normalizer import (
+    normalize_generated_compose_for_coolify,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.core.workflow.execution_artifacts import latest_pushed_execution_artifact_for_run
+from orchestrator.core.workflow.execution_artifacts import (
+    latest_pushed_execution_artifact_for_run,
+)
 from orchestrator.storage.models import Project, ProjectApp, Run, Tenant
 from orchestrator.storage.models import ProjectDeploymentRelease
 from orchestrator.tools.github_app import github_client_from_tenant_config
@@ -45,7 +60,13 @@ class PreviewCleanupResult:
     failed_release_ids: tuple[str, ...] = ()
 
 
-_REUSABLE_PREVIEW_RELEASE_STATUSES = {"queued", "provisioning", "deploying", "route_activating", "live"}
+_REUSABLE_PREVIEW_RELEASE_STATUSES = {
+    "queued",
+    "provisioning",
+    "deploying",
+    "route_activating",
+    "live",
+}
 _RECONCILE_BEFORE_REUSE_STATUSES = {"provisioning", "deploying", "route_activating"}
 _FAILED_PREVIEW_RELEASE_STATUSES = {"failed", "rolled_back"}
 _DESTROYED_PREVIEW_STATUS_CONTEXT_KEY = "status_before_destroy"
@@ -67,15 +88,21 @@ def create_run_preview_deployment(
     demo_proof_lease_required: bool = False,
     demo_proof_lease_acquired_fn: Callable[..., None] | None = None,
 ) -> RunPreviewDeploymentResult:  # noqa: ANN001
-    policy = ProjectDeploymentPolicyRead.model_validate(dict(getattr(project, "deployment_config", None) or {}))
+    policy = ProjectDeploymentPolicyRead.model_validate(
+        dict(getattr(project, "deployment_config", None) or {})
+    )
     if not policy.enabled:
         return RunPreviewDeploymentResult(created=False, reason="deployments_disabled")
     if not policy.preview_prs_enabled:
         return RunPreviewDeploymentResult(created=False, reason="preview_prs_disabled")
 
-    artifact = latest_pushed_execution_artifact_for_run(session=session, run_id=run.run_id)
+    artifact = latest_pushed_execution_artifact_for_run(
+        session=session, run_id=run.run_id
+    )
     if artifact is None:
-        raise RuntimeError("Run preview deployment requires a pushed durable execution branch artifact")
+        raise RuntimeError(
+            "Run preview deployment requires a pushed durable execution branch artifact"
+        )
 
     branch_run_ids = _run_preview_branch_run_ids(
         session=session,
@@ -98,7 +125,9 @@ def create_run_preview_deployment(
                 project_id=project.project_id,
                 proof_scope_id=normalized_proof_scope_id,
                 expected_commit_sha=artifact.commit_sha,
-                current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
+                current_base_domain=_normalize_optional_string(
+                    (tenant.deployment_plane_config or {}).get("base_domain")
+                ),
             )
             if scoped_release is not None:
                 _signal_demo_proof_lease_acquired(
@@ -117,7 +146,9 @@ def create_run_preview_deployment(
             project_id=project.project_id,
             branch_run_ids=branch_run_ids,
             expected_commit_sha=artifact.commit_sha,
-            current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
+            current_base_domain=_normalize_optional_string(
+                (tenant.deployment_plane_config or {}).get("base_domain")
+            ),
             proof_scope_id=normalized_proof_scope_id,
         )
         if existing_release is not None:
@@ -163,12 +194,16 @@ def create_run_preview_deployment(
         proof_scope_id=normalized_proof_scope_id,
     )
 
-    app = _project_level_deployment_app(session=session, tenant_id=tenant.tenant_id, project_id=project.project_id)
+    app = _project_level_deployment_app(
+        session=session, tenant_id=tenant.tenant_id, project_id=project.project_id
+    )
     deployment_config = dict(app.deployment_config or {})
     deployment_config_override: dict[str, object] | None = None
     release_branch = artifact.branch
     release_commit_sha = artifact.commit_sha
-    delivery_metadata = _mobile_delivery_metadata(session=session, tenant_id=tenant.tenant_id, project_id=project.project_id)
+    delivery_metadata = _mobile_delivery_metadata(
+        session=session, tenant_id=tenant.tenant_id, project_id=project.project_id
+    )
     if normalized_proof_scope_id is not None:
         delivery_metadata = _delivery_metadata_with_demo_proof_lease(
             delivery_metadata=delivery_metadata,
@@ -176,10 +211,19 @@ def create_run_preview_deployment(
             commit_sha=release_commit_sha,
             settings=settings,
         )
-    if str(deployment_config.get("source_strategy") or app.build_strategy or "").strip() == "docker_compose":
-        generated_compose_raw = str(deployment_config.get("generated_compose_raw") or "").strip()
+    if (
+        str(
+            deployment_config.get("source_strategy") or app.build_strategy or ""
+        ).strip()
+        == "docker_compose"
+    ):
+        generated_compose_raw = str(
+            deployment_config.get("generated_compose_raw") or ""
+        ).strip()
         if not generated_compose_raw:
-            raise RuntimeError("Run preview deployment requires generated Docker Compose content from deployment setup")
+            raise RuntimeError(
+                "Run preview deployment requires generated Docker Compose content from deployment setup"
+            )
         github_client = github_client_from_tenant_config(
             tenant.github_config,
             tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
@@ -200,16 +244,28 @@ def create_run_preview_deployment(
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
         )
-        run_git(["fetch", "origin", artifact.branch], cwd=checkout_path, token=github_client.get_installation_token())
-        checkout_branch_commit(repo_dir=checkout_path, branch=artifact.branch, commit_sha=artifact.commit_sha)
-        release_branch, release_commit_sha, deployment_compose_path = ensure_deployment_compose_artifact(
-            repo_dir=checkout_path,
-            project_id=project.project_id,
-            source_branch=artifact.branch,
-            source_commit_sha=artifact.commit_sha,
-            compose_raw=normalize_generated_compose_for_coolify(generated_compose_raw).compose_raw,
-            npm_service_source_paths=_npm_service_source_paths(deployment_config),
+        run_git(
+            ["fetch", "origin", artifact.branch],
+            cwd=checkout_path,
             token=github_client.get_installation_token(),
+        )
+        checkout_branch_commit(
+            repo_dir=checkout_path,
+            branch=artifact.branch,
+            commit_sha=artifact.commit_sha,
+        )
+        release_branch, release_commit_sha, deployment_compose_path = (
+            ensure_deployment_compose_artifact(
+                repo_dir=checkout_path,
+                project_id=project.project_id,
+                source_branch=artifact.branch,
+                source_commit_sha=artifact.commit_sha,
+                compose_raw=normalize_generated_compose_for_coolify(
+                    generated_compose_raw
+                ).compose_raw,
+                npm_service_source_paths=_npm_service_source_paths(deployment_config),
+                token=github_client.get_installation_token(),
+            )
         )
         deployment_config_override = {
             "deployment_branch": release_branch,
@@ -310,22 +366,30 @@ def _active_demo_proof_preview_releases_for_scope(
     project_id: str,
     proof_scope_id: str,
 ) -> list[ProjectDeploymentRelease]:
-    releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.status != "destroyed",
-            ProjectDeploymentRelease.destroyed_at.is_(None),
+    releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.release_kind == "run_preview",
+                ProjectDeploymentRelease.status != "destroyed",
+                ProjectDeploymentRelease.destroyed_at.is_(None),
+            )
+            .order_by(
+                ProjectDeploymentRelease.created_at.asc(),
+                ProjectDeploymentRelease.release_id.asc(),
+            )
         )
-        .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         release
         for release in releases
         if _demo_proof_lease_metadata(release).get("proof_scope_id") == proof_scope_id
-        and _demo_proof_lease_metadata(release).get("state") == _DEMO_PROOF_LEASE_ACTIVE_STATE
+        and _demo_proof_lease_metadata(release).get("state")
+        == _DEMO_PROOF_LEASE_ACTIVE_STATE
     ]
 
 
@@ -344,8 +408,12 @@ def _preview_release_is_reusable_for_current_context(
         return False
     if current_base_domain is None:
         return True
-    provider_context = release.provider_context if isinstance(release.provider_context, dict) else {}
-    provider_base_domain = _normalize_optional_string(provider_context.get("base_domain"))
+    provider_context = (
+        release.provider_context if isinstance(release.provider_context, dict) else {}
+    )
+    provider_base_domain = _normalize_optional_string(
+        provider_context.get("base_domain")
+    )
     if provider_base_domain is not None and provider_base_domain != current_base_domain:
         return False
     return existing_status != "live" or deployment_release_routes_match_base_domain(
@@ -356,7 +424,9 @@ def _preview_release_is_reusable_for_current_context(
 
 
 def _demo_proof_lease_metadata(release: ProjectDeploymentRelease) -> dict[str, str]:
-    delivery_metadata = release.delivery_metadata if isinstance(release.delivery_metadata, dict) else {}
+    delivery_metadata = (
+        release.delivery_metadata if isinstance(release.delivery_metadata, dict) else {}
+    )
     raw_metadata = delivery_metadata.get(_DEMO_PROOF_LEASE_METADATA_KEY)
     if not isinstance(raw_metadata, dict):
         return {}
@@ -380,12 +450,16 @@ def _delivery_metadata_with_demo_proof_lease(
     updated = dict(delivery_metadata)
     acquired_at = datetime.now(timezone.utc)
     updated[_DEMO_PROOF_LEASE_METADATA_KEY] = {
-        "lease_id": _demo_proof_lease_id(proof_scope_id=proof_scope_id, commit_sha=commit_sha),
+        "lease_id": _demo_proof_lease_id(
+            proof_scope_id=proof_scope_id, commit_sha=commit_sha
+        ),
         "proof_scope_id": proof_scope_id,
         "commit_sha": commit_sha,
         "state": _DEMO_PROOF_LEASE_ACTIVE_STATE,
         "acquired_at": acquired_at.isoformat(),
-        "expires_at": _demo_proof_lease_expires_at(settings=settings, acquired_at=acquired_at).isoformat(),
+        "expires_at": _demo_proof_lease_expires_at(
+            settings=settings, acquired_at=acquired_at
+        ).isoformat(),
     }
     return updated
 
@@ -396,7 +470,10 @@ def _demo_proof_lease_id(*, proof_scope_id: str, commit_sha: str) -> str:
 
 def _demo_proof_lease_expires_at(*, settings, acquired_at: datetime) -> datetime:  # noqa: ANN001
     try:
-        ttl_seconds = max(60, int(getattr(settings, "run_preview_release_ttl_seconds", 86400) or 86400))
+        ttl_seconds = max(
+            60,
+            int(getattr(settings, "run_preview_release_ttl_seconds", 86400) or 86400),
+        )
     except (TypeError, ValueError):
         ttl_seconds = 86400
     return _as_utc(acquired_at) + timedelta(seconds=ttl_seconds)
@@ -410,7 +487,9 @@ def _attach_demo_proof_lease_metadata(
     settings,  # noqa: ANN001
 ) -> None:
     release.delivery_metadata = _delivery_metadata_with_demo_proof_lease(
-        delivery_metadata=release.delivery_metadata if isinstance(release.delivery_metadata, dict) else {},
+        delivery_metadata=release.delivery_metadata
+        if isinstance(release.delivery_metadata, dict)
+        else {},
         proof_scope_id=proof_scope_id,
         commit_sha=commit_sha,
         settings=settings,
@@ -430,19 +509,26 @@ def _reusable_existing_preview_release(
 ) -> ProjectDeploymentRelease | None:
     if not branch_run_ids:
         return None
-    existing_release = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
-            ProjectDeploymentRelease.commit_sha == expected_commit_sha,
-            ProjectDeploymentRelease.status.in_(_REUSABLE_PREVIEW_RELEASE_STATUSES),
-            ProjectDeploymentRelease.destroyed_at.is_(None),
+    existing_release = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.release_kind == "run_preview",
+                ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
+                ProjectDeploymentRelease.commit_sha == expected_commit_sha,
+                ProjectDeploymentRelease.status.in_(_REUSABLE_PREVIEW_RELEASE_STATUSES),
+                ProjectDeploymentRelease.destroyed_at.is_(None),
+            )
+            .order_by(
+                ProjectDeploymentRelease.created_at.desc(),
+                ProjectDeploymentRelease.release_id.desc(),
+            )
         )
-        .order_by(ProjectDeploymentRelease.created_at.desc(), ProjectDeploymentRelease.release_id.desc())
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing_release is None:
         return None
     if str(existing_release.status or "").strip() in _RECONCILE_BEFORE_REUSE_STATUSES:
@@ -453,14 +539,26 @@ def _reusable_existing_preview_release(
     if existing_status not in _REUSABLE_PREVIEW_RELEASE_STATUSES:
         return None
     if current_base_domain is not None:
-        provider_context = existing_release.provider_context if isinstance(existing_release.provider_context, dict) else {}
-        provider_base_domain = _normalize_optional_string(provider_context.get("base_domain"))
-        if provider_base_domain is not None and provider_base_domain != current_base_domain:
+        provider_context = (
+            existing_release.provider_context
+            if isinstance(existing_release.provider_context, dict)
+            else {}
+        )
+        provider_base_domain = _normalize_optional_string(
+            provider_context.get("base_domain")
+        )
+        if (
+            provider_base_domain is not None
+            and provider_base_domain != current_base_domain
+        ):
             return None
-        if existing_status == "live" and not deployment_release_routes_match_base_domain(
-            provider_context=provider_context,
-            base_domain=current_base_domain,
-            require_preview_wildcard_shape=True,
+        if (
+            existing_status == "live"
+            and not deployment_release_routes_match_base_domain(
+                provider_context=provider_context,
+                base_domain=current_base_domain,
+                require_preview_wildcard_shape=True,
+            )
         ):
             return None
     _raise_if_preview_release_has_conflicting_demo_proof_lease(
@@ -530,31 +628,49 @@ def _latest_failed_preview_release_after_retry_limit(
 ) -> ProjectDeploymentRelease | None:
     if not branch_run_ids:
         return None
-    preview_releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
-            ProjectDeploymentRelease.commit_sha == expected_commit_sha,
+    preview_releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.release_kind == "run_preview",
+                ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
+                ProjectDeploymentRelease.commit_sha == expected_commit_sha,
+            )
+            .order_by(
+                ProjectDeploymentRelease.created_at.desc(),
+                ProjectDeploymentRelease.release_id.desc(),
+            )
         )
-        .order_by(ProjectDeploymentRelease.created_at.desc(), ProjectDeploymentRelease.release_id.desc())
-    ).scalars().all()
-    failed_releases = [release for release in preview_releases if _preview_release_counts_as_failed_attempt(release)]
+        .scalars()
+        .all()
+    )
+    failed_releases = [
+        release
+        for release in preview_releases
+        if _preview_release_counts_as_failed_attempt(release)
+    ]
     if len(failed_releases) < retry_limit:
         return None
     return failed_releases[0]
 
 
-def _preview_release_counts_as_failed_attempt(release: ProjectDeploymentRelease) -> bool:
+def _preview_release_counts_as_failed_attempt(
+    release: ProjectDeploymentRelease,
+) -> bool:
     status = str(release.status or "").strip()
     if status in _FAILED_PREVIEW_RELEASE_STATUSES:
         return True
     if status != "destroyed":
         return False
-    provider_context = release.provider_context if isinstance(release.provider_context, dict) else {}
-    return str(provider_context.get(_DESTROYED_PREVIEW_STATUS_CONTEXT_KEY) or "").strip() in _FAILED_PREVIEW_RELEASE_STATUSES
+    provider_context = (
+        release.provider_context if isinstance(release.provider_context, dict) else {}
+    )
+    return (
+        str(provider_context.get(_DESTROYED_PREVIEW_STATUS_CONTEXT_KEY) or "").strip()
+        in _FAILED_PREVIEW_RELEASE_STATUSES
+    )
 
 
 def _destroy_active_preview_releases_for_branch(
@@ -568,21 +684,31 @@ def _destroy_active_preview_releases_for_branch(
 ) -> PreviewCleanupResult:
     if not branch_run_ids:
         return PreviewCleanupResult(destroyed_release_ids=())
-    releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
-            ProjectDeploymentRelease.status != "destroyed",
+    releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.release_kind == "run_preview",
+                ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
+                ProjectDeploymentRelease.status != "destroyed",
+            )
+            .order_by(
+                ProjectDeploymentRelease.created_at.asc(),
+                ProjectDeploymentRelease.release_id.asc(),
+            )
         )
-        .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     destroyed: list[str] = []
     for release in releases:
         status = str(release.status or "").strip()
-        if status not in _REUSABLE_PREVIEW_RELEASE_STATUSES and not _preview_release_has_provider_resource(release):
+        if (
+            status not in _REUSABLE_PREVIEW_RELEASE_STATUSES
+            and not _preview_release_has_provider_resource(release)
+        ):
             continue
         _raise_if_preview_release_is_owned_by_another_demo_proof_scope(
             release=release,
@@ -630,7 +756,9 @@ def _run_preview_branch_run_ids(
 
 
 def _preview_release_has_provider_resource(release: ProjectDeploymentRelease) -> bool:
-    provider_context = release.provider_context if isinstance(release.provider_context, dict) else {}
+    provider_context = (
+        release.provider_context if isinstance(release.provider_context, dict) else {}
+    )
     for key in ("application_uuid", "service_uuid"):
         if str(provider_context.get(key) or "").strip():
             return True
@@ -648,22 +776,31 @@ def cleanup_stale_run_preview_deployments(
     cleanup_now = now or datetime.now(timezone.utc)
     cutoff = _run_preview_ttl_cutoff(settings=settings, now=cleanup_now)
     excluded = set(exclude_release_ids or set())
-    releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.status.in_(_TERMINAL_PREVIEW_RELEASE_STATUSES),
-            ProjectDeploymentRelease.destroyed_at.is_(None),
+    releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.release_kind == "run_preview",
+                ProjectDeploymentRelease.status.in_(_TERMINAL_PREVIEW_RELEASE_STATUSES),
+                ProjectDeploymentRelease.destroyed_at.is_(None),
+            )
+            .order_by(
+                ProjectDeploymentRelease.created_at.asc(),
+                ProjectDeploymentRelease.release_id.asc(),
+            )
+            .limit(max(1, int(limit)))
         )
-        .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
-        .limit(max(1, int(limit)))
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     destroyed: list[str] = []
     failed: list[str] = []
     for release in releases:
         if release.release_id in excluded:
             continue
-        cleanup_reason = _run_preview_release_cleanup_reason(release=release, ttl_cutoff=cutoff, now=cleanup_now)
+        cleanup_reason = _run_preview_release_cleanup_reason(
+            release=release, ttl_cutoff=cutoff, now=cleanup_now
+        )
         if cleanup_reason is None:
             continue
         try:
@@ -684,12 +821,17 @@ def cleanup_stale_run_preview_deployments(
             failed.append(release.release_id)
             continue
         destroyed.append(destroyed_release.release_id)
-    return PreviewCleanupResult(destroyed_release_ids=tuple(destroyed), failed_release_ids=tuple(failed))
+    return PreviewCleanupResult(
+        destroyed_release_ids=tuple(destroyed), failed_release_ids=tuple(failed)
+    )
 
 
 def _run_preview_ttl_cutoff(*, settings, now: datetime) -> datetime:  # noqa: ANN001
     try:
-        ttl_seconds = max(60, int(getattr(settings, "run_preview_release_ttl_seconds", 86400) or 86400))
+        ttl_seconds = max(
+            60,
+            int(getattr(settings, "run_preview_release_ttl_seconds", 86400) or 86400),
+        )
     except (TypeError, ValueError):
         ttl_seconds = 86400
     return _as_utc(now) - timedelta(seconds=ttl_seconds)
@@ -716,7 +858,9 @@ def _run_preview_release_cleanup_reason(
     return None
 
 
-def _demo_proof_lease_expired(*, release: ProjectDeploymentRelease, now: datetime) -> bool:
+def _demo_proof_lease_expired(
+    *, release: ProjectDeploymentRelease, now: datetime
+) -> bool:
     metadata = _demo_proof_lease_metadata(release)
     if metadata.get("state") != _DEMO_PROOF_LEASE_ACTIVE_STATE:
         return False
@@ -746,17 +890,21 @@ def destroy_run_preview_deployments_for_pr(
     pr_number: int,
     reason: str,
 ) -> PreviewCleanupResult:
-    releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.pr_number == pr_number,
-            ProjectDeploymentRelease.status != "destroyed",
+    releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.release_kind == "run_preview",
+                ProjectDeploymentRelease.pr_number == pr_number,
+                ProjectDeploymentRelease.status != "destroyed",
+            )
+            .order_by(ProjectDeploymentRelease.created_at.asc())
         )
-        .order_by(ProjectDeploymentRelease.created_at.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     destroyed: list[str] = []
     for release in releases:
         destroyed_release = destroy_project_deployment_preview_release(
@@ -770,18 +918,26 @@ def destroy_run_preview_deployments_for_pr(
     return PreviewCleanupResult(destroyed_release_ids=tuple(destroyed))
 
 
-def _project_level_deployment_app(*, session: Session, tenant_id: str, project_id: str) -> ProjectApp:
-    app = session.execute(
-        select(ProjectApp)
-        .where(
-            ProjectApp.tenant_id == tenant_id,
-            ProjectApp.project_id == project_id,
-            ProjectApp.source_path == ".",
+def _project_level_deployment_app(
+    *, session: Session, tenant_id: str, project_id: str
+) -> ProjectApp:
+    app = (
+        session.execute(
+            select(ProjectApp)
+            .where(
+                ProjectApp.tenant_id == tenant_id,
+                ProjectApp.project_id == project_id,
+                ProjectApp.source_path == ".",
+            )
+            .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
         )
-        .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if app is None:
-        raise RuntimeError("Run preview deployment requires a project-level deployment app")
+        raise RuntimeError(
+            "Run preview deployment requires a project-level deployment app"
+        )
     return app
 
 
@@ -804,22 +960,38 @@ def _npm_service_source_paths(deployment_config: dict[str, object]) -> tuple[str
     return tuple(source_paths)
 
 
-def _mobile_delivery_metadata(*, session: Session, tenant_id: str, project_id: str) -> dict[str, object]:
-    mobile_apps = session.execute(
-        select(ProjectApp).where(
-            ProjectApp.tenant_id == tenant_id,
-            ProjectApp.project_id == project_id,
-            ProjectApp.source_path != ".",
+def _mobile_delivery_metadata(
+    *, session: Session, tenant_id: str, project_id: str
+) -> dict[str, object]:
+    mobile_apps = (
+        session.execute(
+            select(ProjectApp).where(
+                ProjectApp.tenant_id == tenant_id,
+                ProjectApp.project_id == project_id,
+                ProjectApp.source_path != ".",
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     mobile_targets = []
     for app in mobile_apps:
         descriptor = " ".join(
             str(value or "").lower()
-            for value in (app.detected_runtime, app.detected_language, app.build_strategy, app.name)
+            for value in (
+                app.detected_runtime,
+                app.detected_language,
+                app.build_strategy,
+                app.name,
+            )
         )
-        if any(marker in descriptor for marker in ("ios", "android", "react native", "flutter", "mobile")):
-            mobile_targets.append({"app_id": app.app_id, "name": app.name, "source_path": app.source_path})
+        if any(
+            marker in descriptor
+            for marker in ("ios", "android", "react native", "flutter", "mobile")
+        ):
+            mobile_targets.append(
+                {"app_id": app.app_id, "name": app.name, "source_path": app.source_path}
+            )
     if not mobile_targets:
         return {}
     return {

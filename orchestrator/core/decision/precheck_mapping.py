@@ -10,7 +10,10 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from orchestrator.core.knowledge.base import SlotResolution
-from orchestrator.core.precheck.pre_run_check import PreRunCheckResult, evaluate_pre_run_check
+from orchestrator.core.precheck.pre_run_check import (
+    PreRunCheckResult,
+    evaluate_pre_run_check,
+)
 from orchestrator.core.decision.state_machine import (
     DecisionResultSnapshot,
     PrecheckSnapshot,
@@ -57,13 +60,17 @@ def evaluate_with_labels(
     oauth_context: Any | None = None,
     evaluate_pre_run_check_fn: Callable[..., object] = evaluate_pre_run_check,
 ):
-    from orchestrator.core.projects.label_action_service import apply_issue_label_actions
+    from orchestrator.core.projects.label_action_service import (
+        apply_issue_label_actions,
+    )
 
     decision = evaluate_ingress_precheck_fn(
         source=source,
         tenant_id=tenant.tenant_id,
         project_id=project.project_id if project is not None else None,
-        project_policy_overrides=project.policy_overrides if project is not None else {},
+        project_policy_overrides=project.policy_overrides
+        if project is not None
+        else {},
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,
@@ -72,14 +79,18 @@ def evaluate_with_labels(
         ready_label=tenant_ready_label(tenant),
         evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
     )
-    normalized_labels = [str(label).strip() for label in (issue_labels or []) if str(label).strip()]
+    normalized_labels = [
+        str(label).strip() for label in (issue_labels or []) if str(label).strip()
+    ]
     if decision.pre_check is None:
         return EvaluationResult(decision=decision, issue_labels=normalized_labels)
 
     apply_result = apply_issue_label_actions(
         session=session,
         tenant=tenant,
-        project_policy_overrides=project.policy_overrides if project is not None else {},
+        project_policy_overrides=project.policy_overrides
+        if project is not None
+        else {},
         issue_key=issue_key,
         existing_labels=normalized_labels,
         actions=decision.label_actions,
@@ -103,7 +114,11 @@ def derive_label_actions(pre_check: object) -> tuple[DecisionLabelAction, ...]:
     ready_label_missing = bool(getattr(pre_check, "ready_label_missing", False))
     ready_label = str(getattr(pre_check, "ready_label", "") or "").strip()
     outcome = PrecheckOutcome.parse(getattr(pre_check, "outcome", None))
-    if ready_label_missing and ready_label and outcome is PrecheckOutcome.MISSING_READY_LABEL:
+    if (
+        ready_label_missing
+        and ready_label
+        and outcome is PrecheckOutcome.MISSING_READY_LABEL
+    ):
         actions.append(
             DecisionLabelAction(
                 label=ready_label,
@@ -111,8 +126,12 @@ def derive_label_actions(pre_check: object) -> tuple[DecisionLabelAction, ...]:
                 reason="ready_label_missing",
             )
         )
-    required_worker_label = str(getattr(pre_check, "required_worker_label", "") or "").strip()
-    required_worker_label_present = bool(getattr(pre_check, "required_worker_label_present", True))
+    required_worker_label = str(
+        getattr(pre_check, "required_worker_label", "") or ""
+    ).strip()
+    required_worker_label_present = bool(
+        getattr(pre_check, "required_worker_label_present", True)
+    )
     if not required_worker_label_present and required_worker_label:
         actions.append(
             DecisionLabelAction(
@@ -141,8 +160,16 @@ def decision_result_for_duplicate_event(
     decision_cycle_type,
     decision_effect_outbox_type,
 ) -> object:
-    payload = existing_event.payload_json if isinstance(existing_event.payload_json, dict) else {}
-    snapshot = payload.get("result_snapshot") if isinstance(payload.get("result_snapshot"), dict) else {}
+    payload = (
+        existing_event.payload_json
+        if isinstance(existing_event.payload_json, dict)
+        else {}
+    )
+    snapshot = (
+        payload.get("result_snapshot")
+        if isinstance(payload.get("result_snapshot"), dict)
+        else {}
+    )
     issue_labels = [
         str(label).strip()
         for label in snapshot.get("issue_labels", payload.get("issue_labels", []))
@@ -154,8 +181,14 @@ def decision_result_for_duplicate_event(
 
     case = session.get(decision_case_type, existing_event.case_id)
     if case is None:
-        raise RuntimeError(f"Decision event {existing_event.event_id} references missing case {existing_event.case_id}")
-    cycle = session.get(decision_cycle_type, existing_event.cycle_id) if existing_event.cycle_id else None
+        raise RuntimeError(
+            f"Decision event {existing_event.event_id} references missing case {existing_event.case_id}"
+        )
+    cycle = (
+        session.get(decision_cycle_type, existing_event.cycle_id)
+        if existing_event.cycle_id
+        else None
+    )
     decision = decision_from_snapshot(
         snapshot=snapshot,
         source=str(existing_event.source or "jira_webhook"),
@@ -170,11 +203,14 @@ def decision_result_for_duplicate_event(
         for effect in session.execute(
             select(decision_effect_outbox_type).where(
                 decision_effect_outbox_type.case_id == case.case_id,
-                decision_effect_outbox_type.cycle_id == (cycle.cycle_id if cycle is not None else None),
+                decision_effect_outbox_type.cycle_id
+                == (cycle.cycle_id if cycle is not None else None),
             )
         ).scalars()
     )
-    execution_gate = resolve_execution_gate_state(decision=decision, classification=classification)
+    execution_gate = resolve_execution_gate_state(
+        decision=decision, classification=classification
+    )
     return decision_result_type(
         decision=decision,
         issue_labels=issue_labels,
@@ -224,7 +260,9 @@ def deserialize_precheck_result(value: object) -> PreRunCheckResult | None:
     return snapshot.to_precheck() if snapshot is not None else None
 
 
-def apply_frozen_cycle_to_precheck(*, pre_check: object, cycle: DecisionCycle, classification: str) -> object:
+def apply_frozen_cycle_to_precheck(
+    *, pre_check: object, cycle: DecisionCycle, classification: str
+) -> object:
     return apply_frozen_cycle_questions(
         pre_check=pre_check,
         cycle_question_set=list(cycle.question_set_json),
@@ -256,7 +294,9 @@ def issue_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def resolve_idempotency_key(*, tenant_id: str, project_id: str | None, event: DecisionEventInput) -> str:
+def resolve_idempotency_key(
+    *, tenant_id: str, project_id: str | None, event: DecisionEventInput
+) -> str:
     if isinstance(event.idempotency_key, str) and event.idempotency_key.strip():
         return event.idempotency_key.strip()
     payload = json.dumps(
@@ -268,7 +308,11 @@ def resolve_idempotency_key(*, tenant_id: str, project_id: str | None, event: De
             "issue_key": event.issue_key,
             "issue_summary": str(event.issue_summary or "").strip(),
             "issue_description": str(event.issue_description or "").strip(),
-            "labels": sorted(str(label).strip().casefold() for label in (event.issue_labels or []) if str(label).strip()),
+            "labels": sorted(
+                str(label).strip().casefold()
+                for label in (event.issue_labels or [])
+                if str(label).strip()
+            ),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -304,7 +348,9 @@ def merge_case_metadata(
         decision=decision,
         classification=classification,
         issue_labels=issue_labels,
-        missing_slots=decision_missing_slots_for_precheck(decision.pre_check) if decision.pre_check is not None else [],
+        missing_slots=decision_missing_slots_for_precheck(decision.pre_check)
+        if decision.pre_check is not None
+        else [],
         auto_resolved_slots=sorted(resolved_answers.keys()),
     )
     return metadata

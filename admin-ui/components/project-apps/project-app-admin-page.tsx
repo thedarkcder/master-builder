@@ -2731,7 +2731,7 @@ export function ProjectAppAdminPage({
                                           currentIndex === index ? { ...item, secret_ref: event.target.value } : item
                                         )),
                                       }))}
-                                      placeholder="tenant/bsktpay-2/DATABASE_URL"
+                                      placeholder="tenant/<tenant-id>/DATABASE_URL"
                                       disabled={savingConfig || deploying}
                                     />
                                   </div>

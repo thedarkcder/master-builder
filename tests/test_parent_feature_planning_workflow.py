@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from fastapi import HTTPException
-from orchestrator.core.parent_feature_workflow.planning import ParentFeaturePlanningWorkflow, ParentFeaturePlanningWorkflowDeps
-from orchestrator.core.projects.parent_planning_clarification_service import ClarificationPublishEffects, ParentPlanningClarificationService
-from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
+from orchestrator.core.parent_feature_workflow.planning import (
+    ParentFeaturePlanningWorkflow,
+    ParentFeaturePlanningWorkflowDeps,
+)
+from orchestrator.core.projects.parent_planning_clarification_service import (
+    ClarificationPublishEffects,
+    ParentPlanningClarificationService,
+)
+from orchestrator.core.projects.parent_planning_fanout_service import (
+    ParentPlanningFanoutService,
+)
 from orchestrator.core.runtime.payload_models import (
     PMDecisionRequest,
     PMDecisionResolution,
@@ -46,7 +54,9 @@ class _FakeBriefPlanner:
 
 class _FakeChildSyncGateway:
     def with_attempt(self, *, attempt_ref):  # noqa: ANN001
-        raise AssertionError(f"Child fanout should not start while backlog planning is blocked: {attempt_ref}")
+        raise AssertionError(
+            f"Child fanout should not start while backlog planning is blocked: {attempt_ref}"
+        )
 
     def combined_child_updates(self, *, seed_data: dict[str, object]):
         return (
@@ -81,7 +91,9 @@ class _FakeCompletingChildSyncGateway:
 
 
 class _FakeIssueGateway:
-    def __init__(self, *, issue_types: tuple[str, ...] = ("Epic", "Story", "Sub-task")) -> None:
+    def __init__(
+        self, *, issue_types: tuple[str, ...] = ("Epic", "Story", "Sub-task")
+    ) -> None:
         self.issue_types = issue_types
         self.label_updates: list[str] = []
         self.published_questions: list[tuple[str, tuple[object, ...]]] = []
@@ -112,7 +124,9 @@ class _FakeIssueGateway:
 
 class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="parent-feature-planning-workflow")
+        self.database_url = self._prepare_test_database(
+            name_prefix="parent-feature-planning-workflow"
+        )
         self.session_factory = create_session_factory(self.database_url)
 
     def tearDown(self) -> None:
@@ -120,7 +134,9 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
 
     def test_task_parent_planning_completes_without_child_fanout(self) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             lifecycle = ensure_workflow_execution(
                 session=session,
                 workflow_type=workflow_type,
@@ -208,9 +224,13 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             self.assertEqual(issue_gateway.label_updates, ["MAB-255:sync-current"])
             self.assertEqual(issue_gateway.start_development_links[0][0], "MAB-255")
 
-    def test_backlog_planning_waits_only_after_pm_escalates_and_records_jira_comment_id(self) -> None:
+    def test_backlog_planning_waits_only_after_pm_escalates_and_records_jira_comment_id(
+        self,
+    ) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             lifecycle = ensure_workflow_execution(
                 session=session,
                 workflow_type=workflow_type,
@@ -318,23 +338,39 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             self.assertFalse(fanout.completed)
             self.assertEqual(issue_gateway.label_updates, ["MAB-241:sync-blocked"])
             self.assertEqual(issue_gateway.published_questions[0][0], "MAB-241")
-            self.assertEqual(issue_gateway.published_questions[0][1][0].question, "What audit window should customers see?")
+            self.assertEqual(
+                issue_gateway.published_questions[0][1][0].question,
+                "What audit window should customers see?",
+            )
             self.assertIn("pm_decision_resolution", operations)
             self.assertEqual(operations["jira_comment_projection"].status, "completed")
-            self.assertIn("jira-comment-1", operations["jira_comment_projection"].summary or "")
+            self.assertIn(
+                "jira-comment-1", operations["jira_comment_projection"].summary or ""
+            )
             self.assertEqual(operations["backlog_planning"].status, "waiting_for_input")
-            self.assertIn("What audit window should customers see?", operations["backlog_planning"].summary or "")
+            self.assertIn(
+                "What audit window should customers see?",
+                operations["backlog_planning"].summary or "",
+            )
             self.assertEqual(operations["jira_child_fanout"].status, "pending")
-            self.assertEqual(attempts["jira_comment_projection"][-1].status, "completed")
-            self.assertEqual(attempts["backlog_planning"][-1].status, "waiting_for_input")
+            self.assertEqual(
+                attempts["jira_comment_projection"][-1].status, "completed"
+            )
+            self.assertEqual(
+                attempts["backlog_planning"][-1].status, "waiting_for_input"
+            )
             self.assertLessEqual(
                 attempts["jira_comment_projection"][-1].finished_at,
                 attempts["backlog_planning"][-1].finished_at,
             )
 
-    def test_plan_and_seed_rejects_unsupported_parent_issue_type_before_planning_runtime(self) -> None:
+    def test_plan_and_seed_rejects_unsupported_parent_issue_type_before_planning_runtime(
+        self,
+    ) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             lifecycle = ensure_workflow_execution(
                 session=session,
                 workflow_type=workflow_type,
@@ -393,12 +429,19 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                     fanout_summary="Child fanout completed.",
                 )
 
-            self.assertIn("supports Epic -> story-level children and Story -> Sub-task only", str(raised.exception.detail))
+            self.assertIn(
+                "supports Epic -> story-level children and Story -> Sub-task only",
+                str(raised.exception.detail),
+            )
             self.assertEqual(planner.product_briefs, [])
 
-    def test_backlog_planning_with_technical_decision_completes_without_jira_comment(self) -> None:
+    def test_backlog_planning_with_technical_decision_completes_without_jira_comment(
+        self,
+    ) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             lifecycle = ensure_workflow_execution(
                 session=session,
                 workflow_type=workflow_type,
@@ -489,12 +532,20 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
             self.assertEqual(operations["backlog_planning"].status, "completed")
             self.assertEqual(operations["jira_child_fanout"].status, "completed")
             self.assertEqual(issue_gateway.start_development_links[0][0], "MAB-242")
-            self.assertIn("/tenant-b/start/", issue_gateway.start_development_links[0][1])
-            self.assertIn("startDevelopmentToken=", issue_gateway.start_development_links[0][1])
+            self.assertIn(
+                "/tenant-b/start/", issue_gateway.start_development_links[0][1]
+            )
+            self.assertIn(
+                "startDevelopmentToken=", issue_gateway.start_development_links[0][1]
+            )
 
-    def test_pm_decision_request_is_answered_internally_then_fanout_continues_without_jira(self) -> None:
+    def test_pm_decision_request_is_answered_internally_then_fanout_continues_without_jira(
+        self,
+    ) -> None:
         with self.session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             lifecycle = ensure_workflow_execution(
                 session=session,
                 workflow_type=workflow_type,
@@ -546,12 +597,18 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                             request_id="pm-email-verification",
                             answer="Use in-product email verification before security-sensitive matching.",
                             rationale="This is acceptance interpretation, not a stakeholder business decision.",
-                            evidence=("The parent brief requires safe account binding.",),
-                            planning_context_delta={"verified_email_policy": "in_product_verification_required"},
+                            evidence=(
+                                "The parent brief requires safe account binding.",
+                            ),
+                            planning_context_delta={
+                                "verified_email_policy": "in_product_verification_required"
+                            },
                         ),
                     ),
                     stakeholder_escalations=(),
-                    updated_planning_context={"verified_email_policy": "in_product_verification_required"},
+                    updated_planning_context={
+                        "verified_email_policy": "in_product_verification_required"
+                    },
                 )
             )
             workflow = ParentFeaturePlanningWorkflow(

@@ -6,8 +6,12 @@ from re import Pattern
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
-from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.api.discord.shared.state_repository import (
+    resolve_project_for_discord_channel,
+)
+from orchestrator.core.discord.channel_tenant_index import (
+    resolve_tenant_for_discord_channel,
+)
 from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     resolve_followup_context as resolve_shared_followup_context,
@@ -18,7 +22,9 @@ from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 logger = logging.getLogger(__name__)
 
 
-def tenant_discord_channel_ids(*, tenant: Tenant, project_channel_ids: set[str]) -> set[str]:
+def tenant_discord_channel_ids(
+    *, tenant: Tenant, project_channel_ids: set[str]
+) -> set[str]:
     discord_config = tenant.discord_config or {}
     channel_ids: set[str] = set(project_channel_ids)
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
@@ -41,12 +47,16 @@ def resolve_project_for_channel(
 
 
 def project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     channel_ids: set[str] = set()
     for project in projects:
         discord_config = dict(project.discord_config or {})
@@ -68,7 +78,9 @@ def project_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[s
     return channel_ids
 
 
-def project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+def project_ask_thread_channel_ids_for_tenant(
+    *, session: Session, tenant_id: str
+) -> set[str]:
     return _project_thread_channel_ids_for_tenant(
         session=session,
         tenant_id=tenant_id,
@@ -76,7 +88,9 @@ def project_ask_thread_channel_ids_for_tenant(*, session: Session, tenant_id: st
     )
 
 
-def project_seed_followup_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str) -> set[str]:
+def project_seed_followup_thread_channel_ids_for_tenant(
+    *, session: Session, tenant_id: str
+) -> set[str]:
     return _project_thread_channel_ids_for_tenant(
         session=session,
         tenant_id=tenant_id,
@@ -107,7 +121,9 @@ def resolve_thread_channel_for_reply(
     normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
     if not normalized_channel_id or not normalized_reply_to_message_id:
         return normalized_channel_id
-    tenant = resolve_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
+    tenant = resolve_tenant_for_discord_channel(
+        session=session, channel_id=normalized_channel_id
+    )
     if tenant is None:
         return normalized_channel_id
     project = resolve_project_for_discord_channel(
@@ -117,8 +133,12 @@ def resolve_thread_channel_for_reply(
     )
     if project is None:
         return normalized_channel_id
-    ask_thread_message_map = ask_thread_message_map_from_config(project.discord_config or {})
-    mapped_thread_channel_id = str(ask_thread_message_map.get(normalized_reply_to_message_id) or "").strip()
+    ask_thread_message_map = ask_thread_message_map_from_config(
+        project.discord_config or {}
+    )
+    mapped_thread_channel_id = str(
+        ask_thread_message_map.get(normalized_reply_to_message_id) or ""
+    ).strip()
     return mapped_thread_channel_id or normalized_channel_id
 
 
@@ -157,7 +177,9 @@ def decision_gate_issue_for_thread(
     normalized_channel_id = str(channel_id or "").strip()
     if not normalized_channel_id:
         return None
-    tenant = resolve_tenant_for_discord_channel(session=session, channel_id=normalized_channel_id)
+    tenant = resolve_tenant_for_discord_channel(
+        session=session, channel_id=normalized_channel_id
+    )
     if tenant is None:
         return None
     context = resolve_shared_followup_context(
@@ -168,7 +190,8 @@ def decision_gate_issue_for_thread(
     issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
     if (
         context is None
-        or str(getattr(context, "context_type", "") or "").strip() != FOLLOWUP_CONTEXT_DECISION_GATE
+        or str(getattr(context, "context_type", "") or "").strip()
+        != FOLLOWUP_CONTEXT_DECISION_GATE
         or not issue_key
         or issue_key_pattern.fullmatch(issue_key) is None
     ):
@@ -176,13 +199,19 @@ def decision_gate_issue_for_thread(
     return tenant.tenant_id, issue_key
 
 
-def _project_thread_channel_ids_for_tenant(*, session: Session, tenant_id: str, config_key: str) -> set[str]:
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+def _project_thread_channel_ids_for_tenant(
+    *, session: Session, tenant_id: str, config_key: str
+) -> set[str]:
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     channel_ids: set[str] = set()
     for project in projects:
         raw_thread_ids = (project.discord_config or {}).get(config_key)

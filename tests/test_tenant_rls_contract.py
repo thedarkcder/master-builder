@@ -25,7 +25,9 @@ def test_tenant_id_tables_are_not_nullable() -> None:
 
 
 def test_rls_policy_contract_is_not_owned_by_runtime_module() -> None:
-    runtime_exports = set(dir(__import__("orchestrator.storage.tenant_rls", fromlist=["*"])))
+    runtime_exports = set(
+        dir(__import__("orchestrator.storage.tenant_rls", fromlist=["*"]))
+    )
 
     assert "build_rls_policies" not in runtime_exports
     assert "TENANT_SCOPED_TABLES" not in runtime_exports

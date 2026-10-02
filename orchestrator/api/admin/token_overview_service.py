@@ -57,7 +57,9 @@ def _coalesce_delta(stored: int | None, computed: int) -> int:
     return max(0, stored)
 
 
-def _build_delta(prev: tuple[int, int, int] | None, current: tuple[int, int, int]) -> tuple[int, int, int]:
+def _build_delta(
+    prev: tuple[int, int, int] | None, current: tuple[int, int, int]
+) -> tuple[int, int, int]:
     if prev is None:
         return current
     prev_input, prev_cached, prev_output = prev
@@ -169,7 +171,9 @@ def _build_runs_query(
     if only_with_test_stage:
         query = query.where(
             RunTokenUsage.run_id.in_(
-                select(RunTokenUsage.run_id).where(RunTokenUsage.stage == "test").distinct()
+                select(RunTokenUsage.run_id)
+                .where(RunTokenUsage.stage == "test")
+                .distinct()
             )
         )
 
@@ -227,14 +231,24 @@ def get_token_overview(
     tenant_id = str(tenant_id).strip()
     project_id = str(project_id).strip()
     if not tenant_id or not project_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id and project_id are required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id and project_id are required",
+        )
 
     if page < 1:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="page must be >= 1")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="page must be >= 1"
+        )
     if page_size < 1:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="page_size must be >= 1")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="page_size must be >= 1"
+        )
     if start_date and end_date and start_date > end_date:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="start_date must be <= end_date")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be <= end_date",
+        )
 
     start = _coerce_aware(start_date) if start_date is not None else None
     end = _coerce_aware(end_date) if end_date is not None else None
@@ -261,7 +275,9 @@ def get_token_overview(
     run_ids = {str(row.run_id) for row in rows if row.run_id}
     run_records: dict[str, Run] = {}
     if run_ids:
-        run_rows = session.execute(select(Run).where(Run.run_id.in_(run_ids))).scalars().all()
+        run_rows = (
+            session.execute(select(Run).where(Run.run_id.in_(run_ids))).scalars().all()
+        )
         run_records = {row.run_id: row for row in run_rows}
 
     run_totals: dict[
@@ -302,9 +318,13 @@ def get_token_overview(
 
         accumulator = run_totals[row_run_id]
         accumulator["input"] = int(accumulator["input"]) + input_tokens
-        accumulator["cached_input"] = int(accumulator["cached_input"]) + cached_input_tokens
+        accumulator["cached_input"] = (
+            int(accumulator["cached_input"]) + cached_input_tokens
+        )
         accumulator["output"] = int(accumulator["output"]) + output_tokens
-        accumulator["uncached_input"] = int(accumulator["uncached_input"]) + uncached_input_tokens
+        accumulator["uncached_input"] = (
+            int(accumulator["uncached_input"]) + uncached_input_tokens
+        )
 
         day_bucket_stats = run_day_totals.setdefault(
             day_bucket,
@@ -329,9 +349,16 @@ def get_token_overview(
             runtime_values.append(float(row.runtime_ms))
             day_bucket_stats["runtimes"].append(float(row.runtime_ms))
 
-        chain_key = (row_run_id, str(row.invocation_id or "default"), str(row.stage or "").strip().lower(), row.attempt)
+        chain_key = (
+            row_run_id,
+            str(row.invocation_id or "default"),
+            str(row.stage or "").strip().lower(),
+            row.attempt,
+        )
         prev = chain_prev.get(chain_key)
-        prev_input, prev_cached, prev_output = prev if prev is not None else (None, None, None)
+        prev_input, prev_cached, prev_output = (
+            prev if prev is not None else (None, None, None)
+        )
         delta_input_raw, delta_uncached_raw, delta_output_raw = _build_delta(
             prev=(prev_input, prev_cached, prev_output) if prev is not None else None,
             current=(input_tokens, cached_input_tokens, output_tokens),
@@ -341,7 +368,9 @@ def get_token_overview(
         delta_output = _coalesce_delta(row.delta_output, delta_output_raw)
         accumulator["delta_input"] = int(accumulator["delta_input"]) + delta_input
         accumulator["delta_output"] = int(accumulator["delta_output"]) + delta_output
-        accumulator["delta_uncached"] = int(accumulator["delta_uncached"]) + delta_uncached
+        accumulator["delta_uncached"] = (
+            int(accumulator["delta_uncached"]) + delta_uncached
+        )
         day_bucket_stats["delta_input"] += delta_input
         day_bucket_stats["delta_output"] += delta_output
         day_bucket_stats["delta_uncached"] += delta_uncached
@@ -363,7 +392,12 @@ def get_token_overview(
         )
 
         if row.stage == "test" and row.attempt and row.attempt > 1:
-            previous_key = (row_run_id, str(row.invocation_id or "default"), "test", row.attempt - 1)
+            previous_key = (
+                row_run_id,
+                str(row.invocation_id or "default"),
+                "test",
+                row.attempt - 1,
+            )
             previous_input = prev_attempt_input.get(previous_key)
             if previous_input is not None and previous_input > 0:
                 ratio = delta_input / float(previous_input)
@@ -381,11 +415,14 @@ def get_token_overview(
                             message="Repeated test attempt grew inputs by 30%+ vs previous attempt.",
                         )
                     )
-            prev_attempt_input[(row_run_id, str(row.invocation_id or "default"), "test", row.attempt)] = input_tokens
+            prev_attempt_input[
+                (row_run_id, str(row.invocation_id or "default"), "test", row.attempt)
+            ] = input_tokens
         if row.attempt and row.attempt > 0:
             stage_name = str(row.stage or "").strip().lower()
             stage_attempt_delta[(row_run_id, stage_name, row.attempt)] = (
-                stage_attempt_delta.get((row_run_id, stage_name, row.attempt), 0) + delta_input
+                stage_attempt_delta.get((row_run_id, stage_name, row.attempt), 0)
+                + delta_input
             )
             if stage_name == "dev":
                 dev_attempt_seen.add((row_run_id, row.attempt))
@@ -404,7 +441,11 @@ def get_token_overview(
     )
     repeated_test_delta = 0
     repeated_test_waste = 0
-    for (run_id, stage_name, attempt_number), delta_value in stage_attempt_delta.items():
+    for (
+        run_id,
+        stage_name,
+        attempt_number,
+    ), delta_value in stage_attempt_delta.items():
         if stage_name != "test" or attempt_number <= 1:
             continue
         repeated_test_delta += max(0, delta_value)
@@ -427,7 +468,9 @@ def get_token_overview(
                 delta_input=int(day_stats["delta_input"]),
                 delta_uncached=int(day_stats["delta_uncached"]),
                 delta_output=int(day_stats["delta_output"]),
-                delta_total_io=int(day_stats["delta_input"] + day_stats["delta_output"]),
+                delta_total_io=int(
+                    day_stats["delta_input"] + day_stats["delta_output"]
+                ),
                 avg_runtime_ms=day_avg,
                 p95_runtime_ms=day_p95,
                 run_count=len(day_stats["run_ids"]),
@@ -436,7 +479,10 @@ def get_token_overview(
 
     sorted_runs = sorted(
         run_totals.items(),
-        key=lambda item: (int(item[1]["input"]) + int(item[1]["output"]), int(item[1]["delta_input"]) + int(item[1]["delta_output"])),
+        key=lambda item: (
+            int(item[1]["input"]) + int(item[1]["output"]),
+            int(item[1]["delta_input"]) + int(item[1]["delta_output"]),
+        ),
         reverse=True,
     )
     start_idx = (page - 1) * page_size

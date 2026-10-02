@@ -12,8 +12,8 @@ import {
 } from "./support/admin-ui";
 
 test("shows artifact PR metadata for selected apps waiting on merge", async ({ page }) => {
-  const tenant = makeTenant({ tenant_id: "example" });
-  const project = makeProject({ tenant_id: "example", project_id: "example-default" });
+  const tenant = makeTenant({ tenant_id: "example-workspace" });
+  const project = makeProject({ tenant_id: "example-workspace", project_id: "example-workspace-default" });
   const app = makeProjectAppRecord({
     app_id: "app-1",
     tenant_id: tenant.tenant_id,
@@ -21,7 +21,7 @@ test("shows artifact PR metadata for selected apps waiting on merge", async ({ p
     name: "Payments API",
     slug: "payments-api",
     status: "needs_pr_merge",
-    source_path: "apps/payments",
+    source_path: ".",
   });
   const analysisRun = makeProjectAppAnalysisRun({
     analysis_run_id: "analysis-1",
@@ -44,28 +44,34 @@ test("shows artifact PR metadata for selected apps waiting on merge", async ({ p
     if (pathname === "/api/bff/api/app/auth/me") {
       return fulfillJson(route, makePlatformAdminPrincipal());
     }
-    if (pathname === "/api/bff/api/admin/tenants/example") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace") {
       return fulfillJson(route, tenant);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default") {
       return fulfillJson(route, project);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps") {
       return fulfillJson(route, [app]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/analysis-runs") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1") {
+      return fulfillJson(route, app);
+    }
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-backups/restore-runs") {
+      return fulfillJson(route, []);
+    }
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/analysis-runs") {
       return fulfillJson(route, [analysisRun]);
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-config") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-config") {
       return fulfillJson(route, makeProjectAppDeploymentConfig({ app_id: app.app_id }));
     }
-    if (pathname === "/api/bff/api/admin/tenants/example/projects/example-default/apps/app-1/deployment-releases") {
+    if (pathname === "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/apps/app-1/deployment-releases") {
       return fulfillJson(route, []);
     }
     return route.fallback();
   });
 
-  await page.goto("/example/projects/example-default/deployments/app-1");
+  await page.goto("/example-workspace/projects/example-workspace-default/deployments/app-1");
 
   await expect(page.getByText("Generated deployment files must be merged before this deployment can run.")).toBeVisible();
   await expect(page.getByText("Artifact PR metadata")).toBeVisible();

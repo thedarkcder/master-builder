@@ -24,7 +24,9 @@ def _table_exists(table_name: str) -> bool:
 
 def _index_exists(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -53,18 +55,39 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
             sa.PrimaryKeyConstraint("case_id"),
-            sa.UniqueConstraint("tenant_id", "request_id", name="uq_pm_interview_cases_tenant_request"),
+            sa.UniqueConstraint(
+                "tenant_id", "request_id", name="uq_pm_interview_cases_tenant_request"
+            ),
         )
 
     index_specs = (
-        ("ix_pm_interview_cases_tenant_status_channel", ["tenant_id", "status", "channel_id"]),
-        ("ix_pm_interview_cases_tenant_status_thread", ["tenant_id", "status", "thread_channel_id"]),
-        ("ix_pm_interview_cases_tenant_status_root_message", ["tenant_id", "status", "root_message_id"]),
-        ("ix_pm_interview_cases_tenant_status_owner", ["tenant_id", "status", "owner_user_id"]),
-        ("ix_pm_interview_cases_tenant_parent_issue", ["tenant_id", "parent_issue_key"]),
+        (
+            "ix_pm_interview_cases_tenant_status_channel",
+            ["tenant_id", "status", "channel_id"],
+        ),
+        (
+            "ix_pm_interview_cases_tenant_status_thread",
+            ["tenant_id", "status", "thread_channel_id"],
+        ),
+        (
+            "ix_pm_interview_cases_tenant_status_root_message",
+            ["tenant_id", "status", "root_message_id"],
+        ),
+        (
+            "ix_pm_interview_cases_tenant_status_owner",
+            ["tenant_id", "status", "owner_user_id"],
+        ),
+        (
+            "ix_pm_interview_cases_tenant_parent_issue",
+            ["tenant_id", "parent_issue_key"],
+        ),
     )
     for index_name, columns in index_specs:
         if not _index_exists("pm_interview_cases", index_name):

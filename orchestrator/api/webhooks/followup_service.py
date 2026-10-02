@@ -10,7 +10,9 @@ from orchestrator.api.webhooks.followup_execution import (
     run_discord_ask_confirmation_followup as _run_discord_ask_confirmation_followup,
     run_discord_command_followup as _run_discord_command_followup,
 )
-from orchestrator.core.communications.integration_contracts import TransportActionExecutor
+from orchestrator.core.communications.integration_contracts import (
+    TransportActionExecutor,
+)
 
 
 class DiscordWebhookFollowupService:

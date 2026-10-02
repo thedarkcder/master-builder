@@ -86,18 +86,24 @@ def _bullet_list(items: list[str]) -> dict:
         "content": [
             {
                 "type": "listItem",
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": item}]}],
+                "content": [
+                    {"type": "paragraph", "content": [{"type": "text", "text": item}]}
+                ],
             }
             for item in normalized_items
         ],
     }
 
 
-def _technical_decision_lines(technical_decisions: list[TechnicalDecision] | None) -> list[str]:
+def _technical_decision_lines(
+    technical_decisions: list[TechnicalDecision] | None,
+) -> list[str]:
     lines: list[str] = []
     for decision in technical_decisions or []:
         selected_option = next(
-            option for option in decision.options if option.option_id == decision.selected_option_id
+            option
+            for option in decision.options
+            if option.option_id == decision.selected_option_id
         )
         suffix = f" Confidence: {decision.confidence}." if decision.confidence else ""
         lines.append(
@@ -105,6 +111,7 @@ def _technical_decision_lines(technical_decisions: list[TechnicalDecision] | Non
             f"Selected {selected_option.title}. {decision.rationale}.{suffix}"
         )
     return lines
+
 
 def build_parent_feature_description(
     *,
@@ -123,10 +130,17 @@ def build_parent_feature_description(
     pm_status: str | None = None,
     planning_state: str | None = None,
 ) -> dict:
-    bounded_objective = _truncate_text(objective, max_chars=_TEXT_LIMITS["objective"]) or "No objective provided"
-    bounded_user_value = _truncate_text(user_value, max_chars=_TEXT_LIMITS["user_value"]) or "User value was not provided"
+    bounded_objective = (
+        _truncate_text(objective, max_chars=_TEXT_LIMITS["objective"])
+        or "No objective provided"
+    )
+    bounded_user_value = (
+        _truncate_text(user_value, max_chars=_TEXT_LIMITS["user_value"])
+        or "User value was not provided"
+    )
     bounded_recommendation = (
-        _truncate_text(recommendation, max_chars=_TEXT_LIMITS["recommendation"]) or "Recommendation was not provided"
+        _truncate_text(recommendation, max_chars=_TEXT_LIMITS["recommendation"])
+        or "Recommendation was not provided"
     )
     bounded_scope_in = _budget_items(
         scope_in,
@@ -181,8 +195,12 @@ def build_parent_feature_description(
     planning_status_items = [
         item
         for item in (
-            f"PM status: {pm_status}" if isinstance(pm_status, str) and pm_status.strip() else "",
-            f"Planning state: {planning_state}" if isinstance(planning_state, str) and planning_state.strip() else "",
+            f"PM status: {pm_status}"
+            if isinstance(pm_status, str) and pm_status.strip()
+            else "",
+            f"Planning state: {planning_state}"
+            if isinstance(planning_state, str) and planning_state.strip()
+            else "",
         )
         if item
     ]
@@ -195,33 +213,35 @@ def build_parent_feature_description(
         )
     content.extend(
         [
-        _heading("Scope In"),
-        _bullet_list(bounded_scope_in),
-        _heading("Scope Out"),
-        _bullet_list(bounded_scope_out),
-        _heading("Acceptance Criteria"),
-        _bullet_list(bounded_acceptance_criteria),
-        _heading("UI / Design / References"),
-        _bullet_list(bounded_ui_references),
-        _heading("Success Outcomes"),
-        _bullet_list(bounded_success_outcomes),
-        _heading("Dependencies / Risks"),
-        _bullet_list(bounded_dependencies_and_risks),
-        _heading("Open Questions"),
-        _bullet_list(bounded_open_questions),
-        _heading("Good To Do Checklist"),
-        _bullet_list(
-            [
-                "[ ] Objective is clear",
-                "[ ] Scope is explicit (in/out)",
-                "[ ] Acceptance criteria are testable",
-                "[ ] UI/design references are attached or explicitly not needed",
-                "[ ] Outcomes are defined for users and the business",
-                "[ ] Dependencies and risks are identified",
-            ]
-        ),
-        _heading("Notes / Links"),
-        _bullet_list(["Owned by Product Management", "Reported via Discord PM flow"]),
+            _heading("Scope In"),
+            _bullet_list(bounded_scope_in),
+            _heading("Scope Out"),
+            _bullet_list(bounded_scope_out),
+            _heading("Acceptance Criteria"),
+            _bullet_list(bounded_acceptance_criteria),
+            _heading("UI / Design / References"),
+            _bullet_list(bounded_ui_references),
+            _heading("Success Outcomes"),
+            _bullet_list(bounded_success_outcomes),
+            _heading("Dependencies / Risks"),
+            _bullet_list(bounded_dependencies_and_risks),
+            _heading("Open Questions"),
+            _bullet_list(bounded_open_questions),
+            _heading("Good To Do Checklist"),
+            _bullet_list(
+                [
+                    "[ ] Objective is clear",
+                    "[ ] Scope is explicit (in/out)",
+                    "[ ] Acceptance criteria are testable",
+                    "[ ] UI/design references are attached or explicitly not needed",
+                    "[ ] Outcomes are defined for users and the business",
+                    "[ ] Dependencies and risks are identified",
+                ]
+            ),
+            _heading("Notes / Links"),
+            _bullet_list(
+                ["Owned by Product Management", "Reported via Discord PM flow"]
+            ),
         ]
     )
     return {"type": "doc", "version": 1, "content": content}
@@ -247,12 +267,16 @@ def build_engineering_child_description(
         _truncate_text(delivery, max_chars=_TEXT_LIMITS["delivery"])
         or "Delivery expectation was not provided"
     )
-    bounded_parent_link = _truncate_text(
-        f"{parent_issue_key}: {parent_summary}".strip(": "),
-        max_chars=_TEXT_LIMITS["delivery"],
-    ) or "Parent link was not provided"
+    bounded_parent_link = (
+        _truncate_text(
+            f"{parent_issue_key}: {parent_summary}".strip(": "),
+            max_chars=_TEXT_LIMITS["delivery"],
+        )
+        or "Parent link was not provided"
+    )
     bounded_capability = (
-        _truncate_text(capability, max_chars=_TEXT_LIMITS["capability"]) or "Capability was not provided"
+        _truncate_text(capability, max_chars=_TEXT_LIMITS["capability"])
+        or "Capability was not provided"
     )
     bounded_expected_outcome = (
         _truncate_text(expected_outcome, max_chars=_TEXT_LIMITS["expected_outcome"])
@@ -283,7 +307,9 @@ def build_engineering_child_description(
         empty_fallback="No explicit technical dependencies or risks were provided",
     )
     bounded_specialist_summary = _budget_items(
-        specialist_summary if specialist_summary else ["No specialist planning context was provided"],
+        specialist_summary
+        if specialist_summary
+        else ["No specialist planning context was provided"],
         max_items=_CHILD_SECTION_ITEM_LIMITS["specialist_summary"],
         max_chars=_TEXT_LIMITS["specialist_item"],
         empty_fallback="No specialist planning context was provided",
@@ -294,11 +320,17 @@ def build_engineering_child_description(
         max_chars=_TEXT_LIMITS["technical_decision_item"],
         empty_fallback="No technical decisions were recorded",
     )
-    bounded_planning_state = _truncate_text(
-        planning_state if isinstance(planning_state, str) else "",
-        max_chars=_TEXT_LIMITS["planning_state"],
-    ) or "Planning state was not provided"
-    bounded_parent_revision = _truncate_text(parent_revision or "unknown", max_chars=_TEXT_LIMITS["revision"]) or "unknown"
+    bounded_planning_state = (
+        _truncate_text(
+            planning_state if isinstance(planning_state, str) else "",
+            max_chars=_TEXT_LIMITS["planning_state"],
+        )
+        or "Planning state was not provided"
+    )
+    bounded_parent_revision = (
+        _truncate_text(parent_revision or "unknown", max_chars=_TEXT_LIMITS["revision"])
+        or "unknown"
+    )
 
     content = [
         _heading("Capability"),
@@ -344,7 +376,8 @@ def build_seed_issue_description(
     return build_engineering_child_description(
         parent_issue_key="PARENT-UNKNOWN",
         parent_summary="Parent feature not linked",
-        parent_revision=nfr_intent.strip() or "Not specified (MVP or scale-ready decision required)",
+        parent_revision=nfr_intent.strip()
+        or "Not specified (MVP or scale-ready decision required)",
         capability=objective,
         delivery=objective,
         expected_outcome=objective,

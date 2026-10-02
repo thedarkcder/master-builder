@@ -16,14 +16,26 @@ from orchestrator.core.workflow.runner import StageOutcome
 from orchestrator.core.workflow.runner import TestResult
 from orchestrator.core.workflow.runner import WorkflowStageCheckpoint
 
-_VALID_STAGE_OUTCOMES: set[str] = {"continue", "requeue", "waiting_for_input", "blocked", "failed"}
+_VALID_STAGE_OUTCOMES: set[str] = {
+    "continue",
+    "requeue",
+    "waiting_for_input",
+    "blocked",
+    "failed",
+}
 _VALID_PM_NEXT_STAGES: set[str] = {"dev", "test"}
-_VALID_TEST_VALIDATION_SCOPES: set[str] = {"targeted_only", "current_head_acceptance", "full_suite"}
+_VALID_TEST_VALIDATION_SCOPES: set[str] = {
+    "targeted_only",
+    "current_head_acceptance",
+    "full_suite",
+}
 _VALID_QA_CAPTURE_TARGETS: set[str] = {"browser", "ios", "android", "desktop"}
 _MIN_DEMO_REQUIREMENT_VARIANTS = 2
 
 
-def encode_stage_checkpoint_artifact(checkpoint: WorkflowStageCheckpoint) -> dict | None:
+def encode_stage_checkpoint_artifact(
+    checkpoint: WorkflowStageCheckpoint,
+) -> dict | None:
     if checkpoint.plan is not None:
         return encode_pm_plan(checkpoint.plan)
     if checkpoint.dev_result is not None:
@@ -39,7 +51,9 @@ def encode_stage_checkpoint_artifact(checkpoint: WorkflowStageCheckpoint) -> dic
 
 def encode_pm_plan(plan: PmPlan) -> dict:
     payload = asdict(plan)
-    plan_steps = _require_non_empty_string_list(payload.get("plan_steps"), field="PM plan plan_steps")
+    plan_steps = _require_non_empty_string_list(
+        payload.get("plan_steps"), field="PM plan plan_steps"
+    )
     acceptance_criteria = _require_non_empty_string_list(
         payload.get("acceptance_criteria"),
         field="PM plan acceptance_criteria",
@@ -63,21 +77,35 @@ def encode_pm_plan(plan: PmPlan) -> dict:
     next_stage = _parse_pm_next_stage(payload.get("next_stage"))
     if next_stage is None:
         raise ValueError("PM plan next_stage must be dev or test")
-    execution_worker_capability = _parse_worker_capability(plan.execution_worker_capability)
+    execution_worker_capability = _parse_worker_capability(
+        plan.execution_worker_capability
+    )
     if execution_worker_capability is None:
-        raise ValueError("PM plan execution_worker_capability must be a valid worker capability")
+        raise ValueError(
+            "PM plan execution_worker_capability must be a valid worker capability"
+        )
     blocker_message = _parse_optional_string(payload.get("blocker_message"))
     if outcome == "blocked" and blocker_message is None:
         raise ValueError("Blocked PM plan must include blocker_message")
     requeue_reason = _parse_optional_string(payload.get("requeue_reason"))
     requeue_target_raw = payload.get("requeue_target")
-    requeue_target = _parse_worker_capability(requeue_target_raw) if requeue_target_raw is not None else None
+    requeue_target = (
+        _parse_worker_capability(requeue_target_raw)
+        if requeue_target_raw is not None
+        else None
+    )
     if requeue_target_raw is not None and requeue_target is None:
-        raise ValueError("PM plan requeue_target must be a valid worker capability when present")
-    if outcome != "requeue" and (requeue_target is not None or requeue_reason is not None):
+        raise ValueError(
+            "PM plan requeue_target must be a valid worker capability when present"
+        )
+    if outcome != "requeue" and (
+        requeue_target is not None or requeue_reason is not None
+    ):
         raise ValueError("PM plan requeue fields are only valid for requeue outcome")
     if outcome == "requeue" and (requeue_target is None or requeue_reason is None):
-        raise ValueError("Requeue PM plan must include requeue_target and requeue_reason")
+        raise ValueError(
+            "Requeue PM plan must include requeue_target and requeue_reason"
+        )
     payload["execution_worker_capability"] = execution_worker_capability
     payload["plan_steps"] = plan_steps
     payload["acceptance_criteria"] = acceptance_criteria
@@ -190,13 +218,21 @@ def decode_pm_plan_payload(payload: dict | None) -> PmPlan | None:
         return None
     outcome = _parse_stage_outcome(payload.get("outcome"))
     next_stage = _parse_pm_next_stage(payload.get("next_stage"))
-    execution_worker_capability = _parse_worker_capability(payload.get("execution_worker_capability"))
+    execution_worker_capability = _parse_worker_capability(
+        payload.get("execution_worker_capability")
+    )
     plan_steps = _parse_string_list(payload.get("plan_steps"), require_non_empty=True)
-    acceptance_criteria = _parse_string_list(payload.get("acceptance_criteria"), require_non_empty=True)
+    acceptance_criteria = _parse_string_list(
+        payload.get("acceptance_criteria"), require_non_empty=True
+    )
     risks = _parse_string_list(payload.get("risks"), require_non_empty=False)
     demo_requirements = _parse_demo_requirements(payload.get("demo_requirements"))
-    resolved_prerequisites = _parse_string_list(payload.get("resolved_prerequisites"), require_non_empty=False)
-    unresolved_prerequisites = _parse_string_list(payload.get("unresolved_prerequisites"), require_non_empty=False)
+    resolved_prerequisites = _parse_string_list(
+        payload.get("resolved_prerequisites"), require_non_empty=False
+    )
+    unresolved_prerequisites = _parse_string_list(
+        payload.get("unresolved_prerequisites"), require_non_empty=False
+    )
     blocker_message = _parse_optional_string(payload.get("blocker_message"))
     requeue_reason = _parse_optional_string(payload.get("requeue_reason"))
     if (
@@ -222,7 +258,9 @@ def decode_pm_plan_payload(payload: dict | None) -> PmPlan | None:
         return None
     if outcome == "requeue" and (requeue_target is None or requeue_reason is None):
         return None
-    if outcome != "requeue" and (requeue_target is not None or requeue_reason is not None):
+    if outcome != "requeue" and (
+        requeue_target is not None or requeue_reason is not None
+    ):
         return None
     return PmPlan(
         plan_steps=plan_steps,
@@ -246,7 +284,9 @@ def decode_dev_result_payload(payload: dict | None) -> DevResult | None:
     outcome = _parse_stage_outcome(payload.get("outcome"))
     if outcome is None:
         return None
-    change_summary = _parse_string_list(payload.get("change_summary"), require_non_empty=True)
+    change_summary = _parse_string_list(
+        payload.get("change_summary"), require_non_empty=True
+    )
     blocker_message = _parse_optional_string(payload.get("blocker_message"))
     if change_summary is None:
         return None
@@ -318,7 +358,12 @@ def decode_qa_result_payload(payload: dict | None) -> QaResult | None:
     recordings = _parse_qa_recordings(payload.get("recordings"))
     failure_evidence = _parse_qa_failure_evidence(payload.get("failure_evidence"))
     blocker_message = _parse_optional_string(payload.get("blocker_message"))
-    if summary is None or scenarios is None or recordings is None or failure_evidence is None:
+    if (
+        summary is None
+        or scenarios is None
+        or recordings is None
+        or failure_evidence is None
+    ):
         return None
     if outcome == "blocked" and blocker_message is None:
         return None
@@ -481,9 +526,17 @@ def _parse_qa_scenarios(value: object) -> list[QaScenario] | None:
         objective = _parse_optional_string(item.get("objective"))
         capture_target = _parse_optional_string(item.get("capture_target"))
         start_path = _parse_optional_string(item.get("start_path")) or "/"
-        expected_outcomes = _parse_string_list(item.get("expected_outcomes"), require_non_empty=False)
+        expected_outcomes = _parse_string_list(
+            item.get("expected_outcomes"), require_non_empty=False
+        )
         steps = _parse_qa_steps(item.get("steps"))
-        if name is None or objective is None or capture_target is None or expected_outcomes is None or steps is None:
+        if (
+            name is None
+            or objective is None
+            or capture_target is None
+            or expected_outcomes is None
+            or steps is None
+        ):
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:
             return None
@@ -507,7 +560,9 @@ def _require_qa_scenarios(value: object, *, field: str) -> list[dict[str, object
     return [asdict(item) for item in parsed]
 
 
-def _require_optional_qa_scenarios(value: object, *, field: str) -> list[dict[str, object]]:
+def _require_optional_qa_scenarios(
+    value: object, *, field: str
+) -> list[dict[str, object]]:
     parsed = _parse_qa_scenarios(value)
     if parsed is None:
         raise ValueError(f"{field} must be a QA scenario list")
@@ -530,7 +585,9 @@ def _parse_qa_recordings(value: object) -> list[QaRecording] | None:
         capture_reference = _parse_optional_string(item.get("capture_reference"))
         content_sha256 = _parse_content_sha256(item.get("content_sha256"))
         release_commit_sha = _parse_commit_sha(item.get("release_commit_sha"))
-        release_context_sha256 = _parse_content_sha256(item.get("release_context_sha256"))
+        release_context_sha256 = _parse_content_sha256(
+            item.get("release_context_sha256")
+        )
         if (
             name is None
             or artifact_url is None
@@ -576,7 +633,9 @@ def _parse_qa_failure_evidence(value: object) -> list[QaFailureEvidence] | None:
         error_message = _parse_optional_string(item.get("error_message"))
         content_sha256 = _parse_content_sha256(item.get("content_sha256"))
         release_commit_sha = _parse_commit_sha(item.get("release_commit_sha"))
-        release_context_sha256 = _parse_content_sha256(item.get("release_context_sha256"))
+        release_context_sha256 = _parse_content_sha256(
+            item.get("release_context_sha256")
+        )
         if (
             name is None
             or artifact_url is None
@@ -612,7 +671,11 @@ def _parse_commit_sha(value: object) -> str | None:
     if parsed is None:
         return None
     normalized = parsed.lower()
-    if len(normalized) < 7 or len(normalized) > 64 or any(char not in "0123456789abcdef" for char in normalized):
+    if (
+        len(normalized) < 7
+        or len(normalized) > 64
+        or any(char not in "0123456789abcdef" for char in normalized)
+    ):
         return None
     return normalized
 
@@ -622,7 +685,9 @@ def _parse_content_sha256(value: object) -> str | None:
     if parsed is None:
         return None
     normalized = parsed.lower()
-    if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+    if len(normalized) != 64 or any(
+        char not in "0123456789abcdef" for char in normalized
+    ):
         return None
     return normalized
 
@@ -634,7 +699,9 @@ def _require_qa_recordings(value: object, *, field: str) -> list[dict[str, objec
     return [asdict(item) for item in parsed]
 
 
-def _require_qa_failure_evidence(value: object, *, field: str) -> list[dict[str, object]]:
+def _require_qa_failure_evidence(
+    value: object, *, field: str
+) -> list[dict[str, object]]:
     parsed = _parse_qa_failure_evidence(value)
     if parsed is None:
         raise ValueError(f"{field} must be a QA failure evidence list")

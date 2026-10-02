@@ -8,7 +8,11 @@ from orchestrator.core.workflow.execution_projection import (
     WorkflowSourceReference,
     workflow_execution_id,
 )
-from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
+from orchestrator.core.workflow.runtime import (
+    WorkflowAdvanceRequest,
+    WorkflowTrigger,
+    build_workflow_runtime,
+)
 
 PROJECT_DEPLOYMENT_SETUP_WORKFLOW_TYPE_KEY = "project_deployment_setup"
 
@@ -32,7 +36,9 @@ def project_deployment_setup_execution_key(*, tenant_id: str, project_id: str) -
 def project_deployment_setup_workflow_id(*, tenant_id: str, project_id: str) -> str:
     return workflow_execution_id(
         workflow_type_key=PROJECT_DEPLOYMENT_SETUP_WORKFLOW_TYPE_KEY,
-        execution_key=project_deployment_setup_execution_key(tenant_id=tenant_id, project_id=project_id),
+        execution_key=project_deployment_setup_execution_key(
+            tenant_id=tenant_id, project_id=project_id
+        ),
     )
 
 

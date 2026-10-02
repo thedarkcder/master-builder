@@ -10,7 +10,9 @@ from orchestrator.api.schemas import (
     ArchitectureDocumentRead,
     ArchitectureDocumentUpdate,
 )
-from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentService
+from orchestrator.core.projects.architecture_document_service import (
+    ArchitectureDocumentService,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import (
     AuthenticatedPrincipal,
@@ -22,10 +24,14 @@ from orchestrator.storage.models import Project
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-def _project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
+def _project_for_tenant_or_404(
+    *, session: Session, tenant_id: str, project_id: str
+) -> Project:
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     return project
 
 
@@ -33,7 +39,9 @@ def _service() -> ArchitectureDocumentService:
     return ArchitectureDocumentService(settings_factory=get_settings)
 
 
-def _to_schema(*, service: ArchitectureDocumentService, session: Session, document) -> ArchitectureDocumentRead:  # noqa: ANN001
+def _to_schema(
+    *, service: ArchitectureDocumentService, session: Session, document
+) -> ArchitectureDocumentRead:  # noqa: ANN001
     return ArchitectureDocumentRead(
         document_id=document.document_id,
         tenant_id=document.tenant_id,
@@ -67,7 +75,9 @@ def list_project_architecture_documents(
     session: Session = Depends(get_session),
 ) -> ArchitectureDocumentPageRead:
     require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     service = _service()
     items = service.list_documents_for_project(
         session=session,
@@ -76,7 +86,10 @@ def list_project_architecture_documents(
         parent_issue_key=parent_issue_key,
     )
     return ArchitectureDocumentPageRead(
-        items=[_to_schema(service=service, session=session, document=item) for item in items],
+        items=[
+            _to_schema(service=service, session=session, document=item)
+            for item in items
+        ],
         total=len(items),
     )
 
@@ -94,13 +107,17 @@ def create_project_architecture_document(
     session: Session = Depends(get_session),
 ) -> ArchitectureDocumentRead:
     require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
-    project = _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     service = _service()
     document = service.create_document(
         session=session,
         project=project,
         parent_issue_key=payload.parent_issue_key,
-        issue_summary=payload.issue_summary or payload.title or payload.parent_issue_key,
+        issue_summary=payload.issue_summary
+        or payload.title
+        or payload.parent_issue_key,
         actor=principal.user_id or principal.username,
         title=payload.title,
         canonical_url=payload.canonical_url,
@@ -121,7 +138,9 @@ def get_project_architecture_document(
     session: Session = Depends(get_session),
 ) -> ArchitectureDocumentRead:
     require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     service = _service()
     document = service.get_document_for_project(
         session=session,
@@ -145,7 +164,9 @@ def update_project_architecture_document(
     session: Session = Depends(get_session),
 ) -> ArchitectureDocumentRead:
     require_tenant_workspace_access(principal=principal, tenant_id=tenant_id)
-    _project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    _project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     service = _service()
     document = service.get_document_for_project(
         session=session,

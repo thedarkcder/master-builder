@@ -12,7 +12,9 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
     def setUp(self) -> None:
         self.session = MagicMock()
         self.tenant = SimpleNamespace(tenant_id="tenant-a")
-        self.payload = DiscordCommandRequest(user_id="u-1", command="!issues", channel_id="c-1")
+        self.payload = DiscordCommandRequest(
+            user_id="u-1", command="!issues", channel_id="c-1"
+        )
 
     def _call(self, **overrides):
         params = {
@@ -26,7 +28,9 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             "codex_working_dir": "/tmp",
             "normalized_user_id": "u-1",
             "defer_seed_issues": False,
-            "seed_parent_issues_with_runtime": MagicMock(return_value=("ok", {"requires_input": False})),
+            "seed_parent_issues_with_runtime": MagicMock(
+                return_value=("ok", {"requires_input": False})
+            ),
             "find_seed_followup_context": MagicMock(return_value=None),
             "store_seed_followup_context": MagicMock(return_value="req-1"),
             "clear_seed_followup_context": MagicMock(),
@@ -68,13 +72,20 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
     def test_followup_requires_existing_context(self) -> None:
         find_context = MagicMock(return_value=None)
         with self.assertRaises(HTTPException) as ctx:
-            self._call(arguments=["followup", "answer"], find_seed_followup_context=find_context)
+            self._call(
+                arguments=["followup", "answer"],
+                find_seed_followup_context=find_context,
+            )
         self.assertEqual(ctx.exception.status_code, 409)
         call_kwargs = find_context.call_args.kwargs
         self.assertEqual(call_kwargs["user_id"], "u-1")
 
     def test_followup_blocks_different_user(self) -> None:
-        context = {"request_id": "req-1", "user_id": "someone-else", "channel_ids": ["c-1"]}
+        context = {
+            "request_id": "req-1",
+            "user_id": "someone-else",
+            "channel_ids": ["c-1"],
+        }
         with self.assertRaises(HTTPException) as ctx:
             self._call(
                 arguments=["followup", "answer"],
@@ -95,7 +106,9 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
         response = self._call(
             arguments=["followup", "answer text"],
             find_seed_followup_context=MagicMock(return_value=context),
-            seed_parent_issues_with_runtime=MagicMock(return_value=("updated", {"requires_input": False})),
+            seed_parent_issues_with_runtime=MagicMock(
+                return_value=("updated", {"requires_input": False})
+            ),
             clear_seed_followup_context=clear_context,
         )
         self.assertEqual(response.message, "updated")
@@ -115,7 +128,9 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             self._call(
                 arguments=["followup", "answer text"],
                 find_seed_followup_context=MagicMock(return_value=context),
-                validate_seed_followup_context=MagicMock(return_value=(False, "referenced Jira issues no longer exist")),
+                validate_seed_followup_context=MagicMock(
+                    return_value=(False, "referenced Jira issues no longer exist")
+                ),
                 clear_seed_followup_context=clear_context,
             )
         self.assertEqual(ctx.exception.status_code, 409)

@@ -18,7 +18,9 @@ from orchestrator.core.deployment_restore_executor import (
         ("mariadb", ("mariadb",)),
     ),
 )
-def test_build_restore_command_emits_expected_provider_command(database_type: str, expected_tokens: tuple[str, ...]) -> None:
+def test_build_restore_command_emits_expected_provider_command(
+    database_type: str, expected_tokens: tuple[str, ...]
+) -> None:
     command = build_restore_command(
         DeploymentRestoreExecutionContext(
             database_type=database_type,
@@ -67,13 +69,20 @@ def test_build_docker_exec_restore_command_wraps_postgres_restore() -> None:
         )
     )
 
-    assert command.startswith("cat /var/lib/coolify/backups/app.dump | docker exec -i coolify-db-container sh -lc ")
+    assert command.startswith(
+        "cat /var/lib/coolify/backups/app.dump | docker exec -i coolify-db-container sh -lc "
+    )
     assert "PGPASSWORD=secret" in command
     assert "pg_restore" in command
-    assert "/var/lib/coolify/backups/app.dump" not in command.split("| docker exec -i ", 1)[1]
+    assert (
+        "/var/lib/coolify/backups/app.dump"
+        not in command.split("| docker exec -i ", 1)[1]
+    )
 
 
-def test_build_docker_exec_restore_command_text_uses_custom_container_reference() -> None:
+def test_build_docker_exec_restore_command_text_uses_custom_container_reference() -> (
+    None
+):
     command = build_docker_exec_restore_command_text(
         context=DeploymentRestoreExecutionContext(
             database_type="mysql",
@@ -88,7 +97,9 @@ def test_build_docker_exec_restore_command_text_uses_custom_container_reference(
         container_reference="'custom-container'",
     )
 
-    assert command.startswith("gunzip -c /var/lib/coolify/backups/app.sql.gz | docker exec -i 'custom-container' sh -lc ")
+    assert command.startswith(
+        "gunzip -c /var/lib/coolify/backups/app.sql.gz | docker exec -i 'custom-container' sh -lc "
+    )
     assert "MYSQL_PWD=secret" in command
     assert "gunzip -c" in command
     assert "mysql" in command

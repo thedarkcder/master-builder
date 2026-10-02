@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = '20260507_0108'
-down_revision = '20260507_0107'
+revision = "20260507_0108"
+down_revision = "20260507_0107"
 branch_labels = None
 depends_on = None
 
@@ -26,7 +26,9 @@ def _index_exists(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -43,16 +45,30 @@ def upgrade() -> None:
             sa.Column("git_ref", sa.String(length=255), nullable=True),
             sa.Column("commit_sha", sa.String(length=64), nullable=True),
             sa.Column("requested_by_user_id", sa.String(length=64), nullable=True),
-            sa.Column("deployment_snapshot", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-            sa.Column("provider_context", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+            sa.Column(
+                "deployment_snapshot",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            ),
+            sa.Column(
+                "provider_context",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            ),
             sa.Column("last_error", sa.Text(), nullable=True),
             sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("release_id"),
         )
 
@@ -60,11 +76,16 @@ def upgrade() -> None:
         ("ix_project_deployment_releases_tenant_id", ["tenant_id"]),
         ("ix_project_deployment_releases_project_id", ["project_id"]),
         ("ix_project_deployment_releases_status", ["status"]),
-        ("ix_project_deployment_releases_tenant_project_created_at", ["tenant_id", "project_id", "created_at"]),
+        (
+            "ix_project_deployment_releases_tenant_project_created_at",
+            ["tenant_id", "project_id", "created_at"],
+        ),
         ("ix_project_deployment_releases_project_status", ["project_id", "status"]),
     ):
         if not _index_exists("project_deployment_releases", index_name):
-            op.create_index(index_name, "project_deployment_releases", columns, unique=False)
+            op.create_index(
+                index_name, "project_deployment_releases", columns, unique=False
+            )
 
 
 def downgrade() -> None:

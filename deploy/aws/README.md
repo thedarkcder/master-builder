@@ -1,5 +1,7 @@
 # AWS Package (Phase 2, HA)
 
+Status: design specification only. This directory has no complete deployment installer or verified HA implementation. See [the support matrix](../../docs/support-matrix.md).
+
 ## Objective
 Deliver an HA AWS deployment with ECS on EC2 ASG and Marketplace-compatible launch flow.
 

@@ -30,7 +30,9 @@ class JiraMcpAdapter:
 
     def discover_capabilities(self) -> JiraCapabilityReport:
         missing_required = REQUIRED_CAPABILITIES - self._declared_capabilities
-        optional_available = OPTIONAL_CAPABILITIES.intersection(self._declared_capabilities)
+        optional_available = OPTIONAL_CAPABILITIES.intersection(
+            self._declared_capabilities
+        )
         return JiraCapabilityReport(
             available=set(self._declared_capabilities),
             missing_required=missing_required,

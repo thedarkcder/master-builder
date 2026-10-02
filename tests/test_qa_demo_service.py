@@ -86,7 +86,9 @@ def _request() -> WorkflowRequest:
     )
 
 
-def test_parse_recorder_failure_evidence_accepts_text_crash_diagnostics(tmp_path: Path) -> None:
+def test_parse_recorder_failure_evidence_accepts_text_crash_diagnostics(
+    tmp_path: Path,
+) -> None:
     output_dir = tmp_path / "videos"
     output_dir.mkdir()
     diagnostic_path = output_dir / "app-load-failure.txt"
@@ -138,7 +140,9 @@ def test_parse_recorder_failure_evidence_accepts_text_crash_diagnostics(tmp_path
     assert "pagecrash: browser page crashed" in evidence[0].error_message
 
 
-def test_native_launch_context_prefers_recording_urls_without_losing_public_release_identity() -> None:
+def test_native_launch_context_prefers_recording_urls_without_losing_public_release_identity() -> (
+    None
+):
     context = qa_demo_launch_context(
         {
             "release_commit_sha": "b" * 40,
@@ -166,7 +170,9 @@ def test_native_launch_context_prefers_recording_urls_without_losing_public_rele
     assert context["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
     assert context["MB_QA_DEMO_RELEASE_BROWSER_URL"] == "https://preview.example"
     assert context["MB_QA_DEMO_RELEASE_API_RECORDING_URL"] == "http://127.0.0.1:8089"
-    assert context["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] == "http://127.0.0.1:8088"
+    assert (
+        context["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] == "http://127.0.0.1:8088"
+    )
     assert context["QA_DEMO_API_BASE_URL"] == "http://127.0.0.1:8089"
     assert context["QA_DEMO_BROWSER_URL"] == "http://127.0.0.1:8088"
 
@@ -193,17 +199,26 @@ def _qa_result() -> QaResult:
             QaScenario(
                 name="Happy path",
                 objective="Show feature works",
-                steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
+                steps=[
+                    QaStep(action="goto", value="/"),
+                    QaStep(action="assert_visible", selector="text=Feature"),
+                ],
             ),
             QaScenario(
                 name="Invalid input is rejected",
                 objective="Show invalid input is rejected",
-                steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
+                steps=[
+                    QaStep(action="goto", value="/"),
+                    QaStep(action="assert_visible", selector="text=Feature"),
+                ],
             ),
             QaScenario(
                 name="Repeat action remains safe",
                 objective="Show repeat action remains safe",
-                steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
+                steps=[
+                    QaStep(action="goto", value="/"),
+                    QaStep(action="assert_visible", selector="text=Feature"),
+                ],
             ),
         ],
     )
@@ -220,7 +235,8 @@ def _demo_requirement(
         title=title,
         acceptance_criterion=acceptance_criterion,
         capture_target=capture_target,  # type: ignore[arg-type]
-        variants=variants or ["Invalid input is rejected", "Repeat action remains safe"],
+        variants=variants
+        or ["Invalid input is rejected", "Repeat action remains safe"],
     )
 
 
@@ -270,20 +286,48 @@ def _sha256(index: int) -> str:
 
 def _release_context_sha256(*, include_api: bool = False) -> str:
     website_service_name = "web" if include_api else ""
-    urls = [{"service_kind": "website", "service_name": website_service_name, "url": "https://preview.example"}]
+    urls = [
+        {
+            "service_kind": "website",
+            "service_name": website_service_name,
+            "url": "https://preview.example",
+        }
+    ]
     if include_api:
-        urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
+        urls.insert(
+            0,
+            {
+                "service_kind": "api",
+                "service_name": "api",
+                "url": "https://api.preview.example",
+            },
+        )
     return release_context_sha256_for_release(
         release=SimpleNamespace(commit_sha=_RELEASE_COMMIT_SHA),
         release_service_urls=urls,
     )
 
 
-def _release_context_sha256_with_commit(*, include_api: bool = False, commit_sha: str = "b" * 40) -> str:
+def _release_context_sha256_with_commit(
+    *, include_api: bool = False, commit_sha: str = "b" * 40
+) -> str:
     website_service_name = "web" if include_api else ""
-    urls = [{"service_kind": "website", "service_name": website_service_name, "url": "https://preview.example"}]
+    urls = [
+        {
+            "service_kind": "website",
+            "service_name": website_service_name,
+            "url": "https://preview.example",
+        }
+    ]
     if include_api:
-        urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
+        urls.insert(
+            0,
+            {
+                "service_kind": "api",
+                "service_name": "api",
+                "url": "https://api.preview.example",
+            },
+        )
     return release_context_sha256_for_release(
         release=SimpleNamespace(commit_sha=commit_sha),
         release_service_urls=urls,
@@ -297,7 +341,9 @@ def _empty_release_context_sha256() -> str:
     )
 
 
-def _qa_failure_evidence(*, capture_target: str = "browser", index: int = 1) -> QaFailureEvidence:
+def _qa_failure_evidence(
+    *, capture_target: str = "browser", index: int = 1
+) -> QaFailureEvidence:
     suffix = "webm" if capture_target == "browser" else "mp4"
     object_key = f"tenant-1/project-1/run-1/{capture_target}-failure-{index}.{suffix}"
     capture_reference = {
@@ -318,7 +364,9 @@ def _qa_failure_evidence(*, capture_target: str = "browser", index: int = 1) -> 
     )
 
 
-def _preview_release(*, service_urls: list[object] | None = None, commit_sha: str = _RELEASE_COMMIT_SHA) -> SimpleNamespace:
+def _preview_release(
+    *, service_urls: list[object] | None = None, commit_sha: str = _RELEASE_COMMIT_SHA
+) -> SimpleNamespace:
     return SimpleNamespace(commit_sha=commit_sha, service_urls=list(service_urls or []))
 
 
@@ -330,14 +378,44 @@ def test_qa_demo_recording_enabled_reads_effective_policy() -> None:
 
 def test_qa_demo_max_attempts_defaults_and_caps() -> None:
     assert qa_demo_max_attempts(SimpleNamespace()) == 3
-    assert qa_demo_max_attempts(SimpleNamespace(qa_demo_max_attempts=0)) == 1
-    assert qa_demo_max_attempts(SimpleNamespace(qa_demo_max_attempts="5")) == 5
+    assert (
+        qa_demo_max_attempts(
+            SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0, qa_demo_max_attempts=0
+            )
+        )
+        == 1
+    )
+    assert (
+        qa_demo_max_attempts(
+            SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0, qa_demo_max_attempts="5"
+            )
+        )
+        == 5
+    )
 
 
 def test_qa_demo_recorder_process_timeout_defaults_and_caps() -> None:
     assert qa_demo_recorder_process_timeout_seconds(SimpleNamespace()) == 900.0
-    assert qa_demo_recorder_process_timeout_seconds(SimpleNamespace(qa_demo_recorder_process_timeout_seconds=0)) == 1.0
-    assert qa_demo_recorder_process_timeout_seconds(SimpleNamespace(qa_demo_recorder_process_timeout_seconds="123.5")) == 123.5
+    assert (
+        qa_demo_recorder_process_timeout_seconds(
+            SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_recorder_process_timeout_seconds=0,
+            )
+        )
+        == 1.0
+    )
+    assert (
+        qa_demo_recorder_process_timeout_seconds(
+            SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_recorder_process_timeout_seconds="123.5",
+            )
+        )
+        == 123.5
+    )
 
 
 def test_storage_config_from_settings_requires_complete_configuration() -> None:
@@ -349,13 +427,17 @@ def test_storage_config_from_settings_requires_complete_configuration() -> None:
         raise AssertionError("expected storage config validation failure")
 
 
-def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypatch) -> None:
+def test_upload_recording_persists_and_verifies_content_sha256_metadata(
+    monkeypatch,
+) -> None:
     calls: dict[str, object] = {}
     expected_digest = _sha256(47)
     expected_release_context_digest = _release_context_sha256()
 
     class FakeMinio:
-        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+        def __init__(
+            self, endpoint: str, *, access_key: str, secret_key: str, secure: bool
+        ) -> None:
             calls["init"] = {
                 "endpoint": endpoint,
                 "access_key": access_key,
@@ -406,7 +488,10 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
         release_context_sha256=expected_release_context_digest,
     )
 
-    assert artifact_url == "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm"
+    assert (
+        artifact_url
+        == "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm"
+    )
     assert calls["fput_object"] == {
         "bucket": "qa-demos",
         "object_key": "tenant-1/project-1/run-1/qa-demo-1.webm",
@@ -426,7 +511,9 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
 
 def test_upload_recording_rejects_storage_metadata_digest_mismatch(monkeypatch) -> None:
     class FakeMinio:
-        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+        def __init__(
+            self, endpoint: str, *, access_key: str, secret_key: str, secure: bool
+        ) -> None:
             pass
 
         def bucket_exists(self, bucket: str) -> bool:
@@ -467,14 +554,20 @@ def test_upload_recording_rejects_storage_metadata_digest_mismatch(monkeypatch) 
     except RuntimeError as exc:
         assert "QA demo artifact metadata sha256 mismatch after upload" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("expected storage metadata digest mismatch to block upload")
+        raise AssertionError(
+            "expected storage metadata digest mismatch to block upload"
+        )
 
 
-def test_upload_recording_rejects_storage_release_commit_metadata_mismatch(monkeypatch) -> None:
+def test_upload_recording_rejects_storage_release_commit_metadata_mismatch(
+    monkeypatch,
+) -> None:
     expected_digest = _sha256(48)
 
     class FakeMinio:
-        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+        def __init__(
+            self, endpoint: str, *, access_key: str, secret_key: str, secure: bool
+        ) -> None:
             pass
 
         def bucket_exists(self, bucket: str) -> bool:
@@ -513,16 +606,25 @@ def test_upload_recording_rejects_storage_release_commit_metadata_mismatch(monke
             release_context_sha256=_release_context_sha256(),
         )
     except RuntimeError as exc:
-        assert "QA demo artifact metadata release commit sha mismatch after upload" in str(exc)
+        assert (
+            "QA demo artifact metadata release commit sha mismatch after upload"
+            in str(exc)
+        )
     else:  # pragma: no cover
-        raise AssertionError("expected storage release commit metadata mismatch to block upload")
+        raise AssertionError(
+            "expected storage release commit metadata mismatch to block upload"
+        )
 
 
-def test_upload_recording_rejects_storage_release_context_metadata_digest_mismatch(monkeypatch) -> None:
+def test_upload_recording_rejects_storage_release_context_metadata_digest_mismatch(
+    monkeypatch,
+) -> None:
     expected_digest = _sha256(48)
 
     class FakeMinio:
-        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+        def __init__(
+            self, endpoint: str, *, access_key: str, secret_key: str, secure: bool
+        ) -> None:
             pass
 
         def bucket_exists(self, bucket: str) -> bool:
@@ -561,18 +663,27 @@ def test_upload_recording_rejects_storage_release_context_metadata_digest_mismat
             release_context_sha256=_release_context_sha256(),
         )
     except RuntimeError as exc:
-        assert "QA demo artifact metadata release context sha256 mismatch after upload" in str(exc)
+        assert (
+            "QA demo artifact metadata release context sha256 mismatch after upload"
+            in str(exc)
+        )
     else:  # pragma: no cover
-        raise AssertionError("expected storage release context metadata digest mismatch to block upload")
+        raise AssertionError(
+            "expected storage release context metadata digest mismatch to block upload"
+        )
 
 
 def test_resolve_preview_demo_url_prefers_active_website() -> None:
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
-            SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
-            SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
-        ]
+            SimpleNamespace(
+                service_kind="api", status="active", url="https://api.example"
+            ),
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            ),
+        ],
     )
     assert resolve_preview_demo_url(release) == "https://preview.example"
 
@@ -581,9 +692,13 @@ def test_resolve_preview_demo_url_rejects_inactive_website() -> None:
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
-            SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
-            SimpleNamespace(service_kind="website", status="pending", url="https://preview.example"),
-        ]
+            SimpleNamespace(
+                service_kind="api", status="active", url="https://api.example"
+            ),
+            SimpleNamespace(
+                service_kind="website", status="pending", url="https://preview.example"
+            ),
+        ],
     )
 
     try:
@@ -600,18 +715,40 @@ def test_required_capture_targets_preserves_pm_order() -> None:
         acceptance_criteria=["Feature works"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Web walkthrough", acceptance_criterion="Feature works", capture_target="browser"),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="iOS flow works", capture_target="ios"),
-            DemoRequirement(title="Android walkthrough", acceptance_criterion="Android flow works", capture_target="android"),
-            DemoRequirement(title="Desktop walkthrough", acceptance_criterion="Desktop flow works", capture_target="desktop"),
-            DemoRequirement(title="Browser retry", acceptance_criterion="Feature works", capture_target="browser"),
+            DemoRequirement(
+                title="Web walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="browser",
+            ),
+            DemoRequirement(
+                title="iOS walkthrough",
+                acceptance_criterion="iOS flow works",
+                capture_target="ios",
+            ),
+            DemoRequirement(
+                title="Android walkthrough",
+                acceptance_criterion="Android flow works",
+                capture_target="android",
+            ),
+            DemoRequirement(
+                title="Desktop walkthrough",
+                acceptance_criterion="Desktop flow works",
+                capture_target="desktop",
+            ),
+            DemoRequirement(
+                title="Browser retry",
+                acceptance_criterion="Feature works",
+                capture_target="browser",
+            ),
         ],
     )
 
     assert required_capture_targets(plan) == ("browser", "ios", "android", "desktop")
 
 
-def test_remaining_capture_targets_requires_recording_per_requirement_and_variant() -> None:
+def test_remaining_capture_targets_requires_recording_per_requirement_and_variant() -> (
+    None
+):
     plan = PmPlan(
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works"],
@@ -623,7 +760,11 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                 capture_target="browser",
                 variants=["Bad input shows validation", "Repeat action remains safe"],
             ),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works on iOS", capture_target="ios"),
+            DemoRequirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works on iOS",
+                capture_target="ios",
+            ),
         ],
     )
 
@@ -697,9 +838,12 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
     )
 
 
-def test_resolve_available_capture_targets_includes_configured_native_recorders() -> None:
+def test_resolve_available_capture_targets_includes_configured_native_recorders() -> (
+    None
+):
     targets = resolve_available_capture_targets(
         settings=SimpleNamespace(
+            qa_demo_artifact_url_timeout_seconds=10.0,
             qa_demo_ios_recorder_command="python /tmp/ios_recorder.py",
             qa_demo_ios_capture_reference="ios-simulator://default",
             qa_demo_android_recorder_command="python /tmp/android_recorder.py",
@@ -719,9 +863,12 @@ def test_resolve_available_capture_targets_includes_configured_native_recorders(
     assert targets["desktop"].required_worker_platform == "macos"
 
 
-def test_resolve_available_capture_targets_allows_configured_android_worker_platform() -> None:
+def test_resolve_available_capture_targets_allows_configured_android_worker_platform() -> (
+    None
+):
     targets = resolve_available_capture_targets(
         settings=SimpleNamespace(
+            qa_demo_artifact_url_timeout_seconds=10.0,
             qa_demo_android_recorder_command="python /tmp/android_recorder.py",
             qa_demo_android_worker_platform="macos",
         ),
@@ -731,10 +878,13 @@ def test_resolve_available_capture_targets_allows_configured_android_worker_plat
     assert targets["android"].required_worker_platform == "macos"
 
 
-def test_resolve_available_capture_targets_rejects_invalid_android_worker_platform() -> None:
+def test_resolve_available_capture_targets_rejects_invalid_android_worker_platform() -> (
+    None
+):
     try:
         resolve_available_capture_targets(
             settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
                 qa_demo_android_recorder_command="python /tmp/android_recorder.py",
                 qa_demo_android_worker_platform="windows",
             ),
@@ -746,10 +896,13 @@ def test_resolve_available_capture_targets_rejects_invalid_android_worker_platfo
         raise AssertionError("expected invalid android worker platform failure")
 
 
-def test_resolve_available_capture_targets_rejects_invalid_desktop_worker_platform() -> None:
+def test_resolve_available_capture_targets_rejects_invalid_desktop_worker_platform() -> (
+    None
+):
     try:
         resolve_available_capture_targets(
             settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
                 qa_demo_desktop_recorder_command="python /tmp/desktop_recorder.py",
                 qa_demo_desktop_worker_platform="windows",
             ),
@@ -761,30 +914,48 @@ def test_resolve_available_capture_targets_rejects_invalid_desktop_worker_platfo
         raise AssertionError("expected invalid desktop worker platform failure")
 
 
-def test_resolve_available_capture_targets_includes_builtin_ios_and_android_recorders_when_unconfigured() -> None:
+def test_resolve_available_capture_targets_includes_builtin_ios_and_android_recorders_when_unconfigured() -> (
+    None
+):
     targets = resolve_available_capture_targets(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
         preview_release=_preview_release(),
     )
 
     assert "ios" in targets
     assert targets["ios"].recorder_command is not None
     assert targets["ios"].recorder_command[0] == sys.executable
-    assert targets["ios"].recorder_command[-1].endswith("scripts/qa_demo_mobile_recorder.py")
+    assert (
+        targets["ios"]
+        .recorder_command[-1]
+        .endswith("scripts/qa_demo_mobile_recorder.py")
+    )
     assert targets["ios"].required_worker_platform == "macos"
     assert "android" in targets
     assert targets["android"].recorder_command is not None
     assert targets["android"].recorder_command[0] == sys.executable
-    assert targets["android"].recorder_command[-1].endswith("scripts/qa_demo_android_recorder.py")
+    assert (
+        targets["android"]
+        .recorder_command[-1]
+        .endswith("scripts/qa_demo_android_recorder.py")
+    )
     assert targets["android"].required_worker_platform == "macos"
 
 
-def test_planned_capture_target_constraints_payload_marks_native_targets_available_from_provider_metadata(monkeypatch) -> None:
+def test_planned_capture_target_constraints_payload_marks_native_targets_available_from_provider_metadata(
+    monkeypatch,
+) -> None:
     def _unexpected_runtime_probe(*_args, **_kwargs):  # noqa: ANN001
-        raise AssertionError("PM capture constraints must not probe current host native runtime")
+        raise AssertionError(
+            "PM capture constraints must not probe current host native runtime"
+        )
 
-    monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", _unexpected_runtime_probe)
-    payload = planned_capture_target_constraints_payload(settings=SimpleNamespace())
+    monkeypatch.setattr(
+        "orchestrator.core.qa.demo_service.subprocess.run", _unexpected_runtime_probe
+    )
+    payload = planned_capture_target_constraints_payload(
+        settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0)
+    )
     by_target = {item["capture_target"]: item for item in payload}
 
     assert by_target["browser"]["provider_available"] is True
@@ -793,12 +964,17 @@ def test_planned_capture_target_constraints_payload_marks_native_targets_availab
     assert by_target["android"]["provider_available"] is True
     assert by_target["android"]["required_worker_platform"] == "macos"
     assert by_target["desktop"]["provider_available"] is False
-    assert "no desktop recorder command is configured" in str(by_target["desktop"]["availability_reason"])
+    assert "no desktop recorder command is configured" in str(
+        by_target["desktop"]["availability_reason"]
+    )
 
 
-def test_planned_capture_target_constraints_payload_uses_configured_android_worker_platform() -> None:
+def test_planned_capture_target_constraints_payload_uses_configured_android_worker_platform() -> (
+    None
+):
     payload = planned_capture_target_constraints_payload(
         settings=SimpleNamespace(
+            qa_demo_artifact_url_timeout_seconds=10.0,
             qa_demo_android_recorder_command="python /tmp/android_recorder.py",
             qa_demo_android_worker_platform="macos",
         )
@@ -810,7 +986,9 @@ def test_planned_capture_target_constraints_payload_uses_configured_android_work
     assert "macOS Android worker" in str(by_target["android"]["availability_reason"])
 
 
-def test_next_required_qa_demo_worker_capability_uses_configured_android_worker_platform() -> None:
+def test_next_required_qa_demo_worker_capability_uses_configured_android_worker_platform() -> (
+    None
+):
     plan = PmPlan(
         plan_steps=["Implement"],
         acceptance_criteria=["Android flow works"],
@@ -824,17 +1002,23 @@ def test_next_required_qa_demo_worker_capability_uses_configured_android_worker_
         ],
     )
 
-    assert next_required_qa_demo_worker_capability(
-        settings=SimpleNamespace(
-            qa_demo_android_recorder_command="python /tmp/android_recorder.py",
-            qa_demo_android_worker_platform="macos",
-        ),
-        plan=plan,
-        recordings=[],
-    ) == WorkerCapability.MACOS
+    assert (
+        next_required_qa_demo_worker_capability(
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_android_recorder_command="python /tmp/android_recorder.py",
+                qa_demo_android_worker_platform="macos",
+            ),
+            plan=plan,
+            recordings=[],
+        )
+        == WorkerCapability.MACOS
+    )
 
 
-def test_next_required_qa_demo_worker_capability_defaults_builtin_android_to_macos() -> None:
+def test_next_required_qa_demo_worker_capability_defaults_builtin_android_to_macos() -> (
+    None
+):
     plan = PmPlan(
         plan_steps=["Implement"],
         acceptance_criteria=["Android flow works"],
@@ -848,11 +1032,14 @@ def test_next_required_qa_demo_worker_capability_defaults_builtin_android_to_mac
         ],
     )
 
-    assert next_required_qa_demo_worker_capability(
-        settings=SimpleNamespace(),
-        plan=plan,
-        recordings=[],
-    ) == WorkerCapability.MACOS
+    assert (
+        next_required_qa_demo_worker_capability(
+            settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
+            plan=plan,
+            recordings=[],
+        )
+        == WorkerCapability.MACOS
+    )
 
 
 def test_ios_builtin_capture_runtime_requires_available_simulator(monkeypatch) -> None:
@@ -877,13 +1064,19 @@ def test_ios_builtin_capture_runtime_requires_available_simulator(monkeypatch) -
         raise AssertionError("expected iOS capture runtime readiness failure")
 
 
-def test_ensure_release_ready_for_qa_requires_active_urls_for_required_services() -> None:
+def test_ensure_release_ready_for_qa_requires_active_urls_for_required_services() -> (
+    None
+):
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
-            SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
-            SimpleNamespace(service_kind="api", status="pending", url="https://api.example"),
-        ]
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            ),
+            SimpleNamespace(
+                service_kind="api", status="pending", url="https://api.example"
+            ),
+        ],
     )
 
     try:
@@ -899,9 +1092,13 @@ def test_ensure_release_ready_for_qa_rejects_unreachable_active_service_url() ->
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
-            SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
-            SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
-        ]
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            ),
+            SimpleNamespace(
+                service_kind="api", status="active", url="https://api.example"
+            ),
+        ],
     )
 
     def _probe(url: str, *, timeout_seconds: float) -> int:
@@ -924,7 +1121,9 @@ def test_ensure_release_ready_for_qa_rejects_unreachable_active_service_url() ->
         raise AssertionError("expected live release readiness failure")
 
 
-def test_ensure_release_ready_for_qa_uses_internal_route_with_public_host_header() -> None:
+def test_ensure_release_ready_for_qa_uses_internal_route_with_public_host_header() -> (
+    None
+):
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
@@ -939,7 +1138,9 @@ def test_ensure_release_ready_for_qa_uses_internal_route_with_public_host_header
     )
     calls: list[tuple[str, dict[str, str] | None]] = []
 
-    def _probe(url: str, *, timeout_seconds: float, headers: dict[str, str] | None = None) -> int:
+    def _probe(
+        url: str, *, timeout_seconds: float, headers: dict[str, str] | None = None
+    ) -> int:
         assert timeout_seconds == 7.0
         calls.append((url, headers))
         return 200
@@ -957,7 +1158,11 @@ def test_ensure_release_ready_for_qa_uses_internal_route_with_public_host_header
 def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> None:
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
 
     try:
@@ -976,7 +1181,11 @@ def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> 
 def test_ensure_release_ready_for_qa_rejects_not_found_service_response() -> None:
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="api", status="active", url="https://api.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="api", status="active", url="https://api.example"
+            )
+        ],
     )
 
     try:
@@ -993,10 +1202,16 @@ def test_ensure_release_ready_for_qa_rejects_not_found_service_response() -> Non
         raise AssertionError("expected not-found readiness failure")
 
 
-def test_ensure_release_ready_for_qa_allows_protected_running_service_response() -> None:
+def test_ensure_release_ready_for_qa_allows_protected_running_service_response() -> (
+    None
+):
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="api", status="active", url="https://api.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="api", status="active", url="https://api.example"
+            )
+        ],
     )
 
     ensure_release_ready_for_qa(
@@ -1024,13 +1239,22 @@ def test_required_release_service_kinds_prefers_release_deployment_snapshot() ->
                 {"kind": "website", "public": False},
             ]
         },
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
 
-    assert required_release_service_kinds(project=project, preview_release=release) == ("website", "api")
+    assert required_release_service_kinds(project=project, preview_release=release) == (
+        "website",
+        "api",
+    )
 
 
-def test_required_release_service_kinds_uses_project_deployment_services_before_present_release_urls() -> None:
+def test_required_release_service_kinds_uses_project_deployment_services_before_present_release_urls() -> (
+    None
+):
     project = SimpleNamespace(
         deployment_config={
             "services": [
@@ -1041,10 +1265,17 @@ def test_required_release_service_kinds_uses_project_deployment_services_before_
     )
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
 
-    assert required_release_service_kinds(project=project, preview_release=release) == ("website", "api")
+    assert required_release_service_kinds(project=project, preview_release=release) == (
+        "website",
+        "api",
+    )
 
 
 def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) -> None:
@@ -1054,7 +1285,10 @@ def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) 
         recorder_command=(sys.executable, "scripts/qa_demo_android_recorder.py"),
         required_worker_platform="linux",
     )
-    monkeypatch.setattr("orchestrator.core.qa.demo_service.shutil.which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(
+        "orchestrator.core.qa.demo_service.shutil.which",
+        lambda command: f"/usr/bin/{command}",
+    )
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
         class _Result:
@@ -1076,7 +1310,9 @@ def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) 
         raise AssertionError("expected Android capture runtime readiness failure")
 
 
-def test_android_builtin_capture_runtime_requires_recorder_toolchain_before_adb_probe(monkeypatch) -> None:
+def test_android_builtin_capture_runtime_requires_recorder_toolchain_before_adb_probe(
+    monkeypatch,
+) -> None:
     target = DemoCaptureTarget(
         capture_target="android",
         capture_reference="android-emulator://configured",
@@ -1089,12 +1325,19 @@ def test_android_builtin_capture_runtime_requires_recorder_toolchain_before_adb_
             return None
         return f"/usr/bin/{command}"
 
-    adb_probe = MagicMock(side_effect=AssertionError("adb devices should not run when recorder tools are missing"))
+    adb_probe = MagicMock(
+        side_effect=AssertionError(
+            "adb devices should not run when recorder tools are missing"
+        )
+    )
     monkeypatch.setattr("orchestrator.core.qa.demo_service.shutil.which", _which)
     monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", adb_probe)
     monkeypatch.delenv("ANDROID_HOME", raising=False)
     monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
-    monkeypatch.setattr("orchestrator.core.qa.demo_service.Path.home", lambda: Path("/tmp/no-android-sdk"))
+    monkeypatch.setattr(
+        "orchestrator.core.qa.demo_service.Path.home",
+        lambda: Path("/tmp/no-android-sdk"),
+    )
 
     try:
         ensure_capture_target_runtime_ready(target)
@@ -1107,7 +1350,9 @@ def test_android_builtin_capture_runtime_requires_recorder_toolchain_before_adb_
 
 
 def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
-    body = "## Summary\n- change\n\n## Demo Evidence\n- old\n\n## How To Test\n- pytest -q"
+    body = (
+        "## Summary\n- change\n\n## Demo Evidence\n- old\n\n## How To Test\n- pytest -q"
+    )
     updated = upsert_demo_evidence_section(
         body=body,
         recordings=[
@@ -1124,7 +1369,8 @@ def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
     assert DEMO_EVIDENCE_HEADING in updated
     assert DEMO_EVIDENCE_MARKER in updated
     assert (
-        "[target=browser; reference=https://preview.example; object_key=qa/happy.webm; sha256=" in updated
+        "[target=browser; reference=https://preview.example; object_key=qa/happy.webm; sha256="
+        in updated
     )
     assert "release_context_sha256=" in updated
     assert "old" not in updated
@@ -1204,10 +1450,14 @@ def test_upsert_demo_evidence_section_rejects_multiline_recording_metadata() -> 
     except RuntimeError as exc:
         assert "QA demo evidence recording metadata is not serializable" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("expected multiline recording metadata to block PR evidence rendering")
+        raise AssertionError(
+            "expected multiline recording metadata to block PR evidence rendering"
+        )
 
 
-def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording_metadata() -> None:
+def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording_metadata() -> (
+    None
+):
     try:
         upsert_demo_evidence_section(
             body="## Summary\n- change",
@@ -1228,10 +1478,14 @@ def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording
     except RuntimeError as exc:
         assert "QA demo evidence recording metadata is not serializable" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("expected structured metadata delimiters to block PR evidence rendering")
+        raise AssertionError(
+            "expected structured metadata delimiters to block PR evidence rendering"
+        )
 
 
-def test_upsert_demo_evidence_section_rejects_unsupported_recording_capture_target() -> None:
+def test_upsert_demo_evidence_section_rejects_unsupported_recording_capture_target() -> (
+    None
+):
     try:
         upsert_demo_evidence_section(
             body="## Summary\n- change",
@@ -1252,14 +1506,18 @@ def test_upsert_demo_evidence_section_rejects_unsupported_recording_capture_targ
     except ValueError as exc:
         assert "Unsupported QA demo capture target" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("expected unsupported capture target to block PR evidence rendering")
+        raise AssertionError(
+            "expected unsupported capture target to block PR evidence rendering"
+        )
 
 
 def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     commands: list[tuple[list[str], dict[str, str], float | None]] = []
 
     def _run(cmd, **kwargs):  # noqa: ANN001
-        commands.append((list(cmd), dict(kwargs.get("env") or {}), kwargs.get("timeout")))
+        commands.append(
+            (list(cmd), dict(kwargs.get("env") or {}), kwargs.get("timeout"))
+        )
         if cmd[0] != "node":
             raise AssertionError(f"unexpected command: {cmd}")
         output_path = Path(cmd[3])
@@ -1269,7 +1527,9 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
         source_path = video_dir / "happy-path.webm"
         source_path.write_bytes(_fake_webm_payload())
         output_path.write_text(
-            json.dumps({"recordings": [{"name": "Happy path", "path": str(source_path)}]}),
+            json.dumps(
+                {"recordings": [{"name": "Happy path", "path": str(source_path)}]}
+            ),
             encoding="utf-8",
         )
         return SimpleNamespace(stdout="")
@@ -1277,10 +1537,13 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         recordings = record_demo_scenarios(
             settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
                 qa_demo_playwright_module_dir="/tmp/playwright-modules",
                 qa_demo_recorder_process_timeout_seconds=42,
             ),
-            request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+            request=replace(
+                _request(), current_worker_capability=WorkerCapability.MACOS
+            ),
             available_capture_targets=_browser_capture_targets(),
             qa_result=QaResult(
                 summary=["Recorded demos"],
@@ -1309,14 +1572,19 @@ def test_record_demo_scenarios_scopes_copied_recordings_to_run_identity() -> Non
         source_path = video_dir / "happy-path.webm"
         source_path.write_bytes(_fake_webm_payload())
         output_path.write_text(
-            json.dumps({"recordings": [{"name": "Happy path", "path": str(source_path)}]}),
+            json.dumps(
+                {"recordings": [{"name": "Happy path", "path": str(source_path)}]}
+            ),
             encoding="utf-8",
         )
         return SimpleNamespace(stdout="")
 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         first_recordings = record_demo_scenarios(
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="/tmp/playwright-modules",
+            ),
             request=replace(_request(), run_id="run-1"),
             available_capture_targets=_browser_capture_targets(),
             qa_result=QaResult(
@@ -1331,7 +1599,10 @@ def test_record_demo_scenarios_scopes_copied_recordings_to_run_identity() -> Non
             ),
         )
         second_recordings = record_demo_scenarios(
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="/tmp/playwright-modules",
+            ),
             request=replace(_request(), run_id="run-2"),
             available_capture_targets=_browser_capture_targets(),
             qa_result=QaResult(
@@ -1355,11 +1626,16 @@ def test_record_demo_scenarios_scopes_copied_recordings_to_run_identity() -> Non
     assert second_path.exists()
 
 
-def test_record_demo_scenarios_rejects_browser_start_path_outside_preview_origin() -> None:
+def test_record_demo_scenarios_rejects_browser_start_path_outside_preview_origin() -> (
+    None
+):
     with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1369,15 +1645,22 @@ def test_record_demo_scenarios_rejects_browser_start_path_outside_preview_origin
                             name="External start",
                             objective="Prove feature on another site",
                             start_path="https://evil.example/fake-feature",
-                            steps=[QaStep(action="assert_visible", selector="text=Feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="text=Feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo browser scenario must stay on preview release origin" in str(exc)
+            assert (
+                "QA demo browser scenario must stay on preview release origin"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected off-origin browser start path to block before recording")
+            raise AssertionError(
+                "expected off-origin browser start path to block before recording"
+            )
 
     run_mock.assert_not_called()
 
@@ -1386,7 +1669,10 @@ def test_record_demo_scenarios_rejects_browser_goto_outside_preview_origin() -> 
     with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1396,17 +1682,26 @@ def test_record_demo_scenarios_rejects_browser_goto_outside_preview_origin() -> 
                             name="External redirect",
                             objective="Navigate away from release",
                             steps=[
-                                QaStep(action="goto", value="//evil.example/fake-feature"),
-                                QaStep(action="assert_visible", selector="text=Feature"),
+                                QaStep(
+                                    action="goto", value="//evil.example/fake-feature"
+                                ),
+                                QaStep(
+                                    action="assert_visible", selector="text=Feature"
+                                ),
                             ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo browser scenario must stay on preview release origin" in str(exc)
+            assert (
+                "QA demo browser scenario must stay on preview release origin"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected off-origin browser navigation to block before recording")
+            raise AssertionError(
+                "expected off-origin browser navigation to block before recording"
+            )
 
     run_mock.assert_not_called()
 
@@ -1414,11 +1709,14 @@ def test_record_demo_scenarios_rejects_browser_goto_outside_preview_origin() -> 
 def test_record_demo_scenarios_fails_when_recorder_process_times_out() -> None:
     with patch(
         "orchestrator.core.qa.demo_service.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(["node", "/tmp/qa_demo_recorder.mjs"], timeout=2),
+        side_effect=subprocess.TimeoutExpired(
+            ["node", "/tmp/qa_demo_recorder.mjs"], timeout=2
+        ),
     ):
         try:
             record_demo_scenarios(
                 settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
                     qa_demo_playwright_module_dir="/tmp/playwright-modules",
                     qa_demo_recorder_process_timeout_seconds=2,
                 ),
@@ -1430,7 +1728,9 @@ def test_record_demo_scenarios_fails_when_recorder_process_times_out() -> None:
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
@@ -1448,7 +1748,10 @@ def test_record_demo_scenarios_fails_when_playwright_module_lookup_times_out() -
     ):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_recorder_process_timeout_seconds=3),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_recorder_process_timeout_seconds=3,
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1457,15 +1760,22 @@ def test_record_demo_scenarios_fails_when_playwright_module_lookup_times_out() -
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo Playwright module lookup timed out after 3.0 seconds" in str(exc)
+            assert (
+                "QA demo Playwright module lookup timed out after 3.0 seconds"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected Playwright module lookup timeout to fail QA demo recording")
+            raise AssertionError(
+                "expected Playwright module lookup timeout to fail QA demo recording"
+            )
 
 
 def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
@@ -1482,14 +1792,16 @@ def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
         source_path = video_dir / "desktop-flow.mp4"
         source_path.write_bytes(_fake_mp4_payload())
         output_path.write_text(
-            json.dumps({"recordings": [{"name": "Desktop flow", "path": str(source_path)}]}),
+            json.dumps(
+                {"recordings": [{"name": "Desktop flow", "path": str(source_path)}]}
+            ),
             encoding="utf-8",
         )
         return SimpleNamespace(stdout="")
 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         recordings = record_demo_scenarios(
-            settings=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
             request=_request(),
             available_capture_targets={
                 "desktop": DemoCaptureTarget(
@@ -1518,7 +1830,9 @@ def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
     assert commands[0][2]["capture_reference"] == "desktop://macos-app"
 
 
-def test_record_demo_scenarios_passes_project_source_paths_and_release_context_to_native_recorder() -> None:
+def test_record_demo_scenarios_passes_project_source_paths_and_release_context_to_native_recorder() -> (
+    None
+):
     commands: list[tuple[dict[str, object], dict[str, str]]] = []
 
     def _run(cmd, **kwargs):  # noqa: ANN001
@@ -1531,16 +1845,20 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
         source_path = video_dir / "android-flow.mp4"
         source_path.write_bytes(_fake_mp4_payload())
         output_path.write_text(
-            json.dumps({"recordings": [{"name": "Android flow", "path": str(source_path)}]}),
+            json.dumps(
+                {"recordings": [{"name": "Android flow", "path": str(source_path)}]}
+            ),
             encoding="utf-8",
         )
         return SimpleNamespace(stdout="")
 
-    request = replace(_request(), project_demo_capture_target_sources={"android": ("apps/android",)})
+    request = replace(
+        _request(), project_demo_capture_target_sources={"android": ("apps/android",)}
+    )
 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         recordings = record_demo_scenarios(
-            settings=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
             request=replace(request, current_worker_capability=WorkerCapability.MACOS),
             available_capture_targets={
                 "android": DemoCaptureTarget(
@@ -1609,7 +1927,10 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
     assert env["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] == "http://127.0.0.1:8088"
     assert env["QA_DEMO_API_BASE_URL"] == "http://127.0.0.1:8089"
     assert env["QA_DEMO_BROWSER_URL"] == "http://127.0.0.1:8088"
-    assert json.loads(env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"])[0]["url"] == "https://api.preview.example"
+    assert (
+        json.loads(env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"])[0]["url"]
+        == "https://api.preview.example"
+    )
 
 
 def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
@@ -1629,7 +1950,10 @@ def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1638,7 +1962,9 @@ def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
                         QaScenario(
                             name="Invalid",
                             objective="Reject invalid recording bytes",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
@@ -1662,7 +1988,10 @@ def test_record_demo_scenarios_rejects_duplicate_local_recording_paths() -> None
                 {
                     "recordings": [
                         {"name": "Happy path", "path": str(source_path)},
-                        {"name": "Bad input shows validation", "path": str(source_path)},
+                        {
+                            "name": "Bad input shows validation",
+                            "path": str(source_path),
+                        },
                     ]
                 }
             ),
@@ -1673,7 +2002,10 @@ def test_record_demo_scenarios_rejects_duplicate_local_recording_paths() -> None
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1682,23 +2014,31 @@ def test_record_demo_scenarios_rejects_duplicate_local_recording_paths() -> None
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         ),
                         QaScenario(
                             name="Bad input shows validation",
                             objective="Show validation works",
-                            steps=[QaStep(action="assert_visible", selector="#validation")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#validation")
+                            ],
                         ),
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo recorder returned duplicate local recording path" in str(exc)
+            assert "QA demo recorder returned duplicate local recording path" in str(
+                exc
+            )
         else:  # pragma: no cover
             raise AssertionError("expected duplicate local recording path to block")
 
 
-def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload() -> None:
+def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload() -> (
+    None
+):
     def _run(cmd, **_kwargs):  # noqa: ANN001
         output_path = Path(cmd[3])
         input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
@@ -1714,7 +2054,10 @@ def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload
                 {
                     "recordings": [
                         {"name": "Happy path", "path": str(first_path)},
-                        {"name": "Bad input shows validation", "path": str(second_path)},
+                        {
+                            "name": "Bad input shows validation",
+                            "path": str(second_path),
+                        },
                     ]
                 }
             ),
@@ -1725,7 +2068,10 @@ def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1734,12 +2080,16 @@ def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         ),
                         QaScenario(
                             name="Bad input shows validation",
                             objective="Show validation works",
-                            steps=[QaStep(action="assert_visible", selector="#validation")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#validation")
+                            ],
                         ),
                     ],
                 ),
@@ -1750,7 +2100,9 @@ def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload
             raise AssertionError("expected duplicate recording content to block")
 
 
-def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_dir() -> None:
+def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_dir() -> (
+    None
+):
     def _run(cmd, **_kwargs):  # noqa: ANN001
         output_path = Path(cmd[3])
         input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
@@ -1759,7 +2111,9 @@ def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_di
         external_path = video_dir.parent / "preexisting-proof.webm"
         external_path.write_bytes(_fake_webm_payload())
         output_path.write_text(
-            json.dumps({"recordings": [{"name": "Happy path", "path": str(external_path)}]}),
+            json.dumps(
+                {"recordings": [{"name": "Happy path", "path": str(external_path)}]}
+            ),
             encoding="utf-8",
         )
         return SimpleNamespace(stdout="")
@@ -1767,7 +2121,10 @@ def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_di
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1776,15 +2133,22 @@ def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_di
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo recorder returned recording path outside recorder output directory" in str(exc)
+            assert (
+                "QA demo recorder returned recording path outside recorder output directory"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected recording path outside recorder output directory to block")
+            raise AssertionError(
+                "expected recording path outside recorder output directory to block"
+            )
 
 
 def test_record_demo_scenarios_rejects_recorder_capture_target_mismatch() -> None:
@@ -1814,7 +2178,10 @@ def test_record_demo_scenarios_rejects_recorder_capture_target_mismatch() -> Non
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1823,13 +2190,18 @@ def test_record_demo_scenarios_rejects_recorder_capture_target_mismatch() -> Non
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo recorder returned capture target outside planned target" in str(exc)
+            assert (
+                "QA demo recorder returned capture target outside planned target"
+                in str(exc)
+            )
         else:  # pragma: no cover
             raise AssertionError("expected recorder capture target mismatch to block")
 
@@ -1861,7 +2233,10 @@ def test_record_demo_scenarios_rejects_recorder_capture_reference_mismatch() -> 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1870,15 +2245,22 @@ def test_record_demo_scenarios_rejects_recorder_capture_reference_mismatch() -> 
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo recorder returned capture reference outside planned target" in str(exc)
+            assert (
+                "QA demo recorder returned capture reference outside planned target"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected recorder capture reference mismatch to block")
+            raise AssertionError(
+                "expected recorder capture reference mismatch to block"
+            )
 
 
 def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() -> None:
@@ -1890,7 +2272,9 @@ def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() 
         source_path = video_dir / "happy-path.webm"
         source_path.write_bytes(_fake_webm_payload())
         output_path.write_text(
-            json.dumps({"recordings": [{"name": "Happy path", "path": str(source_path)}]}),
+            json.dumps(
+                {"recordings": [{"name": "Happy path", "path": str(source_path)}]}
+            ),
             encoding="utf-8",
         )
         return SimpleNamespace(stdout="")
@@ -1898,7 +2282,10 @@ def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1907,18 +2294,25 @@ def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() 
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         ),
                         QaScenario(
                             name="Bad input shows validation",
                             objective="Show validation works",
-                            steps=[QaStep(action="assert_visible", selector="#validation")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#validation")
+                            ],
                         ),
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "did not produce recording(s) for browser scenario(s): Bad input shows validation" in str(exc)
+            assert (
+                "did not produce recording(s) for browser scenario(s): Bad input shows validation"
+                in str(exc)
+            )
         else:  # pragma: no cover
             raise AssertionError("expected missing scenario recording to block")
 
@@ -1949,7 +2343,10 @@ def test_record_demo_scenarios_rejects_unplanned_recording_before_upload() -> No
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -1958,13 +2355,18 @@ def test_record_demo_scenarios_rejects_unplanned_recording_before_upload() -> No
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo recorder produced unplanned recording(s) for browser scenario(s)" in str(exc)
+            assert (
+                "QA demo recorder produced unplanned recording(s) for browser scenario(s)"
+                in str(exc)
+            )
             assert "Unplanned walkthrough" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected unplanned recorder output to block")
@@ -1996,7 +2398,10 @@ def test_record_demo_scenarios_rejects_duplicate_recording_name_before_upload() 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -2005,23 +2410,33 @@ def test_record_demo_scenarios_rejects_duplicate_recording_name_before_upload() 
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         )
                     ],
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo recorder produced duplicate recording(s) for browser scenario(s)" in str(exc)
+            assert (
+                "QA demo recorder produced duplicate recording(s) for browser scenario(s)"
+                in str(exc)
+            )
             assert "Happy path" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected duplicate recorder output to block")
 
 
-def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording() -> None:
+def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording() -> (
+    None
+):
     with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -2030,7 +2445,9 @@ def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
-                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                            steps=[
+                                QaStep(action="assert_visible", selector="#feature")
+                            ],
                         ),
                         QaScenario(
                             name="Happy path",
@@ -2041,7 +2458,10 @@ def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording
                 ),
             )
         except RuntimeError as exc:
-            assert "QA demo scenarios for browser must have unique names: Happy path" in str(exc)
+            assert (
+                "QA demo scenarios for browser must have unique names: Happy path"
+                in str(exc)
+            )
         else:  # pragma: no cover
             raise AssertionError("expected duplicate scenario names to block")
 
@@ -2052,7 +2472,10 @@ def test_record_demo_scenarios_rejects_scenario_without_executable_steps() -> No
     with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -2078,7 +2501,10 @@ def test_record_demo_scenarios_rejects_scenario_without_proof_step() -> None:
     with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                ),
                 request=_request(),
                 available_capture_targets=_browser_capture_targets(),
                 qa_result=QaResult(
@@ -2105,14 +2531,26 @@ def test_record_demo_scenarios_rejects_scenario_without_proof_step() -> None:
 
 def test_execute_qa_demo_stage_records_and_uploads() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
-            SimpleNamespace(service_kind="api", service_name="api", status="active", url="https://api.preview.example"),
-            SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example"),
-        ]
+            SimpleNamespace(
+                service_kind="api",
+                service_name="api",
+                status="active",
+                url="https://api.preview.example",
+            ),
+            SimpleNamespace(
+                service_kind="website",
+                service_name="web",
+                status="active",
+                url="https://preview.example",
+            ),
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2120,21 +2558,32 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
         risks=[],
         demo_requirements=[_demo_requirement()],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
 
     fake_agents = SimpleNamespace(qa=MagicMock(return_value=_qa_result()))
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
-                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
-                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+                _local_recording(
+                    name="Invalid input is rejected", path="/tmp/invalid.webm"
+                ),
+                _local_recording(
+                    name="Repeat action remains safe", path="/tmp/repeat.webm"
+                ),
             ],
         ) as record_mock,
         patch(
@@ -2152,12 +2601,23 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
         ) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200, create=True),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+            create=True,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_android_worker_platform="linux",
+            ),
             tenant=tenant,
             project=project,
             run=run,
@@ -2172,9 +2632,15 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
     assert result.recordings[0].capture_target == "browser"
     assert result.recordings[0].capture_reference == "https://preview.example"
-    assert result.recordings[0].release_context_sha256 == _release_context_sha256_with_commit(include_api=True)
-    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
-    browser_target = next(item for item in available_targets if item["capture_target"] == "browser")
+    assert result.recordings[
+        0
+    ].release_context_sha256 == _release_context_sha256_with_commit(include_api=True)
+    available_targets = json.loads(
+        fake_agents.qa.call_args.kwargs["available_capture_targets_json"]
+    )
+    browser_target = next(
+        item for item in available_targets if item["capture_target"] == "browser"
+    )
     assert browser_target["capture_reference"] == "https://preview.example"
     assert browser_target["source_paths"] == []
     assert browser_target["release_commit_sha"] == "b" * 40
@@ -2194,17 +2660,26 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     ]
     assert record_mock.call_args.kwargs["release_commit_sha"] == "b" * 40
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
-    assert upload_mock.call_args.kwargs["release_context_sha256"] == _release_context_sha256_with_commit(include_api=True)
+    assert upload_mock.call_args.kwargs[
+        "release_context_sha256"
+    ] == _release_context_sha256_with_commit(include_api=True)
 
 
 def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="")
     release = SimpleNamespace(
         commit_sha="b" * 40,
         service_urls=[
-            SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example")
+            SimpleNamespace(
+                service_kind="website",
+                service_name="web",
+                status="active",
+                url="https://preview.example",
+            )
         ],
     )
     plan = PmPlan(
@@ -2213,9 +2688,13 @@ def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() 
         risks=[],
         demo_requirements=[_demo_requirement()],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     request = replace(
         _request(),
         run_id="",
@@ -2228,13 +2707,20 @@ def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() 
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
-                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
-                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+                _local_recording(
+                    name="Invalid input is rejected", path="/tmp/invalid.webm"
+                ),
+                _local_recording(
+                    name="Repeat action remains safe", path="/tmp/repeat.webm"
+                ),
             ],
         ),
         patch(
@@ -2248,13 +2734,24 @@ def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() 
                 secure=False,
             ),
         ),
-        patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload
+        ) as upload_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+            ),
             tenant=tenant,
             project=project,
             run=run,
@@ -2267,7 +2764,10 @@ def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() 
         )
 
     assert result.outcome == "continue"
-    assert result.recordings[0].object_key == "tenant-1/project-1/proofs/pr-8-abcdef1/qa-demo-1.webm"
+    assert (
+        result.recordings[0].object_key
+        == "tenant-1/project-1/proofs/pr-8-abcdef1/qa-demo-1.webm"
+    )
     assert upload_mock.call_args_list[0].kwargs["object_key"] == (
         "tenant-1/project-1/proofs/pr-8-abcdef1/qa-demo-1.webm"
     )
@@ -2275,11 +2775,17 @@ def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() 
 
 def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="../run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2291,13 +2797,20 @@ def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> 
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
-                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
-                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+                _local_recording(
+                    name="Invalid input is rejected", path="/tmp/invalid.webm"
+                ),
+                _local_recording(
+                    name="Repeat action remains safe", path="/tmp/repeat.webm"
+                ),
             ],
         ),
         patch(
@@ -2315,21 +2828,36 @@ def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> 
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/../run-1/qa-demo-1.webm",
         ) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                    qa_demo_max_attempts=1,
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
                 request=replace(_request(), run_id="../run-1"),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
@@ -2340,9 +2868,13 @@ def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> 
     upload_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_targets() -> None:
+def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_targets() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2356,7 +2888,9 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
             )
         ],
     )
-    request = replace(_request(), project_demo_capture_target_sources={"android": ("apps/android",)})
+    request = replace(
+        _request(), project_demo_capture_target_sources={"android": ("apps/android",)}
+    )
     fake_agents = SimpleNamespace(
         qa=MagicMock(
             return_value=QaResult(
@@ -2387,7 +2921,10 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -2430,23 +2967,36 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=replace(request, current_worker_capability=WorkerCapability.MACOS),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["./gradlew test"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=_preview_release(),
         )
 
-    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    available_targets = json.loads(
+        fake_agents.qa.call_args.kwargs["available_capture_targets_json"]
+    )
     assert available_targets == [
         {
             "capture_target": "android",
@@ -2462,38 +3012,61 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
 
 def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works", capture_target="browser")
+            DemoRequirement(
+                title="Feature walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="browser",
+            )
         ],
     )
     fake_agents = SimpleNamespace(qa=MagicMock())
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
-                request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+                request=replace(
+                    _request(), current_worker_capability=WorkerCapability.MACOS
+                ),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
@@ -2504,13 +3077,21 @@ def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> No
     fake_agents.qa.assert_not_called()
 
 
-def test_execute_qa_demo_stage_requires_several_pm_demo_variants_before_qa_agent() -> None:
+def test_execute_qa_demo_stage_requires_several_pm_demo_variants_before_qa_agent() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2529,20 +3110,31 @@ def test_execute_qa_demo_stage_requires_several_pm_demo_variants_before_qa_agent
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
@@ -2553,13 +3145,21 @@ def test_execute_qa_demo_stage_requires_several_pm_demo_variants_before_qa_agent
     fake_agents.qa.assert_not_called()
 
 
-def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets() -> None:
+def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2574,41 +3174,65 @@ def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets
             )
         ],
     )
-    request = replace(_request(), project_demo_capture_targets=("browser", "ios", "android"))
+    request = replace(
+        _request(), project_demo_capture_targets=("browser", "ios", "android")
+    )
     fake_agents = SimpleNamespace(qa=MagicMock())
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
                 request=request,
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "missing required project demo capture target(s): android, ios" in str(exc)
+            assert (
+                "missing required project demo capture target(s): android, ios"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected QA demo project capture target contract failure")
+            raise AssertionError(
+                "expected QA demo project capture target contract failure"
+            )
 
     fake_agents.qa.assert_not_called()
 
 
 def test_execute_qa_demo_stage_requires_release_commit_before_recording() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ]
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2619,39 +3243,63 @@ def test_execute_qa_demo_stage_requires_release_commit_before_recording() -> Non
     fake_agents = SimpleNamespace(qa=MagicMock())
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
             assert "QA demo recording requires a preview release commit SHA" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected missing release commit to block QA demo recording")
+            raise AssertionError(
+                "expected missing release commit to block QA demo recording"
+            )
 
     fake_agents.qa.assert_not_called()
 
 
-def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants() -> None:
+def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2666,21 +3314,34 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants
             )
         ],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     fake_agents = SimpleNamespace(qa=MagicMock(return_value=_qa_result()))
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch("orchestrator.core.qa.demo_service.record_demo_scenarios") as record_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
@@ -2692,7 +3353,10 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "missing variant coverage: browser: Bad input shows validation" in str(exc)
+            assert (
+                "missing variant coverage: browser: Bad input shows validation"
+                in str(exc)
+            )
             assert "browser: Bad input shows validation" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected QA scenario variant coverage failure")
@@ -2700,13 +3364,21 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants
     record_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_coverage() -> None:
+def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_coverage() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2721,9 +3393,13 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_c
             )
         ],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     fake_agents = SimpleNamespace(
         qa=MagicMock(
             return_value=QaResult(
@@ -2760,14 +3436,23 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_c
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch("orchestrator.core.qa.demo_service.record_demo_scenarios") as record_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
@@ -2779,7 +3464,10 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_c
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "missing variant coverage: browser: Bad input shows validation" in str(exc)
+            assert (
+                "missing variant coverage: browser: Bad input shows validation"
+                in str(exc)
+            )
             assert "browser: Repeat action remains safe" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected QA scenario variant traceability failure")
@@ -2787,27 +3475,38 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_c
     record_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptance_criterion() -> None:
+def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptance_criterion() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
         acceptance_criteria=["Cart total recalculates after quantity changes"],
         risks=[],
         demo_requirements=[
-                DemoRequirement(
-                    title="Checkout total updates",
-                    acceptance_criterion="Cart total recalculates after quantity changes",
-                    capture_target="browser",
-                    variants=["Invalid quantity is rejected", "Repeat quantity change remains safe"],
-                )
-            ],
-        )
+            DemoRequirement(
+                title="Checkout total updates",
+                acceptance_criterion="Cart total recalculates after quantity changes",
+                capture_target="browser",
+                variants=[
+                    "Invalid quantity is rejected",
+                    "Repeat quantity change remains safe",
+                ],
+            )
+        ],
+    )
     fake_agents = SimpleNamespace(
         qa=MagicMock(
             return_value=QaResult(
@@ -2822,19 +3521,19 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptanc
                             QaStep(action="assert_visible", selector="text=Ready"),
                         ],
                     ),
-                        QaScenario(
-                            name="Invalid quantity is rejected",
-                            objective="Invalid quantity is rejected",
-                            capture_target="browser",
-                            steps=[
-                                QaStep(action="goto", value="/"),
-                                QaStep(action="assert_visible", selector="text=Ready"),
-                            ],
-                        ),
-                        QaScenario(
-                            name="Repeat quantity change remains safe",
-                            objective="Repeat quantity change remains safe",
-                            capture_target="browser",
+                    QaScenario(
+                        name="Invalid quantity is rejected",
+                        objective="Invalid quantity is rejected",
+                        capture_target="browser",
+                        steps=[
+                            QaStep(action="goto", value="/"),
+                            QaStep(action="assert_visible", selector="text=Ready"),
+                        ],
+                    ),
+                    QaScenario(
+                        name="Repeat quantity change remains safe",
+                        objective="Repeat quantity change remains safe",
+                        capture_target="browser",
                         steps=[
                             QaStep(action="goto", value="/"),
                             QaStep(action="assert_visible", selector="text=Ready"),
@@ -2847,34 +3546,55 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptanc
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch("orchestrator.core.qa.demo_service.record_demo_scenarios") as record_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "missing requirement coverage: browser: Checkout total updates" in str(exc)
+            assert (
+                "missing requirement coverage: browser: Checkout total updates"
+                in str(exc)
+            )
             assert "Cart total recalculates after quantity changes" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected QA scenario acceptance-criterion traceability failure")
+            raise AssertionError(
+                "expected QA scenario acceptance-criterion traceability failure"
+            )
 
     record_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_release() -> None:
+def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_release() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(
         project_id="project-1",
@@ -2889,7 +3609,11 @@ def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_r
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2897,9 +3621,13 @@ def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_r
         risks=[],
         demo_requirements=[_demo_requirement()],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
 
     runtime_mock = MagicMock()
     qa_agent = MagicMock(return_value=_qa_result())
@@ -2907,13 +3635,22 @@ def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_r
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime", runtime_mock),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
@@ -2927,19 +3664,29 @@ def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_r
         except RuntimeError as exc:
             assert "not active: api" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected QA demo stage to block on missing API release service")
+            raise AssertionError(
+                "expected QA demo stage to block on missing API release service"
+            )
 
     runtime_mock.assert_not_called()
     qa_agent.assert_not_called()
 
 
-def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable() -> None:
+def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -2958,13 +3705,20 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
-                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
-                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+                _local_recording(
+                    name="Invalid input is rejected", path="/tmp/invalid.webm"
+                ),
+                _local_recording(
+                    name="Repeat action remains safe", path="/tmp/repeat.webm"
+                ),
             ],
         ),
         patch(
@@ -2982,20 +3736,38 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
         ),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", side_effect=_probe, create=True),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            side_effect=_probe,
+            create=True,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=2),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=2,
+            ),
             tenant=tenant,
             project=project,
             run=run,
-            request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+            request=replace(
+                _request(), current_worker_capability=WorkerCapability.MACOS
+            ),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=release,
         )
 
@@ -3005,7 +3777,9 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
 
 def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3019,9 +3793,13 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
             )
         ],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     fake_agents = SimpleNamespace(
         qa=MagicMock(
             return_value=QaResult(
@@ -3033,20 +3811,26 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
                         capture_target="ios",
                         steps=[
                             QaStep(action="assert_visible", selector="Start Free Demo"),
-                            QaStep(action="click", selector="onboarding_primary_button"),
+                            QaStep(
+                                action="click", selector="onboarding_primary_button"
+                            ),
                         ],
                     ),
                     QaScenario(
                         name="Repeat action remains safe",
                         objective="Repeat action remains safe",
                         capture_target="ios",
-                        steps=[QaStep(action="assert_visible", selector="Start Free Demo")],
+                        steps=[
+                            QaStep(action="assert_visible", selector="Start Free Demo")
+                        ],
                     ),
                     QaScenario(
                         name="Invalid input is rejected",
                         objective="Invalid input is rejected",
                         capture_target="ios",
-                        steps=[QaStep(action="assert_visible", selector="Start Free Demo")],
+                        steps=[
+                            QaStep(action="assert_visible", selector="Start Free Demo")
+                        ],
                     ),
                 ],
             )
@@ -3055,7 +3839,10 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.storage_config_from_settings",
             return_value=SimpleNamespace(
@@ -3097,16 +3884,21 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
             tenant=tenant,
             project=project,
             run=run,
-            request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+            request=replace(
+                _request(), current_worker_capability=WorkerCapability.MACOS
+            ),
             plan=plan,
             dev_result=dev_result,
             test_result=test_result,
@@ -3120,9 +3912,13 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
     assert steps[1].selector == "id=onboarding_primary_button"
 
 
-def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_value() -> None:
+def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_value() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3166,7 +3962,10 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.storage_config_from_settings",
             return_value=SimpleNamespace(
@@ -3208,20 +4007,30 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
             tenant=tenant,
             project=project,
             run=run,
-            request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+            request=replace(
+                _request(), current_worker_capability=WorkerCapability.MACOS
+            ),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=_preview_release(),
         )
 
@@ -3232,7 +4041,9 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
 
 def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3246,9 +4057,13 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
             )
         ],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     fake_agents = SimpleNamespace(
         qa=MagicMock(
             return_value=QaResult(
@@ -3258,7 +4073,9 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
                         name="Splash assertion",
                         objective="Incorrectly assert transient splash",
                         capture_target="ios",
-                        steps=[QaStep(action="assert_visible", selector="splash_screen")],
+                        steps=[
+                            QaStep(action="assert_visible", selector="splash_screen")
+                        ],
                     )
                 ],
             )
@@ -3267,17 +4084,22 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
                 tenant=tenant,
                 project=project,
                 run=run,
-                request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+                request=replace(
+                    _request(), current_worker_capability=WorkerCapability.MACOS
+                ),
                 plan=plan,
                 dev_result=dev_result,
                 test_result=test_result,
@@ -3290,13 +4112,21 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
             raise AssertionError("expected transient native splash assertion failure")
 
 
-def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_worker() -> None:
+def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_worker() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3311,18 +4141,29 @@ def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_w
         ],
     )
 
-    with patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200):
+    with patch(
+        "orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200
+    ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_android_worker_platform="linux",
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=_request(),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=release,
         )
 
@@ -3331,13 +4172,21 @@ def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_w
     assert result.recordings == []
 
 
-def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_remaining_target() -> None:
+def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_remaining_target() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3409,7 +4258,10 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -3480,20 +4332,35 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
             ],
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_android_worker_platform="linux",
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=_request(),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=release,
         )
 
@@ -3507,17 +4374,30 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
         "android",
     ]
     assert "still requires capture target(s): ios" in str(result.feedback)
-    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
-    assert [item["capture_target"] for item in available_targets] == ["browser", "android"]
+    available_targets = json.loads(
+        fake_agents.qa.call_args.kwargs["available_capture_targets_json"]
+    )
+    assert [item["capture_target"] for item in available_targets] == [
+        "browser",
+        "android",
+    ]
 
 
-def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missing() -> None:
+def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missing() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3554,7 +4434,10 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -3583,21 +4466,38 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=2),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                    qa_demo_max_attempts=2,
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
-                request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+                request=replace(
+                    _request(), current_worker_capability=WorkerCapability.MACOS
+                ),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=release,
             )
         except RuntimeError as exc:
@@ -3605,14 +4505,20 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
             assert "browser: expected at least 3, got 1" in str(exc)
             assert "android: expected at least 3, got 0" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected current-worker missing target proof to block")
+            raise AssertionError(
+                "expected current-worker missing target proof to block"
+            )
 
     record_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordings() -> None:
+def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordings() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -3756,7 +4662,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                         objective="Repeat action remains safe on iOS",
                         capture_target="ios",
                         steps=_proof_steps("text=Ready"),
-                    )
+                    ),
                 ],
             )
         )
@@ -3765,7 +4671,10 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -3808,19 +4717,30 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
         ) as upload_mock,
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=request,
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=_preview_release(),
             previous_qa_result=previous_qa,
         )
@@ -3838,7 +4758,9 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
         "ios",
     ]
     assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-9.mp4")
-    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    available_targets = json.loads(
+        fake_agents.qa.call_args.kwargs["available_capture_targets_json"]
+    )
     assert available_targets == [
         {
             "capture_target": "ios",
@@ -3852,9 +4774,13 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
     ]
 
 
-def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_before_reuse() -> None:
+def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_before_reuse() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4006,7 +4932,10 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime") as runtime_mock,
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents) as agents_mock,
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ) as agents_mock,
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -4033,8 +4962,13 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-6.mp4",
             ],
         ) as upload_mock,
-        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready") as runtime_ready_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", side_effect=_probe_artifact_url),
+        patch(
+            "orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"
+        ) as runtime_ready_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            side_effect=_probe_artifact_url,
+        ),
     ):
         try:
             execute_qa_demo_stage(
@@ -4045,9 +4979,14 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 run=run,
                 request=request,
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=_preview_release(),
                 previous_qa_result=previous_qa,
             )
@@ -4055,7 +4994,9 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
             assert "QA demo artifact URL is not reachable" in str(exc)
             assert "object expired" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected stale partial previous QA demo artifact URL to block reuse")
+            raise AssertionError(
+                "expected stale partial previous QA demo artifact URL to block reuse"
+            )
 
     runtime_mock.assert_not_called()
     agents_mock.assert_not_called()
@@ -4065,9 +5006,13 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
     upload_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short_circuit() -> None:
+def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short_circuit() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4129,8 +5074,14 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", side_effect=RuntimeError("object expired")),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            side_effect=RuntimeError("object expired"),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             execute_qa_demo_stage(
@@ -4141,14 +5092,23 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=SimpleNamespace(
                     commit_sha="b" * 40,
                     service_urls=[
-                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
-                    ]
+                        SimpleNamespace(
+                            service_kind="website",
+                            status="active",
+                            url="https://preview.example",
+                        )
+                    ],
                 ),
                 previous_qa_result=previous_qa,
             )
@@ -4156,12 +5116,18 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
             assert "QA demo artifact URL is not reachable" in str(exc)
             assert "object expired" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected stale previous QA demo artifact URL to block short-circuit")
+            raise AssertionError(
+                "expected stale previous QA demo artifact URL to block short-circuit"
+            )
 
 
-def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_recording_short_circuit() -> None:
+def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_recording_short_circuit() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4223,8 +5189,14 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=404),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=404,
+        ),
     ):
         try:
             execute_qa_demo_stage(
@@ -4235,26 +5207,43 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=SimpleNamespace(
                     service_urls=[
-                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                        SimpleNamespace(
+                            service_kind="website",
+                            status="active",
+                            url="https://preview.example",
+                        )
                     ]
                 ),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
-            assert "QA demo recording requires reachable release service URL(s)" in str(exc)
+            assert "QA demo recording requires reachable release service URL(s)" in str(
+                exc
+            )
             assert "website (https://preview.example): HTTP 404" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected broken preview release to block previous QA demo proof reuse")
+            raise AssertionError(
+                "expected broken preview release to block previous QA demo proof reuse"
+            )
 
 
-def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_coverage() -> None:
+def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_coverage() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4265,7 +5254,10 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_cov
                 title="New dashboard walkthrough",
                 acceptance_criterion="New dashboard saves settings",
                 capture_target="browser",
-                variants=["Invalid settings show validation", "Repeat settings save remains safe"],
+                variants=[
+                    "Invalid settings show validation",
+                    "Repeat settings save remains safe",
+                ],
             )
         ],
     )
@@ -4323,8 +5315,14 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_cov
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ) as artifact_probe,
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
     ):
         try:
@@ -4336,30 +5334,47 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_cov
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=SimpleNamespace(
                     service_urls=[
-                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                        SimpleNamespace(
+                            service_kind="website",
+                            status="active",
+                            url="https://preview.example",
+                        )
                     ]
                 ),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
-            assert "QA demo scenarios do not cover PM demo requirement variants" in str(exc)
+            assert "QA demo scenarios do not cover PM demo requirement variants" in str(
+                exc
+            )
             assert "New dashboard walkthrough" in str(exc)
             assert "Invalid settings show validation" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected stale PM coverage proof to block previous QA demo proof reuse")
+            raise AssertionError(
+                "expected stale PM coverage proof to block previous QA demo proof reuse"
+            )
 
     artifact_probe.assert_not_called()
     agents_cls.assert_not_called()
 
 
-def test_execute_qa_demo_stage_rejects_previous_recording_outside_current_pm_targets_before_url_probe() -> None:
+def test_execute_qa_demo_stage_rejects_previous_recording_outside_current_pm_targets_before_url_probe() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4421,8 +5436,14 @@ def test_execute_qa_demo_stage_rejects_previous_recording_outside_current_pm_tar
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ) as artifact_probe,
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
     ):
         try:
@@ -4434,12 +5455,21 @@ def test_execute_qa_demo_stage_rejects_previous_recording_outside_current_pm_tar
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=SimpleNamespace(
                     service_urls=[
-                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                        SimpleNamespace(
+                            service_kind="website",
+                            status="active",
+                            url="https://preview.example",
+                        )
                     ]
                 ),
                 previous_qa_result=previous_qa,
@@ -4447,15 +5477,21 @@ def test_execute_qa_demo_stage_rejects_previous_recording_outside_current_pm_tar
         except RuntimeError as exc:
             assert "outside the current PM demo plan: android" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected out-of-plan previous QA demo proof to block reuse")
+            raise AssertionError(
+                "expected out-of-plan previous QA demo proof to block reuse"
+            )
 
     artifact_probe.assert_not_called()
     agents_cls.assert_not_called()
 
 
-def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_context() -> None:
+def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_context() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4517,8 +5553,14 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ) as artifact_probe,
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
     ):
         try:
@@ -4530,30 +5572,48 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=SimpleNamespace(
                     commit_sha="b" * 40,
                     service_urls=[
-                        SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example")
-                    ]
+                        SimpleNamespace(
+                            service_kind="website",
+                            service_name="web",
+                            status="active",
+                            url="https://preview.example",
+                        )
+                    ],
                 ),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
-            assert "release context does not match current release before reuse" in str(exc)
+            assert "release context does not match current release before reuse" in str(
+                exc
+            )
             assert "Happy path" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected stale release-context proof to block previous QA demo proof reuse")
+            raise AssertionError(
+                "expected stale release-context proof to block previous QA demo proof reuse"
+            )
 
     artifact_probe.assert_not_called()
     agents_cls.assert_not_called()
 
 
-def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_commit() -> None:
+def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_commit() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4592,7 +5652,9 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(53),
                 release_commit_sha="a" * 40,
-                release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
+                release_context_sha256=_release_context_sha256_with_commit(
+                    commit_sha="a" * 40
+                ),
             ),
             QaRecording(
                 name="Invalid input is rejected",
@@ -4602,7 +5664,9 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(54),
                 release_commit_sha="a" * 40,
-                release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
+                release_context_sha256=_release_context_sha256_with_commit(
+                    commit_sha="a" * 40
+                ),
             ),
             QaRecording(
                 name="Repeat action remains safe",
@@ -4612,14 +5676,22 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(55),
                 release_commit_sha="a" * 40,
-                release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
+                release_context_sha256=_release_context_sha256_with_commit(
+                    commit_sha="a" * 40
+                ),
             ),
         ],
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ) as artifact_probe,
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
         patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
     ):
         try:
@@ -4631,30 +5703,47 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=SimpleNamespace(
                     commit_sha="b" * 40,
                     service_urls=[
-                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                        SimpleNamespace(
+                            service_kind="website",
+                            status="active",
+                            url="https://preview.example",
+                        )
                     ],
                 ),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
-            assert "release commit does not match current release before reuse" in str(exc)
+            assert "release commit does not match current release before reuse" in str(
+                exc
+            )
             assert "Happy path" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected stale release-commit proof to block previous QA demo proof reuse")
+            raise AssertionError(
+                "expected stale release-commit proof to block previous QA demo proof reuse"
+            )
 
     artifact_probe.assert_not_called()
     agents_cls.assert_not_called()
 
 
-def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scenario() -> None:
+def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scenario() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4689,20 +5778,31 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scena
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                settings=SimpleNamespace(
+                    qa_demo_artifact_url_timeout_seconds=10.0,
+                    qa_demo_playwright_module_dir="",
+                ),
                 tenant=tenant,
                 project=project,
                 run=run,
                 request=_request(),
                 plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                dev_result=DevResult(
+                    change_summary=["implemented"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                ),
                 test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                review_result=ReviewResult(
+                    summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 preview_release=_preview_release(),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
-            assert "missing matching executable scenario(s): browser: Browser walkthrough" in str(exc)
+            assert (
+                "missing matching executable scenario(s): browser: Browser walkthrough"
+                in str(exc)
+            )
         else:  # pragma: no cover
             raise AssertionError("expected orphaned previous recording proof to block")
 
@@ -4711,7 +5811,9 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scena
 
 def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4725,9 +5827,13 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
             )
         ],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["xcodebuild test"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     request = replace(
         _request(),
         current_worker_capability=WorkerCapability.MACOS,
@@ -4763,7 +5869,10 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -4806,11 +5915,17 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+            ),
             tenant=tenant,
             project=project,
             run=run,
@@ -4824,7 +5939,9 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
 
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.mp4")
     assert result.recordings[0].capture_target == "ios"
-    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    available_targets = json.loads(
+        fake_agents.qa.call_args.kwargs["available_capture_targets_json"]
+    )
     assert available_targets == [
         {
             "capture_target": "ios",
@@ -4838,9 +5955,13 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
     ]
 
 
-def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux_when_configured() -> None:
+def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux_when_configured() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4884,7 +6005,10 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux_when_config
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
@@ -4927,24 +6051,38 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux_when_config
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_android_worker_platform="linux",
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=_request(),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["./gradlew test"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=_preview_release(),
         )
 
     assert result.recordings[0].capture_target == "android"
-    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    available_targets = json.loads(
+        fake_agents.qa.call_args.kwargs["available_capture_targets_json"]
+    )
     assert available_targets == [
         {
             "capture_target": "android",
@@ -4958,9 +6096,13 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux_when_config
     ]
 
 
-def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_worker() -> None:
+def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_worker() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -4978,6 +6120,7 @@ def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_work
     result = execute_qa_demo_stage(
         session=SimpleNamespace(),
         settings=SimpleNamespace(
+            qa_demo_artifact_url_timeout_seconds=10.0,
             qa_demo_playwright_module_dir="",
             qa_demo_desktop_recorder_command="python /tmp/desktop_recorder.py",
             qa_demo_desktop_worker_platform="macos",
@@ -4987,9 +6130,13 @@ def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_work
         run=run,
         request=_request(),
         plan=plan,
-        dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+        dev_result=DevResult(
+            change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+        ),
         test_result=TestResult(guidance=["pytest -q"]),
-        review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+        review_result=ReviewResult(
+            summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+        ),
         preview_release=_preview_release(),
     )
 
@@ -5009,8 +6156,10 @@ def test_record_demo_scenarios_surfaces_recorder_stderr() -> None:
     ):
         try:
             record_demo_scenarios(
-                settings=SimpleNamespace(),
-                request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
+                settings=SimpleNamespace(qa_demo_artifact_url_timeout_seconds=10.0),
+                request=replace(
+                    _request(), current_worker_capability=WorkerCapability.MACOS
+                ),
                 available_capture_targets={
                     "ios": DemoCaptureTarget(
                         capture_target="ios",
@@ -5026,7 +6175,12 @@ def test_record_demo_scenarios_surfaces_recorder_stderr() -> None:
                             name="Mobile flow",
                             objective="Show feature works",
                             capture_target="ios",
-                            steps=[QaStep(action="assert_visible", selector="id=onboarding_primary_button")],
+                            steps=[
+                                QaStep(
+                                    action="assert_visible",
+                                    selector="id=onboarding_primary_button",
+                                )
+                            ],
                         )
                     ],
                 ),
@@ -5039,11 +6193,17 @@ def test_record_demo_scenarios_surfaces_recorder_stderr() -> None:
 
 def test_execute_qa_demo_stage_retries_recording_failures() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -5051,9 +6211,13 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
         risks=[],
         demo_requirements=[_demo_requirement()],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
 
     fake_agents = SimpleNamespace(qa=lambda **_: _qa_result())
     upload_attempts = {"count": 0}
@@ -5066,13 +6230,20 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
-                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
-                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+                _local_recording(
+                    name="Invalid input is rejected", path="/tmp/invalid.webm"
+                ),
+                _local_recording(
+                    name="Repeat action remains safe", path="/tmp/repeat.webm"
+                ),
             ],
         ),
         patch(
@@ -5086,13 +6257,25 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
                 secure=False,
             ),
         ),
-        patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload),
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=2),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=2,
+            ),
             tenant=tenant,
             project=project,
             run=run,
@@ -5108,13 +6291,21 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
 
 
-def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load() -> None:
+def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -5122,9 +6313,13 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load()
         risks=[],
         demo_requirements=[_demo_requirement()],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     failure_evidence = LocalQaFailureEvidence(
         name="App load",
         path="/tmp/app-load-failure.webm",
@@ -5143,7 +6338,10 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load()
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             side_effect=QaDemoRecordingFailure(
@@ -5167,12 +6365,22 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load()
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
         ) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=1,
+            ),
             tenant=tenant,
             project=project,
             run=run,
@@ -5187,20 +6395,34 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load()
     assert result.outcome == "blocked"
     assert result.recordings == []
     assert result.failure_evidence[0].artifact_url.endswith("qa-failure-1.webm")
-    assert result.failure_evidence[0].object_key == "tenant-1/project-1/run-1/qa-failure-1.webm"
+    assert (
+        result.failure_evidence[0].object_key
+        == "tenant-1/project-1/run-1/qa-failure-1.webm"
+    )
     assert "process is not defined" in result.failure_evidence[0].error_message
     upload_mock.assert_called_once()
     assert upload_mock.call_args.kwargs["local_path"] == "/tmp/app-load-failure.webm"
-    assert upload_mock.call_args.kwargs["object_key"] == "tenant-1/project-1/run-1/qa-failure-1.webm"
+    assert (
+        upload_mock.call_args.kwargs["object_key"]
+        == "tenant-1/project-1/run-1/qa-failure-1.webm"
+    )
 
 
-def test_execute_qa_demo_stage_uploads_diagnostic_failure_evidence_when_recorder_crashes_without_video() -> None:
+def test_execute_qa_demo_stage_uploads_diagnostic_failure_evidence_when_recorder_crashes_without_video() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -5208,14 +6430,21 @@ def test_execute_qa_demo_stage_uploads_diagnostic_failure_evidence_when_recorder
         risks=[],
         demo_requirements=[_demo_requirement()],
     )
-    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    dev_result = DevResult(
+        change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     test_result = TestResult(guidance=["pytest -q"])
-    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    review_result = ReviewResult(
+        summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+    )
     fake_agents = SimpleNamespace(qa=lambda **_: _qa_result())
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
-        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.CodexWorkflowAgents",
+            return_value=fake_agents,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             side_effect=RuntimeError("Chromium exited before recording could start"),
@@ -5235,12 +6464,22 @@ def test_execute_qa_demo_stage_uploads_diagnostic_failure_evidence_when_recorder
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.txt",
         ) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=200,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=1,
+            ),
             tenant=tenant,
             project=project,
             run=run,
@@ -5255,24 +6494,43 @@ def test_execute_qa_demo_stage_uploads_diagnostic_failure_evidence_when_recorder
     assert result.outcome == "blocked"
     assert result.recordings == []
     assert result.failure_evidence[0].artifact_url.endswith("qa-failure-1.txt")
-    assert result.failure_evidence[0].object_key == "tenant-1/project-1/run-1/qa-failure-1.txt"
+    assert (
+        result.failure_evidence[0].object_key
+        == "tenant-1/project-1/run-1/qa-failure-1.txt"
+    )
     assert result.failure_evidence[0].capture_target == "browser"
-    assert "Chromium exited before recording could start" in result.failure_evidence[0].error_message
+    assert (
+        "Chromium exited before recording could start"
+        in result.failure_evidence[0].error_message
+    )
     upload_mock.assert_called_once()
     uploaded_path = Path(upload_mock.call_args.kwargs["local_path"])
     assert upload_mock.call_args.kwargs["content_type"] == "text/plain"
-    assert upload_mock.call_args.kwargs["object_key"] == "tenant-1/project-1/run-1/qa-failure-1.txt"
+    assert (
+        upload_mock.call_args.kwargs["object_key"]
+        == "tenant-1/project-1/run-1/qa-failure-1.txt"
+    )
     assert uploaded_path.suffix == ".txt"
-    assert "Chromium exited before recording could start" in uploaded_path.read_text(encoding="utf-8")
+    assert "Chromium exited before recording could start" in uploaded_path.read_text(
+        encoding="utf-8"
+    )
 
 
-def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_fails() -> None:
+def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_fails() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -5323,19 +6581,31 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_f
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
         ) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=1,
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=_request(),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=release,
         )
 
@@ -5349,9 +6619,13 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_f
     runtime_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fails() -> None:
+def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fails() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         release_id="release-preview-1",
@@ -5359,7 +6633,11 @@ def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fai
         provider="internal_coolify",
         status="failed",
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -5383,7 +6661,10 @@ def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fai
 
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime") as runtime_mock,
-        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=502),
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            return_value=502,
+        ),
         patch(
             "orchestrator.core.qa.demo_service.get_project_deployment_release_logs",
             return_value=SimpleNamespace(
@@ -5417,19 +6698,31 @@ def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fai
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
         ),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=1,
+            ),
             tenant=tenant,
             project=project,
             run=run,
             request=_request(),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=release,
         )
 
@@ -5438,7 +6731,10 @@ def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fai
     assert "provider_logs_status: available" in result.failure_evidence[0].error_message
     assert "Error: process is not defined" in result.failure_evidence[0].error_message
     assert "npm start exited with code 1" in result.failure_evidence[0].error_message
-    assert "provider_deployment_uuid: deployment-1" in result.failure_evidence[0].error_message
+    assert (
+        "provider_deployment_uuid: deployment-1"
+        in result.failure_evidence[0].error_message
+    )
     logs_mock.assert_called_once_with(
         session=ANY,
         tenant_id="tenant-1",
@@ -5446,17 +6742,28 @@ def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fai
         release_id="release-preview-1",
         app_id="app-1",
     )
-    assert "Error: process is not defined" in record_mock.call_args.kwargs["qa_result"].scenarios[0].expected_outcomes[0]
+    assert (
+        "Error: process is not defined"
+        in record_mock.call_args.kwargs["qa_result"].scenarios[0].expected_outcomes[0]
+    )
     runtime_mock.assert_not_called()
 
 
-def test_execute_qa_demo_stage_uploads_target_complete_failure_evidence_when_release_readiness_fails() -> None:
+def test_execute_qa_demo_stage_uploads_target_complete_failure_evidence_when_release_readiness_fails() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/acme/repo"
+    )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
         commit_sha="b" * 40,
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website", status="active", url="https://preview.example"
+            )
+        ],
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -5512,12 +6819,19 @@ def test_execute_qa_demo_stage_uploads_target_complete_failure_evidence_when_rel
                 secure=False,
             ),
         ),
-        patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=uploaded_urls) as upload_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            side_effect=uploaded_urls,
+        ) as upload_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
             settings=SimpleNamespace(
+                qa_demo_artifact_url_timeout_seconds=10.0,
                 qa_demo_playwright_module_dir="",
                 qa_demo_max_attempts=1,
                 qa_demo_ios_recorder_command="python /tmp/ios_recorder.py",
@@ -5526,18 +6840,31 @@ def test_execute_qa_demo_stage_uploads_target_complete_failure_evidence_when_rel
             tenant=tenant,
             project=project,
             run=run,
-            request=replace(_request(), project_demo_capture_targets=("browser", "ios", "android")),
+            request=replace(
+                _request(), project_demo_capture_targets=("browser", "ios", "android")
+            ),
             plan=plan,
-            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            dev_result=DevResult(
+                change_summary=["implemented"],
+                pr_url="https://github.com/acme/repo/pull/8",
+            ),
             test_result=TestResult(guidance=["pytest -q"]),
-            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            review_result=ReviewResult(
+                summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"
+            ),
             preview_release=release,
         )
 
     assert result.outcome == "blocked"
-    assert [item.capture_target for item in result.failure_evidence] == ["browser", "ios", "android"]
+    assert [item.capture_target for item in result.failure_evidence] == [
+        "browser",
+        "ios",
+        "android",
+    ]
     assert [item.artifact_url for item in result.failure_evidence] == uploaded_urls
-    assert all("connection refused" in item.error_message for item in result.failure_evidence)
+    assert all(
+        "connection refused" in item.error_message for item in result.failure_evidence
+    )
     assert [call.kwargs["content_type"] for call in upload_mock.call_args_list] == [
         "video/webm",
         "text/plain",
@@ -5567,20 +6894,32 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
 
         def mark_pull_request_ready_for_review(self, **kwargs: object) -> object:
             self.ready_calls.append(dict(kwargs))
-            return SimpleNamespace(number=8, html_url="https://github.com/acme/repo/pull/8", draft=False)
+            return SimpleNamespace(
+                number=8, html_url="https://github.com/acme/repo/pull/8", draft=False
+            )
 
     github_client = _GitHubClient()
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config",
+            return_value=github_client,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         updated_body = update_pull_request_with_demo_evidence(
             session=SimpleNamespace(),
             settings=_qa_artifact_settings(),
             tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-            project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+            project=SimpleNamespace(
+                project_id="project-1", github_repository="https://github.com/acme/repo"
+            ),
             run=SimpleNamespace(run_id="run-1"),
-            workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+            workflow_result=SimpleNamespace(
+                pr_url="https://github.com/acme/repo/pull/8"
+            ),
             qa_result=QaResult(
                 summary=["Recorded demos"],
                 scenarios=[
@@ -5606,11 +6945,16 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
 
     assert DEMO_EVIDENCE_HEADING in updated_body
     assert f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} browser -->" in updated_body
-    assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm" in updated_body
+    assert (
+        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm"
+        in updated_body
+    )
     assert github_client.ready_calls == []
 
 
-def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_without_readying_pr() -> None:
+def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_without_readying_pr() -> (
+    None
+):
     class _GitHubClient:
         body = "## Summary\n- change"
         ready_calls: list[dict[str, object]]
@@ -5631,20 +6975,32 @@ def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_w
 
         def mark_pull_request_ready_for_review(self, **kwargs: object) -> object:
             self.ready_calls.append(dict(kwargs))
-            return SimpleNamespace(number=8, html_url="https://github.com/acme/repo/pull/8", draft=False)
+            return SimpleNamespace(
+                number=8, html_url="https://github.com/acme/repo/pull/8", draft=False
+            )
 
     github_client = _GitHubClient()
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config",
+            return_value=github_client,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         updated_body = update_pull_request_with_demo_failure_evidence(
             session=SimpleNamespace(),
             settings=_qa_artifact_settings(),
             tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-            project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+            project=SimpleNamespace(
+                project_id="project-1", github_repository="https://github.com/acme/repo"
+            ),
             run=SimpleNamespace(run_id="run-1"),
-            workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+            workflow_result=SimpleNamespace(
+                pr_url="https://github.com/acme/repo/pull/8"
+            ),
             qa_result=QaResult(
                 summary=["QA demo recording failed"],
                 scenarios=[],
@@ -5671,25 +7027,39 @@ def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_w
 
     assert DEMO_FAILURE_EVIDENCE_HEADING in updated_body
     assert DEMO_FAILURE_EVIDENCE_MARKER in updated_body
-    assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm" in updated_body
+    assert (
+        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+        in updated_body
+    )
     assert "QA Demo Ready was not visible" in updated_body
     assert "process is not defined" in updated_body
     assert github_client.ready_calls == []
 
 
-def test_update_pull_request_with_demo_failure_evidence_rejects_missing_required_capture_target_before_url_probe() -> None:
+def test_update_pull_request_with_demo_failure_evidence_rejects_missing_required_capture_target_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         try:
             update_pull_request_with_demo_failure_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["QA demo recording failed"],
                     scenarios=[],
@@ -5699,15 +7069,22 @@ def test_update_pull_request_with_demo_failure_evidence_rejects_missing_required
                 required_capture_targets=("browser", "ios", "android"),
             )
         except RuntimeError as exc:
-            assert "QA demo failure evidence is missing required capture target(s): ios, android" in str(exc)
+            assert (
+                "QA demo failure evidence is missing required capture target(s): ios, android"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected missing required failure evidence target to block PR evidence update")
+            raise AssertionError(
+                "expected missing required failure evidence target to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_update() -> None:
+def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_update() -> (
+    None
+):
     github_client = SimpleNamespace(
         get_pull_request_details=MagicMock(
             return_value=SimpleNamespace(
@@ -5716,22 +7093,37 @@ def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_updat
                 base_ref="main",
             )
         ),
-        update_pull_request=MagicMock(return_value=SimpleNamespace(number=8, html_url="https://github.com/acme/repo/pull/8")),
+        update_pull_request=MagicMock(
+            return_value=SimpleNamespace(
+                number=8, html_url="https://github.com/acme/repo/pull/8"
+            )
+        ),
         mark_pull_request_ready_for_review=MagicMock(),
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config",
+            return_value=github_client,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -5756,16 +7148,23 @@ def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_updat
                 required_recording_counts={"browser": 1},
             )
         except RuntimeError as exc:
-            assert "QA demo evidence PR update did not persist required evidence" in str(exc)
+            assert (
+                "QA demo evidence PR update did not persist required evidence"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected stale PR readback to block evidence attachment")
+            raise AssertionError(
+                "expected stale PR readback to block evidence attachment"
+            )
 
     assert github_client.update_pull_request.called
     assert github_client.get_pull_request_details.call_count == 2
     github_client.mark_pull_request_ready_for_review.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_missing_pr_base_branch() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_missing_pr_base_branch() -> (
+    None
+):
     github_client = SimpleNamespace(
         get_pull_request_details=MagicMock(
             return_value=SimpleNamespace(
@@ -5779,17 +7178,29 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_pr_base_branch()
     )
 
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
-        pytest.raises(RuntimeError, match="requires PR details to include a base branch"),
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config",
+            return_value=github_client,
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
+        pytest.raises(
+            RuntimeError, match="requires PR details to include a base branch"
+        ),
     ):
         update_pull_request_with_demo_evidence(
             session=SimpleNamespace(),
             settings=_qa_artifact_settings(),
             tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-            project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+            project=SimpleNamespace(
+                project_id="project-1", github_repository="https://github.com/acme/repo"
+            ),
             run=SimpleNamespace(run_id="run-1"),
-            workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+            workflow_result=SimpleNamespace(
+                pr_url="https://github.com/acme/repo/pull/8"
+            ),
             qa_result=QaResult(
                 summary=["Recorded demos"],
                 scenarios=[
@@ -5817,7 +7228,9 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_pr_base_branch()
     github_client.mark_pull_request_ready_for_review.assert_not_called()
 
 
-def test_mark_pull_request_ready_after_demo_proof_blocks_when_ready_transition_fails() -> None:
+def test_mark_pull_request_ready_after_demo_proof_blocks_when_ready_transition_fails() -> (
+    None
+):
     class _GitHubClient:
         body = "## Summary\n- change"
 
@@ -5837,35 +7250,56 @@ def test_mark_pull_request_ready_after_demo_proof_blocks_when_ready_transition_f
 
     github_client = _GitHubClient()
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config",
+            return_value=github_client,
+        ),
     ):
         try:
             mark_pull_request_ready_after_demo_proof(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
             )
         except RuntimeError as exc:
             assert "GitHub refused ready-for-review transition" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected failed ready-for-review transition to block proof completion")
+            raise AssertionError(
+                "expected failed ready-for-review transition to block proof completion"
+            )
 
 
-def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -5891,27 +7325,43 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_
                 required_capture_targets=("browser",),
             )
         except RuntimeError as exc:
-            assert "QA demo recording release context sha256 is required before PR evidence" in str(exc)
+            assert (
+                "QA demo recording release context sha256 is required before PR evidence"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected missing release context metadata to block PR evidence update")
+            raise AssertionError(
+                "expected missing release context metadata to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_missing_release_commit_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_missing_release_commit_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -5937,27 +7387,44 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_release_commit_b
                 required_capture_targets=("browser",),
             )
         except RuntimeError as exc:
-            assert "QA demo recording release commit sha is required before PR evidence" in str(exc)
+            assert (
+                "QA demo recording release commit sha is required before PR evidence"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected missing release commit proof to block PR evidence update")
+            raise AssertionError(
+                "expected missing release commit proof to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repository() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repository() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+            return_value=200,
+        ),
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/other/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/other/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -5985,30 +7452,45 @@ def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repos
         except RuntimeError as exc:
             assert "QA demo recording PR URL must match project repository" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected cross-repository PR URL to block PR evidence update")
+            raise AssertionError(
+                "expected cross-repository PR URL to block PR evidence update"
+            )
 
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_external_recording_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_external_recording_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         url_probe.return_value = 200
-        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
-            body="## Summary\n- change",
-            title="Demo PR",
-            base_ref="main",
+        github_client_mock.return_value.get_pull_request_details.return_value = (
+            SimpleNamespace(
+                body="## Summary\n- change",
+                title="Demo PR",
+                base_ref="main",
+            )
         )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6034,33 +7516,50 @@ def test_update_pull_request_with_demo_evidence_rejects_external_recording_befor
                 required_capture_targets=("browser",),
             )
         except RuntimeError as exc:
-            assert "QA demo recording must use configured artifact storage URL" in str(exc)
+            assert "QA demo recording must use configured artifact storage URL" in str(
+                exc
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected external recording URL to block PR evidence update")
+            raise AssertionError(
+                "expected external recording URL to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_key_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_key_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         url_probe.return_value = 200
-        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
-            body="## Summary\n- change",
-            title="Demo PR",
-            base_ref="main",
+        github_client_mock.return_value.get_pull_request_details.return_value = (
+            SimpleNamespace(
+                body="## Summary\n- change",
+                title="Demo PR",
+                base_ref="main",
+            )
         )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6088,31 +7587,46 @@ def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_k
         except RuntimeError as exc:
             assert "QA demo recording object key must be scoped to this run" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected out-of-scope recording key to block PR evidence update")
+            raise AssertionError(
+                "expected out-of-scope recording key to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismatch_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismatch_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         url_probe.return_value = 200
-        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
-            body="## Summary\n- change",
-            title="Demo PR",
-            base_ref="main",
+        github_client_mock.return_value.get_pull_request_details.return_value = (
+            SimpleNamespace(
+                body="## Summary\n- change",
+                title="Demo PR",
+                base_ref="main",
+            )
         )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6138,33 +7652,50 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismat
                 required_capture_targets=("browser",),
             )
         except RuntimeError as exc:
-            assert "QA demo recording URL must match its uploaded object key" in str(exc)
+            assert "QA demo recording URL must match its uploaded object key" in str(
+                exc
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected URL/object-key mismatch to block PR evidence update")
+            raise AssertionError(
+                "expected URL/object-key mismatch to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         url_probe.return_value = 200
-        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
-            body="## Summary\n- change",
-            title="Demo PR",
-            base_ref="main",
+        github_client_mock.return_value.get_pull_request_details.return_value = (
+            SimpleNamespace(
+                body="## Summary\n- change",
+                title="Demo PR",
+                base_ref="main",
+            )
         )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6193,25 +7724,40 @@ def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_u
         except RuntimeError as exc:
             assert "QA demo evidence recording metadata is not serializable" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected unsafe recording metadata to block PR evidence update")
+            raise AssertionError(
+                "expected unsafe recording metadata to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture_target_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture_target_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                settings=SimpleNamespace(
+                    secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1
+                ),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6237,27 +7783,44 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture
                 required_capture_targets=("browser", "ios"),
             )
         except RuntimeError as exc:
-            assert "QA demo evidence is missing required capture target(s): ios" in str(exc)
+            assert "QA demo evidence is missing required capture target(s): ios" in str(
+                exc
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected missing required capture target to block PR evidence update")
+            raise AssertionError(
+                "expected missing required capture target to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_missing_required_recording_count_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_missing_required_recording_count_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                settings=SimpleNamespace(
+                    secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1
+                ),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6284,15 +7847,22 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_recordi
                 required_recording_counts={"browser": 2},
             )
         except RuntimeError as exc:
-            assert "QA demo evidence is missing required recording count(s): browser requires 2, recorded 1" in str(exc)
+            assert (
+                "QA demo evidence is missing required recording count(s): browser requires 2, recorded 1"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected missing required recording count to block PR evidence update")
+            raise AssertionError(
+                "expected missing required recording count to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_recording() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_recording() -> (
+    None
+):
     with patch(
         "orchestrator.core.qa.demo_service._default_artifact_url_probe",
         side_effect=RuntimeError("object expired"),
@@ -6302,9 +7872,14 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6345,19 +7920,32 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
         except RuntimeError as exc:
             assert "QA demo artifact URL is not reachable" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected unreachable accumulated recording to block PR evidence update")
+            raise AssertionError(
+                "expected unreachable accumulated recording to block PR evidence update"
+            )
 
 
-def test_update_pull_request_with_demo_evidence_rejects_recording_without_matching_scenario() -> None:
-    with patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe:
+def test_update_pull_request_with_demo_evidence_rejects_recording_without_matching_scenario() -> (
+    None
+):
+    with patch(
+        "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+    ) as url_probe:
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                settings=SimpleNamespace(
+                    secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1
+                ),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[],
@@ -6375,23 +7963,39 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_without_matchi
                 ),
             )
         except RuntimeError as exc:
-            assert "missing matching executable scenario(s): browser: Browser walkthrough" in str(exc)
+            assert (
+                "missing matching executable scenario(s): browser: Browser walkthrough"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected orphaned recording proof to block PR evidence update")
+            raise AssertionError(
+                "expected orphaned recording proof to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_recording_key() -> None:
-    with patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe:
+def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_recording_key() -> (
+    None
+):
+    with patch(
+        "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+    ) as url_probe:
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                settings=SimpleNamespace(
+                    secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1
+                ),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6425,26 +8029,42 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_re
                 ),
             )
         except RuntimeError as exc:
-            assert "recording proof keys must be unique before PR evidence: browser: Browser walkthrough" in str(exc)
+            assert (
+                "recording proof keys must be unique before PR evidence: browser: Browser walkthrough"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected duplicate recording proof key to block PR evidence update")
+            raise AssertionError(
+                "expected duplicate recording proof key to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6486,33 +8106,51 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_bef
                 required_recording_counts={"browser": 2},
             )
         except RuntimeError as exc:
-            assert "QA demo recording object keys must be unique before PR evidence" in str(exc)
+            assert (
+                "QA demo recording object keys must be unique before PR evidence"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected duplicate object key to block PR evidence update")
+            raise AssertionError(
+                "expected duplicate object key to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_missing_content_sha256_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_missing_content_sha256_before_url_probe() -> (
+    None
+):
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         url_probe.return_value = 200
-        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
-            body="## Summary\n- change",
-            title="Demo PR",
-            base_ref="main",
+        github_client_mock.return_value.get_pull_request_details.return_value = (
+            SimpleNamespace(
+                body="## Summary\n- change",
+                title="Demo PR",
+                base_ref="main",
+            )
         )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6537,15 +8175,22 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_content_sha256_b
                 required_recording_counts={"browser": 1},
             )
         except RuntimeError as exc:
-            assert "QA demo recording content sha256 is required before PR evidence" in str(exc)
+            assert (
+                "QA demo recording content sha256 is required before PR evidence"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected missing content sha256 to block PR evidence update")
+            raise AssertionError(
+                "expected missing content sha256 to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256_before_url_probe() -> None:
+def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256_before_url_probe() -> (
+    None
+):
     duplicated_digest = "a" * 64
     recordings = [
         SimpleNamespace(
@@ -6570,23 +8215,34 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256
         ),
     ]
     with (
-        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+        patch(
+            "orchestrator.core.qa.demo_service.github_client_from_tenant_config"
+        ) as github_client_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_artifact_url_probe"
+        ) as url_probe,
     ):
         url_probe.return_value = 200
-        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
-            body="## Summary\n- change",
-            title="Demo PR",
-            base_ref="main",
+        github_client_mock.return_value.get_pull_request_details.return_value = (
+            SimpleNamespace(
+                body="## Summary\n- change",
+                title="Demo PR",
+                base_ref="main",
+            )
         )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
-                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    github_repository="https://github.com/acme/repo",
+                ),
                 run=SimpleNamespace(run_id="run-1"),
-                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                workflow_result=SimpleNamespace(
+                    pr_url="https://github.com/acme/repo/pull/8"
+                ),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
                     scenarios=[
@@ -6609,9 +8265,14 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256
                 required_recording_counts={"browser": 2},
             )
         except RuntimeError as exc:
-            assert "QA demo recording content sha256 values must be unique before PR evidence" in str(exc)
+            assert (
+                "QA demo recording content sha256 values must be unique before PR evidence"
+                in str(exc)
+            )
         else:  # pragma: no cover
-            raise AssertionError("expected duplicate content sha256 to block PR evidence update")
+            raise AssertionError(
+                "expected duplicate content sha256 to block PR evidence update"
+            )
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()

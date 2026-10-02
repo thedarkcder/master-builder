@@ -90,7 +90,8 @@ def _bootstrap_published_execution_artifact(
         commit_sha=start_point_sha,
         diff_stat={
             "source": "published_start_point",
-            "start_point_ref": str(context.get("start_point_ref") or "").strip() or None,
+            "start_point_ref": str(context.get("start_point_ref") or "").strip()
+            or None,
         },
     )
     return True
@@ -116,7 +117,9 @@ def start_run(
         run.dispatch_claimed_at = None
         run.started_at = started_at
         run.last_heartbeat_at = started_at
-        run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
+        run.worker_service_instance_id = (
+            str(worker_service_instance_id or "").strip() or None
+        )
         apply_execution_for_run_started(
             session=session,
             run=run,
@@ -132,18 +135,27 @@ def start_run(
             Run.run_id == run.run_id,
             Run.status == expected_status,
             *(
-                [Run.worker_service_instance_id == str(worker_service_instance_id or "").strip()]
-                if normalized_claim_id is not None and str(worker_service_instance_id or "").strip()
+                [
+                    Run.worker_service_instance_id
+                    == str(worker_service_instance_id or "").strip()
+                ]
+                if normalized_claim_id is not None
+                and str(worker_service_instance_id or "").strip()
                 else []
             ),
-            *([Run.claim_id == normalized_claim_id] if normalized_claim_id is not None else []),
+            *(
+                [Run.claim_id == normalized_claim_id]
+                if normalized_claim_id is not None
+                else []
+            ),
         )
         .values(
             status=RUN_STATUS_RUNNING,
             dispatch_claimed_at=None,
             started_at=started_at,
             last_heartbeat_at=started_at,
-            worker_service_instance_id=str(worker_service_instance_id or "").strip() or None,
+            worker_service_instance_id=str(worker_service_instance_id or "").strip()
+            or None,
         )
     )
     if int(result.rowcount or 0) == 0:
@@ -153,7 +165,9 @@ def start_run(
     run.dispatch_claimed_at = None
     run.started_at = started_at
     run.last_heartbeat_at = started_at
-    run.worker_service_instance_id = str(worker_service_instance_id or "").strip() or None
+    run.worker_service_instance_id = (
+        str(worker_service_instance_id or "").strip() or None
+    )
     apply_execution_for_run_started(
         session=session,
         run=run,
@@ -335,7 +349,11 @@ def _normalize_stage_updates(
 ) -> list[dict[str, str]]:
     payloads: list[dict[str, str]] = []
     for item in stage_updates:
-        normalized = item if isinstance(item, WorkerStageUpdate) else WorkerStageUpdate.load(item)
+        normalized = (
+            item
+            if isinstance(item, WorkerStageUpdate)
+            else WorkerStageUpdate.load(item)
+        )
         if normalized is None:
             continue
         payloads.append(normalized.to_payload())
@@ -354,7 +372,9 @@ def _non_stale_requeue_resume_stage(*, workflow_result: WorkflowResult) -> str |
     return None
 
 
-def _non_stale_requeue_waiting_release_id(*, workflow_result: WorkflowResult) -> str | None:
+def _non_stale_requeue_waiting_release_id(
+    *, workflow_result: WorkflowResult
+) -> str | None:
     for item in reversed(list(workflow_result.orchestration_stage_trace or [])):
         if not isinstance(item, dict):
             continue
@@ -542,9 +562,13 @@ def requeue_workflow_result_for_stale_snapshot(
         workflow = _workflow_for_run(session, run=run)
         if workflow is not None and str(run.pr_url or "").strip():
             workflow.pr_url = run.pr_url
-        waiting_release_id = _non_stale_requeue_waiting_release_id(workflow_result=workflow_result)
+        waiting_release_id = _non_stale_requeue_waiting_release_id(
+            workflow_result=workflow_result
+        )
         if waiting_release_id is not None:
-            snapshot.context.execution_context["qa_demo_waiting_release_id"] = waiting_release_id
+            snapshot.context.execution_context["qa_demo_waiting_release_id"] = (
+                waiting_release_id
+            )
         else:
             snapshot.context.execution_context.pop("qa_demo_waiting_release_id", None)
         resume_stage = _non_stale_requeue_resume_stage(workflow_result=workflow_result)
@@ -628,7 +652,9 @@ def persist_stage_checkpoint(
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_stage_checkpoint(checkpoint)
     snapshot.apply_execution_context(execution_context)
-    requires_durable_artifact = snapshot_requires_durable_execution_artifact(snapshot.dump())
+    requires_durable_artifact = snapshot_requires_durable_execution_artifact(
+        snapshot.dump()
+    )
     durable_artifact = (
         latest_pushed_execution_artifact_for_run(
             session=session,
@@ -655,7 +681,9 @@ def persist_stage_checkpoint(
         )
     elif requires_durable_artifact:
         snapshot.context.execution_context["execution_checkpoint_reusable"] = True
-        snapshot.context.execution_context.pop("execution_checkpoint_reusable_reason", None)
+        snapshot.context.execution_context.pop(
+            "execution_checkpoint_reusable_reason", None
+        )
     run.plan = snapshot.dump()
     if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
         run.pr_url = checkpoint.dev_result.pr_url

@@ -76,7 +76,9 @@ def issue_discord_oauth_state(
         "redirect_to": redirect_to,
         "expires_at": expires_at.isoformat(),
     }
-    encoded = _urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    encoded = _urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    )
     signature = _sign_state(settings=settings, encoded_payload=encoded)
     return f"{encoded}.{signature}"
 
@@ -104,18 +106,24 @@ def parse_discord_oauth_state(*, settings: Settings, state: str) -> DiscordOAuth
     return DiscordOAuthState(
         tenant_id=str(payload.get("tenant_id") or "").strip(),
         user_id=str(payload.get("user_id") or "").strip(),
-        redirect_to=str(payload.get("redirect_to") or "/get-started").strip() or "/get-started",
+        redirect_to=str(payload.get("redirect_to") or "/get-started").strip()
+        or "/get-started",
         expires_at=expires_at,
     )
 
 
-def exchange_code_for_user(*, config: DiscordOAuthConfig, code: str) -> DiscordOAuthUser:
+def exchange_code_for_user(
+    *, config: DiscordOAuthConfig, code: str
+) -> DiscordOAuthUser:
     if not config.exchange_configured:
         raise DiscordOAuthError("Discord OAuth is not configured")
     token_payload = _discord_http_json(
         url="https://discord.com/api/v10/oauth2/token",
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
         data=urlencode(
             {
                 "client_id": config.client_id,
@@ -132,7 +140,10 @@ def exchange_code_for_user(*, config: DiscordOAuthConfig, code: str) -> DiscordO
     user_payload = _discord_http_json(
         url="https://discord.com/api/v10/users/@me",
         method="GET",
-        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"},
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        },
         data=None,
     )
     discord_user_id = str(user_payload.get("id") or "").strip()
@@ -147,14 +158,18 @@ def exchange_code_for_user(*, config: DiscordOAuthConfig, code: str) -> DiscordO
     )
 
 
-def _discord_http_json(*, url: str, method: str, headers: dict[str, str], data: bytes | None) -> dict:
+def _discord_http_json(
+    *, url: str, method: str, headers: dict[str, str], data: bytes | None
+) -> dict:
     request = Request(url=url, headers=headers, data=data, method=method)
     try:
         with urlopen(request, timeout=30) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
         error_body = exc.read().decode("utf-8")
-        raise DiscordOAuthError(f"Discord OAuth request failed ({exc.code}): {error_body}") from exc
+        raise DiscordOAuthError(
+            f"Discord OAuth request failed ({exc.code}): {error_body}"
+        ) from exc
     except URLError as exc:
         raise DiscordOAuthError(f"Discord OAuth request failed: {exc}") from exc
     try:

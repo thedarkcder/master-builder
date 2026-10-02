@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.runs.service import EnqueueRunResult, enqueue_run, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.runs.service import (
+    EnqueueRunResult,
+    enqueue_run,
+    resolve_precheck_outcome_for_enqueue,
+)
 
 
 def enqueue_issue_run_with_precheck(
@@ -28,7 +32,9 @@ def enqueue_issue_run_with_precheck(
         issue_description=issue_description,
         repo_url=repo_url,
         delivery_id=delivery_id,
-        precheck_outcome=resolve_precheck_outcome_for_enqueue(precheck_outcome=precheck_outcome),
+        precheck_outcome=resolve_precheck_outcome_for_enqueue(
+            precheck_outcome=precheck_outcome
+        ),
         required_worker_capability=required_worker_capability,
         max_concurrent_runs=max_concurrent_runs,
     )

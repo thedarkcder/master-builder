@@ -7,7 +7,9 @@ from sqlalchemy import select
 from temporalio import activity
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.runs.human_input_service import resume_run_from_human_input_answer
+from orchestrator.core.runs.human_input_service import (
+    resume_run_from_human_input_answer,
+)
 from orchestrator.core.workflow.operation_service import (
     ACTIVE_OPERATION_ATTEMPT_STATUSES,
     touch_workflow_operation_attempt_heartbeat,
@@ -25,7 +27,12 @@ from orchestrator.core.workflow.type_catalog import (
     get_workflow_type,
 )
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    WorkflowExecution,
+    WorkflowOperationAttempt,
+)
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
@@ -93,7 +100,11 @@ class _WorkflowOperationAttemptHeartbeatController:
         try:
             with self._session_factory() as session:
                 attempt = session.get(WorkflowOperationAttempt, self._attempt_id)
-                if attempt is None or str(attempt.status or "").strip().lower() not in ACTIVE_OPERATION_ATTEMPT_STATUSES:
+                if (
+                    attempt is None
+                    or str(attempt.status or "").strip().lower()
+                    not in ACTIVE_OPERATION_ATTEMPT_STATUSES
+                ):
                     return False
                 touch_workflow_operation_attempt_heartbeat(
                     session,
@@ -124,7 +135,9 @@ def _pending_request_id(*, session, workflow_id: str) -> str | None:
     return str(request_id or "").strip() or None
 
 
-def _result_for_run(*, session, workflow_id: str, run: Run, claim_id: str | None = None) -> DevelopmentTeamRunActivityResult:
+def _result_for_run(
+    *, session, workflow_id: str, run: Run, claim_id: str | None = None
+) -> DevelopmentTeamRunActivityResult:
     return DevelopmentTeamRunActivityResult(
         workflow_id=workflow_id,
         run_id=str(run.run_id),
@@ -140,7 +153,9 @@ def _result_for_run(*, session, workflow_id: str, run: Run, claim_id: str | None
     )
 
 
-def _run_result_from_payload(payload: dict[str, object]) -> DevelopmentTeamRunActivityResult:
+def _run_result_from_payload(
+    payload: dict[str, object],
+) -> DevelopmentTeamRunActivityResult:
     return DevelopmentTeamRunActivityResult(
         workflow_id=str(payload["workflow_id"]),
         run_id=str(payload["run_id"]),
@@ -152,7 +167,9 @@ def _run_result_from_payload(payload: dict[str, object]) -> DevelopmentTeamRunAc
     )
 
 
-def _run_result_to_payload(result: DevelopmentTeamRunActivityResult) -> dict[str, object]:
+def _run_result_to_payload(
+    result: DevelopmentTeamRunActivityResult,
+) -> dict[str, object]:
     return {
         "workflow_id": result.workflow_id,
         "run_id": result.run_id,
@@ -191,13 +208,17 @@ def _finish_workflow_step_for_run_result(
 
 
 @activity.defn(name="execute_claimed_run_activity")
-def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> DevelopmentTeamRunActivityResult:
+def execute_claimed_run_activity(
+    payload: DevelopmentTeamRunWorkflowInput,
+) -> DevelopmentTeamRunActivityResult:
     session_factory = create_session_factory()
     with session_factory() as session:
         workflow = session.get(WorkflowExecution, str(payload.workflow_id))
         run = session.get(Run, str(payload.run_id))
         if workflow is None or run is None:
-            raise RuntimeError(f"Temporal run activity missing workflow/run for workflow_id={payload.workflow_id} run_id={payload.run_id}")
+            raise RuntimeError(
+                f"Temporal run activity missing workflow/run for workflow_id={payload.workflow_id} run_id={payload.run_id}"
+            )
         return _result_for_run(
             session=session,
             workflow_id=workflow.workflow_id,
@@ -207,18 +228,28 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
 
 
 @activity.defn(name="resume_human_input_activity")
-def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTeamRunActivityResult:
+def resume_human_input_activity(
+    payload: HumanInputResumeInput,
+) -> DevelopmentTeamRunActivityResult:
     settings = get_settings()
     session_factory = create_session_factory()
     with session_factory() as session:
         request = session.get(RunHumanInputRequest, str(payload.request_id))
         if request is None:
-            raise RuntimeError(f"Temporal resume activity missing request {payload.request_id}")
+            raise RuntimeError(
+                f"Temporal resume activity missing request {payload.request_id}"
+            )
         workflow = session.get(WorkflowExecution, str(request.workflow_id))
         if workflow is None:
-            raise RuntimeError(f"Temporal resume activity missing workflow {request.workflow_id}")
-        workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
-        lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+            raise RuntimeError(
+                f"Temporal resume activity missing workflow {request.workflow_id}"
+            )
+        workflow_type = get_workflow_type(
+            session, workflow_type_key=workflow.workflow_type_key
+        )
+        lifecycle = WorkflowExecutionProjection(
+            session=session, workflow=workflow, workflow_type=workflow_type
+        )
         step = start_workflow_step_attempt(
             lifecycle=lifecycle,
             run_id=request.source_run_id,
@@ -231,6 +262,7 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
         session.commit()
 
         try:
+
             def _execute(_context) -> DevelopmentTeamRunActivityResult:  # noqa: ANN001
                 resumed_run = resume_run_from_human_input_answer(
                     session=session,
@@ -243,7 +275,8 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                     session=session,
                     workflow_id=workflow.workflow_id,
                     run=resumed_run,
-                    claim_id=str(getattr(resumed_run, "claim_id", "") or "").strip() or None,
+                    claim_id=str(getattr(resumed_run, "claim_id", "") or "").strip()
+                    or None,
                 )
 
             result = run_work_unit(
@@ -252,7 +285,10 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                 operation_attempt=step.attempt,
                 unit_key="human_input_resume.resume",
                 idempotency_key=f"human-input-resume:{request.request_id}",
-                input_payload={"request_id": request.request_id, "workflow_id": workflow.workflow_id},
+                input_payload={
+                    "request_id": request.request_id,
+                    "workflow_id": workflow.workflow_id,
+                },
                 execute=_execute,
                 serialize=_run_result_to_payload,
                 deserialize=_run_result_from_payload,
@@ -266,7 +302,11 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
             session.commit()
             return result
         except Exception as exc:  # noqa: BLE001
-            logger.exception("temporal_resume_execute_failed workflow_id=%s request_id=%s", workflow.workflow_id, request.request_id)
+            logger.exception(
+                "temporal_resume_execute_failed workflow_id=%s request_id=%s",
+                workflow.workflow_id,
+                request.request_id,
+            )
             fail_workflow_step_attempt(
                 lifecycle=lifecycle,
                 step=step,

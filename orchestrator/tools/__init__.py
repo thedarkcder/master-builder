@@ -35,7 +35,11 @@ from orchestrator.tools.atlassian_oauth import (
     AtlassianOAuthTokenSet,
     JiraProject,
 )
-from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError, DiscordTextChannel
+from orchestrator.tools.discord_api import (
+    DiscordApiClient,
+    DiscordApiError,
+    DiscordTextChannel,
+)
 
 __all__ = [
     "WorkflowBootstrapResult",

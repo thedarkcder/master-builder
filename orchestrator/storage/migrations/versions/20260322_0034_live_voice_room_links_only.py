@@ -36,10 +36,16 @@ def _rewrite_discord_config(raw_value: object) -> dict | None:
     if not isinstance(raw_value, dict):
         return dict(raw_value or {})
     discord_config = dict(raw_value)
-    normalized_links = _normalize_channel_id_map(discord_config.get("live_voice_room_links"))
+    normalized_links = _normalize_channel_id_map(
+        discord_config.get("live_voice_room_links")
+    )
     if not normalized_links:
-        legacy_voice_channel_id = str(discord_config.get("live_voice_channel_id") or "").strip()
-        legacy_linked_channel_id = str(discord_config.get("live_voice_linked_text_channel_id") or "").strip()
+        legacy_voice_channel_id = str(
+            discord_config.get("live_voice_channel_id") or ""
+        ).strip()
+        legacy_linked_channel_id = str(
+            discord_config.get("live_voice_linked_text_channel_id") or ""
+        ).strip()
         if legacy_voice_channel_id and legacy_linked_channel_id:
             normalized_links = {
                 legacy_voice_channel_id: legacy_linked_channel_id,
@@ -67,7 +73,9 @@ def upgrade() -> None:
         sa.column("discord_config", sa.JSON()),
     )
 
-    tenant_rows = bind.execute(sa.select(tenants.c.tenant_id, tenants.c.discord_config)).all()
+    tenant_rows = bind.execute(
+        sa.select(tenants.c.tenant_id, tenants.c.discord_config)
+    ).all()
     for row in tenant_rows:
         current_config = row.discord_config
         rewritten_config = _rewrite_discord_config(current_config)
@@ -78,7 +86,9 @@ def upgrade() -> None:
                 .values(discord_config=rewritten_config)
             )
 
-    project_rows = bind.execute(sa.select(projects.c.project_id, projects.c.discord_config)).all()
+    project_rows = bind.execute(
+        sa.select(projects.c.project_id, projects.c.discord_config)
+    ).all()
     for row in project_rows:
         current_config = row.discord_config
         rewritten_config = _rewrite_discord_config(current_config)

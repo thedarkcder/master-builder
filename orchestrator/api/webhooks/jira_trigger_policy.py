@@ -51,7 +51,11 @@ def resolve_jira_trigger_decision(
         and from_status is not None
         and from_status.casefold() != to_status.casefold()
     ):
-        trigger_reason = "status_transition_to_todo" if to_status.strip().lower() == "to do" else "status_transition_to_ready"
+        trigger_reason = (
+            "status_transition_to_todo"
+            if to_status.strip().lower() == "to do"
+            else "status_transition_to_ready"
+        )
     if trigger_reason == "status_recheck" and ready_trigger_mode == "transition_only":
         return JiraTriggerDecision(
             trigger_reason=trigger_reason,
@@ -87,10 +91,14 @@ def resolve_decision_gate_cooldown_block(
         return None
     if blocked_at.tzinfo is None:
         blocked_at = blocked_at.replace(tzinfo=timezone.utc)
-    remaining_seconds = max(0, int((cooldown_window - (now - blocked_at)).total_seconds()))
+    remaining_seconds = max(
+        0, int((cooldown_window - (now - blocked_at)).total_seconds())
+    )
     if remaining_seconds <= 0:
         return None
-    return JiraCooldownBlock(run_id=blocked_run.run_id, remaining_seconds=remaining_seconds)
+    return JiraCooldownBlock(
+        run_id=blocked_run.run_id, remaining_seconds=remaining_seconds
+    )
 
 
 def resolve_retry_source(

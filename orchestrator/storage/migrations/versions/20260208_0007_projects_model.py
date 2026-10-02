@@ -84,7 +84,11 @@ def _jira_project_key_from_config(jira_config: object) -> str:
 
     ready_jql = jira_config.get(JiraConfigKey.READY_JQL.value)
     if isinstance(ready_jql, str):
-        match = re.search(r"\bproject\s*(?:=|IN\s*\()\s*\"?([A-Z][A-Z0-9_]+)", ready_jql, flags=re.IGNORECASE)
+        match = re.search(
+            r"\bproject\s*(?:=|IN\s*\()\s*\"?([A-Z][A-Z0-9_]+)",
+            ready_jql,
+            flags=re.IGNORECASE,
+        )
         if match:
             return match.group(1).strip().upper()
     return ""
@@ -108,7 +112,9 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("github_repository", sa.String(length=512), nullable=False),
         sa.Column("jira_project_key", sa.String(length=64), nullable=False),
-        sa.Column("is_archived", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "is_archived", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -121,13 +127,21 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("project_id"),
-        sa.UniqueConstraint("tenant_id", "github_repository", name="uq_projects_tenant_repo"),
-        sa.UniqueConstraint("tenant_id", "jira_project_key", name="uq_projects_tenant_jira_key"),
+        sa.UniqueConstraint(
+            "tenant_id", "github_repository", name="uq_projects_tenant_repo"
+        ),
+        sa.UniqueConstraint(
+            "tenant_id", "jira_project_key", name="uq_projects_tenant_jira_key"
+        ),
     )
     op.create_index("ix_projects_tenant_id", "projects", ["tenant_id"], unique=False)
-    op.create_index("ix_projects_is_archived", "projects", ["is_archived"], unique=False)
+    op.create_index(
+        "ix_projects_is_archived", "projects", ["is_archived"], unique=False
+    )
 
     connection = op.get_bind()
     projects_table = sa.table(

@@ -72,9 +72,13 @@ class CoolifyApiClient:
                 body=error_body,
             ) from exc
         except TimeoutError as exc:
-            raise CoolifyApiError(f"Coolify API request timed out for {method} {path}") from exc
+            raise CoolifyApiError(
+                f"Coolify API request timed out for {method} {path}"
+            ) from exc
         except URLError as exc:
-            raise CoolifyApiError(f"Coolify API request failed for {method} {path}: {exc.reason}") from exc
+            raise CoolifyApiError(
+                f"Coolify API request failed for {method} {path}: {exc.reason}"
+            ) from exc
 
         if not response_body:
             return {}
@@ -88,7 +92,9 @@ class CoolifyApiClient:
         )
         application_uuid = response.get("uuid") or response.get("application_uuid")
         if not isinstance(application_uuid, str) or not application_uuid.strip():
-            raise CoolifyApiError("Coolify create application response did not include uuid")
+            raise CoolifyApiError(
+                "Coolify create application response did not include uuid"
+            )
         return application_uuid.strip()
 
     def create_private_github_app_application(self, *, payload: dict) -> str:
@@ -99,7 +105,9 @@ class CoolifyApiClient:
         )
         application_uuid = response.get("uuid") or response.get("application_uuid")
         if not isinstance(application_uuid, str) or not application_uuid.strip():
-            raise CoolifyApiError("Coolify create private GitHub application response did not include uuid")
+            raise CoolifyApiError(
+                "Coolify create private GitHub application response did not include uuid"
+            )
         return application_uuid.strip()
 
     def update_application(self, *, application_uuid: str, payload: dict) -> dict:
@@ -121,7 +129,9 @@ class CoolifyApiClient:
             path=f"/applications/{application_uuid}",
         )
 
-    def bulk_update_application_envs(self, *, application_uuid: str, payload: dict) -> dict:
+    def bulk_update_application_envs(
+        self, *, application_uuid: str, payload: dict
+    ) -> dict:
         return self._request_json(
             method="PATCH",
             path=f"/applications/{application_uuid}/envs/bulk",
@@ -144,11 +154,15 @@ class CoolifyApiClient:
         if deployment_uuid is None:
             return None
         if not isinstance(deployment_uuid, str):
-            raise CoolifyApiError("Coolify start application response returned non-string deployment uuid")
+            raise CoolifyApiError(
+                "Coolify start application response returned non-string deployment uuid"
+            )
         normalized = deployment_uuid.strip()
         return normalized or None
 
-    def create_application_storage(self, *, application_uuid: str, payload: dict) -> str | None:
+    def create_application_storage(
+        self, *, application_uuid: str, payload: dict
+    ) -> str | None:
         response = self._request_json(
             method="POST",
             path=f"/applications/{application_uuid}/storages",
@@ -158,11 +172,15 @@ class CoolifyApiClient:
         if storage_uuid is None:
             return None
         if not isinstance(storage_uuid, str):
-            raise CoolifyApiError("Coolify create application storage response returned non-string uuid")
+            raise CoolifyApiError(
+                "Coolify create application storage response returned non-string uuid"
+            )
         normalized = storage_uuid.strip()
         return normalized or None
 
-    def update_application_storage(self, *, application_uuid: str, payload: dict) -> dict:
+    def update_application_storage(
+        self, *, application_uuid: str, payload: dict
+    ) -> dict:
         return self._request_json(
             method="PATCH",
             path=f"/applications/{application_uuid}/storages",
@@ -177,7 +195,9 @@ class CoolifyApiClient:
         )
         database_uuid = response.get("uuid") or response.get("database_uuid")
         if not isinstance(database_uuid, str) or not database_uuid.strip():
-            raise CoolifyApiError("Coolify create database response did not include uuid")
+            raise CoolifyApiError(
+                "Coolify create database response did not include uuid"
+            )
         return database_uuid.strip()
 
     def update_database(self, *, database_uuid: str, payload: dict) -> dict:
@@ -187,7 +207,9 @@ class CoolifyApiClient:
             payload=payload,
         )
 
-    def create_database_backup(self, *, database_uuid: str, payload: dict) -> str | None:
+    def create_database_backup(
+        self, *, database_uuid: str, payload: dict
+    ) -> str | None:
         response = self._request_json(
             method="POST",
             path=f"/databases/{database_uuid}/backups",
@@ -197,11 +219,15 @@ class CoolifyApiClient:
         if backup_uuid is None:
             return None
         if not isinstance(backup_uuid, str):
-            raise CoolifyApiError("Coolify create database backup response returned non-string uuid")
+            raise CoolifyApiError(
+                "Coolify create database backup response returned non-string uuid"
+            )
         normalized = backup_uuid.strip()
         return normalized or None
 
-    def update_database_backup(self, *, database_uuid: str, backup_uuid: str, payload: dict) -> dict:
+    def update_database_backup(
+        self, *, database_uuid: str, backup_uuid: str, payload: dict
+    ) -> dict:
         return self._request_json(
             method="PATCH",
             path=f"/databases/{database_uuid}/backups/{backup_uuid}",
@@ -227,14 +253,18 @@ class CoolifyApiClient:
             return [backup for backup in response if isinstance(backup, dict)]
         return []
 
-    def list_database_backup_executions(self, *, database_uuid: str, backup_uuid: str) -> list[dict]:
+    def list_database_backup_executions(
+        self, *, database_uuid: str, backup_uuid: str
+    ) -> list[dict]:
         response = self._request_json(
             method="GET",
             path=f"/databases/{database_uuid}/backups/{backup_uuid}/executions",
         )
         executions = response.get("executions")
         if isinstance(executions, list):
-            return [execution for execution in executions if isinstance(execution, dict)]
+            return [
+                execution for execution in executions if isinstance(execution, dict)
+            ]
         if isinstance(response, list):
             return [execution for execution in response if isinstance(execution, dict)]
         return []
@@ -247,7 +277,9 @@ class CoolifyApiClient:
         )
         service_uuid = response.get("uuid") or response.get("service_uuid")
         if not isinstance(service_uuid, str) or not service_uuid.strip():
-            raise CoolifyApiError("Coolify create service response did not include uuid")
+            raise CoolifyApiError(
+                "Coolify create service response did not include uuid"
+            )
         return service_uuid.strip()
 
     def update_service(self, *, service_uuid: str, payload: dict) -> dict:
@@ -298,4 +330,6 @@ class CoolifyApiClient:
             deployments = response.get(key)
             if isinstance(deployments, list):
                 return [item for item in deployments if isinstance(item, dict)]
-        raise CoolifyApiError("Coolify list application deployments response was not a list")
+        raise CoolifyApiError(
+            "Coolify list application deployments response was not a list"
+        )

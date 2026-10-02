@@ -8,10 +8,20 @@ from sqlalchemy.orm import Session
 from orchestrator.api.webhooks.jira_admission_flow import (
     evaluate_precheck_decision_with_labels,
 )
-from orchestrator.api.webhooks.jira_board_location import resolve_project_issue_board_location
-from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
-from orchestrator.core.communications import DiscordTenantNotificationAction, TransportAction
-from orchestrator.core.communications.execution_admission_format import present_jira_admission
+from orchestrator.api.webhooks.jira_board_location import (
+    resolve_project_issue_board_location,
+)
+from orchestrator.api.webhooks.jira_webhook_types import (
+    JiraWebhookContext,
+    jira_webhook_response,
+)
+from orchestrator.core.communications import (
+    DiscordTenantNotificationAction,
+    TransportAction,
+)
+from orchestrator.core.communications.execution_admission_format import (
+    present_jira_admission,
+)
 from orchestrator.core.communications.jira_enqueue_presentation import (
     BacklogPreRunCheckPresentation,
     build_backlog_pre_run_check_presentation,
@@ -40,7 +50,9 @@ def stage_handle_backlog_followup_issue_created(
 ) -> dict | None:
     if context.webhook_event != "issue_created":
         return None
-    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels}
+    normalized_labels = {
+        str(label).strip().casefold() for label in context.issue_labels
+    }
     if "backlog-only" not in normalized_labels:
         return None
     logger.info(
@@ -55,6 +67,7 @@ def stage_handle_backlog_followup_issue_created(
         reason="backlog_followup_issue_created",
         webhook_event=context.webhook_event,
     )
+
 
 def stage_handle_run_board_gate(
     *,
@@ -113,11 +126,13 @@ def stage_handle_run_board_gate(
             ready_label=tenant_ready_label(context.tenant),
         )
         if context.webhook_event == "issue_created":
-            actions = (_build_backlog_pre_run_check_notification_action(
-                context=context,
-                board_id=board_id,
-                pre_run_check=pre_run_check,
-            ),)
+            actions = (
+                _build_backlog_pre_run_check_notification_action(
+                    context=context,
+                    board_id=board_id,
+                    pre_run_check=pre_run_check,
+                ),
+            )
         else:
             actions = ()
         logger.info(
@@ -171,7 +186,9 @@ def stage_handle_run_board_gate(
                 context=context,
                 session=session,
                 admission=admission,
-                extra_detail=f"board_id={board_id}" if detail is None else f"board_id={board_id}; detail={detail}",
+                extra_detail=f"board_id={board_id}"
+                if detail is None
+                else f"board_id={board_id}; detail={detail}",
             ),
         ),
     )
@@ -186,7 +203,9 @@ def _build_enqueue_skipped_notification_action(
 ) -> DiscordTenantNotificationAction:
     message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
-        issue_url=tenant_jira_issue_url(session=session, tenant=context.tenant, issue_key=context.issue_key),
+        issue_url=tenant_jira_issue_url(
+            session=session, tenant=context.tenant, issue_key=context.issue_key
+        ),
         issue_status=context.issue_status,
         admission=admission,
         extra_detail=extra_detail,

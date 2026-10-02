@@ -25,7 +25,9 @@ _PM_PARENT_LABEL = "pm-parent"
 _ENGINEERING_CHILD_LABEL = "engineering-child"
 
 
-def _string_list_field(*, issue_index: int, field_name: str, raw_value: object) -> list[str]:
+def _string_list_field(
+    *, issue_index: int, field_name: str, raw_value: object
+) -> list[str]:
     if raw_value is None:
         return []
     if not isinstance(raw_value, list):
@@ -57,7 +59,9 @@ def _optional_string(*, issue_index: int, field_name: str, raw_value: object) ->
     return raw_value.strip()
 
 
-def _normalize_issue_key(raw_value: object, *, field_name: str, issue_index: int, issue_key_pattern) -> str | None:  # noqa: ANN001
+def _normalize_issue_key(
+    raw_value: object, *, field_name: str, issue_index: int, issue_key_pattern
+) -> str | None:  # noqa: ANN001
     if raw_value is None:
         return None
     if not isinstance(raw_value, str):
@@ -143,7 +147,9 @@ class PlanningPackageDraft:
 
     @property
     def blocked(self) -> bool:
-        return bool(self.planning_state) and not _is_planning_complete(self.planning_state)
+        return bool(self.planning_state) and not _is_planning_complete(
+            self.planning_state
+        )
 
     @property
     def planning_state_for_description(self) -> str | None:
@@ -154,7 +160,9 @@ class PlanningPackageDraft:
         return None
 
 
-def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: object) -> list[str]:
+def _string_list_from_stage(
+    *, stage_name: str, field_name: str, raw_value: object
+) -> list[str]:
     if raw_value is None:
         return []
     if not isinstance(raw_value, list):
@@ -175,7 +183,9 @@ def _string_list_from_stage(*, stage_name: str, field_name: str, raw_value: obje
     return values
 
 
-def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> list[TechnicalDecision]:
+def _technical_decisions_from_stage(
+    *, stage_name: str, raw_value: object
+) -> list[TechnicalDecision]:
     if raw_value is None:
         return []
     if not isinstance(raw_value, list):
@@ -201,11 +211,15 @@ def _technical_decisions_from_stage(*, stage_name: str, raw_value: object) -> li
                 )
             )
         except RuntimeError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
     return decisions
 
 
-def _merge_technical_decisions(*decision_groups: list[TechnicalDecision]) -> list[TechnicalDecision]:
+def _merge_technical_decisions(
+    *decision_groups: list[TechnicalDecision],
+) -> list[TechnicalDecision]:
     decisions: list[TechnicalDecision] = []
     seen: set[str] = set()
     for group in decision_groups:
@@ -233,7 +247,11 @@ def _planning_stage_summary_lines(*, stage_name: str, raw_stage: object) -> list
         ("required_tasks", "Required tasks"),
         ("acceptance_impacts", "Acceptance impacts"),
     ):
-        values = _string_list_from_stage(stage_name=stage_name, field_name=field_name, raw_value=raw_stage.get(field_name))
+        values = _string_list_from_stage(
+            stage_name=stage_name,
+            field_name=field_name,
+            raw_value=raw_stage.get(field_name),
+        )
         if values:
             lines.append(f"{stage_name.title()} {label}: {'; '.join(values)}")
     return lines
@@ -260,7 +278,9 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
         child_issues = raw_planning_package.get("engineering_children")
     if not isinstance(child_issues, list):
         child_issues = []
-    planning_state = _normalized_status(raw_planning_package.get("planning_state") or raw_planning_package.get("state"))
+    planning_state = _normalized_status(
+        raw_planning_package.get("planning_state") or raw_planning_package.get("state")
+    )
     summary_lines: list[str] = []
     technical_decision_groups: list[list[TechnicalDecision]] = []
     raw_top_level_technical_decisions = raw_planning_package.get("technical_decisions")
@@ -272,23 +292,30 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
             )
         )
     architecture_summary_raw = raw_planning_package.get("architecture_summary")
-    if architecture_summary_raw is not None and not isinstance(architecture_summary_raw, list):
+    if architecture_summary_raw is not None and not isinstance(
+        architecture_summary_raw, list
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Planning package architecture_summary must be a list of strings",
         )
     architecture_diagram_raw = raw_planning_package.get("architecture_diagram")
-    if architecture_diagram_raw is not None and not isinstance(architecture_diagram_raw, str):
+    if architecture_diagram_raw is not None and not isinstance(
+        architecture_diagram_raw, str
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Planning package architecture_diagram must be a string",
         )
     architecture_summary: list[str] = [
-        str(value).strip() for value in (architecture_summary_raw or []) if str(value).strip()
+        str(value).strip()
+        for value in (architecture_summary_raw or [])
+        if str(value).strip()
     ]
     architecture_diagram = (
         architecture_diagram_raw.strip()
-        if isinstance(architecture_diagram_raw, str) and architecture_diagram_raw.strip()
+        if isinstance(architecture_diagram_raw, str)
+        and architecture_diagram_raw.strip()
         else None
     )
     if isinstance(specialist_outputs, dict):
@@ -328,8 +355,12 @@ def normalize_planning_package(raw_planning_package: object) -> PlanningPackageD
                             raw_value=architecture_stage.get(field_name),
                         )
                     )
-                if architecture_diagram is None and isinstance(architecture_stage.get("mermaid_diagram"), str):
-                    architecture_diagram = architecture_stage.get("mermaid_diagram", "").strip() or None
+                if architecture_diagram is None and isinstance(
+                    architecture_stage.get("mermaid_diagram"), str
+                ):
+                    architecture_diagram = (
+                        architecture_stage.get("mermaid_diagram", "").strip() or None
+                    )
     return PlanningPackageDraft(
         planning_state=planning_state,
         specialist_summary=summary_lines,
@@ -383,9 +414,16 @@ class ParentIssueDraft:
         )
         return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
 
-    def normalized_issue_type(self, *, engineering_children: list[EngineeringChildDraft], available_issue_types: list[str]) -> str:
+    def normalized_issue_type(
+        self,
+        *,
+        engineering_children: list[EngineeringChildDraft],
+        available_issue_types: list[str],
+    ) -> str:
         del engineering_children
-        by_lower = {name.casefold(): name for name in available_issue_types if str(name).strip()}
+        by_lower = {
+            name.casefold(): name for name in available_issue_types if str(name).strip()
+        }
         if not by_lower:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -553,7 +591,11 @@ def parse_engineering_seed_drafts(
     planning_package: dict[str, Any] | None = None,
 ) -> EngineeringSeedDraftSet:
     clarification_questions = _parse_questions(plan_payload.get("questions"))
-    effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
+    effective_pm_status = _normalized_status(
+        pm_status
+        or plan_payload.get("pm_status")
+        or plan_payload.get("interview_status")
+    )
     if pm_status is not None and not _is_pm_complete(effective_pm_status):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -562,10 +604,17 @@ def parse_engineering_seed_drafts(
     effective_planning_package = normalize_planning_package(
         planning_package
         if planning_package is not None
-        else plan_payload.get("planning_package") or plan_payload.get("specialist_planning")
+        else plan_payload.get("planning_package")
+        or plan_payload.get("specialist_planning")
     )
-    planning_package_supplied = planning_package is not None or "planning_package" in plan_payload or "specialist_planning" in plan_payload
-    child_issue_drafts = effective_planning_package.child_issues or plan_payload.get("engineering_children")
+    planning_package_supplied = (
+        planning_package is not None
+        or "planning_package" in plan_payload
+        or "specialist_planning" in plan_payload
+    )
+    child_issue_drafts = effective_planning_package.child_issues or plan_payload.get(
+        "engineering_children"
+    )
     allow_empty_child_drafts = allow_empty_children or planning_package_supplied
     parent_issue = _parse_parent_issue(
         raw_parent=plan_payload.get("parent_issue"),
@@ -595,7 +644,11 @@ def parse_parent_seed_drafts(
     pm_status: str | None = None,
 ) -> ParentSeedDraftSet:
     clarification_questions = _parse_questions(plan_payload.get("questions"))
-    effective_pm_status = _normalized_status(pm_status or plan_payload.get("pm_status") or plan_payload.get("interview_status"))
+    effective_pm_status = _normalized_status(
+        pm_status
+        or plan_payload.get("pm_status")
+        or plan_payload.get("interview_status")
+    )
     if pm_status is not None and not _is_pm_complete(effective_pm_status):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -620,11 +673,21 @@ def _parse_parent_issue(
     issue_key_pattern,
 ) -> ParentIssueDraft:  # noqa: ANN001
     if not isinstance(raw_parent, dict):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return parent_issue")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex did not return parent_issue",
+        )
     issue_index = 1
-    summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=raw_parent.get("summary"))
+    summary = _optional_string(
+        issue_index=issue_index,
+        field_name="summary",
+        raw_value=raw_parent.get("summary"),
+    )
     if not summary:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex parent_issue is missing summary")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex parent_issue is missing summary",
+        )
     issue_type = _optional_string(
         issue_index=issue_index,
         field_name="issue_type",
@@ -638,21 +701,67 @@ def _parse_parent_issue(
     )
     if requested_issue_key is None and force_issue_keys:
         requested_issue_key = force_issue_keys[0]
-    labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=raw_parent.get("labels"))
+    labels = _string_list_field(
+        issue_index=issue_index, field_name="labels", raw_value=raw_parent.get("labels")
+    )
     return ParentIssueDraft(
         summary=summary[:90],
         issue_type=issue_type,
-        objective=_optional_string(issue_index=issue_index, field_name="objective", raw_value=raw_parent.get("objective")),
-        user_value=_optional_string(issue_index=issue_index, field_name="user_value", raw_value=raw_parent.get("user_value")),
-        recommendation=_optional_string(issue_index=issue_index, field_name="recommendation", raw_value=raw_parent.get("recommendation")),
-        scope_in=_string_list_field(issue_index=issue_index, field_name="scope_in", raw_value=raw_parent.get("scope_in")),
-        scope_out=_string_list_field(issue_index=issue_index, field_name="scope_out", raw_value=raw_parent.get("scope_out")),
-        acceptance_criteria=_string_list_field(issue_index=issue_index, field_name="acceptance_criteria", raw_value=raw_parent.get("acceptance_criteria")),
-        ui_references=_string_list_field(issue_index=issue_index, field_name="ui_references", raw_value=raw_parent.get("ui_references")),
-        success_outcomes=_string_list_field(issue_index=issue_index, field_name="success_outcomes", raw_value=raw_parent.get("success_outcomes")),
-        dependencies=_string_list_field(issue_index=issue_index, field_name="dependencies", raw_value=raw_parent.get("dependencies")),
-        risks=_string_list_field(issue_index=issue_index, field_name="risks", raw_value=raw_parent.get("risks")),
-        open_questions=_string_list_field(issue_index=issue_index, field_name="open_questions", raw_value=raw_parent.get("open_questions")),
+        objective=_optional_string(
+            issue_index=issue_index,
+            field_name="objective",
+            raw_value=raw_parent.get("objective"),
+        ),
+        user_value=_optional_string(
+            issue_index=issue_index,
+            field_name="user_value",
+            raw_value=raw_parent.get("user_value"),
+        ),
+        recommendation=_optional_string(
+            issue_index=issue_index,
+            field_name="recommendation",
+            raw_value=raw_parent.get("recommendation"),
+        ),
+        scope_in=_string_list_field(
+            issue_index=issue_index,
+            field_name="scope_in",
+            raw_value=raw_parent.get("scope_in"),
+        ),
+        scope_out=_string_list_field(
+            issue_index=issue_index,
+            field_name="scope_out",
+            raw_value=raw_parent.get("scope_out"),
+        ),
+        acceptance_criteria=_string_list_field(
+            issue_index=issue_index,
+            field_name="acceptance_criteria",
+            raw_value=raw_parent.get("acceptance_criteria"),
+        ),
+        ui_references=_string_list_field(
+            issue_index=issue_index,
+            field_name="ui_references",
+            raw_value=raw_parent.get("ui_references"),
+        ),
+        success_outcomes=_string_list_field(
+            issue_index=issue_index,
+            field_name="success_outcomes",
+            raw_value=raw_parent.get("success_outcomes"),
+        ),
+        dependencies=_string_list_field(
+            issue_index=issue_index,
+            field_name="dependencies",
+            raw_value=raw_parent.get("dependencies"),
+        ),
+        risks=_string_list_field(
+            issue_index=issue_index,
+            field_name="risks",
+            raw_value=raw_parent.get("risks"),
+        ),
+        open_questions=_string_list_field(
+            issue_index=issue_index,
+            field_name="open_questions",
+            raw_value=raw_parent.get("open_questions"),
+        ),
         labels=labels,
         requested_issue_key=requested_issue_key,
     )
@@ -665,12 +774,17 @@ def _parse_parent_issue_drafts(
     issue_key_pattern,
 ) -> list[ParentIssueDraft]:  # noqa: ANN001
     if not isinstance(raw_issues, list):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return issue drafts")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex did not return issue drafts",
+        )
     issues: list[ParentIssueDraft] = []
     for issue_index, item in enumerate(raw_issues[:12], start=1):
         if not isinstance(item, dict):
             continue
-        summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
+        summary = _optional_string(
+            issue_index=issue_index, field_name="summary", raw_value=item.get("summary")
+        )
         if not summary:
             continue
         requested_issue_key = _normalize_issue_key(
@@ -681,28 +795,81 @@ def _parse_parent_issue_drafts(
         )
         if requested_issue_key is None and len(force_issue_keys) >= issue_index:
             requested_issue_key = force_issue_keys[issue_index - 1]
-        labels = _string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels"))
+        labels = _string_list_field(
+            issue_index=issue_index, field_name="labels", raw_value=item.get("labels")
+        )
         issues.append(
             ParentIssueDraft(
                 summary=summary[:90],
-                issue_type=_optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type")),
-                objective=_optional_string(issue_index=issue_index, field_name="objective", raw_value=item.get("objective")),
-                user_value=_optional_string(issue_index=issue_index, field_name="user_value", raw_value=item.get("user_value")),
-                recommendation=_optional_string(issue_index=issue_index, field_name="recommendation", raw_value=item.get("recommendation")),
-                scope_in=_string_list_field(issue_index=issue_index, field_name="scope_in", raw_value=item.get("scope_in")),
-                scope_out=_string_list_field(issue_index=issue_index, field_name="scope_out", raw_value=item.get("scope_out")),
-                acceptance_criteria=_string_list_field(issue_index=issue_index, field_name="acceptance_criteria", raw_value=item.get("acceptance_criteria")),
-                ui_references=_string_list_field(issue_index=issue_index, field_name="ui_references", raw_value=item.get("ui_references")),
-                dependencies=_string_list_field(issue_index=issue_index, field_name="dependencies", raw_value=item.get("dependencies")),
-                risks=_string_list_field(issue_index=issue_index, field_name="risks", raw_value=item.get("risks")),
-                open_questions=_string_list_field(issue_index=issue_index, field_name="open_questions", raw_value=item.get("open_questions")),
-                success_outcomes=_string_list_field(issue_index=issue_index, field_name="success_outcomes", raw_value=item.get("success_outcomes")),
+                issue_type=_optional_string(
+                    issue_index=issue_index,
+                    field_name="issue_type",
+                    raw_value=item.get("issue_type"),
+                ),
+                objective=_optional_string(
+                    issue_index=issue_index,
+                    field_name="objective",
+                    raw_value=item.get("objective"),
+                ),
+                user_value=_optional_string(
+                    issue_index=issue_index,
+                    field_name="user_value",
+                    raw_value=item.get("user_value"),
+                ),
+                recommendation=_optional_string(
+                    issue_index=issue_index,
+                    field_name="recommendation",
+                    raw_value=item.get("recommendation"),
+                ),
+                scope_in=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="scope_in",
+                    raw_value=item.get("scope_in"),
+                ),
+                scope_out=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="scope_out",
+                    raw_value=item.get("scope_out"),
+                ),
+                acceptance_criteria=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="acceptance_criteria",
+                    raw_value=item.get("acceptance_criteria"),
+                ),
+                ui_references=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="ui_references",
+                    raw_value=item.get("ui_references"),
+                ),
+                dependencies=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="dependencies",
+                    raw_value=item.get("dependencies"),
+                ),
+                risks=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="risks",
+                    raw_value=item.get("risks"),
+                ),
+                open_questions=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="open_questions",
+                    raw_value=item.get("open_questions"),
+                ),
+                success_outcomes=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="success_outcomes",
+                    raw_value=item.get("success_outcomes"),
+                ),
                 labels=labels,
                 requested_issue_key=requested_issue_key,
             )
         )
     if not issues:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex returned no valid parent issue drafts")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex returned no valid parent issue drafts",
+        )
     return issues
 
 
@@ -714,16 +881,27 @@ def _parse_engineering_children(
     allow_empty_children: bool = False,
 ) -> list[EngineeringChildDraft]:  # noqa: ANN001
     if not isinstance(raw_children, list):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Codex did not return engineering_children")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex did not return engineering_children",
+        )
     children: list[EngineeringChildDraft] = []
     remaining_force_keys = force_issue_keys[1:] if force_issue_keys else []
-    for issue_index, item in enumerate(raw_children[:_MAX_ENGINEERING_CHILDREN], start=2):
+    for issue_index, item in enumerate(
+        raw_children[:_MAX_ENGINEERING_CHILDREN], start=2
+    ):
         if not isinstance(item, dict):
             continue
-        summary = _optional_string(issue_index=issue_index, field_name="summary", raw_value=item.get("summary"))
+        summary = _optional_string(
+            issue_index=issue_index, field_name="summary", raw_value=item.get("summary")
+        )
         if not summary:
             continue
-        delivery = _optional_string(issue_index=issue_index, field_name="delivery", raw_value=item.get("delivery"))
+        delivery = _optional_string(
+            issue_index=issue_index,
+            field_name="delivery",
+            raw_value=item.get("delivery"),
+        )
         if not delivery:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -760,7 +938,11 @@ def _parse_engineering_children(
                 detail=f"Engineering child {issue_index} is missing done_means",
             )
         raw_issue_type = (
-            _optional_string(issue_index=issue_index, field_name="issue_type", raw_value=item.get("issue_type"))
+            _optional_string(
+                issue_index=issue_index,
+                field_name="issue_type",
+                raw_value=item.get("issue_type"),
+            )
             or _HIERARCHY_RESOLVED_CHILD_ISSUE_TYPE
         )
         requested_issue_key = _normalize_issue_key(
@@ -769,24 +951,50 @@ def _parse_engineering_children(
             issue_index=issue_index,
             issue_key_pattern=issue_key_pattern,
         )
-        if requested_issue_key is None and len(remaining_force_keys) >= len(children) + 1:
+        if (
+            requested_issue_key is None
+            and len(remaining_force_keys) >= len(children) + 1
+        ):
             requested_issue_key = remaining_force_keys[len(children)]
         children.append(
             EngineeringChildDraft(
                 summary=summary[:90],
                 issue_type=raw_issue_type.strip(),
-                capability=_optional_string(issue_index=issue_index, field_name="capability", raw_value=item.get("capability")),
+                capability=_optional_string(
+                    issue_index=issue_index,
+                    field_name="capability",
+                    raw_value=item.get("capability"),
+                ),
                 delivery=delivery,
-                expected_outcome=_optional_string(issue_index=issue_index, field_name="expected_outcome", raw_value=item.get("expected_outcome")),
+                expected_outcome=_optional_string(
+                    issue_index=issue_index,
+                    field_name="expected_outcome",
+                    raw_value=item.get("expected_outcome"),
+                ),
                 acceptance_criteria=acceptance_criteria,
-                dependencies=_string_list_field(issue_index=issue_index, field_name="dependencies", raw_value=item.get("dependencies")),
-                risks=_string_list_field(issue_index=issue_index, field_name="risks", raw_value=item.get("risks")),
+                dependencies=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="dependencies",
+                    raw_value=item.get("dependencies"),
+                ),
+                risks=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="risks",
+                    raw_value=item.get("risks"),
+                ),
                 how_to_test=how_to_test,
                 done_means=done_means,
-                labels=_string_list_field(issue_index=issue_index, field_name="labels", raw_value=item.get("labels")),
+                labels=_string_list_field(
+                    issue_index=issue_index,
+                    field_name="labels",
+                    raw_value=item.get("labels"),
+                ),
                 requested_issue_key=requested_issue_key,
             )
         )
     if not children and not allow_empty_children:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding returned no valid engineering_children")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Issue seeding returned no valid engineering_children",
+        )
     return children

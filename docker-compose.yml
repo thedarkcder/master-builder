@@ -4,7 +4,30 @@ x-extra_hosts_host_gateway: &extra_hosts_host_gateway
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
+x-security-env: &security_env
+  ORCHESTRATOR_PUBLIC_REGISTRATION_ENABLED: ${ORCHESTRATOR_PUBLIC_REGISTRATION_ENABLED:-false}
+  ORCHESTRATOR_TRUSTED_HOSTS: ${ORCHESTRATOR_TRUSTED_HOSTS:-localhost,127.0.0.1,api}
+  ORCHESTRATOR_AUTH_LOGIN_ACCOUNT_LIMIT: ${ORCHESTRATOR_AUTH_LOGIN_ACCOUNT_LIMIT:-10}
+  ORCHESTRATOR_AUTH_LOGIN_PEER_LIMIT: ${ORCHESTRATOR_AUTH_LOGIN_PEER_LIMIT:-60}
+  ORCHESTRATOR_AUTH_LOGIN_WINDOW_SECONDS: ${ORCHESTRATOR_AUTH_LOGIN_WINDOW_SECONDS:-900}
+  ORCHESTRATOR_AUTH_RESET_ACCOUNT_LIMIT: ${ORCHESTRATOR_AUTH_RESET_ACCOUNT_LIMIT:-3}
+  ORCHESTRATOR_AUTH_RESET_PEER_LIMIT: ${ORCHESTRATOR_AUTH_RESET_PEER_LIMIT:-30}
+  ORCHESTRATOR_AUTH_RESET_WINDOW_SECONDS: ${ORCHESTRATOR_AUTH_RESET_WINDOW_SECONDS:-3600}
+  ORCHESTRATOR_AUTH_REGISTRATION_GLOBAL_LIMIT: ${ORCHESTRATOR_AUTH_REGISTRATION_GLOBAL_LIMIT:-20}
+  ORCHESTRATOR_AUTH_REGISTRATION_PEER_LIMIT: ${ORCHESTRATOR_AUTH_REGISTRATION_PEER_LIMIT:-5}
+  ORCHESTRATOR_AUTH_REGISTRATION_WINDOW_SECONDS: ${ORCHESTRATOR_AUTH_REGISTRATION_WINDOW_SECONDS:-3600}
+  ORCHESTRATOR_QA_DEMO_ARTIFACT_MAX_DOWNLOAD_BYTES: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_MAX_DOWNLOAD_BYTES:-104857600}
+  ORCHESTRATOR_AUTO_MIGRATE_ON_STARTUP: "false"
+  ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+  ORCHESTRATOR_ADMIN_TOKEN_SECRET: ${ORCHESTRATOR_ADMIN_TOKEN_SECRET:?Set ORCHESTRATOR_ADMIN_TOKEN_SECRET}
+  ORCHESTRATOR_AUTH_TOKEN_SECRET: ${ORCHESTRATOR_AUTH_TOKEN_SECRET:?Set ORCHESTRATOR_AUTH_TOKEN_SECRET}
+  ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET: ${ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET}
+  ORCHESTRATOR_JIRA_ACTION_TOKEN_SECRET: ${ORCHESTRATOR_JIRA_ACTION_TOKEN_SECRET:?Set ORCHESTRATOR_JIRA_ACTION_TOKEN_SECRET}
+  ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+  ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET: ${ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET}
+
 x-otel-env: &otel_env
+  <<: *security_env
   ORCHESTRATOR_OTEL_ENABLED: ${ORCHESTRATOR_OTEL_ENABLED:-true}
   ORCHESTRATOR_OTEL_SERVICE_NAMESPACE: ${ORCHESTRATOR_OTEL_SERVICE_NAMESPACE:-master-builder}
   ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT: ${ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
@@ -12,7 +35,7 @@ x-otel-env: &otel_env
   ORCHESTRATOR_CLICKHOUSE_HTTP_URL: ${ORCHESTRATOR_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
   ORCHESTRATOR_CLICKHOUSE_DATABASE: ${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}
   ORCHESTRATOR_CLICKHOUSE_USERNAME: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
-  ORCHESTRATOR_CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}
+  ORCHESTRATOR_CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:?Set ORCHESTRATOR_CLICKHOUSE_PASSWORD}
 
 services:
   postgres:
@@ -20,68 +43,102 @@ services:
     container_name: master-builder-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-orchestrator}
-      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator_migrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_RUNTIME_PASSWORD:?Set POSTGRES_RUNTIME_PASSWORD}
     ports:
-      - "${MASTER_BUILDER_POSTGRES_PORT:-60003}:5432"
+      - "127.0.0.1:${MASTER_BUILDER_POSTGRES_PORT:-60003}:5432"
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator} && psql -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator} -tAc 'select not pg_is_in_recovery()' | grep -qx t
+        - pg_isready -U ${POSTGRES_USER:-orchestrator_migrator} -d ${POSTGRES_DB:-orchestrator} && psql -U ${POSTGRES_USER:-orchestrator_migrator} -d ${POSTGRES_DB:-orchestrator} -tAc 'select not pg_is_in_recovery()' | grep -qx t
       interval: 5s
       timeout: 5s
       retries: 20
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./ops/postgres/20-runtime-role.sh:/docker-entrypoint-initdb.d/20-runtime-role.sh:ro
 
   mailpit:
     image: axllent/mailpit:v1.27.5
     container_name: master-builder-mailpit
     ports:
-      - "${MASTER_BUILDER_MAILPIT_SMTP_PORT:-60004}:1025"
-      - "${MASTER_BUILDER_MAILPIT_UI_PORT:-60005}:8025"
+      - "127.0.0.1:${MASTER_BUILDER_MAILPIT_SMTP_PORT:-60004}:1025"
+      - "127.0.0.1:${MASTER_BUILDER_MAILPIT_UI_PORT:-60005}:8025"
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8025 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
 
-  minio:
-    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
-    container_name: master-builder-minio
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-masterbuilder}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-masterbuildersecret}
-    command: server /data --console-address ":9001"
-    ports:
-      - "${MASTER_BUILDER_MINIO_API_PORT:-60015}:9000"
-      - "${MASTER_BUILDER_MINIO_CONSOLE_PORT:-60016}:9001"
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    user: "1000:1000"
+    entrypoint: ["weed"]
+    command:
+      - mini
+      - -dir=/data
+      - -ip=seaweedfs
+      - -ip.bind=0.0.0.0
+      - -webdav=false
+      - -admin.ui=false
+      - -admin.user=storage-admin
+      - -admin.password=${SEAWEEDFS_ADMIN_PASSWORD:?Set SeaweedFS administration password}
+      - -master.telemetry=false
+      - -master.volumeSizeLimitMB=1024
+      - -s3.config=/etc/seaweedfs/s3.json
+      - -s3.autoCreateBucket=false
+      - -s3.allowDeleteBucketNotEmpty=false
+    environment: &seaweed-credentials
+      SEAWEEDFS_ADMIN_ACCESS_KEY: ${SEAWEEDFS_ADMIN_ACCESS_KEY:?Set separate storage administrator access key}
+      SEAWEEDFS_ADMIN_SECRET_KEY: ${SEAWEEDFS_ADMIN_SECRET_KEY:?Set separate storage administrator secret key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:?Set scoped QA storage access key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:?Set independent QA storage secret key}
+    volumes:
+      - seaweedfs-data:/data
+      - ${SEAWEEDFS_S3_CONFIG_PATH:?Generate SeaweedFS identity configuration}:/etc/seaweedfs/s3.json:ro
+    networks: [storage-backend]
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9333/cluster/status"]
       interval: 5s
       timeout: 5s
       retries: 20
-    volumes:
-      - minio-data:/data
 
-  minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
-    container_name: master-builder-minio-init
+  seaweedfs-s3:
+    image: chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    user: "1000:1000"
+    entrypoint: ["weed"]
+    command: ["s3", "-filer=seaweedfs:8888", "-config=/etc/seaweedfs/s3.json", "-port=8333", "-ip.bind=0.0.0.0", "-autoCreateBucket=false", "-allowDeleteBucketNotEmpty=false"]
+    environment: *seaweed-credentials
+    volumes:
+      - ${SEAWEEDFS_S3_CONFIG_PATH:?Generate SeaweedFS identity configuration}:/etc/seaweedfs/s3.json:ro
+    networks: [default, storage-backend]
+    ports:
+      - "127.0.0.1:${MASTER_BUILDER_S3_PORT:-60015}:8333"
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -S -O /dev/null http://127.0.0.1:8333/ 2>&1 | grep -q 'HTTP/1.1 403 Forbidden'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  seaweedfs-init:
+    build:
+      context: .
+      dockerfile: ops/seaweedfs/Dockerfile.init
+    image: master-builder-storage-init:local
     restart: "no"
     depends_on:
-      minio:
+      seaweedfs-s3:
         condition: service_healthy
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-masterbuilder}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-masterbuildersecret}
+      QA_STORAGE_ENDPOINT: seaweedfs-s3:8333
+      SEAWEEDFS_ADMIN_ACCESS_KEY: ${SEAWEEDFS_ADMIN_ACCESS_KEY:?Set separate storage administrator access key}
+      SEAWEEDFS_ADMIN_SECRET_KEY: ${SEAWEEDFS_ADMIN_SECRET_KEY:?Set separate storage administrator secret key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_RETENTION_DAYS: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_RETENTION_DAYS:-30}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}
-    entrypoint:
-      - /bin/sh
-      - -ceu
-      - |
-        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
-        mc mb --ignore-existing "local/$${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET}"
-        mc anonymous set download "local/$${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET}"
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.12
@@ -89,10 +146,10 @@ services:
     environment:
       CLICKHOUSE_DB: ${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}
       CLICKHOUSE_USER: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
-      CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}
+      CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:?Set ORCHESTRATOR_CLICKHOUSE_PASSWORD}
     ports:
-      - "${MASTER_BUILDER_CLICKHOUSE_HTTP_PORT:-60006}:8123"
-      - "${MASTER_BUILDER_CLICKHOUSE_NATIVE_PORT:-60007}:9000"
+      - "127.0.0.1:${MASTER_BUILDER_CLICKHOUSE_HTTP_PORT:-60006}:8123"
+      - "127.0.0.1:${MASTER_BUILDER_CLICKHOUSE_NATIVE_PORT:-60007}:9000"
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 5s
@@ -109,10 +166,10 @@ services:
       DB: postgres12
       DB_PORT: 5432
       POSTGRES_SEEDS: postgres
-      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
-      POSTGRES_PWD: ${POSTGRES_PASSWORD:-orchestrator}
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator_migrator}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     ports:
-      - "${MASTER_BUILDER_TEMPORAL_PORT:-60008}:7233"
+      - "127.0.0.1:${MASTER_BUILDER_TEMPORAL_PORT:-60008}:7233"
     depends_on:
       postgres:
         condition: service_healthy
@@ -129,15 +186,17 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-migrate
     restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      <<: *security_env
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_MIGRATION_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_MIGRATION_DATABASE_URL}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:?Set authenticated QA delivery base URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_MIGRATION_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_MIGRATION_DATABASE_URL}
     command:
       - python
       - -m
@@ -151,9 +210,9 @@ services:
     volumes:
       - ./ops/observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - "${MASTER_BUILDER_OTEL_GRPC_PORT:-60009}:4317"
-      - "${MASTER_BUILDER_OTEL_HTTP_PORT:-60010}:4318"
-      - "${MASTER_BUILDER_OTEL_METRICS_PORT:-60011}:9464"
+      - "127.0.0.1:${MASTER_BUILDER_OTEL_GRPC_PORT:-60009}:4317"
+      - "127.0.0.1:${MASTER_BUILDER_OTEL_HTTP_PORT:-60010}:4318"
+      - "127.0.0.1:${MASTER_BUILDER_OTEL_METRICS_PORT:-60011}:9464"
     depends_on:
       tempo:
         condition: service_started
@@ -166,7 +225,7 @@ services:
       - ./ops/observability/tempo-config.yaml:/etc/tempo/config.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "${MASTER_BUILDER_TEMPO_PORT:-60012}:3200"
+      - "127.0.0.1:${MASTER_BUILDER_TEMPO_PORT:-60012}:3200"
 
   prometheus:
     image: prom/prometheus:v3.3.0
@@ -178,7 +237,7 @@ services:
       - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "${MASTER_BUILDER_PROMETHEUS_PORT:-60013}:9090"
+      - "127.0.0.1:${MASTER_BUILDER_PROMETHEUS_PORT:-60013}:9090"
     depends_on:
       - api
       - otel-collector
@@ -188,15 +247,15 @@ services:
     container_name: master-builder-grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS_ENABLED:-true}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_AUTH_ANONYMOUS_ORG_ROLE: ${GRAFANA_ANONYMOUS_ORG_ROLE:-Viewer}
       GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
     volumes:
       - ./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "${MASTER_BUILDER_GRAFANA_PORT:-60014}:3000"
+      - "127.0.0.1:${MASTER_BUILDER_GRAFANA_PORT:-60014}:3000"
     depends_on:
       - prometheus
       - tempo
@@ -209,14 +268,14 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-api
     environment:
       <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002},http://127.0.0.1:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_CORS_ORIGIN_REGEX: ${ORCHESTRATOR_CORS_ORIGIN_REGEX:-}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
@@ -224,9 +283,9 @@ services:
       ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID: ${ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID:-}
       ORCHESTRATOR_DISCORD_OAUTH_CLIENT_SECRET: ${ORCHESTRATOR_DISCORD_OAUTH_CLIENT_SECRET:-}
       ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL: ${ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL:-}
-      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-workspace-write}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET: ${ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET}
       ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER: ${ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER:-smtp}
       ORCHESTRATOR_EMAIL_FROM_NAME: ${ORCHESTRATOR_EMAIL_FROM_NAME:-Master Builder}
       ORCHESTRATOR_EMAIL_FROM_ADDRESS: ${ORCHESTRATOR_EMAIL_FROM_ADDRESS:-no-reply@masterbuilder.local}
@@ -250,10 +309,15 @@ services:
       ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
       ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
       ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:?Configure internal QA storage endpoint}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:?Set scoped QA storage access key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:?Set independent QA storage secret key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-false}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:?Set authenticated QA delivery base URL}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS:-10}
     ports:
-      - "${MASTER_BUILDER_API_PORT:-60001}:4000"
+      - "127.0.0.1:${MASTER_BUILDER_API_PORT:-60001}:4000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -280,7 +344,7 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-1}" --timeout-worker-healthcheck "${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}"
+        uvicorn orchestrator.api.main:app --no-proxy-headers --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-1}" --timeout-worker-healthcheck "${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}"
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
@@ -292,7 +356,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: android-runtime
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-run-worker
     restart: unless-stopped
     depends_on:
@@ -300,7 +364,7 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
-      minio-init:
+      seaweedfs-init:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
@@ -312,13 +376,13 @@ services:
       <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
-      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-workspace-write}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET: ${ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
@@ -330,11 +394,11 @@ services:
       ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
       ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
       ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:-minio:9000}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:-masterbuilder}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:-masterbuildersecret}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:?Configure internal QA storage endpoint}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:?Set scoped QA storage access key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:?Set ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:?Set authenticated QA delivery base URL}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-false}
       ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS: ${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}
       ORCHESTRATOR_QA_DEMO_RELEASE_HEALTH_TIMEOUT_SECONDS: ${ORCHESTRATOR_QA_DEMO_RELEASE_HEALTH_TIMEOUT_SECONDS:-10}
@@ -365,7 +429,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: voice-runtime
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-webhook-worker
     restart: unless-stopped
     depends_on:
@@ -383,13 +447,13 @@ services:
       <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
-      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-workspace-write}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET: ${ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET}
       ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER: ${ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER:-smtp}
       ORCHESTRATOR_EMAIL_FROM_NAME: ${ORCHESTRATOR_EMAIL_FROM_NAME:-Master Builder}
       ORCHESTRATOR_EMAIL_FROM_ADDRESS: ${ORCHESTRATOR_EMAIL_FROM_ADDRESS:-no-reply@masterbuilder.local}
@@ -411,7 +475,7 @@ services:
       ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
       ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
       ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:?Set authenticated QA delivery base URL}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS:-10}
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
@@ -435,7 +499,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-deployment-host-bootstrap
     restart: "no"
     depends_on:
@@ -470,15 +534,16 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-deployment-host-agent
     restart: unless-stopped
     depends_on:
       deployment-host-bootstrap:
         condition: service_completed_successfully
     environment:
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      <<: *security_env
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_API_BASE_URL: http://api:4000
       ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_BOOTSTRAP_TOKEN_PATH: /var/lib/master-builder/deployment-host/bootstrap-token
@@ -503,7 +568,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-deployment-reconciler
     restart: unless-stopped
     depends_on:
@@ -517,8 +582,8 @@ services:
         condition: service_started
     environment:
       <<: *otel_env
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
@@ -540,7 +605,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-project-automation
     restart: unless-stopped
     depends_on:
@@ -560,13 +625,13 @@ services:
       <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
-      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-workspace-write}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET: ${ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
@@ -590,8 +655,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: voice-runtime
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
-        LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-discord-gateway
     depends_on:
       migrate:
@@ -604,8 +668,8 @@ services:
         condition: service_started
     environment:
       <<: *otel_env
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY: ${ORCHESTRATOR_DISCORD_GATEWAY_LOCK_KEY:-947102033127}
       ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_GATEWAY_POLL_SECONDS:-3}
@@ -638,7 +702,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: android-runtime
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-temporal-orchestrator
     restart: unless-stopped
     depends_on:
@@ -646,7 +710,7 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
-      minio-init:
+      seaweedfs-init:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
@@ -660,23 +724,23 @@ services:
       <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
       ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
-      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET: ${ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
-      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-workspace-write}
       ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
       ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
       ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
       ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:-minio:9000}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:-masterbuilder}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:-masterbuildersecret}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:?Configure internal QA storage endpoint}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:?Set scoped QA storage access key}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:?Set ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}
-      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:?Set authenticated QA delivery base URL}
       ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-false}
       ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS: ${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}
       ORCHESTRATOR_QA_DEMO_RELEASE_HEALTH_TIMEOUT_SECONDS: ${ORCHESTRATOR_QA_DEMO_RELEASE_HEALTH_TIMEOUT_SECONDS:-10}
@@ -703,8 +767,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: voice-runtime
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
-        LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-discord-live-voice
     depends_on:
       migrate:
@@ -717,8 +780,8 @@ services:
         condition: service_started
     environment:
       <<: *otel_env
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_LOCK_KEY:-947102033129}
       ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS: ${ORCHESTRATOR_DISCORD_LIVE_VOICE_POLL_SECONDS:-3}
@@ -750,7 +813,7 @@ services:
       dockerfile: orchestrator/Dockerfile
       target: app-runtime-base
       args:
-        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-0.160.0}
     container_name: master-builder-knowledge-sync
     depends_on:
       migrate:
@@ -763,8 +826,8 @@ services:
         condition: service_started
     environment:
       <<: *otel_env
-      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
+      POSTGRES_URL: ${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
       ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
       ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
@@ -792,17 +855,21 @@ services:
 
   admin-ui:
     build:
-      context: ./admin-ui
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: admin-ui/Dockerfile
     container_name: master-builder-admin-ui
+    environment:
+      ORCHESTRATOR_API_BASE_URL: http://api:4000
+      ADMIN_UI_PORT: 4100
     depends_on:
       - api
     env_file:
       - ./admin-ui/.env.local
     ports:
-      - "${MASTER_BUILDER_ADMIN_UI_PORT:-60002}:4100"
+      - "127.0.0.1:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}:4100"
 
   tailscale:
+    profiles: ["tunnel"]
     image: tailscale/tailscale:stable
     container_name: master-builder-tailscale
     restart: unless-stopped
@@ -838,4 +905,9 @@ volumes:
   clickhouse-data:
   prometheus-data:
   tempo-data:
-  minio-data:
+  seaweedfs-data:
+
+networks:
+  default:
+  storage-backend:
+    internal: true

@@ -25,16 +25,28 @@ class DiscordSharedStateTests(unittest.TestCase):
 
     def test_command_matches_normalizes_internal_whitespace(self) -> None:
         self.assertTrue(
-            state_module.command_matches("!issues   seed   draft", command_name="issues", subcommand="seed")
+            state_module.command_matches(
+                "!issues   seed   draft", command_name="issues", subcommand="seed"
+            )
         )
-        self.assertTrue(state_module.command_matches("!   ask   status", command_name="ask"))
-        self.assertFalse(state_module.command_matches("!issues followup text", command_name="issues", subcommand="seed"))
+        self.assertTrue(
+            state_module.command_matches("!   ask   status", command_name="ask")
+        )
+        self.assertFalse(
+            state_module.command_matches(
+                "!issues followup text", command_name="issues", subcommand="seed"
+            )
+        )
 
     def test_allowlist_helpers(self) -> None:
         project = SimpleNamespace(discord_config={"allowed_user_ids": ["u2", "u3"]})
-        self.assertEqual(state_module.project_allowlisted_user_ids(project), {"u2", "u3"})
+        self.assertEqual(
+            state_module.project_allowlisted_user_ids(project), {"u2", "u3"}
+        )
 
-        project_no_ts = SimpleNamespace(discord_config={"allowlist_requests": [{"user_id": "u2"}]})
+        project_no_ts = SimpleNamespace(
+            discord_config={"allowlist_requests": [{"user_id": "u2"}]}
+        )
         project_requests = state_module.project_allowlist_requests(project_no_ts)
         self.assertEqual(project_requests[0]["user_id"], "u2")
         self.assertIn("requested_at", project_requests[0])
@@ -42,8 +54,13 @@ class DiscordSharedStateTests(unittest.TestCase):
     def test_create_allowlist_request_paths(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={})
-        project = SimpleNamespace(discord_config={"allowed_user_ids": ["u1"], "allowlist_requests": []})
-        with patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=project):
+        project = SimpleNamespace(
+            discord_config={"allowed_user_ids": ["u1"], "allowlist_requests": []}
+        )
+        with patch(
+            "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+            return_value=project,
+        ):
             created, msg = state_module.create_allowlist_request(
                 session=session,
                 tenant=tenant,
@@ -55,7 +72,10 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertFalse(created)
         self.assertIn("already allowlisted", msg)
 
-        with patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=None):
+        with patch(
+            "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+            return_value=None,
+        ):
             created, msg = state_module.create_allowlist_request(
                 session=session,
                 tenant=tenant,
@@ -68,8 +88,13 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertIn("mapped project Discord channel", msg)
 
         with (
-            patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=project),
-            patch("orchestrator.api.discord.shared.state.save_project_allowlist_requests") as save_mock,
+            patch(
+                "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+                return_value=project,
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.save_project_allowlist_requests"
+            ) as save_mock,
         ):
             created, msg = state_module.create_allowlist_request(
                 session=session,
@@ -83,10 +108,19 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertIn("submitted", msg)
         save_mock.assert_called_once()
 
-        project_refresh = SimpleNamespace(discord_config={"allowlist_requests": [{"user_id": "u3", "requested_at": "x"}]})
+        project_refresh = SimpleNamespace(
+            discord_config={
+                "allowlist_requests": [{"user_id": "u3", "requested_at": "x"}]
+            }
+        )
         with (
-            patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=project_refresh),
-            patch("orchestrator.api.discord.shared.state.save_project_allowlist_requests") as save_mock,
+            patch(
+                "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+                return_value=project_refresh,
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.save_project_allowlist_requests"
+            ) as save_mock,
         ):
             created, msg = state_module.create_allowlist_request(
                 session=session,
@@ -114,8 +148,14 @@ class DiscordSharedStateTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=project),
-            patch("orchestrator.api.discord.shared.state.can_execute_sensitive_command", return_value=(True, None)),
+            patch(
+                "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+                return_value=project,
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.can_execute_sensitive_command",
+                return_value=(True, None),
+            ),
         ):
             state_module.assert_sensitive_command_permission(
                 session=session,
@@ -126,8 +166,14 @@ class DiscordSharedStateTests(unittest.TestCase):
             )
 
         with (
-            patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=None),
-            patch("orchestrator.api.discord.shared.state.can_execute_sensitive_command", return_value=(False, "denied")),
+            patch(
+                "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+                return_value=None,
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.can_execute_sensitive_command",
+                return_value=(False, "denied"),
+            ),
         ):
             with self.assertRaises(HTTPException) as exc_ctx:
                 state_module.assert_sensitive_command_permission(
@@ -140,11 +186,18 @@ class DiscordSharedStateTests(unittest.TestCase):
         self.assertEqual(exc_ctx.exception.status_code, 403)
         self.assertEqual(exc_ctx.exception.detail, "denied")
 
-    def test_assert_sensitive_command_permission_allows_tenant_allowlisted_user(self) -> None:
+    def test_assert_sensitive_command_permission_allows_tenant_allowlisted_user(
+        self,
+    ) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace(tenant_id="t1", discord_config={"allowed_user_ids": ["u1"]})
+        tenant = SimpleNamespace(
+            tenant_id="t1", discord_config={"allowed_user_ids": ["u1"]}
+        )
 
-        with patch("orchestrator.api.discord.shared.state.resolve_project_for_discord_channel", return_value=None):
+        with patch(
+            "orchestrator.api.discord.shared.state.resolve_project_for_discord_channel",
+            return_value=None,
+        ):
             state_module.assert_sensitive_command_permission(
                 session=session,
                 tenant=tenant,
@@ -157,26 +210,59 @@ class DiscordSharedStateTests(unittest.TestCase):
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={})
         with (
-            patch("orchestrator.api.discord.shared.state.tenant_allowed_channel_ids", return_value={"c1"}),
-            patch("orchestrator.api.discord.shared.state.project_room_channel_ids", return_value={"room-1"}),
-            patch("orchestrator.api.discord.shared.state.is_channel_allowed", return_value=True),
+            patch(
+                "orchestrator.api.discord.shared.state.tenant_allowed_channel_ids",
+                return_value={"c1"},
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.project_room_channel_ids",
+                return_value={"room-1"},
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.is_channel_allowed",
+                return_value=True,
+            ),
         ):
-            state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="c1")
+            state_module.assert_channel_scope(
+                session=session, tenant=tenant, channel_id="c1"
+            )
 
         with (
-            patch("orchestrator.api.discord.shared.state.tenant_allowed_channel_ids", return_value={"c1"}),
-            patch("orchestrator.api.discord.shared.state.project_room_channel_ids", return_value={"room-1"}),
-            patch("orchestrator.api.discord.shared.state.is_channel_allowed", return_value=False),
+            patch(
+                "orchestrator.api.discord.shared.state.tenant_allowed_channel_ids",
+                return_value={"c1"},
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.project_room_channel_ids",
+                return_value={"room-1"},
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.is_channel_allowed",
+                return_value=False,
+            ),
         ):
             with self.assertRaises(HTTPException):
-                state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="c2")
+                state_module.assert_channel_scope(
+                    session=session, tenant=tenant, channel_id="c2"
+                )
 
         with (
-            patch("orchestrator.api.discord.shared.state.tenant_allowed_channel_ids", return_value=set()),
-            patch("orchestrator.api.discord.shared.state.project_room_channel_ids", return_value={"room-1"}),
-            patch("orchestrator.api.discord.shared.state.is_channel_allowed", return_value=True),
+            patch(
+                "orchestrator.api.discord.shared.state.tenant_allowed_channel_ids",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.project_room_channel_ids",
+                return_value={"room-1"},
+            ),
+            patch(
+                "orchestrator.api.discord.shared.state.is_channel_allowed",
+                return_value=True,
+            ),
         ):
-            state_module.assert_channel_scope(session=session, tenant=tenant, channel_id="room-1")
+            state_module.assert_channel_scope(
+                session=session, tenant=tenant, channel_id="room-1"
+            )
 
     def test_room_channel_helpers_support_general_and_room_keys(self) -> None:
         config = {
@@ -193,11 +279,15 @@ class DiscordSharedStateTests(unittest.TestCase):
         project = SimpleNamespace(discord_config=config)
         session.execute.return_value.scalars.return_value.all.return_value = [project]
         self.assertEqual(
-            state_module.project_room_channel_ids(session=session, tenant_id="tenant-1"),
+            state_module.project_room_channel_ids(
+                session=session, tenant_id="tenant-1"
+            ),
             {"voice-room-1", "persona-thread-1", "pm-room-1"},
         )
         self.assertEqual(
-            state_module.project_pm_room_channel_ids(session=session, tenant_id="tenant-1"),
+            state_module.project_pm_room_channel_ids(
+                session=session, tenant_id="tenant-1"
+            ),
             {"voice-room-1", "persona-thread-1", "pm-room-1"},
         )
 
@@ -231,18 +321,24 @@ class DiscordSharedStateTests(unittest.TestCase):
         project = SimpleNamespace(discord_config=config)
         session.execute.return_value.scalars.return_value.all.return_value = [project]
         self.assertEqual(
-            state_module.project_live_voice_room_channel_ids(session=session, tenant_id="tenant-1"),
+            state_module.project_live_voice_room_channel_ids(
+                session=session, tenant_id="tenant-1"
+            ),
             {"voice-room-1", "voice-room-2"},
         )
         self.assertEqual(
-            state_module.project_live_voice_room_links(session=session, tenant_id="tenant-1"),
+            state_module.project_live_voice_room_links(
+                session=session, tenant_id="tenant-1"
+            ),
             {
                 "voice-room-1": "text-room-1",
                 "voice-room-2": "thread-room-2",
             },
         )
         self.assertEqual(
-            state_module.project_live_voice_linked_channel_ids(session=session, tenant_id="tenant-1"),
+            state_module.project_live_voice_linked_channel_ids(
+                session=session, tenant_id="tenant-1"
+            ),
             {"text-room-1", "thread-room-2"},
         )
 
@@ -255,22 +351,31 @@ class DiscordSharedStateTests(unittest.TestCase):
             },
         }
         self.assertTrue(state_module.live_voice_enabled_from_discord_config(config))
-        self.assertEqual(state_module.live_voice_room_links_from_discord_config(config), {})
-        self.assertEqual(state_module.live_voice_room_channel_ids_from_discord_config(config), set())
-        self.assertEqual(state_module.live_voice_linked_channel_ids_from_discord_config(config), set())
+        self.assertEqual(
+            state_module.live_voice_room_links_from_discord_config(config), {}
+        )
+        self.assertEqual(
+            state_module.live_voice_room_channel_ids_from_discord_config(config), set()
+        )
+        self.assertEqual(
+            state_module.live_voice_linked_channel_ids_from_discord_config(config),
+            set(),
+        )
 
     def test_seed_followup_lifecycle(self) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="t1", discord_config={}, updated_at=None)
 
-        with patch("orchestrator.api.discord.shared.state.upsert_followup_context") as upsert_mock:
+        with patch(
+            "orchestrator.api.discord.shared.state.upsert_followup_context"
+        ) as upsert_mock:
             request_id = state_module.store_seed_followup_context(
                 session=session,
                 tenant=tenant,
                 request_id=None,
                 user_id="u1",
                 channel_ids=["c1", " ", "c2"],
-                project_id="example-default",
+                project_id="example-workspace-default",
                 project_key="mab",
                 issue_keys=["mab-1", "", "MAB-2"],
                 questions=["q1", " ", "q2"],
@@ -278,11 +383,13 @@ class DiscordSharedStateTests(unittest.TestCase):
             )
             self.assertTrue(request_id)
             self.assertEqual(upsert_mock.call_args.kwargs["tenant_id"], "t1")
-            self.assertEqual(upsert_mock.call_args.kwargs["context_type"], "seed_followup")
+            self.assertEqual(
+                upsert_mock.call_args.kwargs["context_type"], "seed_followup"
+            )
             self.assertEqual(upsert_mock.call_args.kwargs["channel_id"], "c1")
             self.assertEqual(upsert_mock.call_args.kwargs["thread_channel_id"], "c2")
             metadata = upsert_mock.call_args.kwargs["metadata"]
-            self.assertEqual(metadata["project_id"], "example-default")
+            self.assertEqual(metadata["project_id"], "example-workspace-default")
             self.assertEqual(metadata["project_key"], "MAB")
             self.assertEqual(metadata["issue_keys"], ["MAB-1", "MAB-2"])
 
@@ -293,24 +400,34 @@ class DiscordSharedStateTests(unittest.TestCase):
                 "channel_ids": ["c3"],
                 "questions": ["q3"],
                 "issue_keys": ["MAB-3"],
-                "project_id": "example-default",
+                "project_id": "example-workspace-default",
                 "project_key": "MAB",
                 "prompt_markdown": "updated",
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
             request_id=request_id,
-            project_id="example-default",
+            project_id="example-workspace-default",
             channel_id="c3",
             thread_channel_id=None,
         )
         session.execute.return_value.scalars.return_value.all.return_value = [row]
-        found = state_module.find_seed_followup_context(session=session, tenant=tenant, channel_id="c3")
+        found = state_module.find_seed_followup_context(
+            session=session, tenant=tenant, channel_id="c3"
+        )
         self.assertIsNotNone(found)
         self.assertEqual(found["request_id"], request_id)
-        self.assertIsNone(state_module.find_seed_followup_context(session=session, tenant=tenant, channel_id="missing"))
+        self.assertIsNone(
+            state_module.find_seed_followup_context(
+                session=session, tenant=tenant, channel_id="missing"
+            )
+        )
 
-        with patch("orchestrator.api.discord.shared.state.close_followup_contexts") as close_mock:
-            state_module.clear_seed_followup_context(session=session, tenant=tenant, request_id=request_id)
+        with patch(
+            "orchestrator.api.discord.shared.state.close_followup_contexts"
+        ) as close_mock:
+            state_module.clear_seed_followup_context(
+                session=session, tenant=tenant, request_id=request_id
+            )
         close_mock.assert_called_once()
 
     def test_find_seed_followup_context_skips_stale_entries(self) -> None:
@@ -331,10 +448,14 @@ class DiscordSharedStateTests(unittest.TestCase):
             thread_channel_id=None,
         )
         session.execute.return_value.scalars.return_value.all.return_value = [stale_row]
-        found = state_module.find_seed_followup_context(session=session, tenant=tenant, channel_id="c1")
+        found = state_module.find_seed_followup_context(
+            session=session, tenant=tenant, channel_id="c1"
+        )
         self.assertIsNone(found)
 
-    def test_find_seed_followup_context_falls_back_to_unique_user_project_match(self) -> None:
+    def test_find_seed_followup_context_falls_back_to_unique_user_project_match(
+        self,
+    ) -> None:
         tenant = SimpleNamespace(tenant_id="t1")
         session = MagicMock()
         row = SimpleNamespace(
@@ -428,11 +549,16 @@ class DiscordSharedStateTests(unittest.TestCase):
             closed_at=None,
             updated_at=None,
         )
-        session.execute.return_value.scalars.return_value.all.return_value = [row_1, row_2]
-        removed_contexts, removed_issue_refs = state_module.remove_issue_key_from_seed_followups(
-            session=session,
-            tenant=tenant,
-            issue_key="MAB-1",
+        session.execute.return_value.scalars.return_value.all.return_value = [
+            row_1,
+            row_2,
+        ]
+        removed_contexts, removed_issue_refs = (
+            state_module.remove_issue_key_from_seed_followups(
+                session=session,
+                tenant=tenant,
+                issue_key="MAB-1",
+            )
         )
         self.assertEqual((removed_contexts, removed_issue_refs), (1, 2))
         self.assertEqual(row_1.metadata_json["issue_keys"], ["MAB-2"])

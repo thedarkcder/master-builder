@@ -16,7 +16,14 @@ from orchestrator.core.pm.followup_context_service import upsert_followup_contex
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
-from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEvidence, FollowupContext, Run, Tenant
+from orchestrator.storage.models import (
+    DecisionCase,
+    DecisionCycle,
+    DecisionEvidence,
+    FollowupContext,
+    Run,
+    Tenant,
+)
 from tests.production_path_support import (
     load_json_fixture,
     ProductionPathApiTestCase,
@@ -24,6 +31,8 @@ from tests.production_path_support import (
     session_factory_for,
 )
 from tests.test_support.workflow_runtime_harness import build_local_workflow_runtime
+
+from tests.test_support.webhook_sender import configure_tenant_webhook_sender
 
 pytestmark = pytest.mark.production_path
 
@@ -44,6 +53,10 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         )
         self._workflow_runtime_patch.start()
         self._start_test_runtime(name_prefix="jira-webhook-production")
+        token = configure_tenant_webhook_sender(
+            session_factory=self.session_factory, tenant_id="example-workspace"
+        )
+        self.client.headers["X-Webhook-Token"] = token
 
     def tearDown(self) -> None:
         self._stop_test_runtime()
@@ -99,18 +112,20 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
             cycle_id=None,
             outbox_effect_ids=(),
             duplicate_event=False,
-            execution_gate=resolve_execution_gate_state(decision=decision, classification="clear"),
+            execution_gate=resolve_execution_gate_state(
+                decision=decision, classification="clear"
+            ),
         )
 
     def test_disabled_tenant_short_circuits_on_real_route(self) -> None:
         with self.session_factory() as session:
-            tenant = session.get(Tenant, "example")
+            tenant = session.get(Tenant, "example-workspace")
             assert tenant is not None
             tenant.is_enabled = False
             session.commit()
 
         response = self.client.post(
-            "/jira/webhook/example",
+            "/jira/webhook/example-workspace",
             json=load_json_fixture("jira", "webhooks", "issue_updated.json"),
         )
 
@@ -137,13 +152,18 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         )
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context", return_value=fake_oauth),
+            patch(
+                "orchestrator.core.worker.webhook_job_service.tenant_atlassian_oauth_context",
+                return_value=fake_oauth,
+            ),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_precheck_decision_with_labels",
-                return_value=self._ready_decision_result(issue_labels=["ready_for_agent"]),
+                return_value=self._ready_decision_result(
+                    issue_labels=["ready_for_agent"]
+                ),
             ),
         ):
-            response = self.client.post("/jira/webhook/example", json=payload)
+            response = self.client.post("/jira/webhook/example-workspace", json=payload)
             processed = self._process_one_webhook_job()
 
         self.assertEqual(response.status_code, 202)
@@ -158,9 +178,15 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(processed.status, "done")
 
         with self.session_factory() as session:
-            tenant_runs = session.execute(
-                select(Run).where(Run.tenant_id == "example", Run.issue_key == "TP-42")
-            ).scalars().all()
+            tenant_runs = (
+                session.execute(
+                    select(Run).where(
+                        Run.tenant_id == "example-workspace", Run.issue_key == "TP-42"
+                    )
+                )
+                .scalars()
+                .all()
+            )
             self.assertTrue(tenant_runs)
 
     def test_comment_reply_records_decision_evidence_through_real_route(self) -> None:
@@ -170,8 +196,8 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
                 [
                     DecisionCase(
                         case_id="case-1",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="TP-42",
                         state="blocked",
                         blocked_reason="decision_gate_required",
@@ -192,8 +218,8 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
                     DecisionCycle(
                         cycle_id="cycle-1",
                         case_id="case-1",
-                        tenant_id="example",
-                        project_id="example-default",
+                        tenant_id="example-workspace",
+                        project_id="example-workspace-default",
                         issue_key="TP-42",
                         status="open",
                         reason="Need cross-account policy",
@@ -216,8 +242,8 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
             )
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="decision_gate",
                 channel_id="discord-channel-1",
                 thread_channel_id="thread-1",
@@ -240,14 +266,20 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
                         "notes": "",
                     },
                 }
-            ]
+            ],
         }
         with (
-            patch("orchestrator.core.decision.reply_service.build_codex_runtime", return_value=runtime),
-            patch("orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment", return_value=(True, None)),
+            patch(
+                "orchestrator.core.decision.reply_service.build_codex_runtime",
+                return_value=runtime,
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment",
+                return_value=(True, None),
+            ),
         ):
             response = self.client.post(
-                "/jira/webhook/example",
+                "/jira/webhook/example-workspace",
                 json=load_json_fixture("jira", "webhooks", "comment_created.json"),
                 headers={"X-Atlassian-Webhook-Identifier": "delivery-1"},
             )
@@ -262,20 +294,27 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(processed.status, "done")
 
         with self.session_factory() as session:
-            evidences = session.execute(
-                select(DecisionEvidence)
-                .where(
-                    DecisionEvidence.tenant_id == "example",
-                    DecisionEvidence.issue_key == "TP-42",
+            evidences = (
+                session.execute(
+                    select(DecisionEvidence).where(
+                        DecisionEvidence.tenant_id == "example-workspace",
+                        DecisionEvidence.issue_key == "TP-42",
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             case = session.get(DecisionCase, "case-1")
-            followup_context = session.execute(
-                select(FollowupContext).where(
-                    FollowupContext.tenant_id == "example",
-                    FollowupContext.issue_key == "TP-42",
+            followup_context = (
+                session.execute(
+                    select(FollowupContext).where(
+                        FollowupContext.tenant_id == "example-workspace",
+                        FollowupContext.issue_key == "TP-42",
+                    )
                 )
-            ).scalars().one()
+                .scalars()
+                .one()
+            )
 
         self.assertEqual(len(evidences), 1)
         self.assertIn("Reject relink", evidences[0].raw_text)

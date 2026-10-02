@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.payload_models import JiraIssueIntakeRoute
 
 

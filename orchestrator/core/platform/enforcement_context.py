@@ -12,6 +12,7 @@ REQUIRED_GUIDANCE_FILES = (
 )
 OPTIONAL_GUIDANCE_FILES = ("AGENTS.md",)
 
+
 class EnforcementAssetsError(ValueError):
     """Raised when required enforcement assets are unavailable or invalid."""
 
@@ -21,7 +22,9 @@ def _load_required_text(*, repo_root: Path, relative_path: str) -> str:
     if local_path.exists():
         content = local_path.read_text(encoding="utf-8").strip()
         if not content:
-            raise EnforcementAssetsError(f"Required enforcement file is empty: {relative_path}")
+            raise EnforcementAssetsError(
+                f"Required enforcement file is empty: {relative_path}"
+            )
         return content
     raise EnforcementAssetsError(
         f"Missing required enforcement file: {relative_path} (not found in repository)"
@@ -46,10 +49,14 @@ def _load_policy_pack_payload(*, repo_root: Path) -> dict[str, dict]:
         try:
             payload[path.name] = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise EnforcementAssetsError(f"Policy pack is invalid JSON: {path.name}") from exc
+            raise EnforcementAssetsError(
+                f"Policy pack is invalid JSON: {path.name}"
+            ) from exc
 
     if not payload:
-        raise EnforcementAssetsError("Missing policy packs: expected .codex/policy_pack*.json in repository")
+        raise EnforcementAssetsError(
+            "Missing policy packs: expected .codex/policy_pack*.json in repository"
+        )
     return payload
 
 
@@ -67,7 +74,9 @@ def build_agent_enforcement_context(
     repo_root: Path,
 ) -> str:
     guidance_text = {
-        relative_path: _load_required_text(repo_root=repo_root, relative_path=relative_path)
+        relative_path: _load_required_text(
+            repo_root=repo_root, relative_path=relative_path
+        )
         for relative_path in REQUIRED_GUIDANCE_FILES
     }
     policy_pack_payload = _load_policy_pack_payload(repo_root=repo_root)
@@ -76,8 +85,16 @@ def build_agent_enforcement_context(
     for relative_path, content in guidance_text.items():
         context_parts.extend(["", f"{relative_path} excerpt:", content])
     for relative_path in OPTIONAL_GUIDANCE_FILES:
-        optional_content = _load_optional_text(repo_root=repo_root, relative_path=relative_path)
+        optional_content = _load_optional_text(
+            repo_root=repo_root, relative_path=relative_path
+        )
         if optional_content:
             context_parts.extend(["", f"{relative_path} excerpt:", optional_content])
-    context_parts.extend(["", "Loaded policy packs:", json.dumps(policy_pack_payload, indent=2, sort_keys=True)])
+    context_parts.extend(
+        [
+            "",
+            "Loaded policy packs:",
+            json.dumps(policy_pack_payload, indent=2, sort_keys=True),
+        ]
+    )
     return "\n".join(context_parts).strip()

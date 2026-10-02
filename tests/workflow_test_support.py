@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    WorkflowCheckpoint,
+    WorkflowExecution,
+)
 
 
 def _public_execution_id(*, run_id: str) -> str:
@@ -101,7 +106,12 @@ def add_run_with_workflow(
         run.entry_stage = "orchestrated"
     timestamp = run.created_at or datetime.now(timezone.utc)
     effective_workflow_status = workflow_status or run.status
-    active_run_id = run.run_id if effective_workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None
+    active_run_id = (
+        run.run_id
+        if effective_workflow_status
+        in {"queued", "dispatching", "running", "waiting_for_input"}
+        else None
+    )
     workflow = WorkflowExecution(
         workflow_id=run.workflow_id,
         execution_id=_public_execution_id(run_id=run.run_id),
@@ -120,12 +130,16 @@ def add_run_with_workflow(
         status=effective_workflow_status,
         last_error=failure_reason if failure_reason is not None else run.last_error,
         active_run_id=active_run_id,
-        latest_checkpoint_id=latest_checkpoint.checkpoint_id if latest_checkpoint is not None else None,
+        latest_checkpoint_id=latest_checkpoint.checkpoint_id
+        if latest_checkpoint is not None
+        else None,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
         created_at=timestamp,
         started_at=run.started_at,
-        finished_at=run.finished_at if effective_workflow_status in {"succeeded", "failed", "cancelled"} else None,
+        finished_at=run.finished_at
+        if effective_workflow_status in {"succeeded", "failed", "cancelled"}
+        else None,
         updated_at=run.finished_at or run.started_at or timestamp,
     )
     session.add(workflow)
@@ -182,13 +196,33 @@ def add_workflow_attempt(
 ) -> tuple[WorkflowExecution, Run, WorkflowCheckpoint | None]:
     timestamp = now or created_at or datetime.now(timezone.utc)
     normalized_workflow_id = workflow_id or f"workflow-{run_id}"
-    workflow_started = started_at if started_at is not None else (timestamp if workflow_status not in {"queued", "dispatching"} else None)
-    workflow_finished = finished_at if finished_at is not None else (
-        timestamp if workflow_status in {"succeeded", "failed", "cancelled", "blocked"} else None
+    workflow_started = (
+        started_at
+        if started_at is not None
+        else (timestamp if workflow_status not in {"queued", "dispatching"} else None)
     )
-    run_started = started_at if started_at is not None else (timestamp if run_status not in {"queued", "dispatching"} else None)
-    run_finished = finished_at if finished_at is not None else (
-        timestamp if run_status in {"succeeded", "failed", "cancelled", "blocked"} else None
+    workflow_finished = (
+        finished_at
+        if finished_at is not None
+        else (
+            timestamp
+            if workflow_status in {"succeeded", "failed", "cancelled", "blocked"}
+            else None
+        )
+    )
+    run_started = (
+        started_at
+        if started_at is not None
+        else (timestamp if run_status not in {"queued", "dispatching"} else None)
+    )
+    run_finished = (
+        finished_at
+        if finished_at is not None
+        else (
+            timestamp
+            if run_status in {"succeeded", "failed", "cancelled", "blocked"}
+            else None
+        )
     )
     workflow = WorkflowExecution(
         workflow_id=normalized_workflow_id,
@@ -207,7 +241,9 @@ def add_workflow_attempt(
         dedupe_scope=dedupe_scope,
         status="failed" if workflow_status == "blocked" else workflow_status,
         last_error=last_error,
-        active_run_id=run_id if workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None,
+        active_run_id=run_id
+        if workflow_status in {"queued", "dispatching", "running", "waiting_for_input"}
+        else None,
         latest_checkpoint_id=entry_checkpoint_id,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
@@ -243,7 +279,9 @@ def add_workflow_attempt(
         created_at=created_at or timestamp,
         dispatch_claimed_at=dispatch_claimed_at,
         started_at=run_started,
-        last_heartbeat_at=last_heartbeat_at if last_heartbeat_at is not None else (timestamp if run_status == "running" else None),
+        last_heartbeat_at=last_heartbeat_at
+        if last_heartbeat_at is not None
+        else (timestamp if run_status == "running" else None),
         worker_service_instance_id=worker_service_instance_id,
         finished_at=run_finished,
     )

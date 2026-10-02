@@ -78,7 +78,9 @@ def project_workflow_for_new_run_attempt(
         active_run_id=run.run_id,
         latest_checkpoint_id=latest_checkpoint_id,
         finished_at=None,
-        orchestration_backend=orchestration_backend if orchestration_backend is not None else _KEEP,
+        orchestration_backend=orchestration_backend
+        if orchestration_backend is not None
+        else _KEEP,
     )
 
 
@@ -179,7 +181,11 @@ def reconcile_workflow_with_active_run(
     now: datetime | None = None,
 ) -> WorkflowExecution:
     normalized_status = _normalize_run_status(active_run.status)
-    if normalized_status in {RUN_STATUS_QUEUED, RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING}:
+    if normalized_status in {
+        RUN_STATUS_QUEUED,
+        RUN_STATUS_DISPATCHING,
+        RUN_STATUS_RUNNING,
+    }:
         return workflow
     if normalized_status == RUN_STATUS_WAITING_FOR_INPUT:
         return _apply_projection(

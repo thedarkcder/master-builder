@@ -19,6 +19,8 @@ from tests.production_path_support import (
     session_factory_for,
 )
 
+from tests.test_support.webhook_sender import configure_tenant_webhook_sender
+
 pytestmark = pytest.mark.production_path
 
 
@@ -32,6 +34,10 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
         self.session_factory = session_factory_for(self.database_url)
         seed_core_runtime_state(self.session_factory)
         self.client = TestClient(create_app())
+        token = configure_tenant_webhook_sender(
+            session_factory=self.session_factory, tenant_id="example-workspace"
+        )
+        self.client.headers["X-Webhook-Token"] = token
 
     def tearDown(self) -> None:
         self.client.close()
@@ -59,7 +65,9 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
                     "status": None,
                 }
             )
-            tenant.discord_config = dict(tenant.discord_config or {}, ask_history=ask_history)
+            tenant.discord_config = dict(
+                tenant.discord_config or {}, ask_history=ask_history
+            )
             session.flush()
             return object()
 
@@ -68,7 +76,7 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
             side_effect=_fake_execute,
         ):
             response = self.client.post(
-                "/discord/webhook/example",
+                "/discord/webhook/example-workspace",
                 json={
                     "user_id": "u-1",
                     "channel_id": "discord-channel-1",
@@ -84,7 +92,7 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
         assert processed is not None
         self.assertEqual(processed.status, "done")
         with self.session_factory() as session:
-            tenant = session.get(Tenant, "example")
+            tenant = session.get(Tenant, "example-workspace")
             assert tenant is not None
             ask_history = list((tenant.discord_config or {}).get("ask_history") or [])
         self.assertEqual(len(ask_history), 1)
@@ -100,7 +108,7 @@ class DiscordWebhookProductionPathTests(unittest.TestCase):
             ),
         ):
             response = self.client.post(
-                "/discord/webhook/example",
+                "/discord/webhook/example-workspace",
                 json={
                     "user_id": "u-1",
                     "channel_id": "discord-channel-1",

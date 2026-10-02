@@ -13,7 +13,13 @@ from orchestrator.api.routes.webhook import (
 )
 from orchestrator.api.schemas import DiscordCommandResponse
 from orchestrator.core.webhooks.health import webhook_health_tracker
-from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
+from orchestrator.storage.models import (
+    FollowupContext,
+    Project,
+    Run,
+    Tenant,
+    WebhookJob,
+)
 from orchestrator.tools.atlassian_oauth import JiraIssuePreview, AtlassianOAuthError
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 
@@ -21,7 +27,6 @@ pytestmark = pytest.mark.contract
 
 
 class JiraWebhookTests(JiraWebhookTestsHarness):
-
     def test_webhook_ignores_disabled_tenant(self) -> None:
         self._create_tenant("tenant-disabled", is_enabled=False)
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
@@ -33,9 +38,14 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(response.json()["reason"], "tenant_disabled")
 
     def test_webhook_queues_todo_status_for_worker_reconciliation(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-123", status_name="To Do", labels=["agent:ready"]
+        )
 
-        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch(
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+            return_value=self._pre_run_check(),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self.assertEqual(response.status_code, 202)
@@ -50,7 +60,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(runs, [])
 
     def test_webhook_queues_comment_event_for_worker_reconciliation(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-123", status_name="To Do", labels=["agent:ready"]
+        )
         payload["webhookEvent"] = "comment_created"
         payload["comment"] = {
             "author": {"accountId": "jira-user-1"},
@@ -74,25 +86,40 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].transport, "jira_webhook")
 
-    def test_webhook_does_not_enqueue_when_issue_is_in_backlog_for_configured_board_on_create_sends_notification(self) -> None:
+    def test_webhook_does_not_enqueue_when_issue_is_in_backlog_for_configured_board_on_create_sends_notification(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             project = session.execute(
                 select(Project)
-                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.jira_project_key == "TP",
+                )
                 .limit(1)
             ).scalar_one()
-            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            project.policy_overrides = {
+                **dict(project.policy_overrides or {}),
+                "run_board_id": 1,
+            }
             session.commit()
 
-        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-123", status_name="To Do", labels=["agent:ready"]
+        )
         payload["webhookEvent"] = "jira:issue_created"
         with (
-            patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("backlog", None)),
+            patch(
+                "orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location",
+                return_value=("backlog", None),
+            ),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=self._pre_run_check(outcome="decision_gate_required"),
             ),
-            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
+            patch(
+                "orchestrator.core.discord.transport_executor.send_tenant_discord_message"
+            ) as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -104,18 +131,34 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         with self.session_factory() as session:
             project = session.execute(
                 select(Project)
-                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.jira_project_key == "TP",
+                )
                 .limit(1)
             ).scalar_one()
-            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            project.policy_overrides = {
+                **dict(project.policy_overrides or {}),
+                "run_board_id": 1,
+            }
             session.commit()
 
-        payload = self._jira_issue_payload(issue_key="TP-139", status_name="To Do", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-139", status_name="To Do", labels=["agent:ready"]
+        )
         payload["webhookEvent"] = "jira:issue_updated"
         with (
-            patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("backlog", None)),
-            patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()),
-            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location",
+                return_value=("backlog", None),
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+                return_value=self._pre_run_check(),
+            ),
+            patch(
+                "orchestrator.core.discord.transport_executor.send_tenant_discord_message"
+            ) as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -124,7 +167,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         notify_mock.assert_not_called()
 
     def test_webhook_applies_required_worker_label_using_pre_run_check(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-126", status_name="To Do", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-126", status_name="To Do", labels=["agent:ready"]
+        )
         payload["issue"]["fields"]["summary"] = "Build iOS app shell"
         payload["issue"]["fields"]["description"] = {
             "type": "doc",
@@ -132,7 +177,12 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             "content": [
                 {
                     "type": "paragraph",
-                    "content": [{"type": "text", "text": "Objective: implement SwiftUI onboarding. How to test: Xcode build."}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Objective: implement SwiftUI onboarding. How to test: Xcode build.",
+                        }
+                    ],
                 }
             ],
         }
@@ -142,30 +192,46 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             connection=SimpleNamespace(cloud_id="cloud-1"),
             client=oauth_client,
         )
-        with patch(
-            "orchestrator.api.webhooks.jira_admission_flow.tenant_atlassian_oauth_context",
-            return_value=oauth_context,
-        ), patch(
-            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
-            return_value=self._pre_run_check(capability="macos"),
+        with (
+            patch(
+                "orchestrator.api.webhooks.jira_admission_flow.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+                return_value=self._pre_run_check(capability="macos"),
+            ),
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-126")
         oauth_client.add_issue_labels.assert_not_called()
 
-    def test_webhook_does_not_enqueue_when_issue_is_not_on_configured_board(self) -> None:
+    def test_webhook_does_not_enqueue_when_issue_is_not_on_configured_board(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             project = session.execute(
                 select(Project)
-                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.jira_project_key == "TP",
+                )
                 .limit(1)
             ).scalar_one()
-            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            project.policy_overrides = {
+                **dict(project.policy_overrides or {}),
+                "run_board_id": 1,
+            }
             session.commit()
 
-        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
-        with patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("not_on_board", None)):
+        payload = self._jira_issue_payload(
+            issue_key="TP-123", status_name="To Do", labels=["agent:ready"]
+        )
+        with patch(
+            "orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location",
+            return_value=("not_on_board", None),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-123")
@@ -175,20 +241,35 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         with self.session_factory() as session:
             project = session.execute(
                 select(Project)
-                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.jira_project_key == "TP",
+                )
                 .limit(1)
             ).scalar_one()
-            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            project.policy_overrides = {
+                **dict(project.policy_overrides or {}),
+                "run_board_id": 1,
+            }
             session.commit()
 
-        payload = self._jira_issue_payload(issue_key="TP-123", status_name="To Do", labels=["agent:ready"])
-        with patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("board", None)):
+        payload = self._jira_issue_payload(
+            issue_key="TP-123", status_name="To Do", labels=["agent:ready"]
+        )
+        with patch(
+            "orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location",
+            return_value=("board", None),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-123")
 
-    def test_fetch_issue_board_location_still_checks_board_when_backlog_lookup_fails(self) -> None:
-        from orchestrator.api.webhooks.jira_board_location import _fetch_issue_board_location
+    def test_fetch_issue_board_location_still_checks_board_when_backlog_lookup_fails(
+        self,
+    ) -> None:
+        from orchestrator.api.webhooks.jira_board_location import (
+            _fetch_issue_board_location,
+        )
 
         context = JiraWebhookContext(
             request_id="req-1",
@@ -219,8 +300,14 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         ]
 
         with (
-            patch("orchestrator.api.webhooks.jira_board_location.tenant_atlassian_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_board_location.AtlassianOAuthHttpClient", return_value=http_client),
+            patch(
+                "orchestrator.api.webhooks.jira_board_location.tenant_atlassian_oauth_context",
+                return_value=oauth_context,
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_board_location.AtlassianOAuthHttpClient",
+                return_value=http_client,
+            ),
         ):
             location, detail = _fetch_issue_board_location(
                 context=context,
@@ -233,10 +320,15 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertIsNone(detail)
 
     def test_webhook_enqueues_issue_created_event_in_todo(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-130", status_name="To Do", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-130", status_name="To Do", labels=["agent:ready"]
+        )
         payload["webhookEvent"] = "jira:issue_created"
 
-        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch(
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+            return_value=self._pre_run_check(),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-130")
@@ -258,8 +350,12 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-active-issue-124"}
 
-        first = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
-        second = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        first = self.client.post(
+            "/jira/webhook/tenant-webhook", json=payload, headers=headers
+        )
+        second = self.client.post(
+            "/jira/webhook/tenant-webhook", json=payload, headers=headers
+        )
 
         first_body = self._assert_jira_issue_event_queued(first, issue_key="TP-124")
         second_body = self._assert_jira_issue_event_queued(
@@ -273,11 +369,17 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
     def test_webhook_enqueue_skip_sends_discord_reason(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-124", labels=["agent:ready"])
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-duplicate-124"}
-        first = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        first = self.client.post(
+            "/jira/webhook/tenant-webhook", json=payload, headers=headers
+        )
         self._assert_jira_issue_event_queued(first, issue_key="TP-124")
 
-        with patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock:
-            second = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        with patch(
+            "orchestrator.core.discord.transport_executor.send_tenant_discord_message"
+        ) as notify_mock:
+            second = self.client.post(
+                "/jira/webhook/tenant-webhook", json=payload, headers=headers
+            )
 
         self._assert_jira_issue_event_queued(
             second,
@@ -292,10 +394,14 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         payload["webhookEvent"] = "jira:issue_updated"
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-meta-1"}
 
-        response = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        response = self.client.post(
+            "/jira/webhook/tenant-webhook", json=payload, headers=headers
+        )
         self._assert_jira_issue_event_queued(response, issue_key="TP-777")
 
-        tenant_response = self.client.get("/api/admin/tenants/tenant-webhook", auth=("admin", "secret"))
+        tenant_response = self.client.get(
+            "/api/admin/tenants/tenant-webhook", auth=("admin", "secret")
+        )
         self.assertEqual(tenant_response.status_code, 200)
         jira_config = tenant_response.json()["jira"]
         self.assertEqual(jira_config["webhook_last_delivery_id"], "delivery-meta-1")
@@ -371,8 +477,10 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             self.assertFalse(ask_history)
             seed_followups = (
                 session.execute(
-                    select(FollowupContext)
-                    .where(FollowupContext.tenant_id == "tenant-webhook", FollowupContext.request_id == "req-1")
+                    select(FollowupContext).where(
+                        FollowupContext.tenant_id == "tenant-webhook",
+                        FollowupContext.request_id == "req-1",
+                    )
                 )
                 .scalars()
                 .all()
@@ -380,7 +488,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             self.assertEqual(len(seed_followups), 1)
             self.assertEqual(seed_followups[0].status, "closed")
 
-    def test_webhook_issue_deleted_without_prefix_clears_discord_ask_history(self) -> None:
+    def test_webhook_issue_deleted_without_prefix_clears_discord_ask_history(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-webhook")
             self.assertIsNotNone(tenant)
@@ -494,7 +604,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                 "content": [
                     {
                         "type": "paragraph",
-                        "content": [{"type": "text", "text": "Can someone take a look?"}],
+                        "content": [
+                            {"type": "text", "text": "Can someone take a look?"}
+                        ],
                     }
                 ],
             },
@@ -524,7 +636,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                 "content": [
                     {
                         "type": "paragraph",
-                        "content": [{"type": "text", "text": "Updated note without command"}],
+                        "content": [
+                            {"type": "text", "text": "Updated note without command"}
+                        ],
                     }
                 ],
             },
@@ -538,7 +652,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(processed.status, "done")
         with self.session_factory() as session:
             run = session.execute(
-                select(Run).where(Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-903")
+                select(Run).where(
+                    Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-903"
+                )
             ).scalar_one_or_none()
             self.assertIsNone(run)
 
@@ -558,11 +674,17 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-128")
 
-    def test_webhook_transition_only_mode_ignores_status_recheck_without_transition(self) -> None:
-        self._create_tenant("tenant-transition-only", ready_trigger_mode="transition_only")
+    def test_webhook_transition_only_mode_ignores_status_recheck_without_transition(
+        self,
+    ) -> None:
+        self._create_tenant(
+            "tenant-transition-only", ready_trigger_mode="transition_only"
+        )
         payload = self._jira_issue_payload(issue_key="TP-129", labels=["agent:ready"])
 
-        response = self.client.post("/jira/webhook/tenant-transition-only", json=payload)
+        response = self.client.post(
+            "/jira/webhook/tenant-transition-only", json=payload
+        )
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-129")
 
@@ -579,7 +701,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-130")
         self.assertEqual(body["webhook_event"], "issue_created")
 
-    def test_webhook_allows_manual_run_command_path_for_backlog_followup_label(self) -> None:
+    def test_webhook_allows_manual_run_command_path_for_backlog_followup_label(
+        self,
+    ) -> None:
         payload = self._jira_issue_payload(
             issue_key="TP-131",
             labels=["backlog-only"],
@@ -600,7 +724,10 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             },
         }
 
-        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch(
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+            return_value=self._pre_run_check(),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-131")
@@ -610,7 +737,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(processed.status, "done")
         with self.session_factory() as session:
             run = session.execute(
-                select(Run).where(Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-131")
+                select(Run).where(
+                    Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-131"
+                )
             ).scalar_one_or_none()
             self.assertIsNone(run)
 
@@ -618,8 +747,12 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
         headers = {"X-Atlassian-Webhook-Identifier": "delivery-123"}
 
-        first = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
-        second = self.client.post("/jira/webhook/tenant-webhook", json=payload, headers=headers)
+        first = self.client.post(
+            "/jira/webhook/tenant-webhook", json=payload, headers=headers
+        )
+        second = self.client.post(
+            "/jira/webhook/tenant-webhook", json=payload, headers=headers
+        )
 
         first_body = self._assert_jira_issue_event_queued(first, issue_key="TP-126")
         second_body = self._assert_jira_issue_event_queued(
@@ -630,7 +763,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         )
         self.assertEqual(second_body["job_id"], first_body["job_id"])
 
-    def test_parse_jira_comment_command_supports_ask_with_inline_and_multiline_text(self) -> None:
+    def test_parse_jira_comment_command_supports_ask_with_inline_and_multiline_text(
+        self,
+    ) -> None:
         inline_payload = {
             "comment": {
                 "body": {
@@ -639,7 +774,12 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                     "content": [
                         {
                             "type": "paragraph",
-                            "content": [{"type": "text", "text": "/mb ask What changed since last run?"}],
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "/mb ask What changed since last run?",
+                                }
+                            ],
                         }
                     ],
                 }
@@ -656,8 +796,16 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                     "type": "doc",
                     "version": 1,
                     "content": [
-                        {"type": "paragraph", "content": [{"type": "text", "text": "/mb ask"}]},
-                        {"type": "paragraph", "content": [{"type": "text", "text": "Can you explain the failure?"}]},
+                        {
+                            "type": "paragraph",
+                            "content": [{"type": "text", "text": "/mb ask"}],
+                        },
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "Can you explain the failure?"}
+                            ],
+                        },
                     ],
                 }
             }
@@ -667,7 +815,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(argument, "Can you explain the failure?")
         self.assertIsNone(error)
 
-    def test_webhook_comment_command_ask_posts_reply_and_does_not_enqueue_run(self) -> None:
+    def test_webhook_comment_command_ask_posts_reply_and_does_not_enqueue_run(
+        self,
+    ) -> None:
         payload = self._jira_issue_payload(issue_key="TP-901", status_name="To Do")
         payload["webhookEvent"] = "comment_created"
         payload["comment"] = {
@@ -678,7 +828,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                 "content": [
                     {
                         "type": "paragraph",
-                        "content": [{"type": "text", "text": "/mb ask Can you fix this?"}],
+                        "content": [
+                            {"type": "text", "text": "/mb ask Can you fix this?"}
+                        ],
                     }
                 ],
             },
@@ -686,9 +838,14 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         with (
             patch(
                 "orchestrator.api.webhooks.jira_webhook_comment_flow.execute_jira_comment_command",
-                return_value=DiscordCommandResponse(ok=True, command="ask", message="I can fix this.", data=None),
+                return_value=DiscordCommandResponse(
+                    ok=True, command="ask", message="I can fix this.", data=None
+                ),
             ) as command_mock,
-            patch("orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment", return_value=(True, None)) as post_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment",
+                return_value=(True, None),
+            ) as post_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
             processed = self._process_one_webhook_job()
@@ -705,15 +862,22 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
 
         with self.session_factory() as session:
             run = session.execute(
-                select(Run).where(Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-901")
+                select(Run).where(
+                    Run.tenant_id == "tenant-webhook", Run.issue_key == "TP-901"
+                )
             ).scalar_one_or_none()
             self.assertIsNone(run)
 
-    def test_webhook_comment_command_ask_uses_jira_ingress_contract_with_tenant_discord_scope(self) -> None:
+    def test_webhook_comment_command_ask_uses_jira_ingress_contract_with_tenant_discord_scope(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-webhook")
             self.assertIsNotNone(tenant)
-            tenant.discord_config = {"channel_id": "discord-channel-1", "notify_events": []}
+            tenant.discord_config = {
+                "channel_id": "discord-channel-1",
+                "notify_events": [],
+            }
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-905", status_name="To Do")
@@ -734,11 +898,21 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         with (
             patch(
                 "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
-                return_value=[JiraIssuePreview(key="TP-905", summary="Investigate", status="To Do")],
+                return_value=[
+                    JiraIssuePreview(
+                        key="TP-905", summary="Investigate", status="To Do"
+                    )
+                ],
             ),
             patch("orchestrator.api.discord.ingress.ask_runtime.build_codex_runtime"),
-            patch("orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_runtime", return_value="Jira ask response"),
-            patch("orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment", return_value=(True, None)) as post_mock,
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.answer_board_question_with_runtime",
+                return_value="Jira ask response",
+            ),
+            patch(
+                "orchestrator.api.webhooks.jira_webhook_comment_flow.post_jira_comment",
+                return_value=(True, None),
+            ) as post_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
             processed = self._process_one_webhook_job()
@@ -753,8 +927,12 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
 
     def test_webhook_respects_tenant_concurrency_limit(self) -> None:
         self._create_tenant("tenant-single", max_concurrent_runs=1)
-        first_payload = self._jira_issue_payload(issue_key="TP-126", labels=["agent:ready"])
-        second_payload = self._jira_issue_payload(issue_key="TP-127", labels=["agent:ready"])
+        first_payload = self._jira_issue_payload(
+            issue_key="TP-126", labels=["agent:ready"]
+        )
+        second_payload = self._jira_issue_payload(
+            issue_key="TP-127", labels=["agent:ready"]
+        )
 
         first = self.client.post("/jira/webhook/tenant-single", json=first_payload)
         second = self.client.post("/jira/webhook/tenant-single", json=second_payload)
@@ -789,7 +967,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         )
         payload = self._jira_issue_payload(issue_key="TP-125", labels=["agent:ready"])
 
-        unauthenticated = self.client.post("/jira/webhook/tenant-auth", json=payload)
+        unauthenticated = self.client.post(
+            "/jira/webhook/tenant-auth", json=payload, headers={"X-Webhook-Token": ""}
+        )
         invalid_token = self.client.post(
             "/jira/webhook/tenant-auth",
             json=payload,
@@ -806,9 +986,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self._assert_jira_issue_event_queued(valid_token, issue_key="TP-125")
 
     def test_github_webhook_ping_is_accepted(self) -> None:
-        response = self.client.post(
-            "/github/webhook",
-            json={"zen": "keep it logically awesome"},
+        response = self._post_authenticated_github(
+            self.client,
+            payload={"zen": "keep it logically awesome"},
             headers={
                 "X-GitHub-Event": "ping",
                 "X-GitHub-Delivery": "gh-delivery-1",
@@ -819,10 +999,12 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertTrue(response.json()["accepted"])
         self.assertEqual(response.json()["reason"], "ping")
 
-    def test_github_webhook_unknown_installation_is_accepted_without_handler(self) -> None:
-        response = self.client.post(
-            "/github/webhook",
-            json={
+    def test_github_webhook_unknown_installation_is_accepted_without_handler(
+        self,
+    ) -> None:
+        response = self._post_authenticated_github(
+            self.client,
+            payload={
                 "action": "opened",
                 "installation": {"id": 999999},
                 "repository": {"full_name": "example/repo"},
@@ -838,9 +1020,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(response.json()["reason"], "unknown_installation")
 
     def test_github_webhook_resolves_tenant_from_installation_id(self) -> None:
-        response = self.client.post(
-            "/github/webhook",
-            json={
+        response = self._post_authenticated_github(
+            self.client,
+            payload={
                 "action": "synchronize",
                 "installation": {"id": 12345},
                 "repository": {"full_name": "example/repo"},
@@ -857,9 +1039,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_github_push_webhook_enqueues_deployment_event(self) -> None:
-        response = self.client.post(
-            "/github/webhook",
-            json={
+        response = self._post_authenticated_github(
+            self.client,
+            payload={
                 "ref": "refs/heads/main",
                 "after": "abcdef1234567890",
                 "installation": {"id": 12345},
@@ -883,7 +1065,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(job.context_json["branch"], "main")
         self.assertEqual(job.context_json["commit_sha"], "abcdef1234567890")
 
-    def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
+    def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(
+        self,
+    ) -> None:
         self.client.put(
             "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",
             json={"value": self.github_webhook_secret_value},
@@ -902,13 +1086,17 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             headers={
                 "content-type": "application/json",
                 "X-GitHub-Event": "pull_request",
-                "X-Hub-Signature-256": self._sign_github_payload(payload_bytes, "wrong-secret"),
+                "X-Hub-Signature-256": self._sign_github_payload(
+                    payload_bytes, "wrong-secret"
+                ),
             },
         )
 
         self.assertEqual(response.status_code, 401)
 
-    def test_github_webhook_accepts_valid_signature_when_global_secret_configured(self) -> None:
+    def test_github_webhook_accepts_valid_signature_when_global_secret_configured(
+        self,
+    ) -> None:
         self.client.put(
             "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",
             json={"value": self.github_webhook_secret_value},
@@ -920,7 +1108,9 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             "repository": {"full_name": "example/repo"},
         }
         payload_bytes = json.dumps(payload).encode("utf-8")
-        signature = self._sign_github_payload(payload_bytes, self.github_webhook_secret_value)
+        signature = self._sign_github_payload(
+            payload_bytes, self.github_webhook_secret_value
+        )
 
         response = self.client.post(
             "/github/webhook",
@@ -998,9 +1188,20 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(response.json()["reason"], "missing_pr_context")
 
     def test_discord_webhook_routes_with_discord_ingress_contract(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-webhook")
+            assert tenant is not None
+            tenant.discord_config = dict(
+                tenant.discord_config or {}, command_secret_ref="fixture-webhook-token"
+            )
+            session.commit()
         response = self.client.post(
             "/discord/webhook/tenant-webhook",
-            json={"user_id": "discord-user-1", "command": "!help", "channel_id": "discord-channel-1"},
+            json={
+                "user_id": "discord-user-1",
+                "command": "!help",
+                "channel_id": "discord-channel-1",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -1008,11 +1209,17 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertTrue(response.json()["deferred"])
         self.assertTrue(response.json()["queued"])
         with self.session_factory() as session:
-            jobs = session.execute(
-                select(WebhookJob).where(WebhookJob.transport == "discord_webhook")
-            ).scalars().all()
+            jobs = (
+                session.execute(
+                    select(WebhookJob).where(WebhookJob.transport == "discord_webhook")
+                )
+                .scalars()
+                .all()
+            )
         self.assertEqual(len(jobs), 1)
-        self.assertEqual(jobs[0].subject_key, "discord_channel:tenant-webhook:discord-channel-1")
+        self.assertEqual(
+            jobs[0].subject_key, "discord_channel:tenant-webhook:discord-channel-1"
+        )
 
     def test_discord_interaction_commands_are_queued_after_immediate_ack(self) -> None:
         payload = {
@@ -1025,11 +1232,20 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         }
 
         with (
-            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key",
+                return_value=b"\x01" * 32,
+            ),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"
+            ),
             patch(
                 "orchestrator.api.routes.webhook_discord_interactions._resolve_interaction_subject_scope",
-                return_value=("tenant-webhook", None, "discord_channel:tenant-webhook:discord-channel-1"),
+                return_value=(
+                    "tenant-webhook",
+                    None,
+                    "discord_channel:tenant-webhook:discord-channel-1",
+                ),
             ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
@@ -1039,9 +1255,15 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["data"]["flags"], 64)
         with self.session_factory() as session:
-            jobs = session.execute(
-                select(WebhookJob).where(WebhookJob.transport == "discord_interaction")
-            ).scalars().all()
+            jobs = (
+                session.execute(
+                    select(WebhookJob).where(
+                        WebhookJob.transport == "discord_interaction"
+                    )
+                )
+                .scalars()
+                .all()
+            )
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].tenant_id, "tenant-webhook")
         self.assertIsNone(jobs[0].dedupe_key)

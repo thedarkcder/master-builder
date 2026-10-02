@@ -48,7 +48,11 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def _canonicalize_selector_routing(selector_routing: dict[str, str]) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for selector, profile_name in selector_routing.items():
-        canonical_selector = "discord.voice_entry_router" if selector == "discord.voice_room_router" else selector
+        canonical_selector = (
+            "discord.voice_entry_router"
+            if selector == "discord.voice_room_router"
+            else selector
+        )
         normalized[canonical_selector] = profile_name
     return normalized
 
@@ -66,7 +70,9 @@ def _default_profiles() -> dict[str, dict]:
 
 
 def _configured_profiles(*, session: Session) -> dict[str, dict]:
-    payload = platform_settings_service.get_json(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_PROFILES)
+    payload = platform_settings_service.get_json(
+        session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_PROFILES
+    )
     return normalize_execution_profiles(payload.get("profiles"))
 
 
@@ -79,10 +85,14 @@ def _save_configured_profiles(*, session: Session, profiles: dict[str, dict]) ->
             value_json={"profiles": normalized},
         )
         return
-    platform_settings_service.delete(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_PROFILES)
+    platform_settings_service.delete(
+        session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_PROFILES
+    )
 
 
-def _merged_profiles(*, session: Session) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
+def _merged_profiles(
+    *, session: Session
+) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
     defaults = _default_profiles()
     configured = _configured_profiles(session=session)
     merged = dict(defaults)
@@ -90,9 +100,15 @@ def _merged_profiles(*, session: Session) -> tuple[dict[str, dict], dict[str, di
     return defaults, configured, merged
 
 
-def _current_routing(*, session: Session) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
-    payload = platform_settings_service.get_json(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING)
-    selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.get("selector_routing")))
+def _current_routing(
+    *, session: Session
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    payload = platform_settings_service.get_json(
+        session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING
+    )
+    selector_routing = _canonicalize_selector_routing(
+        normalize_execution_profile_routing(payload.get("selector_routing"))
+    )
     return (
         normalize_agent_routing(payload.get("role_routing")),
         normalize_agent_routing(payload.get("name_routing")),
@@ -180,7 +196,9 @@ def _available_profiles(*, session: Session) -> dict[str, AgentExecutionProfileR
     role_routing, name_routing, selector_routing = _current_routing(session=session)
     available: dict[str, AgentExecutionProfileRead] = {}
     for profile_name in sorted(merged.keys()):
-        profile = build_agent_execution_profile(profile_name=profile_name, profiles=merged)
+        profile = build_agent_execution_profile(
+            profile_name=profile_name, profiles=merged
+        )
         available[profile_name] = _profile_to_read(
             profile_name=profile_name,
             profile=profile,
@@ -207,22 +225,42 @@ def _validate_routing_payload(
 
     for role, profile_name in role_routing.items():
         if role not in known_roles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown agent role: {role}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown agent role: {role}",
+            )
         if profile_name not in known_profiles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown execution profile: {profile_name}",
+            )
     for agent_name, profile_name in name_routing.items():
         if agent_name not in known_names:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown named agent: {agent_name}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown named agent: {agent_name}",
+            )
         if profile_name not in known_profiles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown execution profile: {profile_name}",
+            )
     for selector, profile_name in selector_routing.items():
         if selector not in known_selectors:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown selector: {selector}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown selector: {selector}",
+            )
         if profile_name not in known_profiles:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown execution profile: {profile_name}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unknown execution profile: {profile_name}",
+            )
 
 
-def _normalize_profile_payload(payload: AgentExecutionProfileWrite) -> dict[str, object]:
+def _normalize_profile_payload(
+    payload: AgentExecutionProfileWrite,
+) -> dict[str, object]:
     return {
         "runtime_kind": payload.runtime_kind,
         "cli_command": payload.cli_command,
@@ -246,7 +284,9 @@ def _validate_profile_write(
 ) -> dict[str, dict]:
     normalized_name = str(profile_name or "").strip()
     if not normalized_name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="profile_name is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="profile_name is required"
+        )
 
     raw_profiles = dict(configured)
     normalized_profiles = normalize_execution_profiles(
@@ -256,35 +296,74 @@ def _validate_profile_write(
         }
     )
     if normalized_name not in normalized_profiles:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid execution profile payload")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid execution profile payload",
+        )
 
     runtime_kind = normalized_profiles[normalized_name]["runtime_kind"]
-    cli_command = str(normalized_profiles[normalized_name].get("cli_command") or "").strip()
+    cli_command = str(
+        normalized_profiles[normalized_name].get("cli_command") or ""
+    ).strip()
     base_url = str(normalized_profiles[normalized_name].get("base_url") or "").strip()
-    api_key_secret_ref = str(normalized_profiles[normalized_name].get("api_key_secret_ref") or "").strip()
-    fallback_profile = str(normalized_profiles[normalized_name].get("fallback_profile") or "").strip()
+    api_key_secret_ref = str(
+        normalized_profiles[normalized_name].get("api_key_secret_ref") or ""
+    ).strip()
+    fallback_profile = str(
+        normalized_profiles[normalized_name].get("fallback_profile") or ""
+    ).strip()
 
     if runtime_kind in {"codex_cli", "chat_cli", "claude_cli"} and not cli_command:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cli_command is required for CLI runtimes")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cli_command is required for CLI runtimes",
+        )
     if runtime_kind_requires_base_url(runtime_kind) and not base_url:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"base_url is required for runtime {runtime_kind}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"base_url is required for runtime {runtime_kind}",
+        )
     if runtime_kind in {"openai", "claude"} and not api_key_secret_ref:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"api_key_secret_ref is required for runtime {runtime_kind}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"api_key_secret_ref is required for runtime {runtime_kind}",
+        )
     if not runtime_kind_supports_api_key(runtime_kind) and api_key_secret_ref:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"runtime {runtime_kind} does not use api_key_secret_ref")
-    if not runtime_kind_supports_reasoning_effort(runtime_kind) and payload.reasoning_effort is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"runtime {runtime_kind} does not support reasoning_effort")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"runtime {runtime_kind} does not use api_key_secret_ref",
+        )
+    if (
+        not runtime_kind_supports_reasoning_effort(runtime_kind)
+        and payload.reasoning_effort is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"runtime {runtime_kind} does not support reasoning_effort",
+        )
     if creating and normalized_name in defaults:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Built-in profile already exists: {normalized_name}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Built-in profile already exists: {normalized_name}",
+        )
     if creating and normalized_name in configured:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Execution profile already exists: {normalized_name}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Execution profile already exists: {normalized_name}",
+        )
     if fallback_profile and fallback_profile == normalized_name:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fallback_profile cannot point to itself")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fallback_profile cannot point to itself",
+        )
 
     candidate_profiles = dict(merged)
     candidate_profiles[normalized_name] = normalized_profiles[normalized_name]
     if fallback_profile and fallback_profile not in candidate_profiles:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown fallback profile: {fallback_profile}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown fallback profile: {fallback_profile}",
+        )
     return normalized_profiles
 
 
@@ -323,7 +402,9 @@ def put_agent_runtimes(
     available_profiles = _available_profiles(session=session)
     role_routing = normalize_agent_routing(payload.role_routing)
     name_routing = normalize_agent_routing(payload.name_routing)
-    selector_routing = _canonicalize_selector_routing(normalize_execution_profile_routing(payload.selector_routing))
+    selector_routing = _canonicalize_selector_routing(
+        normalize_execution_profile_routing(payload.selector_routing)
+    )
     _validate_routing_payload(
         role_routing=role_routing,
         name_routing=name_routing,
@@ -347,7 +428,9 @@ def reset_agent_runtimes(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> AgentRuntimeRoutingRead:
-    platform_settings_service.delete(session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING)
+    platform_settings_service.delete(
+        session=session, setting_key=SETTING_KEY_AGENT_RUNTIME_ROUTING
+    )
     return _build_routing_response(session=session)
 
 
@@ -365,7 +448,10 @@ def get_agent_runtime_tools(
 ) -> AgentRuntimeToolsRead:
     return AgentRuntimeToolsRead(
         available_stages=list(TOOL_ALLOWLIST.keys()),
-        tools=[AgentRuntimeToolRead.model_validate(tool) for tool in list_implemented_tools()],
+        tools=[
+            AgentRuntimeToolRead.model_validate(tool)
+            for tool in list_implemented_tools()
+        ],
     )
 
 
@@ -389,7 +475,9 @@ def create_agent_runtime_profile(
     return _available_profiles(session=session)[payload.profile_name]
 
 
-@router.put("/agent-runtime-profiles/{profile_name}", response_model=AgentExecutionProfileRead)
+@router.put(
+    "/agent-runtime-profiles/{profile_name}", response_model=AgentExecutionProfileRead
+)
 def update_agent_runtime_profile(
     profile_name: str,
     payload: AgentExecutionProfileWrite,
@@ -399,7 +487,9 @@ def update_agent_runtime_profile(
     defaults, configured, merged = _merged_profiles(session=session)
     normalized_name = str(profile_name or "").strip()
     if normalized_name not in merged:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found"
+        )
     normalized_profiles = _validate_profile_write(
         profile_name=normalized_name,
         payload=payload,
@@ -413,7 +503,10 @@ def update_agent_runtime_profile(
     return _available_profiles(session=session)[normalized_name]
 
 
-@router.post("/agent-runtime-profiles/{profile_name}/reset", response_model=AgentExecutionProfileRead)
+@router.post(
+    "/agent-runtime-profiles/{profile_name}/reset",
+    response_model=AgentExecutionProfileRead,
+)
 def reset_agent_runtime_profile(
     profile_name: str,
     _: str = Depends(require_admin),
@@ -422,15 +515,22 @@ def reset_agent_runtime_profile(
     defaults, configured, merged = _merged_profiles(session=session)
     normalized_name = str(profile_name or "").strip()
     if normalized_name not in defaults:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only built-in profiles can be reset")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only built-in profiles can be reset",
+        )
     if normalized_name not in merged:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found"
+        )
     configured.pop(normalized_name, None)
     _save_configured_profiles(session=session, profiles=configured)
     return _available_profiles(session=session)[normalized_name]
 
 
-@router.delete("/agent-runtime-profiles/{profile_name}", response_model=AgentExecutionProfilesRead)
+@router.delete(
+    "/agent-runtime-profiles/{profile_name}", response_model=AgentExecutionProfilesRead
+)
 def delete_agent_runtime_profile(
     profile_name: str,
     _: str = Depends(require_admin),
@@ -439,13 +539,20 @@ def delete_agent_runtime_profile(
     defaults, configured, _merged = _merged_profiles(session=session)
     normalized_name = str(profile_name or "").strip()
     if normalized_name in defaults:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Built-in profiles cannot be deleted")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Built-in profiles cannot be deleted",
+        )
     if normalized_name not in configured:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found"
+        )
 
     available_profile = _available_profiles(session=session).get(normalized_name)
     if available_profile is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found"
+        )
     if available_profile.usage_references:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -468,9 +575,13 @@ def list_agent_runtime_models(
     defaults, _configured, merged = _merged_profiles(session=session)
     normalized_profile_name = str(profile_name or "").strip() or None
     if normalized_profile_name is not None and normalized_profile_name not in merged:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Execution profile not found"
+        )
     resolved_profile = (
-        build_agent_execution_profile(profile_name=normalized_profile_name, profiles=merged)
+        build_agent_execution_profile(
+            profile_name=normalized_profile_name, profiles=merged
+        )
         if normalized_profile_name
         else None
     )
@@ -493,9 +604,21 @@ def list_agent_runtime_models(
     reasoning_efforts = []
     if runtime_kind_supports_reasoning_effort(resolved_runtime_kind):
         reasoning_efforts = [
-            {"id": "medium", "label": "Medium", "description": "Balanced depth and speed"},
-            {"id": "low", "label": "Low", "description": "Fastest responses with less deliberation"},
-            {"id": "high", "label": "High", "description": "Most deliberate reasoning mode"},
+            {
+                "id": "medium",
+                "label": "Medium",
+                "description": "Balanced depth and speed",
+            },
+            {
+                "id": "low",
+                "label": "Low",
+                "description": "Fastest responses with less deliberation",
+            },
+            {
+                "id": "high",
+                "label": "High",
+                "description": "Most deliberate reasoning mode",
+            },
         ]
     return {
         "default_model": resolved_default_model,
@@ -503,7 +626,11 @@ def list_agent_runtime_models(
         "runtime_kind": resolved_runtime_kind,
         "profile_name": normalized_profile_name,
         "models": [
-            {"id": option.model_id, "label": option.label, "description": option.description}
+            {
+                "id": option.model_id,
+                "label": option.label,
+                "description": option.description,
+            }
             for option in options
         ],
         "reasoning_efforts": reasoning_efforts,

@@ -54,7 +54,10 @@ def _table_exists(bind, table_name: str) -> bool:
 def _index_exists(bind, table_name: str, index_name: str) -> bool:
     if bind.dialect.name == "sqlite":
         inspector = sa.inspect(bind)
-        return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+        return any(
+            index.get("name") == index_name
+            for index in inspector.get_indexes(table_name)
+        )
     return bool(
         bind.execute(
             text(
@@ -79,7 +82,9 @@ def _column_length(table_name: str, column_name: str) -> int | None:
 
 def _is_duplicate_table_error(exc: Exception) -> bool:
     orig = getattr(exc, "orig", None)
-    sqlstate = str(getattr(orig, "pgcode", "") or getattr(orig, "sqlstate", "") or "").strip()
+    sqlstate = str(
+        getattr(orig, "pgcode", "") or getattr(orig, "sqlstate", "") or ""
+    ).strip()
     if sqlstate == "42P07":
         return True
     message = str(orig or exc)
@@ -98,25 +103,38 @@ def upgrade() -> None:
                 sa.Column("agent_id", sa.String(length=128), nullable=True),
                 sa.Column("worker_mode", sa.String(length=32), nullable=True),
                 sa.Column("capabilities_json", sa.JSON(), nullable=False),
-                sa.Column("state", sa.String(length=32), nullable=False, server_default="starting"),
+                sa.Column(
+                    "state",
+                    sa.String(length=32),
+                    nullable=False,
+                    server_default="starting",
+                ),
                 sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
-                sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
+                sa.Column(
+                    "last_heartbeat_at", sa.DateTime(timezone=True), nullable=True
+                ),
                 sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
                 sa.PrimaryKeyConstraint("service_instance_id"),
             )
         except (IntegrityError, ProgrammingError) as exc:
             # Table/type may already exist (concurrent startup, partial run); confirm before ignoring.
-            if not _is_duplicate_table_error(exc) and not _table_exists(bind, "worker_runtime_states"):
+            if not _is_duplicate_table_error(exc) and not _table_exists(
+                bind, "worker_runtime_states"
+            ):
                 raise
 
     if _table_exists(bind, "worker_runtime_states"):
         for index_name, columns in _WORKER_INDEXES:
             if not _index_exists(bind, "worker_runtime_states", index_name):
-                op.create_index(index_name, "worker_runtime_states", columns, unique=False)
+                op.create_index(
+                    index_name, "worker_runtime_states", columns, unique=False
+                )
 
     current_slot_name_length = _column_length("knowledge_facts", "slot_name")
     if current_slot_name_length is not None and current_slot_name_length < 128:
-        with op.batch_alter_table("knowledge_facts", recreate="auto" if is_sqlite else "never") as batch_op:
+        with op.batch_alter_table(
+            "knowledge_facts", recreate="auto" if is_sqlite else "never"
+        ) as batch_op:
             batch_op.alter_column(
                 "slot_name",
                 existing_type=sa.String(length=current_slot_name_length),
@@ -138,9 +156,20 @@ def downgrade() -> None:
 
     bind = op.get_bind()
     if _table_exists(bind, "worker_runtime_states"):
-        op.drop_index("ix_worker_runtime_states_updated_at", table_name="worker_runtime_states")
-        op.drop_index("ix_worker_runtime_states_last_heartbeat_at", table_name="worker_runtime_states")
-        op.drop_index("ix_worker_runtime_states_state", table_name="worker_runtime_states")
-        op.drop_index("ix_worker_runtime_states_worker_mode", table_name="worker_runtime_states")
-        op.drop_index("ix_worker_runtime_states_agent_id", table_name="worker_runtime_states")
+        op.drop_index(
+            "ix_worker_runtime_states_updated_at", table_name="worker_runtime_states"
+        )
+        op.drop_index(
+            "ix_worker_runtime_states_last_heartbeat_at",
+            table_name="worker_runtime_states",
+        )
+        op.drop_index(
+            "ix_worker_runtime_states_state", table_name="worker_runtime_states"
+        )
+        op.drop_index(
+            "ix_worker_runtime_states_worker_mode", table_name="worker_runtime_states"
+        )
+        op.drop_index(
+            "ix_worker_runtime_states_agent_id", table_name="worker_runtime_states"
+        )
         op.drop_table("worker_runtime_states")

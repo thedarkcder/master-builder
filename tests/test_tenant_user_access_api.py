@@ -10,10 +10,21 @@ from cryptography.fernet import Fernet
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    Project,
+    Run,
+    Tenant,
+    WebhookJob,
+    WorkflowCheckpoint,
+    WorkflowExecution,
+)
 from orchestrator.tools.discord_api import DiscordApiError
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
-from tests.workflow_test_support import add_run_with_workflow, add_workflow_attempt, make_run
+from tests.workflow_test_support import (
+    add_run_with_workflow,
+    add_workflow_attempt,
+    make_run,
+)
 
 
 class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
@@ -29,6 +40,8 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
     @classmethod
     def class_environment_overrides(cls) -> dict[str, str]:
         return {
+            "ORCHESTRATOR_PUBLIC_REGISTRATION_ENABLED": "true",
+            "ORCHESTRATOR_TRUSTED_HOSTS": "testserver,localhost,127.0.0.1,workspace.example.com",
             "ORCHESTRATOR_ADMIN_USERNAME": "admin",
             "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
             "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
@@ -80,7 +93,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         get_settings.cache_clear()
         reset_db_engine_cache()
 
-    def _register(self, *, email: str = "owner@example.com", tenant_name: str = "Acme Delivery") -> dict:
+    def _register(
+        self, *, email: str = "owner@example.com", tenant_name: str = "Acme Delivery"
+    ) -> dict:
         if email == "owner@example.com" and tenant_name == "Acme Delivery":
             return deepcopy(self._baseline_registration)
         response = self.client.post(
@@ -95,7 +110,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()
 
-    def _login(self, *, email: str = "owner@example.com", password: str = "S3cret-passphrase") -> str:
+    def _login(
+        self, *, email: str = "owner@example.com", password: str = "S3cret-passphrase"
+    ) -> str:
         if email == "owner@example.com" and password == "S3cret-passphrase":
             return self._baseline_token
         response = self.client.post(
@@ -108,7 +125,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["access_token"]
 
-    def _accept_invite(self, *, token: str, password: str = "S3cret-passphrase") -> dict:
+    def _accept_invite(
+        self, *, token: str, password: str = "S3cret-passphrase"
+    ) -> dict:
         response = self.client.post(
             "/api/public/invites/accept",
             json={
@@ -136,7 +155,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             self.assertIsNotNone(tenant)
         self.assertEqual(body["tenant"]["name"], "Acme Delivery")
 
-    def test_tenant_user_login_returns_access_token_and_membership_profile(self) -> None:
+    def test_tenant_user_login_returns_access_token_and_membership_profile(
+        self,
+    ) -> None:
         self._register()
 
         response = self.client.post(
@@ -483,7 +504,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(list_response.status_code, 200, list_response.text)
-        self.assertEqual(list_response.json()[0]["workflow_id"], "tenant-user-visible-workflow")
+        self.assertEqual(
+            list_response.json()[0]["workflow_id"], "tenant-user-visible-workflow"
+        )
         self.assertEqual(list_response.json()[0]["runs"][0]["attempt_number"], 1)
 
         detail_response = self.client.get(
@@ -491,7 +514,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(detail_response.status_code, 200, detail_response.text)
-        self.assertEqual(detail_response.json()["workflow_id"], "tenant-user-visible-workflow")
+        self.assertEqual(
+            detail_response.json()["workflow_id"], "tenant-user-visible-workflow"
+        )
 
     def test_business_member_can_read_runs_without_extra_team_permissions(self) -> None:
         registration = self._register()
@@ -539,7 +564,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         )
 
         self.assertEqual(list_response.status_code, 200, list_response.text)
-        self.assertEqual(list_response.json()[0]["run_id"], "business-member-visible-run")
+        self.assertEqual(
+            list_response.json()[0]["run_id"], "business-member-visible-run"
+        )
 
         detail_response = self.client.get(
             "/api/admin/runs/business-member-visible-run",
@@ -547,7 +574,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         )
 
         self.assertEqual(detail_response.status_code, 200, detail_response.text)
-        self.assertEqual(detail_response.json()["run_id"], "business-member-visible-run")
+        self.assertEqual(
+            detail_response.json()["run_id"], "business-member-visible-run"
+        )
 
     def test_tenant_user_runs_listing_requires_explicit_tenant_scope(self) -> None:
         self._register()
@@ -576,7 +605,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
     def test_tenant_user_cannot_list_runs_for_other_workspace(self) -> None:
         self._register(email="owner-a@example.com", tenant_name="Workspace A")
         token = self._login(email="owner-a@example.com")
-        registration_b = self._register(email="owner-b@example.com", tenant_name="Workspace B")
+        registration_b = self._register(
+            email="owner-b@example.com", tenant_name="Workspace B"
+        )
 
         response = self.client.get(
             f"/api/admin/runs?tenant_id={registration_b['tenant']['tenant_id']}",
@@ -602,7 +633,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(change_response.status_code, 200, change_response.text)
-        self.assertEqual(change_response.json()["principal_type"], "platform_super_admin")
+        self.assertEqual(
+            change_response.json()["principal_type"], "platform_super_admin"
+        )
 
         old_login_response = self.client.post(
             "/api/admin/auth/login",
@@ -616,10 +649,14 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(new_login_response.status_code, 200, new_login_response.text)
 
-    def test_password_reset_request_does_not_leak_email_existence_and_confirm_resets_password(self) -> None:
+    def test_password_reset_request_does_not_leak_email_existence_and_confirm_resets_password(
+        self,
+    ) -> None:
         self._register()
 
-        with patch("orchestrator.api.routes.app_auth.send_password_reset_email") as email_mock:
+        with patch(
+            "orchestrator.api.routes.app_auth.send_password_reset_email"
+        ) as email_mock:
             existing_response = self.client.post(
                 "/api/public/password-reset/request",
                 json={"email": "owner@example.com"},
@@ -636,7 +673,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(existing_response.json(), missing_response.json())
         email_mock.assert_called_once()
         reset_url = email_mock.call_args.kwargs["reset_url"]
-        self.assertTrue(reset_url.startswith("https://workspace.example.com/reset-password?token="))
+        self.assertTrue(
+            reset_url.startswith("http://localhost:60002/reset-password?token=")
+        )
         token = parse_qs(urlparse(reset_url).query)["token"][0]
 
         confirm_response = self.client.post(
@@ -663,7 +702,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(replay_response.status_code, 400, replay_response.text)
 
-    def test_discord_onboarding_invite_uses_guild_when_onboarding_channel_is_missing(self) -> None:
+    def test_discord_onboarding_invite_uses_guild_when_onboarding_channel_is_missing(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -686,22 +727,31 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         fake_client.list_text_channels.return_value = [Mock(channel_id="channel-456")]
         fake_client.create_invite.return_value = {"code": "invite-code"}
 
-        with patch("orchestrator.api.routes.admin_tenants._discord_client", return_value=fake_client):
+        with patch(
+            "orchestrator.api.routes.admin_tenants._discord_client",
+            return_value=fake_client,
+        ):
             response = self.client.post(
                 f"/api/admin/tenants/{tenant_id}/discord/onboarding-invite",
                 headers={"Authorization": f"Bearer {token}"},
             )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["invite_url"], "https://discord.gg/invite-code")
+        self.assertEqual(
+            response.json()["invite_url"], "https://discord.gg/invite-code"
+        )
         fake_client.list_text_channels.assert_called_once_with(guild_id="guild-123")
 
-    def test_invite_email_uses_forwarded_public_host(self) -> None:
+    def test_invite_email_uses_configured_public_origin_despite_forwarded_host(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
 
-        with patch("orchestrator.api.routes.admin_tenants.email_delivery.send_tenant_invite_email") as email_mock:
+        with patch(
+            "orchestrator.api.routes.admin_tenants.email_delivery.send_tenant_invite_email"
+        ) as email_mock:
             response = self.client.post(
                 f"/api/admin/tenants/{tenant_id}/invites",
                 json={
@@ -719,9 +769,16 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             )
 
         self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["invite_url"].split("?token=")[0], "https://workspace.example.com/invite/accept")
+        self.assertEqual(
+            response.json()["invite_url"].split("?token=")[0],
+            "http://localhost:60002/invite/accept",
+        )
         email_mock.assert_called_once()
-        self.assertTrue(email_mock.call_args.kwargs["invite_url"].startswith("https://workspace.example.com/invite/accept?token="))
+        self.assertTrue(
+            email_mock.call_args.kwargs["invite_url"].startswith(
+                "http://localhost:60002/invite/accept?token="
+            )
+        )
 
     def test_tenant_user_list_tenants_returns_only_memberships(self) -> None:
         first = self._register(email="owner1@example.com", tenant_name="Tenant One")
@@ -741,7 +798,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         registration = self._register()
         token = self._login()
 
-        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email") as email_mock:
+        with patch(
+            "orchestrator.core.invites.email_delivery.send_tenant_invite_email"
+        ) as email_mock:
             response = self.client.post(
                 f"/api/admin/tenants/{registration['tenant']['tenant_id']}/invites",
                 json={
@@ -761,7 +820,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertTrue(payload["invite_url"])
         email_mock.assert_called_once()
 
-    def test_tenant_admin_create_invite_returns_503_when_email_delivery_fails(self) -> None:
+    def test_tenant_admin_create_invite_returns_503_when_email_delivery_fails(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -783,13 +844,19 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             )
 
         self.assertEqual(response.status_code, 503, response.text)
-        self.assertEqual(response.json()["detail"], "Invite email delivery is unavailable")
+        self.assertEqual(
+            response.json()["detail"], "Invite email delivery is unavailable"
+        )
 
         session_factory = create_session_factory(self.database_url)
         from orchestrator.storage.models import TenantInvite
 
         with session_factory() as session:
-            invites = session.query(TenantInvite).filter(TenantInvite.tenant_id == tenant_id).all()
+            invites = (
+                session.query(TenantInvite)
+                .filter(TenantInvite.tenant_id == tenant_id)
+                .all()
+            )
             self.assertEqual(invites, [])
 
     def test_tenant_admin_can_create_team(self) -> None:
@@ -920,7 +987,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
 
-        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email") as email_mock:
+        with patch(
+            "orchestrator.core.invites.email_delivery.send_tenant_invite_email"
+        ) as email_mock:
             create_response = self.client.post(
                 f"/api/admin/tenants/{tenant_id}/invites",
                 json={
@@ -957,7 +1026,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             self.assertEqual(revoke_response.json()["invite"]["status"], "revoked")
             self.assertEqual(email_mock.call_count, 2)
 
-    def test_tenant_admin_resend_invite_returns_503_when_email_delivery_fails(self) -> None:
+    def test_tenant_admin_resend_invite_returns_503_when_email_delivery_fails(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -987,14 +1058,20 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             )
 
         self.assertEqual(resend_response.status_code, 503, resend_response.text)
-        self.assertEqual(resend_response.json()["detail"], "Invite email delivery is unavailable")
+        self.assertEqual(
+            resend_response.json()["detail"], "Invite email delivery is unavailable"
+        )
 
-    def test_public_invite_acceptance_creates_user_and_marks_invite_accepted(self) -> None:
+    def test_public_invite_acceptance_creates_user_and_marks_invite_accepted(
+        self,
+    ) -> None:
         registration = self._register()
         owner_token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
 
-        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email") as email_mock:
+        with patch(
+            "orchestrator.core.invites.email_delivery.send_tenant_invite_email"
+        ) as email_mock:
             create_response = self.client.post(
                 f"/api/admin/tenants/{tenant_id}/invites",
                 json={
@@ -1008,16 +1085,23 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             )
             self.assertEqual(create_response.status_code, 201, create_response.text)
             invite_payload = create_response.json()
-            invite_token = parse_qs(urlparse(invite_payload["invite_url"]).query)["token"][0]
+            invite_token = parse_qs(urlparse(invite_payload["invite_url"]).query)[
+                "token"
+            ][0]
             invite_id = invite_payload["invite_id"]
             email_mock.assert_called_once()
 
         accepted = self._accept_invite(token=invite_token, password="Business-pass-123")
         self.assertEqual(accepted["principal"]["email"], "invitee@example.com")
-        self.assertEqual(accepted["principal"]["memberships"][0]["tenant_id"], tenant_id)
+        self.assertEqual(
+            accepted["principal"]["memberships"][0]["tenant_id"], tenant_id
+        )
 
         session_factory = create_session_factory(self.database_url)
-        from orchestrator.storage.models import TenantInvite, TenantUser  # local import keeps test deps scoped
+        from orchestrator.storage.models import (
+            TenantInvite,
+            TenantUser,
+        )  # local import keeps test deps scoped
 
         with session_factory() as session:
             invite = session.get(TenantInvite, invite_id)
@@ -1029,7 +1113,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             self.assertIsNotNone(tenant_user)
             self.assertEqual(tenant_user.email, "invitee@example.com")
 
-    def test_tenant_admin_can_start_discord_install_and_callback_persists_guild(self) -> None:
+    def test_tenant_admin_can_start_discord_install_and_callback_persists_guild(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1047,7 +1133,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(query["client_id"], ["discord-client-id-123"])
         self.assertEqual(query["permissions"], ["3224728621023057"])
 
-        with patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock:
+        with patch(
+            "orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands"
+        ) as sync_mock:
             callback_response = self.client.get(
                 f"/api/admin/discord/install/callback?state={query['state'][0]}&guild_id=987654321&code=oauth-code",
                 follow_redirects=False,
@@ -1065,7 +1153,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(discord_config["guild_id"], "987654321")
         self.assertIsNotNone(discord_config["installed_at"])
 
-    def test_discord_install_callback_reconciles_default_project_channel_when_setup_is_ready(self) -> None:
+    def test_discord_install_callback_reconciles_default_project_channel_when_setup_is_ready(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1081,7 +1171,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             }
             tenant.repos_config = {
                 "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_project_key": {
+                    "TP": "https://github.com/example/repo"
+                },
                 "mapping_rules_by_component": {},
                 "fallback_repo": None,
                 "github_repository": "https://github.com/example/repo",
@@ -1094,7 +1186,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(start_response.status_code, 200, start_response.text)
-        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)[
+            "state"
+        ][0]
 
         with patch(
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
@@ -1111,11 +1205,17 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             project = session.get(Project, f"{tenant_id}-default")
             self.assertIsNotNone(project)
             assert project is not None
-            self.assertEqual(project.github_repository, "https://github.com/example/repo")
+            self.assertEqual(
+                project.github_repository, "https://github.com/example/repo"
+            )
             self.assertEqual(project.jira_project_key, "TP")
-            self.assertEqual(project.discord_config["channel_id"], "discord-channel-123")
+            self.assertEqual(
+                project.discord_config["channel_id"], "discord-channel-123"
+            )
 
-    def test_discord_install_callback_backfills_live_voice_room_for_existing_project_channel(self) -> None:
+    def test_discord_install_callback_backfills_live_voice_room_for_existing_project_channel(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1147,7 +1247,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(start_response.status_code, 200, start_response.text)
-        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)[
+            "state"
+        ][0]
 
         fake_client = Mock()
         fake_client.get_channel.return_value = {"id": "project-text-123"}
@@ -1155,12 +1257,22 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             SimpleNamespace(channel_id="voice-category-1", name="Voice Rooms"),
         ]
         fake_client.list_voice_channels.return_value = []
-        fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-123")
+        fake_client.ensure_voice_channel.return_value = Mock(
+            channel_id="voice-room-123"
+        )
 
         with (
-            patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-            patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client) as client_mock,
-            patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock,
+            patch(
+                "orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref",
+                return_value="discord-bot-token",
+            ),
+            patch(
+                "orchestrator.api.admin.tenant_project_helpers.DiscordApiClient",
+                return_value=fake_client,
+            ) as client_mock,
+            patch(
+                "orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands"
+            ) as sync_mock,
         ):
             callback_response = self.client.get(
                 f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
@@ -1188,10 +1300,14 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                 discord_config["live_voice_room_links"],
                 {"voice-room-123": "project-text-123"},
             )
-            self.assertEqual(discord_config["voice_room_channel_ids"], ["voice-room-123"])
+            self.assertEqual(
+                discord_config["voice_room_channel_ids"], ["voice-room-123"]
+            )
             self.assertEqual(discord_config["voice_room_channel_id"], "voice-room-123")
 
-    def test_discord_install_callback_recreates_missing_project_text_channel_before_voice_room(self) -> None:
+    def test_discord_install_callback_recreates_missing_project_text_channel_before_voice_room(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1223,21 +1339,35 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(start_response.status_code, 200, start_response.text)
-        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)[
+            "state"
+        ][0]
 
         fake_client = Mock()
         fake_client.get_channel.side_effect = [DiscordApiError("missing text")]
-        fake_client.ensure_text_channel.return_value = Mock(channel_id="project-text-456")
+        fake_client.ensure_text_channel.return_value = Mock(
+            channel_id="project-text-456"
+        )
         fake_client.list_channel_categories.return_value = [
             SimpleNamespace(channel_id="voice-category-1", name="Voice Rooms"),
         ]
         fake_client.list_voice_channels.return_value = []
-        fake_client.ensure_voice_channel.return_value = Mock(channel_id="voice-room-456")
+        fake_client.ensure_voice_channel.return_value = Mock(
+            channel_id="voice-room-456"
+        )
 
         with (
-            patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-            patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
-            patch("orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands") as sync_mock,
+            patch(
+                "orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref",
+                return_value="discord-bot-token",
+            ),
+            patch(
+                "orchestrator.api.admin.tenant_project_helpers.DiscordApiClient",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.routes.admin_discord_install.sync_discord_guild_commands"
+            ) as sync_mock,
         ):
             callback_response = self.client.get(
                 f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
@@ -1263,7 +1393,10 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             assert project is not None
             discord_config = dict(project.discord_config or {})
             self.assertEqual(discord_config["channel_id"], "project-text-456")
-            self.assertEqual(discord_config["live_voice_room_links"], {"voice-room-456": "project-text-456"})
+            self.assertEqual(
+                discord_config["live_voice_room_links"],
+                {"voice-room-456": "project-text-456"},
+            )
 
     def test_discord_install_callback_handles_access_denied_without_422(self) -> None:
         registration = self._register()
@@ -1275,7 +1408,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(start_response.status_code, 200, start_response.text)
-        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)[
+            "state"
+        ][0]
 
         callback_response = self.client.get(
             (
@@ -1290,7 +1425,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(redirect_query["tenant_id"], [tenant_id])
         self.assertEqual(redirect_query["discord_error"], ["access_denied"])
 
-    def test_discord_install_callback_redirects_edit_mode_to_tenant_settings_section(self) -> None:
+    def test_discord_install_callback_redirects_edit_mode_to_tenant_settings_section(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1300,7 +1437,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             headers={"Authorization": f"Bearer {token}"},
         )
         self.assertEqual(start_response.status_code, 200, start_response.text)
-        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)["state"][0]
+        state_token = parse_qs(urlparse(start_response.json()["install_url"]).query)[
+            "state"
+        ][0]
 
         callback_response = self.client.get(
             f"/api/admin/discord/install/callback?state={state_token}&guild_id=987654321&code=oauth-code",
@@ -1316,8 +1455,12 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             f"/api/admin/tenants/{tenant_id}/discord/install/start?return_to=edit",
             headers={"Authorization": f"Bearer {token}"},
         )
-        self.assertEqual(cancel_start_response.status_code, 200, cancel_start_response.text)
-        cancel_state_token = parse_qs(urlparse(cancel_start_response.json()["install_url"]).query)["state"][0]
+        self.assertEqual(
+            cancel_start_response.status_code, 200, cancel_start_response.text
+        )
+        cancel_state_token = parse_qs(
+            urlparse(cancel_start_response.json()["install_url"]).query
+        )["state"][0]
 
         cancel_response = self.client.get(
             (
@@ -1335,7 +1478,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             ),
         )
 
-    def test_discord_install_uses_platform_secret_client_id_when_env_missing(self) -> None:
+    def test_discord_install_uses_platform_secret_client_id_when_env_missing(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1359,7 +1504,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         query = parse_qs(urlparse(payload["install_url"]).query)
         self.assertEqual(query["client_id"], ["platform-discord-client-id"])
 
-    def test_discord_identity_reports_oauth_unconfigured_when_redirect_missing(self) -> None:
+    def test_discord_identity_reports_oauth_unconfigured_when_redirect_missing(
+        self,
+    ) -> None:
         registration = self._register()
         token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
@@ -1400,7 +1547,9 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         owner_token = self._login()
         tenant_id = registration["tenant"]["tenant_id"]
 
-        with patch("orchestrator.core.invites.email_delivery.send_tenant_invite_email") as email_mock:
+        with patch(
+            "orchestrator.core.invites.email_delivery.send_tenant_invite_email"
+        ) as email_mock:
             create_response = self.client.post(
                 f"/api/admin/tenants/{tenant_id}/invites",
                 json={

@@ -51,7 +51,9 @@ class GitHubAppClientTests(unittest.TestCase):
         )
         client = GitHubAppClient(config)
 
-        with patch("orchestrator.tools.github_app.jwt.encode", return_value="token") as mock_encode:
+        with patch(
+            "orchestrator.tools.github_app.jwt.encode", return_value="token"
+        ) as mock_encode:
             token = client.create_app_jwt()
 
         self.assertEqual(token, "token")
@@ -68,7 +70,9 @@ class GitHubAppClientTests(unittest.TestCase):
         )
         client = GitHubAppClient(config)
 
-        with patch("orchestrator.tools.github_app.jwt.encode", return_value="token") as mock_encode:
+        with patch(
+            "orchestrator.tools.github_app.jwt.encode", return_value="token"
+        ) as mock_encode:
             token = client.create_app_jwt()
 
         self.assertEqual(token, "token")
@@ -96,8 +100,13 @@ class GitHubAppClientTests(unittest.TestCase):
         )
         client = GitHubAppClient(config)
 
-        with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("invalid key")):
-            with self.assertRaisesRegex(ValueError, "Invalid GitHub App private key secret"):
+        with patch(
+            "orchestrator.tools.github_app.jwt.encode",
+            side_effect=InvalidKeyError("invalid key"),
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "Invalid GitHub App private key secret"
+            ):
                 client.create_app_jwt()
 
     def test_create_app_jwt_invalid_key_error_from_jwt_encode(self) -> None:
@@ -107,7 +116,10 @@ class GitHubAppClientTests(unittest.TestCase):
             private_key_pem="-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
         )
         client = GitHubAppClient(config)
-        with patch("orchestrator.tools.github_app.jwt.encode", side_effect=InvalidKeyError("bad key")):
+        with patch(
+            "orchestrator.tools.github_app.jwt.encode",
+            side_effect=InvalidKeyError("bad key"),
+        ):
             with self.assertRaisesRegex(ValueError, "expected PEM"):
                 client.create_app_jwt()
 
@@ -131,9 +143,12 @@ class GitHubAppClientTests(unittest.TestCase):
             requests.append(request)
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
             first = client.get_installation_token()
             second = client.get_installation_token()
@@ -167,9 +182,12 @@ class GitHubAppClientTests(unittest.TestCase):
             requests.append(request)
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
             result = client.create_pull_request(
                 repo_full_name="example/repo",
@@ -182,7 +200,9 @@ class GitHubAppClientTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            PullRequestResult(number=42, html_url="https://github.com/example/repo/pull/42"),
+            PullRequestResult(
+                number=42, html_url="https://github.com/example/repo/pull/42"
+            ),
         )
         self.assertEqual(len(requests), 2)
         self.assertIn("/repos/example/repo/pulls", requests[1].full_url)
@@ -219,9 +239,12 @@ class GitHubAppClientTests(unittest.TestCase):
             requests.append(request)
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
             client.create_pull_request(
                 repo_full_name="example/repo",
@@ -236,7 +259,9 @@ class GitHubAppClientTests(unittest.TestCase):
         payload = json.loads(requests[1].data.decode("utf-8"))
         self.assertIs(payload["draft"], True)
 
-    def test_mark_pull_request_ready_for_review_uses_graphql_mutation_for_drafts(self) -> None:
+    def test_mark_pull_request_ready_for_review_uses_graphql_mutation_for_drafts(
+        self,
+    ) -> None:
         config = GitHubAppConfig(
             app_id="12345",
             installation_id="999",
@@ -275,7 +300,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 return_value={"data": {"markPullRequestReadyForReview": {}}},
             ) as request_mock,
         ):
-            result = client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+            result = client.mark_pull_request_ready_for_review(
+                repo_full_name="example/repo", pr_number=42
+            )
 
         self.assertIs(result, ready_details)
         self.assertEqual(details_mock.call_count, 2)
@@ -305,7 +332,9 @@ class GitHubAppClientTests(unittest.TestCase):
             patch.object(client, "get_pull_request_details", return_value=details),
             patch.object(client, "_request_json") as request_mock,
         ):
-            result = client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+            result = client.mark_pull_request_ready_for_review(
+                repo_full_name="example/repo", pr_number=42
+            )
 
         self.assertIs(result, details)
         request_mock.assert_not_called()
@@ -331,7 +360,9 @@ class GitHubAppClientTests(unittest.TestCase):
             patch.object(client, "_request_json") as request_mock,
         ):
             with self.assertRaisesRegex(GitHubApiError, "did not include node_id"):
-                client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+                client.mark_pull_request_ready_for_review(
+                    repo_full_name="example/repo", pr_number=42
+                )
 
         request_mock.assert_not_called()
 
@@ -355,12 +386,22 @@ class GitHubAppClientTests(unittest.TestCase):
         with (
             patch.object(client, "get_installation_token", return_value="token"),
             patch.object(client, "get_pull_request_details", return_value=details),
-            patch.object(client, "_request_json", return_value={"errors": [{"message": "not authorized"}]}),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"errors": [{"message": "not authorized"}]},
+            ),
         ):
-            with self.assertRaisesRegex(GitHubApiError, "ready-for-review mutation failed"):
-                client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+            with self.assertRaisesRegex(
+                GitHubApiError, "ready-for-review mutation failed"
+            ):
+                client.mark_pull_request_ready_for_review(
+                    repo_full_name="example/repo", pr_number=42
+                )
 
-    def test_mark_pull_request_ready_for_review_requires_refreshed_pr_to_leave_draft(self) -> None:
+    def test_mark_pull_request_ready_for_review_requires_refreshed_pr_to_leave_draft(
+        self,
+    ) -> None:
         config = GitHubAppConfig(
             app_id="12345",
             installation_id="999",
@@ -379,11 +420,19 @@ class GitHubAppClientTests(unittest.TestCase):
 
         with (
             patch.object(client, "get_installation_token", return_value="token"),
-            patch.object(client, "get_pull_request_details", side_effect=[details, details]),
-            patch.object(client, "_request_json", return_value={"data": {"markPullRequestReadyForReview": {}}}),
+            patch.object(
+                client, "get_pull_request_details", side_effect=[details, details]
+            ),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"data": {"markPullRequestReadyForReview": {}}},
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "PR remained draft"):
-                client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+                client.mark_pull_request_ready_for_review(
+                    repo_full_name="example/repo", pr_number=42
+                )
 
     def test_create_check_run_uses_installation_token_and_payload(self) -> None:
         config = GitHubAppConfig(
@@ -409,9 +458,12 @@ class GitHubAppClientTests(unittest.TestCase):
             requests.append(request)
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
             result = client.create_check_run(
                 repo_full_name="example/repo",
@@ -425,7 +477,9 @@ class GitHubAppClientTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            CheckRunResult(check_run_id=71, html_url="https://github.com/example/repo/runs/71"),
+            CheckRunResult(
+                check_run_id=71, html_url="https://github.com/example/repo/runs/71"
+            ),
         )
         payload = json.loads(requests[1].data.decode("utf-8"))
         self.assertEqual(payload["name"], "MB Staging Merge Check")
@@ -433,7 +487,9 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["conclusion"], "success")
         self.assertEqual(payload["output"]["title"], "Staging merge check")
-        self.assertEqual(payload["output"]["summary"], "Validated against staging@abcdef0.")
+        self.assertEqual(
+            payload["output"]["summary"], "Validated against staging@abcdef0."
+        )
         self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
 
     def test_create_pull_request_rejects_repo_outside_tenant_repository(self) -> None:
@@ -466,20 +522,36 @@ class GitHubAppClientTests(unittest.TestCase):
         platform_secret_lookup = MagicMock(return_value=None)
 
         with self.assertRaises(ValueError):
-            github_client_from_tenant_config(config, tenant_secret_lookup=tenant_secret_lookup, platform_secret_lookup=platform_secret_lookup)
+            github_client_from_tenant_config(
+                config,
+                tenant_secret_lookup=tenant_secret_lookup,
+                platform_secret_lookup=platform_secret_lookup,
+            )
 
         tenant_secret_lookup = MagicMock(return_value="tenant-app-id")
         platform_secret_lookup = MagicMock(return_value="fake-private-key")
-        client = github_client_from_tenant_config(config, tenant_secret_lookup=tenant_secret_lookup, platform_secret_lookup=platform_secret_lookup)
+        client = github_client_from_tenant_config(
+            config,
+            tenant_secret_lookup=tenant_secret_lookup,
+            platform_secret_lookup=platform_secret_lookup,
+        )
         self.assertIsInstance(client, GitHubAppClient)
 
-    def test_github_client_from_tenant_config_resolves_tenant_and_platform_refs(self) -> None:
-        tenant_secret_lookup = MagicMock(side_effect=lambda secret_ref: "tenant-app-id" if secret_ref.endswith("GITHUB_APP_ID") else "tenant-private-key")
+    def test_github_client_from_tenant_config_resolves_tenant_and_platform_refs(
+        self,
+    ) -> None:
+        tenant_secret_lookup = MagicMock(
+            side_effect=lambda secret_ref: (
+                "tenant-app-id"
+                if secret_ref.endswith("GITHUB_APP_ID")
+                else "tenant-private-key"
+            )
+        )
         platform_secret_lookup = MagicMock(return_value="platform-mismatch")
         config = {
             "mode": "github_app",
-            "app_id_ref": "tenant/example/GITHUB_APP_ID",
-            "private_key_ref": "tenant/example/GITHUB_APP_PRIVATE_KEY",
+            "app_id_ref": "tenant/example-workspace/GITHUB_APP_ID",
+            "private_key_ref": "tenant/example-workspace/GITHUB_APP_PRIVATE_KEY",
             "installation_id": "101",
         }
         client = github_client_from_tenant_config(
@@ -492,9 +564,15 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(tenant_secret_lookup.call_count, 2)
         self.assertEqual(platform_secret_lookup.call_count, 0)
 
-    def test_github_client_from_tenant_config_uses_platform_resolver_for_unscoped_refs(self) -> None:
+    def test_github_client_from_tenant_config_uses_platform_resolver_for_unscoped_refs(
+        self,
+    ) -> None:
         tenant_secret_lookup = MagicMock(return_value=None)
-        platform_secret_lookup = MagicMock(side_effect=lambda secret_ref: "platform-app-id" if "APP_ID" in secret_ref else "platform-private-key")
+        platform_secret_lookup = MagicMock(
+            side_effect=lambda secret_ref: (
+                "platform-app-id" if "APP_ID" in secret_ref else "platform-private-key"
+            )
+        )
         config = {
             "mode": "github_app",
             "app_id_ref": "GITHUB_APP_ID",
@@ -511,18 +589,20 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(tenant_secret_lookup.call_count, 0)
         self.assertEqual(platform_secret_lookup.call_count, 2)
 
-    def test_github_client_from_tenant_config_returns_error_if_scoped_lookup_missing(self) -> None:
+    def test_github_client_from_tenant_config_returns_error_if_scoped_lookup_missing(
+        self,
+    ) -> None:
         tenant_secret_lookup = MagicMock(return_value=None)
         platform_secret_lookup = MagicMock(return_value="platform-private-key")
         config = {
             "mode": "github_app",
-            "app_id_ref": "tenant/example/GITHUB_APP_ID",
+            "app_id_ref": "tenant/example-workspace/GITHUB_APP_ID",
             "private_key_ref": "GITHUB_APP_PRIVATE_KEY",
             "installation_id": "101",
         }
         with self.assertRaisesRegex(
             ValueError,
-            "Missing GitHub App ID secret for ref 'tenant/example/GITHUB_APP_ID'",
+            "Missing GitHub App ID secret for ref 'tenant/example-workspace/GITHUB_APP_ID'",
         ):
             github_client_from_tenant_config(
                 config,
@@ -530,7 +610,9 @@ class GitHubAppClientTests(unittest.TestCase):
                 platform_secret_lookup=platform_secret_lookup,
             )
 
-    def test_github_client_from_tenant_config_returns_error_if_platform_lookup_missing(self) -> None:
+    def test_github_client_from_tenant_config_returns_error_if_platform_lookup_missing(
+        self,
+    ) -> None:
         tenant_secret_lookup = MagicMock(return_value="tenant-private-key")
         platform_secret_lookup = MagicMock(return_value=None)
         config = {
@@ -583,33 +665,50 @@ class GitHubAppClientTests(unittest.TestCase):
             def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
                 return False
 
-        with patch("orchestrator.tools.github_app.urlopen", return_value=_EmptyResponse()):
+        with patch(
+            "orchestrator.tools.github_app.urlopen", return_value=_EmptyResponse()
+        ):
             result = client._request_json(method="GET", path="/x", bearer_token="t")
         self.assertEqual(result, {})
 
     def test_get_installation_token_validates_required_fields(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
 
-        with patch.object(client, "create_app_jwt", return_value="jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            return_value=_FakeHTTPResponse({"expires_at": "2099-01-01T00:00:00Z"}),
+        with (
+            patch.object(client, "create_app_jwt", return_value="jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                return_value=_FakeHTTPResponse({"expires_at": "2099-01-01T00:00:00Z"}),
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "include token"):
                 client.get_installation_token()
 
-        with patch.object(client, "create_app_jwt", return_value="jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            return_value=_FakeHTTPResponse({"token": "abc"}),
+        with (
+            patch.object(client, "create_app_jwt", return_value="jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                return_value=_FakeHTTPResponse({"token": "abc"}),
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "include expires_at"):
                 client.get_installation_token()
 
     def test_create_pull_request_validates_response_shape(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={"html_url": "https://example/pull/1"}
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"html_url": "https://example/pull/1"},
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "numeric PR number"):
                 client.create_pull_request(
@@ -620,8 +719,9 @@ class GitHubAppClientTests(unittest.TestCase):
                     base_branch="b",
                     body="body",
                 )
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={"number": 1}
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "_request_json", return_value={"number": 1}),
         ):
             with self.assertRaisesRegex(GitHubApiError, "html_url"):
                 client.create_pull_request(
@@ -634,83 +734,145 @@ class GitHubAppClientTests(unittest.TestCase):
                 )
 
     def test_get_pull_request_details_validates_fields(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={"number": "x", "html_url": "https://example"}
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"number": "x", "html_url": "https://example"},
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "numeric PR number"):
-                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={"number": 1, "head": {"sha": "abc"}}
+                client.get_pull_request_details(
+                    repo_full_name="example/repo", pr_number=1
+                )
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"number": 1, "head": {"sha": "abc"}},
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "html_url"):
-                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={"number": 1, "html_url": "https://example", "head": {}}
+                client.get_pull_request_details(
+                    repo_full_name="example/repo", pr_number=1
+                )
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"number": 1, "html_url": "https://example", "head": {}},
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "head SHA"):
-                client.get_pull_request_details(repo_full_name="example/repo", pr_number=1)
+                client.get_pull_request_details(
+                    repo_full_name="example/repo", pr_number=1
+                )
 
     def test_list_check_suites_validates_payload_and_sanitizes_conclusion(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={}
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "_request_json", return_value={}),
         ):
             with self.assertRaisesRegex(GitHubApiError, "check_suites"):
                 client.list_check_suites(repo_full_name="example/repo", ref="abc")
 
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value={
-                "check_suites": [
-                    {"name": "CI", "status": "queued", "conclusion": 123, "app": {"slug": "github-actions"}},
-                    {"name": "", "status": "queued", "app": {"slug": "github-actions"}},
-                ]
-            },
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={
+                    "check_suites": [
+                        {
+                            "name": "CI",
+                            "status": "queued",
+                            "conclusion": 123,
+                            "app": {"slug": "github-actions"},
+                        },
+                        {
+                            "name": "",
+                            "status": "queued",
+                            "app": {"slug": "github-actions"},
+                        },
+                    ]
+                },
+            ),
         ):
             suites = client.list_check_suites(repo_full_name="example/repo", ref="abc")
-        self.assertEqual(suites, [WorkflowCheckSuite(name="CI", status="queued", conclusion=None)])
+        self.assertEqual(
+            suites, [WorkflowCheckSuite(name="CI", status="queued", conclusion=None)]
+        )
 
-    def test_list_pull_request_files_validates_response_type_and_patch_type(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+    def test_list_pull_request_files_validates_response_type_and_patch_type(
+        self,
+    ) -> None:
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={}
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "_request_json", return_value={}),
         ):
             with self.assertRaisesRegex(GitHubApiError, "was not a list"):
-                client.list_pull_request_files(repo_full_name="example/repo", pr_number=1)
+                client.list_pull_request_files(
+                    repo_full_name="example/repo", pr_number=1
+                )
 
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value=[{"filename": "a.txt", "patch": {"bad": True}}]
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value=[{"filename": "a.txt", "patch": {"bad": True}}],
+            ),
         ):
-            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=1)
+            files = client.list_pull_request_files(
+                repo_full_name="example/repo", pr_number=1
+            )
         self.assertEqual(files, [PullRequestFileChange(filename="a.txt", patch=None)])
 
-    def test_list_installation_repositories_validates_response_and_defaults(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+    def test_list_installation_repositories_validates_response_and_defaults(
+        self,
+    ) -> None:
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client, "_request_json", return_value={}
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "_request_json", return_value={}),
         ):
             with self.assertRaisesRegex(GitHubApiError, "include repositories"):
                 client.list_installation_repositories()
 
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value={
-                "repositories": [
-                    {
-                        "full_name": "example/repo",
-                        "html_url": "https://github.com/example/repo",
-                        "default_branch": "",
-                        "private": "no",
-                    }
-                ]
-            },
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={
+                    "repositories": [
+                        {
+                            "full_name": "example/repo",
+                            "html_url": "https://github.com/example/repo",
+                            "default_branch": "",
+                            "private": "no",
+                        }
+                    ]
+                },
+            ),
         ):
             repos = client.list_installation_repositories()
         self.assertEqual(
@@ -726,11 +888,15 @@ class GitHubAppClientTests(unittest.TestCase):
         )
 
     def test_get_repository_default_branch_reads_repository_contract(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
         with (
             patch.object(client, "get_installation_token", return_value="token"),
-            patch.object(client, "_request_json", return_value={"default_branch": "master"}) as request_mock,
+            patch.object(
+                client, "_request_json", return_value={"default_branch": "master"}
+            ) as request_mock,
         ):
             default_branch = client.get_repository_default_branch(
                 repo_full_name="example/repo",
@@ -745,7 +911,9 @@ class GitHubAppClientTests(unittest.TestCase):
         )
 
     def test_get_repository_default_branch_rejects_missing_provider_value(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
         with (
             patch.object(client, "get_installation_token", return_value="token"),
@@ -758,16 +926,21 @@ class GitHubAppClientTests(unittest.TestCase):
                 )
 
     def test_list_repository_branches_parses_branch_names(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value=[
-                {"name": "main", "protected": True},
-                {"name": "develop", "protected": False},
-                {"name": "", "protected": True},
-            ],
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value=[
+                    {"name": "main", "protected": True},
+                    {"name": "develop", "protected": False},
+                    {"name": "", "protected": True},
+                ],
+            ),
         ):
             branches = client.list_repository_branches(
                 repo_full_name="example/repo",
@@ -783,14 +956,21 @@ class GitHubAppClientTests(unittest.TestCase):
         )
 
     def test_list_repository_branches_validates_response_type(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value={},
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={},
+            ),
         ):
-            with self.assertRaisesRegex(GitHubApiError, "branch list response was not a list"):
+            with self.assertRaisesRegex(
+                GitHubApiError, "branch list response was not a list"
+            ):
                 client.list_repository_branches(
                     repo_full_name="example/repo",
                     github_repository="https://github.com/example/repo",
@@ -823,11 +1003,16 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
-            details = client.get_pull_request_details(repo_full_name="example/repo", pr_number=12)
+            details = client.get_pull_request_details(
+                repo_full_name="example/repo", pr_number=12
+            )
 
         self.assertEqual(
             details,
@@ -882,17 +1067,24 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
-            suites = client.list_check_suites(repo_full_name="example/repo", ref="abc123")
+            suites = client.list_check_suites(
+                repo_full_name="example/repo", ref="abc123"
+            )
 
         self.assertEqual(
             suites,
             [
                 WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
-                WorkflowCheckSuite(name="Security", status="in_progress", conclusion=None),
+                WorkflowCheckSuite(
+                    name="Security", status="in_progress", conclusion=None
+                ),
             ],
         )
 
@@ -930,9 +1122,12 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
             repositories = client.list_installation_repositories()
 
@@ -981,11 +1176,16 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
-            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=99)
+            files = client.list_pull_request_files(
+                repo_full_name="example/repo", pr_number=99
+            )
 
         self.assertEqual(
             files,
@@ -1033,11 +1233,16 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
-            files = client.list_pull_request_files(repo_full_name="example/repo", pr_number=100)
+            files = client.list_pull_request_files(
+                repo_full_name="example/repo", pr_number=100
+            )
 
         self.assertEqual(len(files), 101)
         self.assertEqual(files[0].filename, "src/file-0.ts")
@@ -1050,10 +1255,13 @@ class GitHubAppClientTests(unittest.TestCase):
             private_key_pem="unused",
         )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value={"encoding": "base64", "content": "aGVsbG8gd29ybGQ=\n"},
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"encoding": "base64", "content": "aGVsbG8gd29ybGQ=\n"},
+            ),
         ):
             content = client.get_file_text_at_ref(
                 repo_full_name="example/repo",
@@ -1069,10 +1277,13 @@ class GitHubAppClientTests(unittest.TestCase):
             private_key_pem="unused",
         )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value={"encoding": "utf-8", "content": "hello"},
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"encoding": "utf-8", "content": "hello"},
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "base64 content"):
                 client.get_file_text_at_ref(
@@ -1110,11 +1321,16 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
-            pull_requests = client.list_open_pull_requests(repo_full_name="example/repo", limit=10)
+            pull_requests = client.list_open_pull_requests(
+                repo_full_name="example/repo", limit=10
+            )
 
         self.assertEqual(
             pull_requests,
@@ -1150,14 +1366,19 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
             with self.assertRaisesRegex(GitHubApiError, "response was not a list"):
                 client.list_open_pull_requests(repo_full_name="example/repo")
 
-    def test_list_pull_requests_supports_all_states_and_parses_lifecycle_timestamps(self) -> None:
+    def test_list_pull_requests_supports_all_states_and_parses_lifecycle_timestamps(
+        self,
+    ) -> None:
         config = GitHubAppConfig(
             app_id="12345",
             installation_id="999",
@@ -1189,11 +1410,16 @@ class GitHubAppClientTests(unittest.TestCase):
         def fake_urlopen(request, timeout=30):  # noqa: ANN001
             return _FakeHTTPResponse(responses.pop(0))
 
-        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
-            "orchestrator.tools.github_app.urlopen",
-            side_effect=fake_urlopen,
+        with (
+            patch.object(client, "create_app_jwt", return_value="app.jwt"),
+            patch(
+                "orchestrator.tools.github_app.urlopen",
+                side_effect=fake_urlopen,
+            ),
         ):
-            pull_requests = client.list_pull_requests(repo_full_name="example/repo", state="all", limit=10)
+            pull_requests = client.list_pull_requests(
+                repo_full_name="example/repo", state="all", limit=10
+            )
 
         self.assertEqual(
             pull_requests,
@@ -1254,16 +1480,31 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(pull_request.number, 124)
 
     def test_create_and_update_issue_comment(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            side_effect=[
-                {"id": 1001, "body": "first", "created_at": "2026-03-04T10:00:00Z", "user": {"login": "bot"}},
-                {"id": 1001, "body": "second", "created_at": "2026-03-04T10:01:00Z", "user": {"login": "bot"}},
-            ],
-        ) as request_json:
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                side_effect=[
+                    {
+                        "id": 1001,
+                        "body": "first",
+                        "created_at": "2026-03-04T10:00:00Z",
+                        "user": {"login": "bot"},
+                    },
+                    {
+                        "id": 1001,
+                        "body": "second",
+                        "created_at": "2026-03-04T10:01:00Z",
+                        "user": {"login": "bot"},
+                    },
+                ],
+            ) as request_json,
+        ):
             created = client.create_pull_request_issue_comment(
                 repo_full_name="example/repo",
                 pr_number=10,
@@ -1281,16 +1522,33 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(request_json.call_count, 2)
 
     def test_create_and_update_pull_request_review_comment_reply(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            side_effect=[
-                {"id": 2001, "body": "reply", "path": "src/a.py", "line": 10, "user": {"login": "bot"}},
-                {"id": 2001, "body": "updated reply", "path": "src/a.py", "line": 10, "user": {"login": "bot"}},
-            ],
-        ) as request_json:
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                side_effect=[
+                    {
+                        "id": 2001,
+                        "body": "reply",
+                        "path": "src/a.py",
+                        "line": 10,
+                        "user": {"login": "bot"},
+                    },
+                    {
+                        "id": 2001,
+                        "body": "updated reply",
+                        "path": "src/a.py",
+                        "line": 10,
+                        "user": {"login": "bot"},
+                    },
+                ],
+            ) as request_json,
+        ):
             created = client.create_pull_request_review_comment_reply(
                 repo_full_name="example/repo",
                 pr_number=10,
@@ -1309,24 +1567,31 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(request_json.call_count, 2)
 
     def test_list_pull_request_review_comments_parses_created_at(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            return_value=[
-                {
-                    "id": 3001,
-                    "body": "Consider renaming this",
-                    "path": "src/app.py",
-                    "line": 42,
-                    "state": "commented",
-                    "created_at": "2026-03-27T12:30:00Z",
-                    "user": {"login": "reviewer"},
-                }
-            ],
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                return_value=[
+                    {
+                        "id": 3001,
+                        "body": "Consider renaming this",
+                        "path": "src/app.py",
+                        "line": 42,
+                        "state": "commented",
+                        "created_at": "2026-03-27T12:30:00Z",
+                        "user": {"login": "reviewer"},
+                    }
+                ],
+            ),
         ):
-            comments = client.list_pull_request_review_comments(repo_full_name="example/repo", pr_number=21)
+            comments = client.list_pull_request_review_comments(
+                repo_full_name="example/repo", pr_number=21
+            )
 
         self.assertEqual(
             comments[0],
@@ -1342,16 +1607,21 @@ class GitHubAppClientTests(unittest.TestCase):
         )
 
     def test_add_issue_and_review_comment_reactions(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            side_effect=[
-                {"id": 901, "content": "eyes"},
-                {"id": 902, "content": "eyes"},
-            ],
-        ) as request_json:
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                side_effect=[
+                    {"id": 901, "content": "eyes"},
+                    {"id": 902, "content": "eyes"},
+                ],
+            ) as request_json,
+        ):
             issue_reaction = client.add_issue_comment_reaction(
                 repo_full_name="example/repo",
                 comment_id=1001,
@@ -1367,18 +1637,34 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(review_reaction.content, "eyes")
         self.assertEqual(request_json.call_count, 2)
 
-    def test_sync_pull_request_reaction_clears_existing_app_status_reactions_first(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+    def test_sync_pull_request_reaction_clears_existing_app_status_reactions_first(
+        self,
+    ) -> None:
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
         with (
-            patch.object(client, "get_app_bot_login", return_value="master-builder[bot]") as get_app_bot_login,
+            patch.object(
+                client, "get_app_bot_login", return_value="master-builder[bot]"
+            ) as get_app_bot_login,
             patch.object(
                 client,
                 "list_pull_request_reactions",
                 return_value=[
-                    ReactionSummary(reaction_id=301, content="eyes", user_login="master-builder[bot]"),
-                    ReactionSummary(reaction_id=302, content="confused", user_login="master-builder[bot]"),
-                    ReactionSummary(reaction_id=303, content="+1", user_login="human-reviewer"),
+                    ReactionSummary(
+                        reaction_id=301,
+                        content="eyes",
+                        user_login="master-builder[bot]",
+                    ),
+                    ReactionSummary(
+                        reaction_id=302,
+                        content="confused",
+                        user_login="master-builder[bot]",
+                    ),
+                    ReactionSummary(
+                        reaction_id=303, content="+1", user_login="human-reviewer"
+                    ),
                 ],
             ) as list_reactions,
             patch.object(client, "delete_issue_reaction") as delete_reaction,
@@ -1395,7 +1681,9 @@ class GitHubAppClientTests(unittest.TestCase):
             )
 
         get_app_bot_login.assert_called_once_with()
-        list_reactions.assert_called_once_with(repo_full_name="example/repo", pr_number=10)
+        list_reactions.assert_called_once_with(
+            repo_full_name="example/repo", pr_number=10
+        )
         self.assertEqual(
             [call.kwargs for call in delete_reaction.call_args_list],
             [
@@ -1412,22 +1700,35 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(result.content, "+1")
 
     def test_submit_pull_request_review_and_merge(self) -> None:
-        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        config = GitHubAppConfig(
+            app_id="12345", installation_id="999", private_key_pem="unused"
+        )
         client = GitHubAppClient(config)
-        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
-            client,
-            "_request_json",
-            side_effect=[
-                {"id": 9001, "state": "COMMENTED"},
-                {"merged": True, "message": "Pull Request successfully merged", "sha": "abc123"},
-            ],
-        ) as request_json:
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "_request_json",
+                side_effect=[
+                    {"id": 9001, "state": "COMMENTED"},
+                    {
+                        "merged": True,
+                        "message": "Pull Request successfully merged",
+                        "sha": "abc123",
+                    },
+                ],
+            ) as request_json,
+        ):
             review = client.submit_pull_request_review(
                 repo_full_name="example/repo",
                 pr_number=10,
                 commit_id="abc123",
                 body="Codex inline findings",
-                comments=[PullRequestInlineCommentDraft(path="src/main.py", line=42, body="Fix this.")],
+                comments=[
+                    PullRequestInlineCommentDraft(
+                        path="src/main.py", line=42, body="Fix this."
+                    )
+                ],
             )
             merge_result = client.merge_pull_request(
                 repo_full_name="example/repo",

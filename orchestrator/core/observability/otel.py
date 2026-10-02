@@ -107,7 +107,9 @@ def scoped_log_context(
 
 
 class ObservabilityJsonFormatter(logging.Formatter):
-    def __init__(self, *, environment: str, platform_version: str, default_agent_id: str = "") -> None:
+    def __init__(
+        self, *, environment: str, platform_version: str, default_agent_id: str = ""
+    ) -> None:
         super().__init__()
         self._environment = environment
         self._platform_version = platform_version
@@ -124,20 +126,34 @@ class ObservabilityJsonFormatter(logging.Formatter):
             metadata.setdefault("exception", self.formatException(record.exc_info))
 
         payload: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                record.created, tz=timezone.utc
+            ).isoformat(),
             "level": record.levelname,
             "environment": self._environment,
             "platform_version": self._platform_version,
-            "tenant_id": _normalize_log_field(getattr(record, "tenant_id", context["tenant_id"])),
-            "project_id": _normalize_log_field(getattr(record, "project_id", context["project_id"])),
+            "tenant_id": _normalize_log_field(
+                getattr(record, "tenant_id", context["tenant_id"])
+            ),
+            "project_id": _normalize_log_field(
+                getattr(record, "project_id", context["project_id"])
+            ),
             "agent_id": _normalize_log_field(
                 getattr(record, "agent_id", context["agent_id"]),
                 default=self._default_agent_id,
             ),
-            "correlation_id": _normalize_log_field(getattr(record, "correlation_id", context["correlation_id"])),
-            "trace_id": _normalize_log_field(getattr(record, "trace_id", trace_context["trace_id"])),
-            "span_id": _normalize_log_field(getattr(record, "span_id", trace_context["span_id"])),
-            "event_type": _normalize_log_field(getattr(record, "event_type", record.name), default=record.name),
+            "correlation_id": _normalize_log_field(
+                getattr(record, "correlation_id", context["correlation_id"])
+            ),
+            "trace_id": _normalize_log_field(
+                getattr(record, "trace_id", trace_context["trace_id"])
+            ),
+            "span_id": _normalize_log_field(
+                getattr(record, "span_id", trace_context["span_id"])
+            ),
+            "event_type": _normalize_log_field(
+                getattr(record, "event_type", record.name), default=record.name
+            ),
             "message": record.getMessage(),
             "metadata": metadata,
         }

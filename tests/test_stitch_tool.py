@@ -5,7 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestrator.tools import stitch_tool
-from orchestrator.tools.stitch_mcp_client import StitchMcpError, parse_stitch_tool_mcp_result
+from orchestrator.tools.stitch_mcp_client import (
+    StitchMcpError,
+    parse_stitch_tool_mcp_result,
+)
 
 
 class StitchToolTests(unittest.TestCase):
@@ -25,7 +28,11 @@ class StitchToolTests(unittest.TestCase):
 
     def test_maybe_invoke_appends_metadata_when_secret_resolves(self) -> None:
         settings = SimpleNamespace(secrets_encryption_key="enc")
-        fake_result = {"provider": "stitch", "kind": "stitch_tool", "tool": "synthesize_screen"}
+        fake_result = {
+            "provider": "stitch",
+            "kind": "stitch_tool",
+            "tool": "synthesize_screen",
+        }
         with patch("orchestrator.core.config.get_settings", return_value=settings):
             with patch(
                 "orchestrator.tools.stitch_tool._resolve_stitch_api_key_from_tenant_secret",
@@ -70,12 +77,16 @@ class StitchToolTests(unittest.TestCase):
         mock_client.__enter__ = MagicMock(return_value=mock_client)
         mock_client.__exit__ = MagicMock(return_value=False)
         mock_client.connect.side_effect = StitchMcpError("boom")
-        with patch("orchestrator.tools.stitch_tool.StitchMcpClient", return_value=mock_client):
+        with patch(
+            "orchestrator.tools.stitch_tool.StitchMcpClient", return_value=mock_client
+        ):
             with self.assertRaises(stitch_tool.StitchToolError):
                 stitch_tool.synthesize_stitch_screen(api_key="k", prompt="p")
 
     def test_normalize_project_id_strips_prefix(self) -> None:
-        self.assertEqual(stitch_tool._normalize_project_id({"name": "projects/abc"}), "abc")
+        self.assertEqual(
+            stitch_tool._normalize_project_id({"name": "projects/abc"}), "abc"
+        )
         self.assertEqual(stitch_tool._normalize_project_id("projects/xyz"), "xyz")
 
 

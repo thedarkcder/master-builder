@@ -43,7 +43,11 @@ def resolve_discord_oauth_config(
         encryption_key=settings.secrets_encryption_key,
     )
     return DiscordOAuthConfig(
-        client_id=str(managed_client_id or settings.discord_oauth_client_id or "").strip(),
-        client_secret=str(managed_client_secret or settings.discord_oauth_client_secret or "").strip(),
+        client_id=str(
+            managed_client_id or settings.discord_oauth_client_id or ""
+        ).strip(),
+        client_secret=str(
+            managed_client_secret or settings.discord_oauth_client_secret or ""
+        ).strip(),
         redirect_url=str(settings.discord_oauth_redirect_url or "").strip(),
     )

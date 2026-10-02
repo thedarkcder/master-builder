@@ -31,10 +31,14 @@ def _heading_texts(doc: dict) -> list[str]:
 def _flatten_text(value: object) -> str:
     if isinstance(value, dict):
         text = str(value.get("text") or "").strip()
-        child_text = " ".join(_flatten_text(item) for item in value.get("content", []) if item is not None).strip()
+        child_text = " ".join(
+            _flatten_text(item) for item in value.get("content", []) if item is not None
+        ).strip()
         return " ".join(part for part in (text, child_text) if part).strip()
     if isinstance(value, list):
-        return " ".join(_flatten_text(item) for item in value if item is not None).strip()
+        return " ".join(
+            _flatten_text(item) for item in value if item is not None
+        ).strip()
     return ""
 
 
@@ -49,7 +53,9 @@ def _technical_decision() -> TechnicalDecision:
                     "option_id": "database-rls",
                     "title": "Database RLS",
                     "description": "Use database-owned row-level security as the enforcement backstop.",
-                    "benefits": ["Prevents app-layer omission from leaking tenant data"],
+                    "benefits": [
+                        "Prevents app-layer omission from leaking tenant data"
+                    ],
                     "risks": ["Requires migration and policy coverage"],
                 }
             ],
@@ -128,9 +134,13 @@ def test_seed_description_builders_budget_content_before_jira_transport_cap() ->
 
     for doc in (parent_doc, child_doc):
         bounded = _to_adf_description(doc)
-        serialized = json.dumps(bounded, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        serialized = json.dumps(
+            bounded, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
         assert len(serialized) <= MAX_JIRA_ADF_DOCUMENT_BYTES
-        assert "Content truncated to fit Jira content size limit." not in _flatten_text(bounded)
+        assert "Content truncated to fit Jira content size limit." not in _flatten_text(
+            bounded
+        )
 
 
 def test_engineering_child_description_omits_architecture_section() -> None:
@@ -142,9 +152,15 @@ def test_engineering_child_description_omits_architecture_section() -> None:
         delivery="Engineering child inherits the canonical architecture document link.",
         expected_outcome="Implementation tickets use the same architecture reference as the epic.",
         acceptance_criteria=["Child ticket points at the architecture document."],
-        how_to_test=["Open the child ticket and verify the architecture link is present."],
-        done_means=["Child descriptions reference the architecture doc instead of copying architecture context."],
-        dependencies_and_risks=["Architecture document must exist before fanout completes."],
+        how_to_test=[
+            "Open the child ticket and verify the architecture link is present."
+        ],
+        done_means=[
+            "Child descriptions reference the architecture doc instead of copying architecture context."
+        ],
+        dependencies_and_risks=[
+            "Architecture document must exist before fanout completes."
+        ],
         specialist_summary=["Architecture doc is the persistent source of truth."],
         planning_state="planning_completed",
     )
@@ -157,7 +173,9 @@ def test_engineering_child_description_omits_architecture_section() -> None:
     assert "See Architecture:" not in _flatten_text(doc)
 
 
-def test_engineering_child_description_renders_typed_technical_decisions_at_description_boundary() -> None:
+def test_engineering_child_description_renders_typed_technical_decisions_at_description_boundary() -> (
+    None
+):
     doc = build_engineering_child_description(
         parent_issue_key="MAB-215",
         parent_summary="Decision engine rollout",

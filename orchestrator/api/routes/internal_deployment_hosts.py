@@ -31,20 +31,31 @@ from orchestrator.core.deployment_host_queue import (
     complete_deployment_host_command,
     start_deployment_host_command,
 )
-from orchestrator.core.deployment_host_recovery import fail_stale_running_restore_commands
+from orchestrator.core.deployment_host_recovery import (
+    fail_stale_running_restore_commands,
+)
 from orchestrator.core.config import get_settings
-from orchestrator.core.security import DeploymentHostPrincipal, require_deployment_host_agent
+from orchestrator.core.security import (
+    DeploymentHostPrincipal,
+    require_deployment_host_agent,
+)
 from orchestrator.storage.models import DeploymentHostCommand
 
-router = APIRouter(prefix="/api/internal/deployment-hosts", tags=["internal-deployment-hosts"])
+router = APIRouter(
+    prefix="/api/internal/deployment-hosts", tags=["internal-deployment-hosts"]
+)
 
 
-def _hydrate_command_payload(*, session: Session, command: DeploymentHostCommand) -> dict[str, object]:
+def _hydrate_command_payload(
+    *, session: Session, command: DeploymentHostCommand
+) -> dict[str, object]:
     if command.kind == "restore_database":
         restore_run_id = str(command.restore_run_id or "").strip()
         if not restore_run_id:
             raise RuntimeError("Restore command is missing restore_run_id")
-        return build_restore_host_command_payload(session=session, restore_run_id=restore_run_id)
+        return build_restore_host_command_payload(
+            session=session, restore_run_id=restore_run_id
+        )
     return dict(command.payload_json or {})
 
 
@@ -61,7 +72,9 @@ def register_host_agent(
     )
 
 
-@router.post("/heartbeat", response_model=DeploymentHostRead, status_code=status.HTTP_200_OK)
+@router.post(
+    "/heartbeat", response_model=DeploymentHostRead, status_code=status.HTTP_200_OK
+)
 def heartbeat_host_agent(
     payload: DeploymentHostHeartbeatWrite,
     host: DeploymentHostPrincipal = Depends(require_deployment_host_agent),
@@ -106,10 +119,14 @@ def claim_host_command(
                 last_error=str(exc),
             )
         session.commit()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     session.commit()
     session.refresh(command)
-    return DeploymentHostCommandClaimRead(command=deployment_host_command_to_schema(command, payload=payload))
+    return DeploymentHostCommandClaimRead(
+        command=deployment_host_command_to_schema(command, payload=payload)
+    )
 
 
 @router.post("/commands/{command_id}/start", response_model=DeploymentHostCommandRead)
@@ -125,11 +142,23 @@ def start_host_command(
         command_id=command_id,
         claim_id=payload.claim_id,
         lease_duration=timedelta(
-            seconds=max(60, int(getattr(get_settings(), "deployment_host_agent_command_timeout_seconds", 900)) + 60)
+            seconds=max(
+                60,
+                int(
+                    getattr(
+                        get_settings(),
+                        "deployment_host_agent_command_timeout_seconds",
+                        900,
+                    )
+                )
+                + 60,
+            )
         ),
     )
     if command.kind == "restore_database" and command.restore_run_id:
-        start_project_deployment_restore_run(session=session, restore_run_id=command.restore_run_id)
+        start_project_deployment_restore_run(
+            session=session, restore_run_id=command.restore_run_id
+        )
     session.commit()
     session.refresh(command)
     return deployment_host_command_to_schema(command)

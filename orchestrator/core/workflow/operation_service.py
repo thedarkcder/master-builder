@@ -20,7 +20,9 @@ OPERATION_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
 OPERATION_STATUS_RETRYING = "retrying"
 OPERATION_STATUS_FAILED = "failed"
 OPERATION_STATUS_COMPLETED = "completed"
-ACTIVE_OPERATION_ATTEMPT_STATUSES = frozenset({OPERATION_STATUS_RUNNING, OPERATION_STATUS_WAITING_FOR_INPUT})
+ACTIVE_OPERATION_ATTEMPT_STATUSES = frozenset(
+    {OPERATION_STATUS_RUNNING, OPERATION_STATUS_WAITING_FOR_INPUT}
+)
 
 
 class WorkflowOperationAttemptAlreadyRunningError(RuntimeError):
@@ -32,11 +34,20 @@ def _now() -> datetime:
 
 
 def _lease_expires_at(anchor: datetime) -> datetime:
-    timeout_seconds = max(60, int(getattr(get_settings(), "workflow_operation_attempt_stale_timeout_seconds", 300)))
+    timeout_seconds = max(
+        60,
+        int(
+            getattr(
+                get_settings(), "workflow_operation_attempt_stale_timeout_seconds", 300
+            )
+        ),
+    )
     return anchor + timedelta(seconds=timeout_seconds)
 
 
-def _attempt_ref(*, operation: WorkflowOperation, attempt: WorkflowOperationAttempt) -> WorkflowAttemptRef:
+def _attempt_ref(
+    *, operation: WorkflowOperation, attempt: WorkflowOperationAttempt
+) -> WorkflowAttemptRef:
     return WorkflowAttemptRef(
         workflow_id=operation.workflow_id,
         operation_id=operation.operation_id,
@@ -119,14 +130,17 @@ def start_workflow_operation_attempt(
             f"{operation.operation_type} already has active attempt {running_attempt.attempt_number} "
             f"({running_attempt.attempt_id})."
         )
-    next_attempt_number = int(
-        session.execute(
-            select(func.max(WorkflowOperationAttempt.attempt_number)).where(
-                WorkflowOperationAttempt.operation_id == operation.operation_id
-            )
-        ).scalar_one()
-        or 0
-    ) + 1
+    next_attempt_number = (
+        int(
+            session.execute(
+                select(func.max(WorkflowOperationAttempt.attempt_number)).where(
+                    WorkflowOperationAttempt.operation_id == operation.operation_id
+                )
+            ).scalar_one()
+            or 0
+        )
+        + 1
+    )
     now = _now()
     operation.status = OPERATION_STATUS_RUNNING
     operation.started_at = operation.started_at or now
@@ -144,7 +158,9 @@ def start_workflow_operation_attempt(
         next_retry_at=None,
         last_heartbeat_at=now,
         lease_expires_at=_lease_expires_at(now),
-        lease_owner=str(getattr(get_settings(), "agent_id", "") or "workflow_operation_service"),
+        lease_owner=str(
+            getattr(get_settings(), "agent_id", "") or "workflow_operation_service"
+        ),
         created_at=now,
         started_at=now,
         finished_at=None,
@@ -185,7 +201,10 @@ def fail_active_workflow_operation_attempts_for_run(
     timestamp = now or _now()
     rows = session.execute(
         select(WorkflowOperation, WorkflowOperationAttempt)
-        .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
+        .join(
+            WorkflowOperationAttempt,
+            WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id,
+        )
         .where(
             WorkflowOperation.run_id == normalized_run_id,
             WorkflowOperationAttempt.status.in_(ACTIVE_OPERATION_ATTEMPT_STATUSES),
@@ -211,7 +230,10 @@ def fail_active_workflow_operation_attempts_for_run(
             event_kind="attempt_failed",
             level="warning",
             message=error_message,
-            payload={"status": attempt.status, "error_category": attempt.error_category},
+            payload={
+                "status": attempt.status,
+                "error_category": attempt.error_category,
+            },
         )
         emit_workflow_operation_log(
             session,
@@ -219,7 +241,10 @@ def fail_active_workflow_operation_attempts_for_run(
             attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
             event_type="workflow_operation_attempt_failed",
             message=error_message,
-            metadata={"status": attempt.status, "error_category": attempt.error_category},
+            metadata={
+                "status": attempt.status,
+                "error_category": attempt.error_category,
+            },
         )
     return len(rows)
 
@@ -286,11 +311,15 @@ def fail_workflow_operation(
     now = _now()
     retryable = True
     scheduled_for_retry = next_retry_at is not None
-    operation.status = OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
+    operation.status = (
+        OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
+    )
     operation.summary = message
     operation.finished_at = None if scheduled_for_retry else now
     operation.updated_at = now
-    attempt.status = OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
+    attempt.status = (
+        OPERATION_STATUS_RETRYING if scheduled_for_retry else OPERATION_STATUS_FAILED
+    )
     attempt.error_category = category
     attempt.error_message = message
     attempt.status_detail = None
@@ -303,7 +332,9 @@ def fail_workflow_operation(
         operation=operation,
         attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
         source_component="workflow_operation_service",
-        event_kind="attempt_retry_scheduled" if scheduled_for_retry else "attempt_failed",
+        event_kind="attempt_retry_scheduled"
+        if scheduled_for_retry
+        else "attempt_failed",
         level="warn" if scheduled_for_retry else "error",
         message=message,
         payload={
@@ -311,21 +342,27 @@ def fail_workflow_operation(
             "attempt_number": attempt.attempt_number,
             "error_category": category,
             "retryable": retryable,
-            "next_retry_at": next_retry_at.isoformat() if next_retry_at is not None else None,
+            "next_retry_at": next_retry_at.isoformat()
+            if next_retry_at is not None
+            else None,
         },
     )
     emit_workflow_operation_log(
         session,
         operation=operation,
         attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
-        event_type="workflow_operation_attempt_retry_scheduled" if scheduled_for_retry else "workflow_operation_attempt_failed",
+        event_type="workflow_operation_attempt_retry_scheduled"
+        if scheduled_for_retry
+        else "workflow_operation_attempt_failed",
         message=message,
         level=logging.WARNING if scheduled_for_retry else logging.ERROR,
         metadata={
             "status": attempt.status,
             "error_category": category,
             "retryable": retryable,
-            "next_retry_at": next_retry_at.isoformat() if next_retry_at is not None else None,
+            "next_retry_at": next_retry_at.isoformat()
+            if next_retry_at is not None
+            else None,
         },
     )
 

@@ -73,12 +73,16 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
                     brief_json={
                         "objective": "Generate signed downloads for queued audit export requests.",
                         "user_value": "Administrators can securely retrieve completed exports.",
-                        "acceptance_criteria": ["Signed download URLs are generated for completed export jobs."],
+                        "acceptance_criteria": [
+                            "Signed download URLs are generated for completed export jobs."
+                        ],
                         "scope_in": ["Signed URL generation"],
                         "scope_out": ["Changing export generation"],
                         "constraints": ["Links must expire."],
                         "risks": ["Leaked URLs expose exports."],
-                        "success_outcomes": ["Audit exports can be downloaded securely."],
+                        "success_outcomes": [
+                            "Audit exports can be downloaded securely."
+                        ],
                         "recommendation": "Implement signed download creation directly on the source task.",
                     },
                     evidence_json=[],
@@ -143,7 +147,9 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
             session.add_all([operation, attempt, work_unit])
             session.commit()
 
-    def test_run_completed_self_executable_parent_bypasses_decision_gate_and_queues_derived_contract(self) -> None:
+    def test_run_completed_self_executable_parent_bypasses_decision_gate_and_queues_derived_contract(
+        self,
+    ) -> None:
         issue_key = "TP-255"
         self._seed_self_executable_parent_planning(issue_key=issue_key)
         captured: dict[str, object] = {}
@@ -159,7 +165,9 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
         with (
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key=issue_key, summary="Signed audit downloads", status="To Do"),
+                return_value=JiraIssuePreview(
+                    key=issue_key, summary="Signed audit downloads", status="To Do"
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
@@ -174,25 +182,38 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
             ),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
-                side_effect=AssertionError("self-executable parent should not enter Decision Gate evaluation"),
+                side_effect=AssertionError(
+                    "self-executable parent should not enter Decision Gate evaluation"
+                ),
             ),
-            patch("orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck", side_effect=_enqueue),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.enqueue_issue_run_with_precheck",
+                side_effect=_enqueue,
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": f"!run {issue_key}"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": f"!run {issue_key}",
+                },
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["issue_key"], issue_key)
         self.assertIn("Owned by Engineering", str(captured["issue_description"]))
-        self.assertNotEqual(captured["issue_description"], "PM parent brief still lives on Jira.")
+        self.assertNotEqual(
+            captured["issue_description"], "PM parent brief still lives on Jira."
+        )
 
     def test_run_rejects_when_ready_label_is_missing(self) -> None:
         with (
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+                return_value=JiraIssuePreview(
+                    key="TP-20", summary="Do thing", status="To Do"
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
@@ -211,7 +232,11 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!run TP-20",
+                },
             )
 
         self.assertEqual(response.status_code, 409)
@@ -222,7 +247,9 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
         with (
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+                return_value=JiraIssuePreview(
+                    key="TP-20", summary="Do thing", status="To Do"
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
@@ -249,7 +276,11 @@ class DiscordRunAdmissionFlowTests(DiscordCommandReplyHarness):
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!run TP-20",
+                },
             )
 
         self.assertEqual(response.status_code, 409)

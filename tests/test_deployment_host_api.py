@@ -9,7 +9,11 @@ from cryptography.fernet import Fernet
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import AtlassianOAuthConnection, DeploymentHostCommand, ProjectDeploymentRestoreRun
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    DeploymentHostCommand,
+    ProjectDeploymentRestoreRun,
+)
 from orchestrator.worker import _has_available_webhook_job_once
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
 
@@ -31,7 +35,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
             "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
             "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
         }
@@ -96,7 +100,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             "repos": {
                 "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_project_key": {
+                    "TP": "https://github.com/example/repo"
+                },
                 "mapping_rules_by_component": {},
                 "fallback_repo": None,
             },
@@ -151,14 +157,21 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
     def test_registered_host_claims_no_command_when_queue_is_empty(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
         create_host_response = self.client.post(
             "/api/admin/deployment-hosts",
-            json={"label": "empty-queue-host", "capabilities": ["local_preview_routes"]},
+            json={
+                "label": "empty-queue-host",
+                "capabilities": ["local_preview_routes"],
+            },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         bootstrap_token = create_host_response.json()["bootstrap_token"]
         register_response = self.client.post(
             "/api/internal/deployment-hosts/register",
@@ -211,7 +224,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             json={"value": "secret"},
             auth=("admin", "secret"),
         )
-        self.assertEqual(password_secret_response.status_code, 200, password_secret_response.text)
+        self.assertEqual(
+            password_secret_response.status_code, 200, password_secret_response.text
+        )
         deployment_config_response = self.client.put(
             f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
@@ -243,15 +258,21 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_config_response.status_code, 200, deployment_config_response.text)
+        self.assertEqual(
+            deployment_config_response.status_code, 200, deployment_config_response.text
+        )
         resource_config = deployment_config_response.json()["resources"][0]["config"]
         self.assertNotIn("postgres_password", resource_config)
-        self.assertEqual(resource_config["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD")
+        self.assertEqual(
+            resource_config["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD"
+        )
         return project_id, app_id
 
     def test_restore_run_dispatches_to_managed_host_command(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -272,7 +293,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         host_id = create_host_response.json()["host"]["host_id"]
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
@@ -281,7 +304,12 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             json={
                 "bootstrap_token": bootstrap_token,
                 "agent_version": "1.0.0",
-                "advertised_capabilities": ["restore_database", "postgres", "mysql", "mariadb"],
+                "advertised_capabilities": [
+                    "restore_database",
+                    "postgres",
+                    "mysql",
+                    "mariadb",
+                ],
             },
         )
         self.assertEqual(register_response.status_code, 200, register_response.text)
@@ -307,7 +335,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
 
@@ -342,7 +372,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            restore_run = session.get(ProjectDeploymentRestoreRun, restore_response.json()["restore_run_id"])
+            restore_run = session.get(
+                ProjectDeploymentRestoreRun, restore_response.json()["restore_run_id"]
+            )
             self.assertIsNotNone(restore_run)
             assert restore_run is not None
             self.assertEqual(restore_run.host_id, host_id)
@@ -357,7 +389,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
     def test_internal_host_agent_claims_and_completes_restore_command(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -378,7 +412,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         host_id = create_host_response.json()["host"]["host_id"]
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
@@ -426,7 +462,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
         with patch(
@@ -493,7 +531,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
     def test_host_bootstrap_token_cannot_be_replayed_after_registration(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         create_host_response = self.client.post(
@@ -507,7 +547,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
         first_register = self.client.post(
@@ -543,7 +585,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
     def test_claim_route_fails_stale_running_restore_command(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -564,7 +608,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         host_id = create_host_response.json()["host"]["host_id"]
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
@@ -600,7 +646,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
         with patch(
@@ -666,9 +714,13 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(restore_detail.json()["status"], "failed")
         self.assertIn("expired", str(restore_detail.json()["last_error"]).lower())
 
-    def test_worker_probe_fails_stale_running_restore_command_without_host_reclaim(self) -> None:
+    def test_worker_probe_fails_stale_running_restore_command_without_host_reclaim(
+        self,
+    ) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -689,7 +741,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         host_id = create_host_response.json()["host"]["host_id"]
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
@@ -725,7 +779,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
         with patch(
@@ -789,7 +845,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
     def test_restore_run_requires_active_managed_host(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -819,7 +877,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
 
@@ -836,9 +896,13 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(restore_response.status_code, 409, restore_response.text)
         self.assertIn("managed host", restore_response.json()["detail"].lower())
 
-    def test_restore_run_uses_single_active_host_when_plane_has_no_explicit_assignment(self) -> None:
+    def test_restore_run_uses_single_active_host_when_plane_has_no_explicit_assignment(
+        self,
+    ) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -859,7 +923,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         host_id = create_host_response.json()["host"]["host_id"]
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
@@ -868,7 +934,12 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             json={
                 "bootstrap_token": bootstrap_token,
                 "agent_version": "1.0.0",
-                "advertised_capabilities": ["restore_database", "postgres", "mysql", "mariadb"],
+                "advertised_capabilities": [
+                    "restore_database",
+                    "postgres",
+                    "mysql",
+                    "mariadb",
+                ],
             },
         )
         self.assertEqual(register_response.status_code, 200, register_response.text)
@@ -893,7 +964,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
         with patch(
@@ -925,7 +998,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
 
     def test_restore_run_rejects_default_host_with_region_mismatch(self) -> None:
         self._insert_jira_connection()
-        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        create_tenant = self.client.post(
+            "/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret")
+        )
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
 
         coolify_secret_response = self.client.put(
@@ -946,7 +1021,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        self.assertEqual(
+            create_host_response.status_code, 201, create_host_response.text
+        )
         bootstrap_token = create_host_response.json()["bootstrap_token"]
 
         register_response = self.client.post(
@@ -979,7 +1056,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(deployment_plane_response.status_code, 200, deployment_plane_response.text)
+        self.assertEqual(
+            deployment_plane_response.status_code, 200, deployment_plane_response.text
+        )
 
         project_id, app_id = self._create_project_with_database_backup()
 

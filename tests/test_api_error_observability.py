@@ -15,7 +15,9 @@ class ApiErrorObservabilityTests(unittest.TestCase):
         with (
             patch("orchestrator.api.main.run_migrations"),
             patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
-            patch("orchestrator.api.main.register_discord_command_executor") as register_mock,
+            patch(
+                "orchestrator.api.main.register_discord_command_executor"
+            ) as register_mock,
             patch("orchestrator.api.main.sync_discord_guild_commands"),
         ):
             app = create_app()
@@ -30,7 +32,9 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.core.knowledge.jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
+            patch(
+                "orchestrator.core.knowledge.jira_sync_runtime.run_knowledge_jira_sync"
+            ) as sync_runtime_mock,
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False):
@@ -105,6 +109,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["detail"], "Unauthorized")
         self.assertEqual(response.headers.get("WWW-Authenticate"), "Bearer")
+
     def test_method_not_allowed_is_request_logged(self) -> None:
         app = create_app()
 
@@ -116,7 +121,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.logger.info") as info_log,
             TestClient(app, raise_server_exceptions=False) as client,
         ):
-            response = client.get("/jira/webhook/example")
+            response = client.get("/jira/webhook/example-workspace")
 
         self.assertEqual(response.status_code, 405)
         self.assertGreaterEqual(info_log.call_count, 1)

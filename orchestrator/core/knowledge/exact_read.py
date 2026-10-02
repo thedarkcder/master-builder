@@ -6,9 +6,17 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.api.atlassian_oauth.service import (
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeAsset, Project, Tenant
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    KnowledgeAsset,
+    Project,
+    Tenant,
+)
 
 
 @dataclass(frozen=True)
@@ -50,11 +58,15 @@ def exact_read_knowledge_source(
         "title": asset.title,
         "content": asset.text_content or "",
         "metadata": dict(asset.metadata_json or {}),
-        "source_timestamp": asset.source_timestamp.isoformat() if asset.source_timestamp else None,
+        "source_timestamp": asset.source_timestamp.isoformat()
+        if asset.source_timestamp
+        else None,
     }
 
 
-def _resolve_asset(*, session: Session, request: ExactReadRequest) -> KnowledgeAsset | None:
+def _resolve_asset(
+    *, session: Session, request: ExactReadRequest
+) -> KnowledgeAsset | None:
     if request.asset_id:
         asset = session.get(KnowledgeAsset, request.asset_id)
         if (
@@ -87,13 +99,17 @@ def _jira_exact_read(
     tenant: Tenant,
     asset: KnowledgeAsset,
 ) -> dict[str, Any] | None:
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         return None
     connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         return None
-    client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+    client = atlassian_oauth_client(
+        session=session, settings=settings, tenant_id=tenant.tenant_id
+    )
     access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
@@ -147,7 +163,9 @@ def _jira_exact_read(
                 "metadata": {
                     **dict(asset.metadata_json or {}),
                     "author_display_name": comment.author_display_name,
-                    "updated_at": comment.updated_at.isoformat() if comment.updated_at else None,
+                    "updated_at": comment.updated_at.isoformat()
+                    if comment.updated_at
+                    else None,
                 },
             }
     return None

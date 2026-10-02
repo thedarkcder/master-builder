@@ -109,9 +109,13 @@ def test_service_rejects_waiting_state_without_questions() -> None:
             context="Backlog planning",
         )
     except ValueError as exc:
-        assert str(exc) == "Backlog planning requires at least one clarification question"
+        assert (
+            str(exc) == "Backlog planning requires at least one clarification question"
+        )
     else:
-        raise AssertionError("Waiting for input without clarification questions must fail")
+        raise AssertionError(
+            "Waiting for input without clarification questions must fail"
+        )
 
     assert publisher.has_active_calls == []
     assert publisher.publish_calls == []

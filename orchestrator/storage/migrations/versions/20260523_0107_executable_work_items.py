@@ -47,7 +47,11 @@ def _backfilled_parent_work_state(status: object) -> str:
 
 
 def _insert_work_item(bind: sa.engine.Connection, values: dict[str, object]) -> None:
-    payload_value_expr = "CAST(:source_payload_json AS JSON)" if bind.dialect.name == "postgresql" else ":source_payload_json"
+    payload_value_expr = (
+        "CAST(:source_payload_json AS JSON)"
+        if bind.dialect.name == "postgresql"
+        else ":source_payload_json"
+    )
     insert_sql = """
         INSERT INTO workflow_executable_work_items (
             work_item_id,
@@ -129,13 +133,26 @@ def upgrade() -> None:
             sa.Column("issue_status", sa.String(length=128), nullable=True),
             sa.Column("issue_type", sa.String(length=128), nullable=True),
             sa.Column("mb_work_state", sa.String(length=64), nullable=True),
-            sa.Column("source_system", sa.String(length=64), nullable=False, server_default="jira"),
+            sa.Column(
+                "source_system",
+                sa.String(length=64),
+                nullable=False,
+                server_default="jira",
+            ),
             sa.Column("source_external_id", sa.String(length=255), nullable=True),
-            sa.Column("source_payload_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+            sa.Column(
+                "source_payload_json",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
-            sa.CheckConstraint("item_kind IN ('parent', 'child')", name="ck_workflow_executable_work_items_kind"),
+            sa.CheckConstraint(
+                "item_kind IN ('parent', 'child')",
+                name="ck_workflow_executable_work_items_kind",
+            ),
             sa.UniqueConstraint(
                 "parent_workflow_id",
                 "item_kind",
@@ -212,7 +229,10 @@ def upgrade() -> None:
         _insert_work_item(bind, values)
         parent_by_issue_key[issue_key] = values
 
-    if not (_table_exists(bind, "workflow_operation_work_units") and _table_exists(bind, "workflow_operations")):
+    if not (
+        _table_exists(bind, "workflow_operation_work_units")
+        and _table_exists(bind, "workflow_operations")
+    ):
         return
 
     classification_rows = bind.execute(
@@ -263,10 +283,14 @@ def upgrade() -> None:
                     "issue_summary": str(issue.get("summary") or "").strip() or None,
                     "issue_status": str(issue.get("status") or "").strip() or None,
                     "issue_type": str(issue.get("issue_type") or "").strip() or None,
-                    "mb_work_state": str(issue.get("mb_work_state") or "").strip() or None,
+                    "mb_work_state": str(issue.get("mb_work_state") or "").strip()
+                    or None,
                     "source_system": "jira",
-                    "source_external_id": str(issue.get("issue_id") or "").strip() or None,
-                    "source_payload_json": _json_value(bind, {"backfilled_from": "jira_issue_classification.compute"}),
+                    "source_external_id": str(issue.get("issue_id") or "").strip()
+                    or None,
+                    "source_payload_json": _json_value(
+                        bind, {"backfilled_from": "jira_issue_classification.compute"}
+                    ),
                     "created_at": parent["created_at"],
                     "updated_at": parent["updated_at"],
                     "last_seen_at": parent["last_seen_at"],

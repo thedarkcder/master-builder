@@ -50,7 +50,9 @@ def _coalesce_delta(stored: int | None, computed: int) -> int:
     return max(0, stored)
 
 
-def _build_delta(prev: tuple[int, int, int] | None, current: tuple[int, int, int]) -> tuple[int, int, int]:
+def _build_delta(
+    prev: tuple[int, int, int] | None, current: tuple[int, int, int]
+) -> tuple[int, int, int]:
     if prev is None:
         return current
     prev_input, prev_cached, prev_output = prev
@@ -79,7 +81,11 @@ def _load_run_rows(
         session.execute(
             select(RunTokenUsage)
             .where(RunTokenUsage.run_id.in_(run_ids))
-            .order_by(RunTokenUsage.recorded_at.asc(), RunTokenUsage.run_id.asc(), RunTokenUsage.id.asc())
+            .order_by(
+                RunTokenUsage.recorded_at.asc(),
+                RunTokenUsage.run_id.asc(),
+                RunTokenUsage.id.asc(),
+            )
         )
         .scalars()
         .all()
@@ -87,7 +93,9 @@ def _load_run_rows(
 
 
 def _load_runs(session, run_ids: list[str]) -> dict[str, Run]:
-    run_rows = session.execute(select(Run).where(Run.run_id.in_(run_ids))).scalars().all()
+    run_rows = (
+        session.execute(select(Run).where(Run.run_id.in_(run_ids))).scalars().all()
+    )
     return {row.run_id: row for row in run_rows}
 
 
@@ -100,9 +108,14 @@ def compare_run_tokens(
 ) -> TokenCompareRead:
     run_ids = [str(run_id).strip() for run_id in payload.run_ids if str(run_id).strip()]
     if len(run_ids) < 2:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="run_ids requires at least 2 runs")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="run_ids requires at least 2 runs",
+        )
     if len(run_ids) > _MAX_RUNS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Too many runs; max is 20")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Too many runs; max is 20"
+        )
 
     align_by = (payload.align_by or "turn_sequence").strip().lower()
     if align_by not in {"turn_sequence", "recorded_at"}:
@@ -110,20 +123,32 @@ def compare_run_tokens(
     tenant_id = str(tenant_id).strip()
     project_id = str(project_id).strip()
     if not tenant_id or not project_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant_id and project_id are required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant_id and project_id are required",
+        )
 
     run_rows = _load_runs(session, run_ids)
     for requested_id in run_ids:
         if requested_id not in run_rows:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run not found: {requested_id}")
-    mismatched_tenant_runs = [run_id for run_id, row in run_rows.items() if str(row.tenant_id or "").strip() != tenant_id]
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Run not found: {requested_id}",
+            )
+    mismatched_tenant_runs = [
+        run_id
+        for run_id, row in run_rows.items()
+        if str(row.tenant_id or "").strip() != tenant_id
+    ]
     if mismatched_tenant_runs:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="All runs must belong to the selected tenant.",
         )
     mismatched_project_runs = [
-        run_id for run_id, row in run_rows.items() if str(row.project_id or "").strip() != project_id
+        run_id
+        for run_id, row in run_rows.items()
+        if str(row.project_id or "").strip() != project_id
     ]
     if mismatched_project_runs:
         raise HTTPException(
@@ -141,15 +166,21 @@ def compare_run_tokens(
         }
         for run_id in run_ids
     }
-    stage_totals_by_run: dict[str, dict[str, dict[str, int]]] = {run_id: {} for run_id in run_ids}
-    turns_by_run: dict[str, list[TokenCompareWaterfallStepRead]] = {run_id: [] for run_id in run_ids}
+    stage_totals_by_run: dict[str, dict[str, dict[str, int]]] = {
+        run_id: {} for run_id in run_ids
+    }
+    turns_by_run: dict[str, list[TokenCompareWaterfallStepRead]] = {
+        run_id: [] for run_id in run_ids
+    }
     chain_prev: dict[tuple[str, str, str, int | None], tuple[int, int, int]] = {}
     align_axis: list[int] = []
     axis_lookup: dict[str, int] = {}
     run_turn_index: dict[str, int] = {run_id: 0 for run_id in run_ids}
 
     if align_by == "recorded_at":
-        axis_source_rows = sorted(rows, key=lambda row: _coerce_aware(row.recorded_at) or datetime.min)
+        axis_source_rows = sorted(
+            rows, key=lambda row: _coerce_aware(row.recorded_at) or datetime.min
+        )
         for row in axis_source_rows:
             timestamp = str(_coerce_aware(row.recorded_at).isoformat())
             if timestamp not in axis_lookup:
@@ -217,7 +248,9 @@ def compare_run_tokens(
                 delta_input=delta_input,
                 uncached_delta=delta_uncached,
                 output_tokens=output_tokens,
-                delta_reason=_build_spike_reasons(delta_input=delta_input, delta_uncached=delta_uncached),
+                delta_reason=_build_spike_reasons(
+                    delta_input=delta_input, delta_uncached=delta_uncached
+                ),
             )
         )
 
@@ -225,7 +258,9 @@ def compare_run_tokens(
         max_turns = max(run_turn_index.values(), default=0)
         align_axis = list(range(1, max_turns + 1))
     elif not align_axis:
-        align_axis = [value for _, value in sorted(axis_lookup.items(), key=lambda item: item[1])]
+        align_axis = [
+            value for _, value in sorted(axis_lookup.items(), key=lambda item: item[1])
+        ]
 
     runs: list[TokenCompareRunRead] = []
     for run_id in run_ids:
@@ -254,7 +289,8 @@ def compare_run_tokens(
                         input=int(stage_totals["input"]),
                         uncached_input=int(stage_totals["uncached_input"]),
                         output=int(stage_totals["output"]),
-                        total_io=int(stage_totals["input"]) + int(stage_totals["output"]),
+                        total_io=int(stage_totals["input"])
+                        + int(stage_totals["output"]),
                     )
                     for stage_name, stage_totals in stage_totals_by_run[run_id].items()
                 ],

@@ -55,7 +55,7 @@ def build_discord_guild_commands() -> list[dict]:
                 {
                     "type": 3,  # STRING
                     "name": "issue_key",
-                    "description": "Jira issue key, e.g. MAB-24",
+                    "description": "Jira issue key, e.g. EXAMPLE-24",
                     "required": True,
                     "autocomplete": True,
                 }
@@ -236,7 +236,7 @@ def build_discord_guild_commands() -> list[dict]:
                 {
                     "type": 3,  # STRING
                     "name": "issue_key",
-                    "description": "Jira issue key, e.g. MAB-24",
+                    "description": "Jira issue key, e.g. EXAMPLE-24",
                     "required": True,
                     "autocomplete": True,
                 }
@@ -314,7 +314,7 @@ def build_discord_guild_commands() -> list[dict]:
                             "required": True,
                         }
                     ],
-                }
+                },
             ],
         },
         {
@@ -346,7 +346,7 @@ def build_discord_guild_commands() -> list[dict]:
                     "name": "reason",
                     "description": "Optional reason for access request",
                     "required": False,
-                }
+                },
             ],
         },
         {
@@ -373,7 +373,9 @@ def sync_discord_guild_commands(
     sync_session = session if session is not None else resolved_session_factory()
     lock_acquired = False
     try:
-        lock_acquired = _try_acquire_command_sync_lock(session=sync_session, settings=resolved_settings)
+        lock_acquired = _try_acquire_command_sync_lock(
+            session=sync_session, settings=resolved_settings
+        )
         if not lock_acquired:
             logger.info("discord_command_sync_skipped reason=lock_busy")
             current = get_discord_command_sync_status(session=sync_session)
@@ -410,7 +412,10 @@ def sync_discord_guild_commands(
                 service_instance_id=service_instance_id,
             )
             sync_session.commit()
-            logger.info("discord_command_sync_skipped reason=missing_bot_token secret_ref=%s", bot_token_ref)
+            logger.info(
+                "discord_command_sync_skipped reason=missing_bot_token secret_ref=%s",
+                bot_token_ref,
+            )
             return False
 
         if not guild_ids:
@@ -479,7 +484,9 @@ def sync_discord_guild_commands(
 def _configured_tenant_guild_ids(*, session: Session) -> list[str]:
     guild_ids: list[str] = []
     tenants = session.execute(
-        select(Tenant).where(Tenant.is_enabled.is_(True)).order_by(Tenant.tenant_id.asc())
+        select(Tenant)
+        .where(Tenant.is_enabled.is_(True))
+        .order_by(Tenant.tenant_id.asc())
     ).scalars()
     for tenant in tenants:
         discord_config = getattr(tenant, "discord_config", None) or {}
@@ -493,7 +500,9 @@ def _try_acquire_command_sync_lock(*, session: Session, settings: Settings) -> b
     if not is_postgres_database_url(settings.database_url):
         return True
     lock_key = int(getattr(settings, "discord_command_sync_lock_key", 947102033130))
-    row = session.execute(text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}).scalar()
+    row = session.execute(
+        text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": lock_key}
+    ).scalar()
     return bool(row is True)
 
 
@@ -502,6 +511,10 @@ def _release_command_sync_lock(*, session: Session, settings: Settings) -> None:
         return
     lock_key = int(getattr(settings, "discord_command_sync_lock_key", 947102033130))
     try:
-        session.execute(text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": lock_key})
+        session.execute(
+            text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": lock_key}
+        )
     except Exception:  # noqa: BLE001
-        logger.exception("discord_command_sync_lock_release_failed lock_key=%s", lock_key)
+        logger.exception(
+            "discord_command_sync_lock_release_failed lock_key=%s", lock_key
+        )

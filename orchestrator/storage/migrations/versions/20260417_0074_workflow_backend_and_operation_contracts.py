@@ -20,15 +20,19 @@ depends_on = None
 def upgrade() -> None:
     bind = op.get_bind()
 
-    workflow_rows = bind.execute(
-        sa.text(
-            """
+    workflow_rows = (
+        bind.execute(
+            sa.text(
+                """
             SELECT workflow_id, workflow_type_key
             FROM workflow_executions
             WHERE orchestration_backend IS NULL OR TRIM(orchestration_backend) = ''
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     for row in workflow_rows:
         backend = bind.execute(
             sa.text(
@@ -69,7 +73,9 @@ def upgrade() -> None:
         )
     ).scalar_one()
     if invalid_backends:
-        raise RuntimeError("workflow_types contains unsupported orchestration_backend values")
+        raise RuntimeError(
+            "workflow_types contains unsupported orchestration_backend values"
+        )
 
     invalid_execution_backends = bind.execute(
         sa.text(
@@ -81,11 +87,14 @@ def upgrade() -> None:
         )
     ).scalar_one()
     if invalid_execution_backends:
-        raise RuntimeError("workflow_executions contains unsupported orchestration_backend values")
+        raise RuntimeError(
+            "workflow_executions contains unsupported orchestration_backend values"
+        )
 
-    undefined_operations = bind.execute(
-        sa.text(
-            """
+    undefined_operations = (
+        bind.execute(
+            sa.text(
+                """
             SELECT we.workflow_id, wo.operation_type, we.workflow_type_key
             FROM workflow_operations wo
             JOIN workflow_executions we ON we.workflow_id = wo.workflow_id
@@ -95,13 +104,19 @@ def upgrade() -> None:
             WHERE wto.operation_definition_id IS NULL
             ORDER BY we.workflow_id, wo.operation_type
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     if undefined_operations:
         formatted = ", ".join(
-            f"{row['workflow_id']}:{row['operation_type']}" for row in undefined_operations[:10]
+            f"{row['workflow_id']}:{row['operation_type']}"
+            for row in undefined_operations[:10]
         )
-        raise RuntimeError(f"workflow_operations contains undefined operation types: {formatted}")
+        raise RuntimeError(
+            f"workflow_operations contains undefined operation types: {formatted}"
+        )
 
     if bind.dialect.name == "sqlite":
         with op.batch_alter_table("workflow_types") as batch_op:
@@ -131,9 +146,19 @@ def downgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name == "sqlite":
         with op.batch_alter_table("workflow_executions") as batch_op:
-            batch_op.drop_constraint("ck_workflow_executions_orchestration_backend", type_="check")
+            batch_op.drop_constraint(
+                "ck_workflow_executions_orchestration_backend", type_="check"
+            )
         with op.batch_alter_table("workflow_types") as batch_op:
-            batch_op.drop_constraint("ck_workflow_types_orchestration_backend", type_="check")
+            batch_op.drop_constraint(
+                "ck_workflow_types_orchestration_backend", type_="check"
+            )
     else:
-        op.drop_constraint("ck_workflow_executions_orchestration_backend", "workflow_executions", type_="check")
-        op.drop_constraint("ck_workflow_types_orchestration_backend", "workflow_types", type_="check")
+        op.drop_constraint(
+            "ck_workflow_executions_orchestration_backend",
+            "workflow_executions",
+            type_="check",
+        )
+        op.drop_constraint(
+            "ck_workflow_types_orchestration_backend", "workflow_types", type_="check"
+        )

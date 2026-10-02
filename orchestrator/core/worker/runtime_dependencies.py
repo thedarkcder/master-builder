@@ -73,7 +73,9 @@ class RuntimeDependencyStatus:
         if self.remediation_text:
             payload["remediation_text"] = self.remediation_text
         if self.remediation_expires_at is not None:
-            payload["remediation_expires_at"] = self.remediation_expires_at.astimezone(timezone.utc).isoformat()
+            payload["remediation_expires_at"] = self.remediation_expires_at.astimezone(
+                timezone.utc
+            ).isoformat()
         return payload
 
 
@@ -102,10 +104,15 @@ class WorkerRuntimeDependencySnapshot:
         return bool(self.blocked_runtime_kinds)
 
     def to_json(self) -> dict[str, dict[str, Any]]:
-        return {runtime_kind: dependency.as_json() for runtime_kind, dependency in sorted(self.dependencies.items())}
+        return {
+            runtime_kind: dependency.as_json()
+            for runtime_kind, dependency in sorted(self.dependencies.items())
+        }
 
 
-def runtime_dependency_payload_to_json(raw_value: object | None) -> dict[str, dict[str, Any]]:
+def runtime_dependency_payload_to_json(
+    raw_value: object | None,
+) -> dict[str, dict[str, Any]]:
     if not isinstance(raw_value, dict):
         return {}
     payload: dict[str, dict[str, Any]] = {}
@@ -169,7 +176,9 @@ def _check_runtime_dependency(
             auth_request=auth_request,
         )
     if runtime_kind in {RUNTIME_KIND_CHAT_CLI, RUNTIME_KIND_CLAUDE_CLI}:
-        return _check_cli_command_dependency(runtime_kind=runtime_kind, settings=settings)
+        return _check_cli_command_dependency(
+            runtime_kind=runtime_kind, settings=settings
+        )
     return RuntimeDependencyStatus(
         runtime_kind=runtime_kind,
         state=RUNTIME_DEPENDENCY_STATE_READY,
@@ -177,7 +186,9 @@ def _check_runtime_dependency(
     )
 
 
-def _check_cli_command_dependency(*, runtime_kind: str, settings: Settings) -> RuntimeDependencyStatus:
+def _check_cli_command_dependency(
+    *, runtime_kind: str, settings: Settings
+) -> RuntimeDependencyStatus:
     command = _runtime_cli_command(runtime_kind=runtime_kind, settings=settings)
     if not command:
         return RuntimeDependencyStatus(
@@ -206,7 +217,9 @@ def _check_codex_cli_dependency(
     existing_payload: dict[str, Any],
     auth_request: WorkerRuntimeAuthRequest | None,
 ) -> RuntimeDependencyStatus:
-    command = _runtime_cli_command(runtime_kind=RUNTIME_KIND_CODEX_CLI, settings=settings)
+    command = _runtime_cli_command(
+        runtime_kind=RUNTIME_KIND_CODEX_CLI, settings=settings
+    )
     if not command:
         return RuntimeDependencyStatus(
             runtime_kind=RUNTIME_KIND_CODEX_CLI,
@@ -247,11 +260,17 @@ def _check_codex_cli_dependency(
         )
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(
-        seconds=max(60, int(getattr(settings, "worker_runtime_auth_remediation_ttl_seconds", 900)))
+        seconds=max(
+            60,
+            int(getattr(settings, "worker_runtime_auth_remediation_ttl_seconds", 900)),
+        )
     )
     remediation_text: str | None = None
     active_request = auth_request
-    if active_request is not None and active_request.status == WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING:
+    if (
+        active_request is not None
+        and active_request.status == WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING
+    ):
         active_request = _start_codex_cli_login_session(
             session_factory=session_factory,
             service_instance_id=service_instance_id,
@@ -260,7 +279,10 @@ def _check_codex_cli_dependency(
             settings=settings,
             expires_at=expires_at,
         )
-    if active_request is not None and active_request.status == WORKER_RUNTIME_AUTH_REQUEST_STATUS_ACTIVE:
+    if (
+        active_request is not None
+        and active_request.status == WORKER_RUNTIME_AUTH_REQUEST_STATUS_ACTIVE
+    ):
         active_request = _refresh_live_runtime_auth_request(
             session_factory=session_factory,
             service_instance_id=service_instance_id,
@@ -306,10 +328,14 @@ def _parse_iso_datetime(value: object | None) -> datetime | None:
 
 
 def registered_worker_runtime_kinds_from_settings(settings: Settings) -> list[str]:
-    return sorted(set(normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))))
+    return sorted(
+        set(normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None)))
+    )
 
 
-def _registered_worker_runtime_kinds(raw_value: object | None, *, settings: Settings) -> set[str]:
+def _registered_worker_runtime_kinds(
+    raw_value: object | None, *, settings: Settings
+) -> set[str]:
     registered = set(normalize_runtime_kinds(raw_value))
     if registered:
         return registered
@@ -321,24 +347,29 @@ def _open_worker_runtime_auth_requests(
     session: Session,
     service_instance_id: str,
 ) -> dict[str, WorkerRuntimeAuthRequest]:
-    rows = session.execute(
-        select(WorkerRuntimeAuthRequest)
-        .where(
-            WorkerRuntimeAuthRequest.service_instance_id == service_instance_id,
-            WorkerRuntimeAuthRequest.status.in_(
-                (
-                    WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING,
-                    WORKER_RUNTIME_AUTH_REQUEST_STATUS_ACTIVE,
-                )
-            ),
+    rows = (
+        session.execute(
+            select(WorkerRuntimeAuthRequest)
+            .where(
+                WorkerRuntimeAuthRequest.service_instance_id == service_instance_id,
+                WorkerRuntimeAuthRequest.status.in_(
+                    (
+                        WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING,
+                        WORKER_RUNTIME_AUTH_REQUEST_STATUS_ACTIVE,
+                    )
+                ),
+            )
+            .order_by(WorkerRuntimeAuthRequest.requested_at.desc())
         )
-        .order_by(WorkerRuntimeAuthRequest.requested_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     selected: dict[str, WorkerRuntimeAuthRequest] = {}
     for row in rows:
         if row.runtime_kind not in selected:
             selected[row.runtime_kind] = row
     return selected
+
 
 def _read_process_stream(process_stream: Any, session_key: tuple[str, str]) -> None:
     try:
@@ -370,10 +401,20 @@ def _start_codex_cli_login_session(
     session_key = (service_instance_id, runtime_kind)
     with _LIVE_RUNTIME_AUTH_SESSIONS_LOCK:
         current_session = _LIVE_RUNTIME_AUTH_SESSIONS.get(session_key)
-    if current_session is None or current_session.request_id != request_id or current_session.process.poll() is not None:
-        command_cwd, env = build_cli_command_env(settings=settings, working_dir=None, runtime_kind=runtime_kind)
+    if (
+        current_session is None
+        or current_session.request_id != request_id
+        or current_session.process.poll() is not None
+    ):
+        command_cwd, env = build_cli_command_env(
+            settings=settings, working_dir=None, runtime_kind=runtime_kind
+        )
         process = subprocess.Popen(  # noqa: S603
-            [_runtime_cli_command(runtime_kind=runtime_kind, settings=settings), "login", "--device-auth"],
+            [
+                _runtime_cli_command(runtime_kind=runtime_kind, settings=settings),
+                "login",
+                "--device-auth",
+            ],
             cwd=command_cwd or None,
             env=env,
             stdout=subprocess.PIPE,
@@ -435,12 +476,16 @@ def _refresh_live_runtime_auth_request(
             last_error="Worker login session is no longer running.",
         )
     auth_ready, auth_status_output = codex_login_status(
-        codex_command=_runtime_cli_command(runtime_kind=runtime_kind, settings=settings),
+        codex_command=_runtime_cli_command(
+            runtime_kind=runtime_kind, settings=settings
+        ),
         settings=settings,
         working_dir=None,
     )
     if auth_ready is True:
-        _stop_live_runtime_auth_session(service_instance_id=service_instance_id, runtime_kind=runtime_kind)
+        _stop_live_runtime_auth_session(
+            service_instance_id=service_instance_id, runtime_kind=runtime_kind
+        )
         return _update_worker_runtime_auth_request(
             session_factory=session_factory,
             request_id=request_id,
@@ -451,7 +496,9 @@ def _refresh_live_runtime_auth_request(
             last_error=None,
         )
     if live_session.expires_at <= now:
-        _stop_live_runtime_auth_session(service_instance_id=service_instance_id, runtime_kind=runtime_kind)
+        _stop_live_runtime_auth_session(
+            service_instance_id=service_instance_id, runtime_kind=runtime_kind
+        )
         return _update_worker_runtime_auth_request(
             session_factory=session_factory,
             request_id=request_id,
@@ -463,7 +510,9 @@ def _refresh_live_runtime_auth_request(
         )
     process_return_code = live_session.process.poll()
     if process_return_code is not None:
-        _stop_live_runtime_auth_session(service_instance_id=service_instance_id, runtime_kind=runtime_kind)
+        _stop_live_runtime_auth_session(
+            service_instance_id=service_instance_id, runtime_kind=runtime_kind
+        )
         return _update_worker_runtime_auth_request(
             session_factory=session_factory,
             request_id=request_id,
@@ -471,7 +520,8 @@ def _refresh_live_runtime_auth_request(
             completed_at=now,
             remediation_text=live_session.remediation_text(),
             expires_at=live_session.expires_at,
-            last_error=auth_status_output or f"Worker login session exited with code {process_return_code}.",
+            last_error=auth_status_output
+            or f"Worker login session exited with code {process_return_code}.",
         )
     return _update_worker_runtime_auth_request(
         session_factory=session_factory,
@@ -521,18 +571,22 @@ def _complete_worker_runtime_auth_request(
     runtime_kind: str,
 ) -> None:
     with session_factory() as session:
-        rows = session.execute(
-            select(WorkerRuntimeAuthRequest).where(
-                WorkerRuntimeAuthRequest.service_instance_id == service_instance_id,
-                WorkerRuntimeAuthRequest.runtime_kind == runtime_kind,
-                WorkerRuntimeAuthRequest.status.in_(
-                    (
-                        WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING,
-                        WORKER_RUNTIME_AUTH_REQUEST_STATUS_ACTIVE,
-                    )
-                ),
+        rows = (
+            session.execute(
+                select(WorkerRuntimeAuthRequest).where(
+                    WorkerRuntimeAuthRequest.service_instance_id == service_instance_id,
+                    WorkerRuntimeAuthRequest.runtime_kind == runtime_kind,
+                    WorkerRuntimeAuthRequest.status.in_(
+                        (
+                            WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING,
+                            WORKER_RUNTIME_AUTH_REQUEST_STATUS_ACTIVE,
+                        )
+                    ),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not rows:
             return
         now = datetime.now(timezone.utc)
@@ -543,7 +597,9 @@ def _complete_worker_runtime_auth_request(
         session.commit()
 
 
-def _stop_live_runtime_auth_session(*, service_instance_id: str, runtime_kind: str) -> None:
+def _stop_live_runtime_auth_session(
+    *, service_instance_id: str, runtime_kind: str
+) -> None:
     session_key = (service_instance_id, runtime_kind)
     with _LIVE_RUNTIME_AUTH_SESSIONS_LOCK:
         live_session = _LIVE_RUNTIME_AUTH_SESSIONS.pop(session_key, None)
@@ -564,7 +620,9 @@ def stop_all_live_runtime_auth_sessions() -> None:
     with _LIVE_RUNTIME_AUTH_SESSIONS_LOCK:
         session_keys = list(_LIVE_RUNTIME_AUTH_SESSIONS.keys())
     for service_instance_id, runtime_kind in session_keys:
-        _stop_live_runtime_auth_session(service_instance_id=service_instance_id, runtime_kind=runtime_kind)
+        _stop_live_runtime_auth_session(
+            service_instance_id=service_instance_id, runtime_kind=runtime_kind
+        )
 
 
 def sync_worker_runtime_auth_requests(
@@ -590,7 +648,14 @@ def sync_worker_runtime_auth_requests(
         if runtime_kind != RUNTIME_KIND_CODEX_CLI:
             continue
         expires_at = datetime.now(timezone.utc) + timedelta(
-            seconds=max(60, int(getattr(settings, "worker_runtime_auth_remediation_ttl_seconds", 900)))
+            seconds=max(
+                60,
+                int(
+                    getattr(
+                        settings, "worker_runtime_auth_remediation_ttl_seconds", 900
+                    )
+                ),
+            )
         )
         if auth_request.status == WORKER_RUNTIME_AUTH_REQUEST_STATUS_PENDING:
             _start_codex_cli_login_session(

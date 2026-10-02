@@ -46,7 +46,9 @@ class AgentLifecycleEvent(Base):
     issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
     agent_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class RunTokenUsage(Base):
@@ -73,9 +75,13 @@ class RunTokenUsage(Base):
     )
     attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stage: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    invocation_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     turn_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cached_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

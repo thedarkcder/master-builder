@@ -8,10 +8,15 @@ from datetime import UTC, datetime
 
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.observability.logging import configure_logging
-from orchestrator.core.projects.automation_service import enqueue_due_project_automation_runs
+from orchestrator.core.projects.automation_service import (
+    enqueue_due_project_automation_runs,
+)
 from orchestrator.core.observability.otel_telemetry import initialize_telemetry
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
+from orchestrator.storage.run_queue_events import (
+    is_postgres_database_url,
+    postgres_dsn_from_database_url,
+)
 
 try:
     import psycopg
@@ -55,9 +60,15 @@ class ProjectAutomationRuntime:
             raise RuntimeError("project_automation runtime requires psycopg")
 
         stop_event = threading.Event()
-        lock_key = int(getattr(self._settings, "project_automation_lock_key", 947102033131))
-        poll_seconds = max(5, int(getattr(self._settings, "project_automation_poll_seconds", 30)))
-        interval_seconds = max(10, int(getattr(self._settings, "project_automation_interval_seconds", 30)))
+        lock_key = int(
+            getattr(self._settings, "project_automation_lock_key", 947102033131)
+        )
+        poll_seconds = max(
+            5, int(getattr(self._settings, "project_automation_poll_seconds", 30))
+        )
+        interval_seconds = max(
+            10, int(getattr(self._settings, "project_automation_interval_seconds", 30))
+        )
         dsn = postgres_dsn_from_database_url(self._settings.database_url)
 
         def _request_stop() -> None:
@@ -79,7 +90,9 @@ class ProjectAutomationRuntime:
                     if not _try_acquire_leader_lock(conn=conn, lock_key=lock_key):
                         stop_event.wait(timeout=poll_seconds)
                         continue
-                    logger.info("project_automation_leader_acquired lock_key=%s", lock_key)
+                    logger.info(
+                        "project_automation_leader_acquired lock_key=%s", lock_key
+                    )
                     while not stop_event.is_set():
                         self._run_scheduler_pass()
                         waited = 0
@@ -88,7 +101,9 @@ class ProjectAutomationRuntime:
                             step = min(poll_seconds, interval_seconds - waited)
                             stop_event.wait(timeout=step)
                             waited += step
-                    logger.info("project_automation_leader_released lock_key=%s", lock_key)
+                    logger.info(
+                        "project_automation_leader_released lock_key=%s", lock_key
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("project_automation_runtime_loop_failed error=%s", exc)
                 stop_event.wait(timeout=poll_seconds)

@@ -43,7 +43,9 @@ def normalize_install_kind(value: str) -> str:
     return normalized
 
 
-def normalize_binding_names(values: list[str] | tuple[str, ...] | set[str] | None) -> tuple[str, ...]:
+def normalize_binding_names(
+    values: list[str] | tuple[str, ...] | set[str] | None,
+) -> tuple[str, ...]:
     normalized: list[str] = []
     seen: set[str] = set()
     for raw_value in values or ():
@@ -70,7 +72,9 @@ def normalize_install_write(payload: ProjectInstallWrite) -> ProjectInstallWrite
     )
 
 
-def list_project_installs(*, session: Session, tenant_id: str, project_id: str) -> list[ProjectInstall]:
+def list_project_installs(
+    *, session: Session, tenant_id: str, project_id: str
+) -> list[ProjectInstall]:
     return (
         session.execute(
             select(ProjectInstall)

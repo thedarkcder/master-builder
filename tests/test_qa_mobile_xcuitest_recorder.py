@@ -37,7 +37,9 @@ def test_launch_arguments_for_scenario_preserves_state_for_returning_hint() -> N
 
 
 def test_generated_test_method_name_sanitizes_input() -> None:
-    assert generated_test_method_name("Happy path / first run") == "testHappyPathFirstRun"
+    assert (
+        generated_test_method_name("Happy path / first run") == "testHappyPathFirstRun"
+    )
 
 
 def test_render_xcuitest_source_maps_mobile_steps_to_swift() -> None:
@@ -55,7 +57,11 @@ def test_render_xcuitest_source_maps_mobile_steps_to_swift() -> None:
                     QaStep(action="wait_for_text", value="Continue"),
                     QaStep(action="relaunch_app", value="preserve"),
                     QaStep(action="assert_visible", selector="start_demo_button"),
-                    QaStep(action="assert_text", selector="start_demo_button", value="Start Free Demo"),
+                    QaStep(
+                        action="assert_text",
+                        selector="start_demo_button",
+                        value="Start Free Demo",
+                    ),
                 ],
             )
         ],
@@ -67,18 +73,23 @@ def test_render_xcuitest_source_maps_mobile_steps_to_swift() -> None:
     assert 'tap(selector: "onboarding_primary_button")' in source
     assert 'waitForText("Continue")' in source
     assert 'relaunchApp(arguments: ["-uiTesting"])' in source
-    assert 'assertText(selector: "start_demo_button", expected: "Start Free Demo")' in source
+    assert (
+        'assertText(selector: "start_demo_button", expected: "Start Free Demo")'
+        in source
+    )
     assert 'if selector.hasPrefix("text=")' in source
-    assert 'let button = app.buttons[text]' in source
-    assert 'let staticText = app.staticTexts[text]' in source
-    assert 'let button = app.buttons[identifier]' in source
-    assert 'let staticText = app.staticTexts[identifier]' in source
-    assert 'let otherElement = app.otherElements[identifier]' in source
+    assert "let button = app.buttons[text]" in source
+    assert "let staticText = app.staticTexts[text]" in source
+    assert "let button = app.buttons[identifier]" in source
+    assert "let staticText = app.staticTexts[identifier]" in source
+    assert "let otherElement = app.otherElements[identifier]" in source
     assert "XCTNSPredicateExpectation" in source
     assert "currentText(for: target)" in source
 
 
-def test_render_xcuitest_source_resolves_bare_native_selectors_by_text_or_identifier() -> None:
+def test_render_xcuitest_source_resolves_bare_native_selectors_by_text_or_identifier() -> (
+    None
+):
     source = render_xcuitest_source(
         test_class_name="GirlPowerUITests",
         scenarios=[
@@ -94,8 +105,8 @@ def test_render_xcuitest_source_resolves_bare_native_selectors_by_text_or_identi
         ],
     )
 
-    assert 'let button = app.buttons[selector]' in source
-    assert 'let staticText = app.staticTexts[selector]' in source
+    assert "let button = app.buttons[selector]" in source
+    assert "let staticText = app.staticTexts[selector]" in source
     assert 'format: "identifier == %@ OR label == %@ OR value == %@"' in source
     assert 'assertVisible(selector: "Start Free Demo")' in source
     assert 'tap(selector: "onboarding_primary_button")' in source
@@ -116,9 +127,11 @@ def test_render_xcuitest_source_prefers_controls_for_identifier_selectors() -> N
         ],
     )
 
-    button_index = source.index('let button = app.buttons[identifier]')
-    other_element_index = source.index('let otherElement = app.otherElements[identifier]')
-    fallback_index = source.index('return app.descendants(matching: .any)[identifier]')
+    button_index = source.index("let button = app.buttons[identifier]")
+    other_element_index = source.index(
+        "let otherElement = app.otherElements[identifier]"
+    )
+    fallback_index = source.index("return app.descendants(matching: .any)[identifier]")
 
     assert button_index < other_element_index < fallback_index
 
@@ -132,8 +145,14 @@ def test_render_xcuitest_source_maps_arrow_presses_to_swipes() -> None:
                 objective="Navigate onboarding carousel one slide at a time",
                 capture_target="ios",
                 steps=[
-                    QaStep(action="press", selector="onboarding_tabview", value="ArrowLeft"),
-                    QaStep(action="press", selector="onboarding_tabview", value="ArrowRight"),
+                    QaStep(
+                        action="press", selector="onboarding_tabview", value="ArrowLeft"
+                    ),
+                    QaStep(
+                        action="press",
+                        selector="onboarding_tabview",
+                        value="ArrowRight",
+                    ),
                 ],
             )
         ],
@@ -159,7 +178,7 @@ def test_render_xcuitest_source_does_not_use_returning_user_shortcut_for_goto() 
         ],
     )
 
-    assert '-returningUser' not in source
+    assert "-returningUser" not in source
     assert 'launchApp(arguments: ["-uiTesting"])' in source
 
 
@@ -170,7 +189,10 @@ def test_discover_xcode_project_prefers_repo_root_project() -> None:
         repo_dir / "GirlPower.xcodeproj",
     ]
 
-    assert discover_xcode_project(repo_dir=repo_dir, project_paths=paths) == repo_dir / "GirlPower.xcodeproj"
+    assert (
+        discover_xcode_project(repo_dir=repo_dir, project_paths=paths)
+        == repo_dir / "GirlPower.xcodeproj"
+    )
 
 
 def test_discover_xcuitest_file_prefers_conventional_file_name() -> None:
@@ -180,7 +202,10 @@ def test_discover_xcuitest_file_prefers_conventional_file_name() -> None:
         repo_dir / "GirlPowerUITests" / "GirlPowerUITests.swift",
     ]
 
-    assert discover_xcuitest_file(repo_dir=repo_dir, swift_files=paths) == repo_dir / "GirlPowerUITests" / "GirlPowerUITests.swift"
+    assert (
+        discover_xcuitest_file(repo_dir=repo_dir, swift_files=paths)
+        == repo_dir / "GirlPowerUITests" / "GirlPowerUITests.swift"
+    )
 
 
 def test_preferred_simulator_udid_chooses_first_iphone_16() -> None:
@@ -191,7 +216,10 @@ def test_preferred_simulator_udid_chooses_first_iphone_16() -> None:
     iPhone 16 (8A77B676-BBF7-4335-8B22-75A08A5D064E) (Shutdown)
 """
 
-    assert preferred_simulator_udid(simctl_output) == "8A77B676-BBF7-4335-8B22-75A08A5D064E"
+    assert (
+        preferred_simulator_udid(simctl_output)
+        == "8A77B676-BBF7-4335-8B22-75A08A5D064E"
+    )
 
 
 def test_simulator_test_build_flags_disable_codesigning() -> None:

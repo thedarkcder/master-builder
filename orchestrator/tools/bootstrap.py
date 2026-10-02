@@ -58,6 +58,8 @@ Use `.codex/OPERATING.md` for repository execution conventions.
 """
 
 CODEX_REQUIRED_FILES = (
+    ".codex/LICENSE",
+    ".codex/THIRD_PARTY_NOTICES.md",
     ".codex/OPERATING.md",
     ".codex/POLICY.md",
     ".codex/ENGINEERING_STANDARDS.md",
@@ -123,7 +125,9 @@ def bootstrap_ci_workflows(
         copied.append(str(destination_file.relative_to(target_repo)))
 
     readme_updated = _ensure_readme_ci_note(target_repo)
-    return WorkflowBootstrapResult(copied_workflows=tuple(copied), readme_updated=readme_updated)
+    return WorkflowBootstrapResult(
+        copied_workflows=tuple(copied), readme_updated=readme_updated
+    )
 
 
 def bootstrap_codex_assets(
@@ -140,14 +144,20 @@ def bootstrap_codex_assets(
     source_engineering = source_repo / ".codex" / "ENGINEERING_STANDARDS.md"
     source_decision_gate = source_repo / ".codex" / "DECISION_GATE_TEMPLATE.md"
     source_pr_ready = source_repo / ".codex" / "PR_READY_TEMPLATES.md"
+    source_license = source_repo / ".codex" / "LICENSE"
+    source_notices = source_repo / ".codex" / "THIRD_PARTY_NOTICES.md"
     if (
         not source_operating.exists()
         or not source_policy.exists()
         or not source_engineering.exists()
         or not source_decision_gate.exists()
         or not source_pr_ready.exists()
+        or not source_license.exists()
+        or not source_notices.exists()
     ):
-        raise FileNotFoundError("Canonical .codex templates are missing required baseline docs")
+        raise FileNotFoundError(
+            "Canonical .codex templates are missing required baseline docs"
+        )
 
     created_files: list[str] = []
     codex_dir = target_repo / ".codex"
@@ -156,10 +166,16 @@ def bootstrap_codex_assets(
     skills_dir.mkdir(parents=True, exist_ok=True)
 
     mapping = {
+        ".codex/LICENSE": source_license.read_text(encoding="utf-8"),
+        ".codex/THIRD_PARTY_NOTICES.md": source_notices.read_text(encoding="utf-8"),
         ".codex/OPERATING.md": source_operating.read_text(encoding="utf-8"),
         ".codex/POLICY.md": source_policy.read_text(encoding="utf-8"),
-        ".codex/ENGINEERING_STANDARDS.md": source_engineering.read_text(encoding="utf-8"),
-        ".codex/DECISION_GATE_TEMPLATE.md": source_decision_gate.read_text(encoding="utf-8"),
+        ".codex/ENGINEERING_STANDARDS.md": source_engineering.read_text(
+            encoding="utf-8"
+        ),
+        ".codex/DECISION_GATE_TEMPLATE.md": source_decision_gate.read_text(
+            encoding="utf-8"
+        ),
         ".codex/PR_READY_TEMPLATES.md": source_pr_ready.read_text(encoding="utf-8"),
     }
     for skill_filename, skill_content in SKILL_TEMPLATES.items():
@@ -214,12 +230,18 @@ def load_codex_preflight_context(target_repo_dir: str | Path) -> dict[str, str]:
         operating_or_agents = operating_path.read_text(encoding="utf-8")
         operating_source = ".codex/OPERATING.md"
     else:
-        raise FileNotFoundError("Missing required preflight file: AGENTS.md or .codex/OPERATING.md")
+        raise FileNotFoundError(
+            "Missing required preflight file: AGENTS.md or .codex/OPERATING.md"
+        )
 
     if not engineering_path.exists():
-        raise FileNotFoundError("Missing required preflight file: .codex/ENGINEERING_STANDARDS.md")
+        raise FileNotFoundError(
+            "Missing required preflight file: .codex/ENGINEERING_STANDARDS.md"
+        )
     if not decision_gate_path.exists():
-        raise FileNotFoundError("Missing required preflight file: .codex/DECISION_GATE_TEMPLATE.md")
+        raise FileNotFoundError(
+            "Missing required preflight file: .codex/DECISION_GATE_TEMPLATE.md"
+        )
 
     return {
         "policy": policy_path.read_text(encoding="utf-8"),
@@ -246,7 +268,9 @@ def ensure_codex_bootstrap_state(
     if existing is not None and has_required_codex_assets(target_repo_dir):
         existing.updated_at = datetime.now(timezone.utc)
         session.commit()
-        return CodexBootstrapResult(created_files=(), agents_created=False, already_bootstrapped=True)
+        return CodexBootstrapResult(
+            created_files=(), agents_created=False, already_bootstrapped=True
+        )
 
     bootstrap_result = bootstrap_codex_assets(
         target_repo_dir=target_repo_dir,
@@ -281,12 +305,18 @@ def ensure_codex_bootstrap_state(
     return bootstrap_result
 
 
-def list_repo_bootstrap_states(*, session: Session, tenant_id: str) -> list[RepoBootstrapStateResult]:
-    states = session.execute(
-        select(RepoBootstrapState)
-        .where(RepoBootstrapState.tenant_id == tenant_id)
-        .order_by(RepoBootstrapState.repo_url.asc())
-    ).scalars().all()
+def list_repo_bootstrap_states(
+    *, session: Session, tenant_id: str
+) -> list[RepoBootstrapStateResult]:
+    states = (
+        session.execute(
+            select(RepoBootstrapState)
+            .where(RepoBootstrapState.tenant_id == tenant_id)
+            .order_by(RepoBootstrapState.repo_url.asc())
+        )
+        .scalars()
+        .all()
+    )
 
     return [
         RepoBootstrapStateResult(

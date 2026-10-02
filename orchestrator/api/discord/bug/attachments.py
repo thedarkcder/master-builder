@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from sqlalchemy.orm import Session
 
@@ -18,8 +18,9 @@ from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 logger = logging.getLogger(__name__)
 _SNIPPET_LIMIT = 240
 _HTTP_STATUS_PATTERN = re.compile(r"(?:HTTP\s+|\()(?P<status>\d{3})(?:\)|:)")
-_DISCORD_ATTACHMENT_USER_AGENT = "DiscordBot (https://github.com/thedarkcder/master-builder, 1.0)"
-_CLOUDFLARE_1010_MARKER = "error code: 1010"
+_DISCORD_ATTACHMENT_USER_AGENT = "MasterBuilder-DiscordAttachmentDownloader/1.0"
+_DISCORD_ATTACHMENT_MAX_BYTES = 25_000_000
+_DISCORD_ATTACHMENT_HOSTS = {"cdn.discordapp.com", "media.discordapp.net"}
 
 
 @dataclass(frozen=True)
@@ -92,90 +93,57 @@ def resolve_discord_channel_name(
     return None
 
 
-def _is_discord_attachment_url(url: str) -> bool:
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except ValueError:
-        return False
-    return (
-        host.endswith("discordapp.com")
-        or host.endswith("discordapp.net")
-        or host.endswith("discord.com")
-    )
+def _validate_discord_attachment_url(url: str) -> None:
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in _DISCORD_ATTACHMENT_HOSTS
+        or parsed.port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(
+            "Discord attachment downloads require an approved HTTPS CDN URL"
+        )
 
 
-def _is_cloudflare_1010(body: str | None) -> bool:
-    return _CLOUDFLARE_1010_MARKER in (str(body or "").lower())
-
-
-def _discord_attachment_url_candidates(url: str) -> list[str]:
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return [url]
-
-    host = (parsed.hostname or "").lower()
-    if not _is_discord_attachment_url(url):
-        return [url]
-
-    candidates = [url]
-    if host == "cdn.discordapp.com":
-        candidates.append(url.replace("//cdn.discordapp.com/", "//media.discordapp.net/"))
-    elif host == "media.discordapp.net":
-        candidates.append(url.replace("//media.discordapp.net/", "//cdn.discordapp.com/"))
-    elif host == "discordapp.com":
-        candidates.append(url.replace("//discordapp.com/", "//cdn.discordapp.com/"))
-    return list(dict.fromkeys(candidates))
-
-
-def _download_discord_attachment(url: str, headers: dict[str, str]) -> tuple[bytes, str | None]:
-    request = Request(url=url, headers=headers, method="GET")
-    with urlopen(request, timeout=30) as response:
-        payload = response.read()
-        content_type = response.headers.get("Content-Type")
-    return payload, content_type
-
-
-def download_discord_attachment(*, url: str, bot_token: str | None = None) -> tuple[bytes, str | None]:
-    candidates = _discord_attachment_url_candidates(url)
-    normalized_token = str(bot_token or "").strip()
-    headers: dict[str, str] = {
-        "Accept": "*/*",
-        "User-Agent": _DISCORD_ATTACHMENT_USER_AGENT,
-    }
-    if normalized_token:
-        headers["Authorization"] = f"Bot {normalized_token}"
-
-    for candidate in candidates:
-        try:
-            payload, content_type = _download_discord_attachment(candidate, headers)
-            if not payload:
-                raise AtlassianOAuthError("Downloaded attachment was empty")
-            return (
-                payload,
-                content_type.strip() if isinstance(content_type, str) and content_type.strip() else None,
+class _DiscordAttachmentRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        _validate_discord_attachment_url(newurl)
+        if urlparse(newurl).hostname != urlparse(req.full_url).hostname:
+            raise ValueError(
+                "Discord attachment redirects must retain the original HTTPS origin"
             )
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            if _is_cloudflare_1010(body) and candidate != candidates[-1]:
-                logger.warning(
-                    "discord_attachment_fetch_blocked candidate=%s status=%s source=discord_fetch detail=%s",
-                    candidate,
-                    exc.code,
-                    "error code: 1010",
-                )
-                continue
-            if _is_cloudflare_1010(body):
-                logger.error(
-                    "discord_attachment_fetch_blocked candidate=%s status=%s source=discord_fetch detail=%s",
-                    candidate,
-                    exc.code,
-                    "error code: 1010",
-                )
-            raise AtlassianOAuthError(f"HTTP {exc.code} downloading attachment: {body}") from exc
-        except URLError as exc:
-            raise AtlassianOAuthError(f"Failed to download attachment: {exc.reason}") from exc
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
+
+def download_discord_attachment(*, url: str) -> tuple[bytes, str | None]:
+    """Fetch a signed Discord CDN URL without credentials, up to 25 MB."""
+    _validate_discord_attachment_url(url)
+    request = Request(
+        url=url,
+        headers={"Accept": "*/*", "User-Agent": _DISCORD_ATTACHMENT_USER_AGENT},
+        method="GET",
+    )
+    try:
+        with build_opener(_DiscordAttachmentRedirectHandler()).open(
+            request, timeout=30
+        ) as response:
+            payload = response.read(_DISCORD_ATTACHMENT_MAX_BYTES + 1)
+            content_type = response.headers.get("Content-Type")
+    except HTTPError as exc:
+        raise AtlassianOAuthError(
+            f"HTTP {exc.code} downloading Discord attachment"
+        ) from exc
+    except URLError as exc:
+        raise AtlassianOAuthError("Failed to download Discord attachment") from exc
+    if len(payload) > _DISCORD_ATTACHMENT_MAX_BYTES:
+        raise ValueError("Discord attachment exceeds the 25 MB size limit")
+    if not payload:
+        raise AtlassianOAuthError("Downloaded attachment was empty")
+    return payload, content_type.strip() if isinstance(
+        content_type, str
+    ) and content_type.strip() else None
 
 
 def _extract_status_and_snippet(
@@ -193,15 +161,6 @@ def _extract_status_and_snippet(
     if len(snippet) > _SNIPPET_LIMIT:
         snippet = f"{snippet[: _SNIPPET_LIMIT - 3]}..."
     return status, snippet or None
-
-
-def _normalize_attachment_url_list(*, attachment: dict[str, str]) -> list[str]:
-    urls: list[str] = []
-    for key in ("url", "proxy_url"):
-        url = str(attachment.get(key) or "").strip()
-        if url and url not in urls:
-            urls.append(url)
-    return urls
 
 
 def upload_discord_attachments_to_jira(
@@ -222,8 +181,8 @@ def upload_discord_attachments_to_jira(
     upload_correlation_id = str(correlation_id or uuid4().hex)
     for attachment in attachments:
         filename = str(attachment.get("filename") or "").strip() or "attachment"
-        url_list = _normalize_attachment_url_list(attachment=attachment)
-        if not url_list:
+        url = str(attachment.get("url") or "").strip()
+        if not url:
             failures.append(
                 AttachmentUploadFailure(
                     filename=filename,
@@ -245,32 +204,12 @@ def upload_discord_attachments_to_jira(
             )
             continue
         try:
-            content = None
-            downloaded_content_type = None
-            last_error: Exception | None = None
+            content, downloaded_content_type = download_attachment(url=url)
 
-            for index, url in enumerate(url_list):
-                try:
-                    content, downloaded_content_type = download_attachment(url=url)
-                    break
-                except (AtlassianOAuthError, ValueError) as exc:
-                    last_error = exc
-                    if index + 1 < len(url_list):
-                        logger.warning(
-                            "discord_attachment_upload_failed issue_id_or_key=%s source=%s filename=%s status=%s detail=%s",
-                            issue_key,
-                            "discord_fetch",
-                            filename,
-                            None,
-                            "retrying_attachment_url",
-                        )
-                        continue
-                    raise
-            if content is None:
-                assert last_error is not None
-                raise last_error
-
-            content_type = str(attachment.get("content_type") or "").strip() or downloaded_content_type
+            content_type = (
+                str(attachment.get("content_type") or "").strip()
+                or downloaded_content_type
+            )
             try:
                 client.upload_issue_attachment(
                     access_token=access_token,

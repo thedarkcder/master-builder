@@ -3,7 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from orchestrator.api.admin.tenant_project_helpers import ensure_default_project_for_tenant, resolve_project_discord_channel_binding
+from orchestrator.api.admin.tenant_project_helpers import (
+    ensure_default_project_for_tenant,
+    resolve_project_discord_channel_binding,
+)
 from orchestrator.storage.models import Project
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -20,7 +23,9 @@ def _tenant() -> SimpleNamespace:
 
 
 def _project() -> SimpleNamespace:
-    return SimpleNamespace(project_id="project-1", name="Alpha Project", jira_project_key="TP")
+    return SimpleNamespace(
+        project_id="project-1", name="Alpha Project", jira_project_key="TP"
+    )
 
 
 def test_ensure_default_project_uses_opaque_project_id() -> None:
@@ -47,7 +52,9 @@ def test_ensure_default_project_uses_opaque_project_id() -> None:
     assert added[0].name == "align"
 
 
-def test_resolve_project_discord_channel_binding_preserves_existing_text_and_voice_channels() -> None:
+def test_resolve_project_discord_channel_binding_preserves_existing_text_and_voice_channels() -> (
+    None
+):
     fake_client = Mock()
     fake_client.get_channel.side_effect = [
         {"id": "text-1"},
@@ -55,8 +62,14 @@ def test_resolve_project_discord_channel_binding_preserves_existing_text_and_voi
     ]
 
     with (
-        patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-        patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref",
+            return_value="discord-bot-token",
+        ),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.DiscordApiClient",
+            return_value=fake_client,
+        ),
     ):
         result = resolve_project_discord_channel_binding(
             session=Mock(),
@@ -79,7 +92,9 @@ def test_resolve_project_discord_channel_binding_preserves_existing_text_and_voi
     fake_client.ensure_voice_channel.assert_not_called()
 
 
-def test_resolve_project_discord_channel_binding_remaps_existing_voice_channel_to_recreated_text_channel() -> None:
+def test_resolve_project_discord_channel_binding_remaps_existing_voice_channel_to_recreated_text_channel() -> (
+    None
+):
     fake_client = Mock()
     fake_client.get_channel.side_effect = [
         DiscordApiError("missing text"),
@@ -89,8 +104,14 @@ def test_resolve_project_discord_channel_binding_remaps_existing_voice_channel_t
     fake_client.ensure_text_channel.return_value = SimpleNamespace(channel_id="text-2")
 
     with (
-        patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-        patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref",
+            return_value="discord-bot-token",
+        ),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.DiscordApiClient",
+            return_value=fake_client,
+        ),
     ):
         result = resolve_project_discord_channel_binding(
             session=Mock(),
@@ -114,11 +135,15 @@ def test_resolve_project_discord_channel_binding_remaps_existing_voice_channel_t
     fake_client.ensure_voice_channel.assert_not_called()
 
 
-def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channels_when_missing() -> None:
+def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channels_when_missing() -> (
+    None
+):
     fake_client = Mock()
     fake_client.get_channel.side_effect = [DiscordApiError("missing text")]
     fake_client.ensure_text_channel.return_value = SimpleNamespace(channel_id="text-2")
-    fake_client.ensure_voice_channel.return_value = SimpleNamespace(channel_id="voice-2")
+    fake_client.ensure_voice_channel.return_value = SimpleNamespace(
+        channel_id="voice-2"
+    )
     fake_client.list_channel_categories.return_value = [
         SimpleNamespace(channel_id="voice-category-1", name="Voice Rooms"),
         SimpleNamespace(channel_id="text-category-1", name="Projects"),
@@ -126,8 +151,14 @@ def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channe
     fake_client.list_voice_channels.return_value = []
 
     with (
-        patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-        patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref",
+            return_value="discord-bot-token",
+        ),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.DiscordApiClient",
+            return_value=fake_client,
+        ),
     ):
         result = resolve_project_discord_channel_binding(
             session=Mock(),
@@ -155,18 +186,28 @@ def test_resolve_project_discord_channel_binding_recreates_text_and_voice_channe
     )
 
 
-def test_resolve_project_discord_channel_binding_falls_back_to_text_category_when_no_voice_category_is_discoverable() -> None:
+def test_resolve_project_discord_channel_binding_falls_back_to_text_category_when_no_voice_category_is_discoverable() -> (
+    None
+):
     fake_client = Mock()
     fake_client.ensure_text_channel.return_value = SimpleNamespace(channel_id="text-2")
-    fake_client.ensure_voice_channel.return_value = SimpleNamespace(channel_id="voice-2")
+    fake_client.ensure_voice_channel.return_value = SimpleNamespace(
+        channel_id="voice-2"
+    )
     fake_client.list_channel_categories.return_value = [
         SimpleNamespace(channel_id="text-category-1", name="Projects"),
     ]
     fake_client.list_voice_channels.return_value = []
 
     with (
-        patch("orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref", return_value="discord-bot-token"),
-        patch("orchestrator.api.admin.tenant_project_helpers.DiscordApiClient", return_value=fake_client),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.resolve_platform_secret_ref",
+            return_value="discord-bot-token",
+        ),
+        patch(
+            "orchestrator.api.admin.tenant_project_helpers.DiscordApiClient",
+            return_value=fake_client,
+        ),
     ):
         resolve_project_discord_channel_binding(
             session=Mock(),

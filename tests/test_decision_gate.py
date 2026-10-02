@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.decision.gate import DecisionGateResult, evaluate_decision_gate, format_decision_gate_summary
+from orchestrator.core.decision.gate import (
+    DecisionGateResult,
+    evaluate_decision_gate,
+    format_decision_gate_summary,
+)
 
 
 class DecisionGateTests(unittest.TestCase):
@@ -40,4 +44,6 @@ class DecisionGateTests(unittest.TestCase):
             result = evaluate_decision_gate(issue_summary="x", issue_description="y")
 
         self.assertFalse(result.triggered)
-        self.assertEqual(format_decision_gate_summary(result), "Decision Gate not required.")
+        self.assertEqual(
+            format_decision_gate_summary(result), "Decision Gate not required."
+        )

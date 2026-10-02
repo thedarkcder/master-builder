@@ -1,4 +1,5 @@
 import { encode } from "next-auth/jwt";
+import { requireAuthSecret } from "../../../lib/auth-secret";
 import type { Page, Route } from "@playwright/test";
 
 import {
@@ -38,7 +39,7 @@ export const TENANT_ACCESS_TOKEN = "playwright-tenant-token";
 
 export const APP_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${process.env.PLAYWRIGHT_APP_PORT ?? "4101"}`;
 const BACKEND_BASE_URL = DEFAULT_API_BASE_URL;
-const AUTH_SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret";
+const AUTH_SECRET = requireAuthSecret();
 const AUTH_SESSION_COOKIE_NAME = "authjs.session-token";
 const AUTH_SESSION_COOKIE_SALT = "authjs.session-token";
 
@@ -250,8 +251,8 @@ export async function fulfillJson(route: Route, body: unknown, status = 200): Pr
 
 export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord {
   return {
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
     is_enabled: true,
     archived_at: null,
     purge_after_at: null,
@@ -312,9 +313,9 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
 
 export function makeProject(overrides: Partial<ProjectRecord> = {}): ProjectRecord {
   return {
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
     github_repository: "thedarkcder/girl-power",
     jira_project_key: "GP",
     policy_overrides: {},
@@ -332,11 +333,11 @@ export function makeProject(overrides: Partial<ProjectRecord> = {}): ProjectReco
 export function makeProjectAppRecord(overrides: Partial<ProjectAppRecord> = {}): ProjectAppRecord {
   return {
     app_id: "app-1",
-    tenant_id: "example",
-    project_id: "example-default",
-    name: "Route 25 App",
-    slug: "route-25-app",
-    source_path: "apps/route-25-app",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
+    name: "Example Workspace App",
+    slug: "example-app",
+    source_path: "apps/example-app",
     detection_confidence: 0.87,
     detected_runtime: "node",
     detected_language: "typescript",
@@ -363,8 +364,8 @@ export function makeProjectAppAnalysisRun(
   return {
     run_id: "analysis-1",
     analysis_run_id: "analysis-1",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     status: "completed",
     request_payload: {},
     result_payload: {},
@@ -429,8 +430,8 @@ export function makeProjectAutomationExecution(
 export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord> = {}): ProjectAutomationRecord {
   return {
     automation_id: "automation-1",
-    project_id: "example-default",
-    tenant_id: "example",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
     kind: "standup_voice_brief",
     enabled: true,
     timezone: "UTC",
@@ -456,8 +457,8 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     entry_mode: "fresh",
     entry_stage: "orchestrated",
     entry_checkpoint_id: "checkpoint-orchestrated-gp-124",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     issue_key: "GP-124",
     issue_summary: "Fix rerun lifecycle regressions",
     issue_url: "https://jira.example.test/browse/GP-124",
@@ -633,8 +634,8 @@ export function makeTokenTimeline(run: RunRecord): TokenTimelineRecord {
 
 export function makeMembership(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
   return {
-    membership_id: "membership-example",
-    tenant_id: "example",
+    membership_id: "membership-example-workspace",
+    tenant_id: "example-workspace",
     role: "technical_member",
     permission_keys: ["technical.access"],
     effective_mode: "technical",
@@ -654,7 +655,7 @@ export function makeTenantUserPrincipal(
 ): AuthenticatedPrincipalRecord {
   return {
     principal_type: "tenant_user",
-    user_id: "user-example",
+    user_id: "user-example-workspace",
     email: "person@example.com",
     full_name: "Person Example",
     memberships: [makeMembership()],
@@ -694,7 +695,7 @@ export function makeDiscordIdentity(
 export function makeTeam(overrides: Partial<TenantTeamRecord> = {}): TenantTeamRecord {
   return {
     team_id: "delivery",
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     name: "Delivery",
     description: "Delivery team",
     permission_keys: [],
@@ -706,8 +707,8 @@ export function makeTeam(overrides: Partial<TenantTeamRecord> = {}): TenantTeamR
 
 export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantInviteRecord {
   return {
-    invite_id: "invite-example",
-    tenant_id: "example",
+    invite_id: "invite-example-workspace",
+    tenant_id: "example-workspace",
     email: "newperson@example.com",
     full_name: "New Person",
     role: "business_member",
@@ -726,9 +727,9 @@ export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantI
 
 export function makeMember(overrides: Partial<TenantMemberRecord> = {}): TenantMemberRecord {
   return {
-    membership_id: "membership-example",
-    tenant_id: "example",
-    user_id: "user-example",
+    membership_id: "membership-example-workspace",
+    tenant_id: "example-workspace",
+    user_id: "user-example-workspace",
     email: "person@example.com",
     full_name: "Person Example",
     is_active: true,
@@ -764,7 +765,7 @@ export function makeDeliverySummary(
     timeline: [
       {
         run_id: "run-1",
-        project_id: "example-default",
+        project_id: "example-workspace-default",
         issue_key: "GP-125",
         issue_summary: "Ship onboarding checklist",
         status: "completed",
@@ -796,7 +797,7 @@ export function makeStageInvocationLogs(options: {
       event_id: `${options.invocationId}:started`,
       run_id: runId,
       issue_key: "GP-124",
-      project_id: "example-default",
+      project_id: "example-workspace-default",
       agent_id: options.stage,
       invocation_id: options.invocationId,
       channel: null,
@@ -814,7 +815,7 @@ export function makeStageInvocationLogs(options: {
       event_id: `${options.invocationId}:finished`,
       run_id: runId,
       issue_key: "GP-124",
-      project_id: "example-default",
+      project_id: "example-workspace-default",
       agent_id: options.stage,
       invocation_id: options.invocationId,
       channel: null,
@@ -849,7 +850,7 @@ export function makeRuntimeStageLogs(options: {
     event_id: `${options.invocationId}:runtime:${index}`,
     run_id: runId,
     issue_key: "GP-124",
-    project_id: "example-default",
+    project_id: "example-workspace-default",
     agent_id: options.stage,
     invocation_id: options.invocationId,
     channel: null,
@@ -893,7 +894,7 @@ export async function mockRunDetailApis(
   },
 ): Promise<void> {
   const tenant = options.tenant ?? makeTenant({ tenant_id: options.run.tenant_id });
-  const projects = options.projects ?? [makeProject({ tenant_id: options.run.tenant_id, project_id: options.run.project_id ?? "example-default" })];
+  const projects = options.projects ?? [makeProject({ tenant_id: options.run.tenant_id, project_id: options.run.project_id ?? "example-workspace-default" })];
   const nextRun =
     options.nextAttemptResponse ??
     makeRun({
@@ -1079,7 +1080,7 @@ export async function mockRunDetailApis(
             ({
               release_id: "preview-release-1",
               tenant_id: options.run.tenant_id,
-              project_id: options.run.project_id ?? projects[0]?.project_id ?? "example-default",
+              project_id: options.run.project_id ?? projects[0]?.project_id ?? "example-workspace-default",
               app_id: deploymentApps[0]?.app_id ?? "app-1",
               provider: "internal_coolify",
               release_kind: "run_preview",
@@ -1146,11 +1147,11 @@ export async function mockTenantWorkflowApis(
     auditTranscriptByOperationId?: Record<string, unknown>;
   },
 ): Promise<void> {
-  const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "example";
+  const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "example-workspace";
   const tenant = options.tenant ?? makeTenant({ tenant_id: tenantId });
   const projects =
     options.projects ??
-    [makeProject({ tenant_id: tenantId, project_id: options.workflows[0]?.project_id ?? "example-default" })];
+    [makeProject({ tenant_id: tenantId, project_id: options.workflows[0]?.project_id ?? "example-workspace-default" })];
   const primaryWorkflow = options.workflows[0] ?? makeWorkflow({ tenant_id: tenantId });
   const workflowTypeSummary = {
     key: primaryWorkflow.workflow_type.key,

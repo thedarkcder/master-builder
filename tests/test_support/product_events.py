@@ -30,7 +30,11 @@ class RecordingProductEventRepository:
             for row in [*self.rows, *self.inserted]
             if row.event_class == event_class and _matches_filters(row, filters)
         ]
-        rows = sorted(rows, key=lambda row: (row.recorded_at, row.event_sequence), reverse=newest_first)
+        rows = sorted(
+            rows,
+            key=lambda row: (row.recorded_at, row.event_sequence),
+            reverse=newest_first,
+        )
         return rows[:limit]
 
     def list_events_after_sequence(

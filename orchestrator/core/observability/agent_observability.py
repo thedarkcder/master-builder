@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
+import logging
 import threading
 
 from sqlalchemy import delete, func, select
@@ -29,6 +30,7 @@ ALLOWED_AGENT_EVENTS = {
 }
 MAX_IN_MEMORY_EVENT_HISTORY = 1000
 MAX_PERSISTED_EVENTS_PER_TENANT = 5000
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -92,7 +94,9 @@ class AgentObservabilityTracker:
                 del self._events[:overflow]
             self._heartbeats[(event.tenant_id, event.agent_id)] = timestamp
 
-    def snapshot(self) -> tuple[list[AgentEventRecord], dict[tuple[str, str], datetime]]:
+    def snapshot(
+        self,
+    ) -> tuple[list[AgentEventRecord], dict[tuple[str, str], datetime]]:
         with self._lock:
             return list(self._events), dict(self._heartbeats)
 
@@ -146,36 +150,45 @@ def record_agent_lifecycle_event(
             recorded_at=timestamp,
         )
     )
-    record_audit_event(
-        session,
-        tenant_id=normalized_tenant,
-        project_id=normalized_project,
-        workflow_id=workflow_id,
-        run_id=normalized_run,
-        operation_id=None,
-        attempt_id=None,
-        issue_key=str(issue_key or "").strip() or None,
-        actor_type="agent",
-        actor_id=normalized_agent,
-        source_component="agent_observability",
-        event_kind=normalized_event_type.lower(),
-        level="info",
-        message=f"Agent lifecycle event: {normalized_event_type}",
-        payload={"event_type": normalized_event_type},
-        recorded_at=timestamp,
-    )
-    emit_agent_lifecycle_log_event(
-        session=session,
-        tenant_id=normalized_tenant,
-        project_id=normalized_project,
-        workflow_id=workflow_id,
-        run_id=normalized_run,
-        issue_key=str(issue_key or "").strip() or None,
-        agent_id=normalized_agent,
-        event_type=normalized_event_type,
-        recorded_at=timestamp,
-    )
     session.flush()
+    try:
+        record_audit_event(
+            session,
+            tenant_id=normalized_tenant,
+            project_id=normalized_project,
+            workflow_id=workflow_id,
+            run_id=normalized_run,
+            operation_id=None,
+            attempt_id=None,
+            issue_key=str(issue_key or "").strip() or None,
+            actor_type="agent",
+            actor_id=normalized_agent,
+            source_component="agent_observability",
+            event_kind=normalized_event_type.lower(),
+            level="info",
+            message=f"Agent lifecycle event: {normalized_event_type}",
+            payload={"event_type": normalized_event_type},
+            recorded_at=timestamp,
+        )
+        emit_agent_lifecycle_log_event(
+            session=session,
+            tenant_id=normalized_tenant,
+            project_id=normalized_project,
+            workflow_id=workflow_id,
+            run_id=normalized_run,
+            issue_key=str(issue_key or "").strip() or None,
+            agent_id=normalized_agent,
+            event_type=normalized_event_type,
+            recorded_at=timestamp,
+        )
+    except Exception:
+        logger.exception(
+            "agent_lifecycle_downstream_observability_failed tenant_id=%s project_id=%s run_id=%s event_type=%s",
+            normalized_tenant,
+            normalized_project,
+            normalized_run,
+            normalized_event_type,
+        )
 
 
 agent_observability_tracker = AgentObservabilityTracker()
@@ -190,23 +203,34 @@ def prune_agent_lifecycle_events(
     session: Session,
     max_events_per_tenant: int = MAX_PERSISTED_EVENTS_PER_TENANT,
 ) -> int:
-    ranked_events = (
-        select(
-            AgentLifecycleEvent.event_id,
-            func.row_number()
-            .over(
-                partition_by=AgentLifecycleEvent.tenant_id,
-                order_by=(AgentLifecycleEvent.recorded_at.desc(), AgentLifecycleEvent.event_id.desc()),
+    ranked_events = select(
+        AgentLifecycleEvent.event_id,
+        func.row_number()
+        .over(
+            partition_by=AgentLifecycleEvent.tenant_id,
+            order_by=(
+                AgentLifecycleEvent.recorded_at.desc(),
+                AgentLifecycleEvent.event_id.desc(),
+            ),
+        )
+        .label("row_number"),
+    ).subquery()
+    cutoff_event_ids = (
+        session.execute(
+            select(ranked_events.c.event_id).where(
+                ranked_events.c.row_number > max(0, int(max_events_per_tenant))
             )
-            .label("row_number"),
-        ).subquery()
+        )
+        .scalars()
+        .all()
     )
-    cutoff_event_ids = session.execute(
-        select(ranked_events.c.event_id).where(ranked_events.c.row_number > max(0, int(max_events_per_tenant)))
-    ).scalars().all()
     deleted = 0
     if cutoff_event_ids:
-        result = session.execute(delete(AgentLifecycleEvent).where(AgentLifecycleEvent.event_id.in_(cutoff_event_ids)))
+        result = session.execute(
+            delete(AgentLifecycleEvent).where(
+                AgentLifecycleEvent.event_id.in_(cutoff_event_ids)
+            )
+        )
         deleted += int(result.rowcount or 0)
 
     return deleted

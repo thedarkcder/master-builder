@@ -3,18 +3,25 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.core.decision.gate import DecisionGateResult
-from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.planner import (
+    DecisionPlannerQuestion,
+    DecisionPlannerResult,
+)
 from orchestrator.core.decision.state_machine import DecisionEvent
 from orchestrator.core.decision.state_machine import DecisionState
 from orchestrator.core.decision.state_machine import DecisionStateTransition
 from orchestrator.core.decision.state_machine import ExecutionAdmissionReason
-from orchestrator.core.decision.state_machine import decision_classification_for_precheck
+from orchestrator.core.decision.state_machine import (
+    decision_classification_for_precheck,
+)
 from orchestrator.core.decision.state_machine import decision_missing_slots_for_precheck
 from orchestrator.core.decision.state_machine import ingress_decision_from_precheck
 from orchestrator.core.decision.state_machine import ingress_policy_error_decision
 from orchestrator.core.decision.state_machine import reduce_decision_planner_result
 from orchestrator.core.decision.state_machine import resolve_worker_blocked_outcome
-from orchestrator.core.decision.state_machine import resolve_worker_decision_from_precheck
+from orchestrator.core.decision.state_machine import (
+    resolve_worker_decision_from_precheck,
+)
 from orchestrator.core.decision.state_machine import resolve_decision_state_transition
 from orchestrator.core.decision.state_machine import resolve_execution_admission
 from orchestrator.core.decision.state_machine import resolve_execution_gate_state
@@ -48,8 +55,12 @@ def _precheck(
         ),
         gtd=GoodToDoValidationResult(
             valid=(outcome not in {"gtd_required", "execution_blocked"}),
-            missing_criteria=("how_to_test",) if outcome in {"gtd_required", "execution_blocked"} else (),
-            clarification_questions=("How do we test this?",) if outcome in {"gtd_required", "execution_blocked"} else (),
+            missing_criteria=("how_to_test",)
+            if outcome in {"gtd_required", "execution_blocked"}
+            else (),
+            clarification_questions=("How do we test this?",)
+            if outcome in {"gtd_required", "execution_blocked"}
+            else (),
         ),
     )
 
@@ -139,8 +150,13 @@ def test_resolve_execution_admission_blocks_from_canonical_gate_state() -> None:
 
 
 def test_execution_admission_reason_owns_guidance() -> None:
-    assert "concurrency limit" in ExecutionAdmissionReason.TENANT_CONCURRENCY_LIMIT_REACHED.guidance.lower()
-    assert "ready label" in ExecutionAdmissionReason.MISSING_READY_LABEL.guidance.lower()
+    assert (
+        "concurrency limit"
+        in ExecutionAdmissionReason.TENANT_CONCURRENCY_LIMIT_REACHED.guidance.lower()
+    )
+    assert (
+        "ready label" in ExecutionAdmissionReason.MISSING_READY_LABEL.guidance.lower()
+    )
 
 
 def test_resolve_worker_decision_from_precheck_creates_blocked_gate_payload() -> None:
@@ -222,7 +238,9 @@ def test_reduce_decision_planner_result_is_canonical() -> None:
         captured_answer_summary=None,
     )
 
-    reduced = reduce_decision_planner_result(decision=decision, planner_result=planner_result)
+    reduced = reduce_decision_planner_result(
+        decision=decision, planner_result=planner_result
+    )
 
     assert reduced.classification is DecisionClassification.DECISION_GATE
     assert reduced.question_set[0]["id"] == "dg_owner"

@@ -11,7 +11,19 @@ from dataclasses import dataclass
 
 from orchestrator.storage.db import create_db_engine
 
-REQUEST_DURATION_BUCKETS_SECONDS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+REQUEST_DURATION_BUCKETS_SECONDS = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+)
 
 
 @dataclass
@@ -26,7 +38,9 @@ class PlatformMetrics:
         self._lock = threading.Lock()
         self._process_start_time_seconds = time.time()
         self._api_requests_total: dict[tuple[str, str, str], int] = defaultdict(int)
-        self._api_request_errors_total: dict[tuple[str, str, str], int] = defaultdict(int)
+        self._api_request_errors_total: dict[tuple[str, str, str], int] = defaultdict(
+            int
+        )
         self._api_request_duration: dict[tuple[str, str], _HistogramState] = {}
         self._worker_failures_total: dict[str, int] = defaultdict(int)
 
@@ -38,16 +52,22 @@ class PlatformMetrics:
             self._api_request_duration.clear()
             self._worker_failures_total.clear()
 
-    def record_api_request(self, *, method: str, route: str, status_code: int, duration_seconds: float) -> None:
+    def record_api_request(
+        self, *, method: str, route: str, status_code: int, duration_seconds: float
+    ) -> None:
         normalized_method = _normalize_method(method)
         normalized_route = _normalize_route(route)
         status_class = _status_class(status_code)
         with self._lock:
-            self._api_requests_total[(normalized_method, normalized_route, status_class)] += 1
+            self._api_requests_total[
+                (normalized_method, normalized_route, status_class)
+            ] += 1
             histogram_key = (normalized_method, normalized_route)
             histogram = self._api_request_duration.get(histogram_key)
             if histogram is None:
-                histogram = _HistogramState(bucket_counts=[0 for _ in REQUEST_DURATION_BUCKETS_SECONDS])
+                histogram = _HistogramState(
+                    bucket_counts=[0 for _ in REQUEST_DURATION_BUCKETS_SECONDS]
+                )
                 self._api_request_duration[histogram_key] = histogram
             normalized_duration = max(0.0, duration_seconds)
             histogram.count += 1
@@ -57,14 +77,18 @@ class PlatformMetrics:
                     histogram.bucket_counts[index] += 1
                     break
             if status_code >= 500:
-                self._api_request_errors_total[(normalized_method, normalized_route, "http_5xx")] += 1
+                self._api_request_errors_total[
+                    (normalized_method, normalized_route, "http_5xx")
+                ] += 1
 
     def record_api_exception(self, *, method: str, route: str, error_type: str) -> None:
         normalized_method = _normalize_method(method)
         normalized_route = _normalize_route(route)
         normalized_error_type = _normalize_error_type(error_type)
         with self._lock:
-            self._api_request_errors_total[(normalized_method, normalized_route, normalized_error_type)] += 1
+            self._api_request_errors_total[
+                (normalized_method, normalized_route, normalized_error_type)
+            ] += 1
 
     def record_worker_failure(self, *, kind: str) -> None:
         normalized_kind = _normalize_failure_kind(kind)
@@ -72,7 +96,9 @@ class PlatformMetrics:
             self._worker_failures_total[normalized_kind] += 1
 
     def render_prometheus(self) -> str:
-        runtime = _runtime_metrics_snapshot(process_start_time_seconds=self._process_start_time_seconds)
+        runtime = _runtime_metrics_snapshot(
+            process_start_time_seconds=self._process_start_time_seconds
+        )
         with self._lock:
             api_requests = dict(self._api_requests_total)
             api_request_errors = dict(self._api_request_errors_total)
@@ -165,7 +191,11 @@ class PlatformMetrics:
             )
 
         total_requests = sum(api_requests.values())
-        failed_requests = sum(value for (_, _, status_class), value in api_requests.items() if status_class == "5xx")
+        failed_requests = sum(
+            value
+            for (_, _, status_class), value in api_requests.items()
+            if status_class == "5xx"
+        )
         error_rate = 0.0 if total_requests <= 0 else failed_requests / total_requests
         lines.extend(
             [
@@ -177,7 +207,9 @@ class PlatformMetrics:
             ]
         )
         for kind, value in sorted(worker_failures.items()):
-            lines.append(f'master_builder_worker_failures_total{{kind="{_label_escape(kind)}"}} {value}')
+            lines.append(
+                f'master_builder_worker_failures_total{{kind="{_label_escape(kind)}"}} {value}'
+            )
 
         lines.append("")
         return "\n".join(lines)

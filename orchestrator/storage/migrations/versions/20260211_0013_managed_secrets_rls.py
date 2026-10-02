@@ -90,4 +90,3 @@ def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS managed_secrets_scope_select ON managed_secrets")
     op.execute("ALTER TABLE managed_secrets NO FORCE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE managed_secrets DISABLE ROW LEVEL SECURITY")
-

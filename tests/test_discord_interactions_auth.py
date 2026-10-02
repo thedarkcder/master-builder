@@ -26,23 +26,43 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
         settings = SimpleNamespace(secrets_encryption_key="enc")
         session = MagicMock()
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value=""):
+        with patch(
+            "orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref",
+            return_value="",
+        ):
             with self.assertRaises(HTTPException) as exc_ctx:
-                _resolve_discord_interactions_public_key(session=session, settings=settings)
+                _resolve_discord_interactions_public_key(
+                    session=session, settings=settings
+                )
         self.assertEqual(exc_ctx.exception.status_code, 500)
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value="not-hex"):
+        with patch(
+            "orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref",
+            return_value="not-hex",
+        ):
             with self.assertRaises(HTTPException) as exc_ctx:
-                _resolve_discord_interactions_public_key(session=session, settings=settings)
+                _resolve_discord_interactions_public_key(
+                    session=session, settings=settings
+                )
         self.assertIn("hex-encoded", exc_ctx.exception.detail)
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value="ab" * 31):
+        with patch(
+            "orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref",
+            return_value="ab" * 31,
+        ):
             with self.assertRaises(HTTPException) as exc_ctx:
-                _resolve_discord_interactions_public_key(session=session, settings=settings)
+                _resolve_discord_interactions_public_key(
+                    session=session, settings=settings
+                )
         self.assertIn("32 bytes", exc_ctx.exception.detail)
 
-        with patch("orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref", return_value="ab" * 32):
-            key = _resolve_discord_interactions_public_key(session=session, settings=settings)
+        with patch(
+            "orchestrator.api.discord.interactions.auth.resolve_platform_secret_ref",
+            return_value="ab" * 32,
+        ):
+            key = _resolve_discord_interactions_public_key(
+                session=session, settings=settings
+            )
         self.assertEqual(len(key), 32)
 
     def test_validate_discord_interaction_signature(self) -> None:
@@ -55,7 +75,9 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
             )
         self.assertEqual(exc_ctx.exception.status_code, 401)
 
-        request = SimpleNamespace(headers={"X-Signature-Ed25519": "not-hex", "X-Signature-Timestamp": "1"})
+        request = SimpleNamespace(
+            headers={"X-Signature-Ed25519": "not-hex", "X-Signature-Timestamp": "1"}
+        )
         with self.assertRaises(HTTPException) as exc_ctx:
             _validate_discord_interaction_signature(
                 request=request,
@@ -64,10 +86,15 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
             )
         self.assertEqual(exc_ctx.exception.status_code, 401)
 
-        request = SimpleNamespace(headers={"X-Signature-Ed25519": "ab" * 64, "X-Signature-Timestamp": "1"})
+        request = SimpleNamespace(
+            headers={"X-Signature-Ed25519": "ab" * 64, "X-Signature-Timestamp": "1"}
+        )
         verifier = MagicMock()
         verifier.verify.side_effect = InvalidSignature()
-        with patch("orchestrator.api.discord.interactions.auth.Ed25519PublicKey.from_public_bytes", return_value=verifier):
+        with patch(
+            "orchestrator.api.discord.interactions.auth.Ed25519PublicKey.from_public_bytes",
+            return_value=verifier,
+        ):
             with self.assertRaises(HTTPException) as exc_ctx:
                 _validate_discord_interaction_signature(
                     request=request,
@@ -77,7 +104,10 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
         self.assertEqual(exc_ctx.exception.status_code, 401)
 
         verifier = MagicMock()
-        with patch("orchestrator.api.discord.interactions.auth.Ed25519PublicKey.from_public_bytes", return_value=verifier):
+        with patch(
+            "orchestrator.api.discord.interactions.auth.Ed25519PublicKey.from_public_bytes",
+            return_value=verifier,
+        ):
             _validate_discord_interaction_signature(
                 request=request,
                 payload_bytes=b"{}",
@@ -106,11 +136,16 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
         self.assertEqual(len(autocomplete_payload["data"]["choices"]), 25)
 
     def test_custom_id_parsers_and_modal_response(self) -> None:
-        parsed = _parse_ask_confirmation_custom_id("ask.approve.0123456789abcdef0123456789abcdef")
+        parsed = _parse_ask_confirmation_custom_id(
+            "ask.approve.0123456789abcdef0123456789abcdef"
+        )
         self.assertEqual(parsed, ("approve", "0123456789abcdef0123456789abcdef"))
         self.assertIsNone(_parse_ask_confirmation_custom_id("ask.approve.bad"))
 
-        self.assertEqual(_parse_ask_reply_modal_custom_id("ask.reply.123456789012345"), "123456789012345")
+        self.assertEqual(
+            _parse_ask_reply_modal_custom_id("ask.reply.123456789012345"),
+            "123456789012345",
+        )
         self.assertIsNone(_parse_ask_reply_modal_custom_id("ask.reply.bad"))
 
         modal = _discord_interaction_modal_response(
@@ -133,13 +168,19 @@ class DiscordInteractionsAuthTests(unittest.TestCase):
                 "components": [
                     {
                         "components": [
-                            {"type": 4, "custom_id": "reply", "value": "   hello world   "},
+                            {
+                                "type": 4,
+                                "custom_id": "reply",
+                                "value": "   hello world   ",
+                            },
                         ]
                     }
                 ]
             }
         }
-        self.assertEqual(_discord_modal_text_value(payload, custom_id="reply"), "hello world")
+        self.assertEqual(
+            _discord_modal_text_value(payload, custom_id="reply"), "hello world"
+        )
         self.assertIsNone(_discord_modal_text_value({"data": {}}, custom_id="reply"))
         self.assertIsNone(_discord_modal_text_value(payload, custom_id="other"))
 

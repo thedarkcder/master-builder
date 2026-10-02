@@ -6,7 +6,9 @@ from datetime import datetime
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.admin.runs.logging_stream_service import stream_run_events_ndjson as stream_run_events_ndjson_impl
+from orchestrator.api.admin.runs.logging_stream_service import (
+    stream_run_events_ndjson as stream_run_events_ndjson_impl,
+)
 from orchestrator.api.admin.runs.query import build_runs_query as build_runs_query_impl
 from orchestrator.api.admin.runs.runtime_logs_service import (
     list_runtime_log_events as list_runtime_log_events_impl,
@@ -21,11 +23,20 @@ from orchestrator.api.admin.runs.service import (
     list_runs as list_runs_impl,
 )
 from orchestrator.api.admin.schema_mappers import run_to_schema
-from orchestrator.api.schemas import LoggingPaneEventRead, ProjectDeploymentReleaseRead, RunEventRead, RunRead
+from orchestrator.api.schemas import (
+    LoggingPaneEventRead,
+    ProjectDeploymentReleaseRead,
+    RunEventRead,
+    RunRead,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE
-from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_permission, require_tenant_workspace_access
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_tenant_permission,
+    require_tenant_workspace_access,
+)
 from orchestrator.storage.models import Project, Run, Tenant
 
 
@@ -68,11 +79,15 @@ def list_runs(
     )
 
 
-def get_run(*, session: Session, principal: AuthenticatedPrincipal, run_id: str) -> RunRead:
+def get_run(
+    *, session: Session, principal: AuthenticatedPrincipal, run_id: str
+) -> RunRead:
     if not principal.is_platform_super_admin:
         run = session.get(Run, run_id)
         if run is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
         require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
     return get_run_impl(
         session=session,
@@ -82,6 +97,7 @@ def get_run(*, session: Session, principal: AuthenticatedPrincipal, run_id: str)
         tenant_model=Tenant,
         tenant_jira_issue_url_fn=tenant_jira_issue_url,
     )
+
 
 def cancel_run(*, session: Session, run_id: str) -> RunRead:
     return cancel_run_admin_impl(
@@ -102,7 +118,9 @@ def create_run_preview(
 ) -> ProjectDeploymentReleaseRead:
     run = session.get(Run, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     require_tenant_permission(
         principal=principal,
         tenant_id=run.tenant_id,
@@ -213,10 +231,15 @@ def stream_runtime_events(
         command=command,
     )
 
-def _require_run_access(*, session: Session, principal: AuthenticatedPrincipal, run_id: str) -> Run:
+
+def _require_run_access(
+    *, session: Session, principal: AuthenticatedPrincipal, run_id: str
+) -> Run:
     run = session.get(Run, run_id)
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+        )
     if not principal.is_platform_super_admin:
         require_tenant_workspace_access(principal=principal, tenant_id=run.tenant_id)
     return run

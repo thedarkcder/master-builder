@@ -14,7 +14,7 @@ def skip_product_event_notification(
     operation_id: str | None,
     attempt_id: str | None,
 ) -> None:
-    del event_class, event_sequence, tenant_id, workflow_id, run_id, operation_id, attempt_id
+    del event_class, event_sequence, tenant_id, workflow_id, run_id, operation_id, attempt_id  # fmt: skip
 
 
 def build_local_workflow_runtime(
@@ -27,7 +27,7 @@ def build_local_workflow_runtime(
     resolve_advance_handler_fn,
     workflow_handler_registry,
 ):  # noqa: ANN001, ANN202
-    del process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry
+    del process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry  # fmt: skip
 
     class _LocalWorkflowRuntime:
         def advance(self, *, request):  # noqa: ANN001, ANN202

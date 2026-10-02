@@ -30,10 +30,7 @@ class AlertingTests(unittest.TestCase):
             return len(emitted)
 
         with ThreadPoolExecutor(max_workers=16) as executor:
-            futures = [
-                executor.submit(_invoke, index % 2 == 0)
-                for index in range(200)
-            ]
+            futures = [executor.submit(_invoke, index % 2 == 0) for index in range(200)]
             results = [future.result() for future in as_completed(futures)]
 
         self.assertEqual(len(results), 200)

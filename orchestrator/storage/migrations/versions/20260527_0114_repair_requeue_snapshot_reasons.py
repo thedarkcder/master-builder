@@ -29,15 +29,21 @@ def upgrade() -> None:
     runs = sa.Table("runs", metadata, autoload_with=bind)
     checkpoints = sa.Table("workflow_checkpoints", metadata, autoload_with=bind)
 
-    for row in bind.execute(sa.select(runs.c.run_id, runs.c.plan).where(runs.c.plan.is_not(None))).mappings():
+    for row in bind.execute(
+        sa.select(runs.c.run_id, runs.c.plan).where(runs.c.plan.is_not(None))
+    ).mappings():
         repaired = _repair_requeue_snapshot_reason(row.get("plan"))
         if repaired is None:
             continue
-        bind.execute(runs.update().where(runs.c.run_id == row["run_id"]).values(plan=repaired))
+        bind.execute(
+            runs.update().where(runs.c.run_id == row["run_id"]).values(plan=repaired)
+        )
 
     now = datetime.now(timezone.utc)
     for row in bind.execute(
-        sa.select(checkpoints.c.checkpoint_id, checkpoints.c.payload_json).where(checkpoints.c.payload_json.is_not(None))
+        sa.select(checkpoints.c.checkpoint_id, checkpoints.c.payload_json).where(
+            checkpoints.c.payload_json.is_not(None)
+        )
     ).mappings():
         repaired = _repair_requeue_snapshot_reason(row.get("payload_json"))
         if repaired is None:

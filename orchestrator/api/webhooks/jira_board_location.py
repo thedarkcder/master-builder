@@ -5,7 +5,9 @@ from urllib.parse import quote_plus
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
@@ -53,7 +55,9 @@ def _fetch_issue_board_location(
             url=backlog_url,
             access_token=oauth_context.access_token,
         )
-        if _issues_payload_contains_issue(payload=backlog_payload, issue_key=context.issue_key):
+        if _issues_payload_contains_issue(
+            payload=backlog_payload, issue_key=context.issue_key
+        ):
             return "backlog", None
     except (AtlassianOAuthError, ValueError) as exc:
         backlog_error_detail = f"backlog lookup failed: {exc}"
@@ -62,7 +66,9 @@ def _fetch_issue_board_location(
             url=board_url,
             access_token=oauth_context.access_token,
         )
-        if _issues_payload_contains_issue(payload=board_payload, issue_key=context.issue_key):
+        if _issues_payload_contains_issue(
+            payload=board_payload, issue_key=context.issue_key
+        ):
             return "board", None
     except (AtlassianOAuthError, ValueError) as exc:
         board_error_detail = f"board lookup failed: {exc}"

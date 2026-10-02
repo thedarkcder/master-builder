@@ -6,7 +6,9 @@ from typing import Any, Mapping
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification.projection_service import resolve_active_clarification_context
+from orchestrator.core.clarification.projection_service import (
+    resolve_active_clarification_context,
+)
 from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
     FOLLOWUP_CONTEXT_PM_INTERVIEW,
@@ -57,7 +59,9 @@ class ParentFeatureBriefReadiness:
         return self.canonical_brief is not None and not self.clarification_open
 
 
-def _brief_without_open_questions(brief: PMInterviewBrief | None) -> PMInterviewBrief | None:
+def _brief_without_open_questions(
+    brief: PMInterviewBrief | None,
+) -> PMInterviewBrief | None:
     if brief is None:
         return None
     return replace(brief, open_questions=())
@@ -69,7 +73,8 @@ def _primary_parent_feature_case_stmt(*, tenant_id: str, parent_issue_key: str):
         .where(
             PMInterviewCase.tenant_id == tenant_id,
             PMInterviewCase.parent_issue_key == parent_issue_key,
-            PMInterviewCase.source_kind != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+            PMInterviewCase.source_kind
+            != PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
         )
         .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
     )
@@ -81,7 +86,8 @@ def _parent_feature_snapshot_stmt(*, tenant_id: str, parent_issue_key: str):
         .where(
             PMInterviewCase.tenant_id == tenant_id,
             PMInterviewCase.parent_issue_key == parent_issue_key,
-            PMInterviewCase.source_kind == PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+            PMInterviewCase.source_kind
+            == PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
         )
         .order_by(PMInterviewCase.updated_at.desc(), PMInterviewCase.created_at.desc())
     )
@@ -115,7 +121,11 @@ def _clarification_questions_from_followup(*, followup_context) -> tuple[str, ..
         return ()
     metadata = dict(getattr(followup_context, "metadata_json", {}) or {})
     questions: list[str] = []
-    for candidate in metadata.get("questions", []) if isinstance(metadata.get("questions"), list) else []:
+    for candidate in (
+        metadata.get("questions", [])
+        if isinstance(metadata.get("questions"), list)
+        else []
+    ):
         question = _question_from_payload(candidate)
         if question and question not in questions:
             questions.append(question)
@@ -138,25 +148,39 @@ def resolve_parent_feature_brief_readiness(
             clarification_questions=(),
         )
 
-    snapshot_row = session.execute(
-        _parent_feature_snapshot_stmt(
-            tenant_id=normalized_tenant_id,
-            parent_issue_key=normalized_parent_issue_key,
-        ).where(PMInterviewCase.status == PM_INTERVIEW_STATUS_PM_COMPLETED)
-    ).scalars().first()
-    draft_snapshot_row = session.execute(
-        _parent_feature_snapshot_stmt(
-            tenant_id=normalized_tenant_id,
-            parent_issue_key=normalized_parent_issue_key,
-        ).where(PMInterviewCase.status.in_(_PM_INTERVIEW_DRAFT_STATUSES))
-    ).scalars().first()
-    primary_case = session.execute(
-        _primary_parent_feature_case_stmt(
-            tenant_id=normalized_tenant_id,
-            parent_issue_key=normalized_parent_issue_key,
+    snapshot_row = (
+        session.execute(
+            _parent_feature_snapshot_stmt(
+                tenant_id=normalized_tenant_id,
+                parent_issue_key=normalized_parent_issue_key,
+            ).where(PMInterviewCase.status == PM_INTERVIEW_STATUS_PM_COMPLETED)
         )
-    ).scalars().first()
-    pm_interview_status = str(getattr(primary_case, "status", "") or "").strip().lower() or None
+        .scalars()
+        .first()
+    )
+    draft_snapshot_row = (
+        session.execute(
+            _parent_feature_snapshot_stmt(
+                tenant_id=normalized_tenant_id,
+                parent_issue_key=normalized_parent_issue_key,
+            ).where(PMInterviewCase.status.in_(_PM_INTERVIEW_DRAFT_STATUSES))
+        )
+        .scalars()
+        .first()
+    )
+    primary_case = (
+        session.execute(
+            _primary_parent_feature_case_stmt(
+                tenant_id=normalized_tenant_id,
+                parent_issue_key=normalized_parent_issue_key,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    pm_interview_status = (
+        str(getattr(primary_case, "status", "") or "").strip().lower() or None
+    )
     active_followup = resolve_active_clarification_context(
         session=session,
         tenant_id=normalized_tenant_id,
@@ -171,22 +195,32 @@ def resolve_parent_feature_brief_readiness(
     )
     draft_brief = _brief_without_open_questions(
         normalize_pm_interview_brief(getattr(primary_case, "brief_json", None) or None)
-        if primary_case is not None and pm_interview_status in _PM_INTERVIEW_DRAFT_STATUSES
+        if primary_case is not None
+        and pm_interview_status in _PM_INTERVIEW_DRAFT_STATUSES
         else None
     )
     if draft_brief is None and draft_snapshot_row is not None:
         draft_brief = _brief_without_open_questions(
-            normalize_pm_interview_brief(getattr(draft_snapshot_row, "brief_json", None) or None)
+            normalize_pm_interview_brief(
+                getattr(draft_snapshot_row, "brief_json", None) or None
+            )
         )
 
     clarification_open = False
     clarification_questions: tuple[str, ...] = ()
     if canonical_brief is None:
-        clarification_open = active_followup is not None or pm_interview_status in _PM_INTERVIEW_CLARIFICATION_STATUSES
+        clarification_open = (
+            active_followup is not None
+            or pm_interview_status in _PM_INTERVIEW_CLARIFICATION_STATUSES
+        )
         if clarification_open:
-            clarification_questions = _clarification_questions_from_followup(followup_context=active_followup)
+            clarification_questions = _clarification_questions_from_followup(
+                followup_context=active_followup
+            )
             if not clarification_questions:
-                clarification_questions = _clarification_questions_from_case(primary_case)
+                clarification_questions = _clarification_questions_from_case(
+                    primary_case
+                )
 
     return ParentFeatureBriefReadiness(
         canonical_brief=canonical_brief,
@@ -227,19 +261,30 @@ def parent_planning_clarification_history(
     normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
     if not normalized_tenant_id or not normalized_parent_issue_key:
         return ()
-    rows = session.execute(
-        select(FollowupContext)
-        .where(
-            FollowupContext.tenant_id == normalized_tenant_id,
-            FollowupContext.issue_key == normalized_parent_issue_key,
-            FollowupContext.context_type == FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
+    rows = (
+        session.execute(
+            select(FollowupContext)
+            .where(
+                FollowupContext.tenant_id == normalized_tenant_id,
+                FollowupContext.issue_key == normalized_parent_issue_key,
+                FollowupContext.context_type
+                == FOLLOWUP_CONTEXT_PARENT_PLANNING_CLARIFICATION,
+            )
+            .order_by(
+                FollowupContext.created_at.asc(), FollowupContext.updated_at.asc()
+            )
         )
-        .order_by(FollowupContext.created_at.asc(), FollowupContext.updated_at.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     history: list[dict[str, Any]] = []
     for row in rows:
         metadata = dict(getattr(row, "metadata_json", {}) or {})
-        questions = metadata.get("questions") if isinstance(metadata.get("questions"), list) else []
+        questions = (
+            metadata.get("questions")
+            if isinstance(metadata.get("questions"), list)
+            else []
+        )
         answer_text = str(metadata.get("answer_text") or "").strip()
         answer_comment_id = str(metadata.get("answer_comment_id") or "").strip()
         if questions:
@@ -247,7 +292,8 @@ def parent_planning_clarification_history(
                 {
                     "role": "system",
                     "kind": "parent_planning_clarification_questions",
-                    "source_ref": str(metadata.get("jira_comment_id") or "").strip() or None,
+                    "source_ref": str(metadata.get("jira_comment_id") or "").strip()
+                    or None,
                     "questions": questions,
                 }
             )
@@ -273,12 +319,16 @@ def resolve_parent_feature_case(
     normalized_parent_issue_key = _normalized_text(parent_issue_key).upper()
     if not normalized_tenant_id or not normalized_parent_issue_key:
         return None
-    primary_row = session.execute(
-        _primary_parent_feature_case_stmt(
-            tenant_id=normalized_tenant_id,
-            parent_issue_key=normalized_parent_issue_key,
+    primary_row = (
+        session.execute(
+            _primary_parent_feature_case_stmt(
+                tenant_id=normalized_tenant_id,
+                parent_issue_key=normalized_parent_issue_key,
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     return primary_row
 
 

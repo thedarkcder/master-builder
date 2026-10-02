@@ -19,7 +19,9 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("runs", recreate="auto") as batch_op:
-        batch_op.add_column(sa.Column("pm_session_id", sa.String(length=64), nullable=True))
+        batch_op.add_column(
+            sa.Column("pm_session_id", sa.String(length=64), nullable=True)
+        )
 
     op.create_index("ix_runs_pm_session_id", "runs", ["pm_session_id"], unique=False)
 

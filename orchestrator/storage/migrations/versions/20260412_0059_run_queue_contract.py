@@ -28,18 +28,37 @@ def upgrade() -> None:
 
     with op.batch_alter_table("runs") as batch_op:
         if "pre_check_outcome" not in existing_columns:
-            batch_op.add_column(sa.Column("pre_check_outcome", sa.String(length=32), nullable=True))
+            batch_op.add_column(
+                sa.Column("pre_check_outcome", sa.String(length=32), nullable=True)
+            )
         if "required_worker_capability" not in existing_columns:
-            batch_op.add_column(sa.Column("required_worker_capability", sa.String(length=32), nullable=True))
+            batch_op.add_column(
+                sa.Column(
+                    "required_worker_capability", sa.String(length=32), nullable=True
+                )
+            )
         if "dispatch_claimed_at" not in existing_columns:
-            batch_op.add_column(sa.Column("dispatch_claimed_at", sa.DateTime(timezone=True), nullable=True))
+            batch_op.add_column(
+                sa.Column(
+                    "dispatch_claimed_at", sa.DateTime(timezone=True), nullable=True
+                )
+            )
 
     if "ix_runs_pre_check_outcome" not in existing_indexes:
-        op.create_index("ix_runs_pre_check_outcome", "runs", ["pre_check_outcome"], unique=False)
+        op.create_index(
+            "ix_runs_pre_check_outcome", "runs", ["pre_check_outcome"], unique=False
+        )
     if "ix_runs_required_worker_capability" not in existing_indexes:
-        op.create_index("ix_runs_required_worker_capability", "runs", ["required_worker_capability"], unique=False)
+        op.create_index(
+            "ix_runs_required_worker_capability",
+            "runs",
+            ["required_worker_capability"],
+            unique=False,
+        )
     if "ix_runs_dispatch_claimed_at" not in existing_indexes:
-        op.create_index("ix_runs_dispatch_claimed_at", "runs", ["dispatch_claimed_at"], unique=False)
+        op.create_index(
+            "ix_runs_dispatch_claimed_at", "runs", ["dispatch_claimed_at"], unique=False
+        )
     runs = sa.Table("runs", metadata, autoload_with=bind)
 
     rows = bind.execute(
@@ -54,7 +73,9 @@ def upgrade() -> None:
         payload = row.get("plan")
         if not isinstance(payload, dict):
             continue
-        execution_context = _coerce_dict(_coerce_dict(payload.get("context")).get("execution_context"))
+        execution_context = _coerce_dict(
+            _coerce_dict(payload.get("context")).get("execution_context")
+        )
         workflow = _coerce_dict(payload.get("workflow"))
         pre_check_outcome = _coerce_string(execution_context.get("pre_check_outcome"))
         required_worker_capability = _coerce_capability(workflow.get("requeue_target"))

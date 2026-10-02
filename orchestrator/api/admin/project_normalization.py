@@ -151,7 +151,9 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
 
     notify_events = raw.get("notify_events")
     if isinstance(notify_events, list):
-        normalized_events = [str(value).strip() for value in notify_events if str(value).strip()]
+        normalized_events = [
+            str(value).strip() for value in notify_events if str(value).strip()
+        ]
         if normalized_events:
             normalized["notify_events"] = normalized_events
 
@@ -173,11 +175,15 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
     elif live_voice_room_links_provided:
         normalized["live_voice_room_links"] = {}
 
-    normalized_ask_threads = _normalize_channel_id_list(raw.get("ask_thread_channel_ids"))
+    normalized_ask_threads = _normalize_channel_id_list(
+        raw.get("ask_thread_channel_ids")
+    )
     if normalized_ask_threads:
         normalized["ask_thread_channel_ids"] = normalized_ask_threads
 
-    normalized_seed_threads = _normalize_channel_id_list(raw.get("seed_followup_thread_channel_ids"))
+    normalized_seed_threads = _normalize_channel_id_list(
+        raw.get("seed_followup_thread_channel_ids")
+    )
     if normalized_seed_threads:
         normalized["seed_followup_thread_channel_ids"] = normalized_seed_threads
 
@@ -198,7 +204,9 @@ def normalize_project_discord_config(raw: dict | None) -> dict:
     return normalized
 
 
-def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | None) -> dict | None:
+def with_preserved_discord_system_fields(
+    *, existing: dict, proposed: dict | None
+) -> dict | None:
     if proposed is None:
         return None
     merged = dict(proposed)
@@ -209,6 +217,10 @@ def with_preserved_discord_system_fields(*, existing: dict, proposed: dict | Non
         value = existing.get(key)
         if value is not None:
             merged[key] = value
+    # This public configuration reference is updated explicitly. An unrelated
+    # settings update must retain it, including an explicitly cleared reference.
+    if "command_secret_ref" not in merged and "command_secret_ref" in existing:
+        merged["command_secret_ref"] = existing["command_secret_ref"]
     return merged
 
 
@@ -218,8 +230,12 @@ def sanitize_discord_channel_name(value: str) -> str:
     return normalized[:100]
 
 
-def resolve_project_discord_channel_name(*, settings, tenant: Tenant, project: Project) -> str:  # noqa: ANN001
-    template = str(settings.discord_channel_name_template or "").strip() or "{project_name}"
+def resolve_project_discord_channel_name(
+    *, settings, tenant: Tenant, project: Project
+) -> str:  # noqa: ANN001
+    template = (
+        str(settings.discord_channel_name_template or "").strip() or "{project_name}"
+    )
     includes_project_token = "{project_name}" in template or "{project_id}" in template
     rendered = template.format(
         tenant_id=tenant.tenant_id,

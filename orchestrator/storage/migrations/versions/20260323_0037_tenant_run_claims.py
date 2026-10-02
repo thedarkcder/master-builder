@@ -30,12 +30,17 @@ def upgrade() -> None:
             "tenant_run_claims",
             sa.Column("tenant_id", sa.String(length=128), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("tenant_id"),
         )
 
     bind = op.get_bind()
-    tenant_ids = [row[0] for row in bind.execute(sa.text("SELECT tenant_id FROM tenants")).fetchall()]
+    tenant_ids = [
+        row[0]
+        for row in bind.execute(sa.text("SELECT tenant_id FROM tenants")).fetchall()
+    ]
     if not tenant_ids:
         return
 
@@ -46,7 +51,10 @@ def upgrade() -> None:
         sa.column("updated_at", sa.DateTime(timezone=True)),
     )
     existing_ids = {
-        row[0] for row in bind.execute(sa.text("SELECT tenant_id FROM tenant_run_claims")).fetchall()
+        row[0]
+        for row in bind.execute(
+            sa.text("SELECT tenant_id FROM tenant_run_claims")
+        ).fetchall()
     }
     rows = [
         {"tenant_id": tenant_id, "updated_at": now}

@@ -6,9 +6,18 @@ from urllib.parse import quote
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.schemas import GitHubBranchRead, GitHubInstallStart, GitHubRepositoryRead
-from orchestrator.core.platform.secret_service import PLATFORM_SECRET_GITHUB_APP_SLUG_REF
-from orchestrator.core.integrations.github.install_state import create_install_state_token, parse_install_state_token
+from orchestrator.api.schemas import (
+    GitHubBranchRead,
+    GitHubInstallStart,
+    GitHubRepositoryRead,
+)
+from orchestrator.core.platform.secret_service import (
+    PLATFORM_SECRET_GITHUB_APP_SLUG_REF,
+)
+from orchestrator.core.integrations.github.install_state import (
+    create_install_state_token,
+    parse_install_state_token,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubApiError
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
@@ -35,7 +44,9 @@ def start_github_install(
     resolve_platform_secret_ref_fn,
 ) -> GitHubInstallStart:  # noqa: ANN001
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     app_slug = resolve_platform_secret_ref_fn(
         session,
@@ -82,11 +93,15 @@ def github_install_callback(
             secret=settings.github_install_state_secret,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     tenant = session.get(Tenant, state.tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     github_config = dict(tenant.github_config)
     github_config["installation_id"] = str(installation_id)
@@ -120,7 +135,9 @@ def list_tenant_github_repositories(
     github_client_from_tenant_config_fn,
 ) -> list[GitHubRepositoryRead]:  # noqa: ANN001
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     github = tenant.github_config
     if not github.get("installation_id"):
@@ -146,9 +163,13 @@ def list_tenant_github_repositories(
         )
         repositories = client.list_installation_repositories()
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except GitHubApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
 
     return [
         GitHubRepositoryRead(
@@ -174,12 +195,19 @@ def list_project_github_branches(
     github_client_from_tenant_config_fn,
 ) -> list[GitHubBranchRead]:  # noqa: ANN001
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     github_repository = str(project.github_repository or "").strip()
     if not github_repository:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project GitHub repository is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project GitHub repository is not configured",
+        )
     github = tenant.github_config
     if not github.get("installation_id"):
         raise HTTPException(
@@ -207,11 +235,18 @@ def list_project_github_branches(
             github_repository=project.github_repository,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except GitHubApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
 
-    return [GitHubBranchRead(name=branch.name, protected=branch.protected) for branch in branches]
+    return [
+        GitHubBranchRead(name=branch.name, protected=branch.protected)
+        for branch in branches
+    ]
 
 
 def get_project_github_branch_head_sha(
@@ -228,15 +263,24 @@ def get_project_github_branch_head_sha(
     github_client_from_tenant_config_fn,
 ) -> str:  # noqa: ANN001
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     github_repository = str(project.github_repository or "").strip()
     if not github_repository:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Project GitHub repository is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project GitHub repository is not configured",
+        )
     normalized_branch = str(branch or "").strip()
     if not normalized_branch:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub branch is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="GitHub branch is required"
+        )
     github = tenant.github_config
     if not github.get("installation_id"):
         raise HTTPException(
@@ -265,6 +309,10 @@ def get_project_github_branch_head_sha(
             branch=normalized_branch,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except GitHubApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc

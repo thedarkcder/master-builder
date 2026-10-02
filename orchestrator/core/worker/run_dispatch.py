@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.runtime.runtime import CodexRuntimeError
 from orchestrator.core.config import Settings
-from orchestrator.core.deployment_host_recovery import fail_stale_running_restore_commands
+from orchestrator.core.deployment_host_recovery import (
+    fail_stale_running_restore_commands,
+)
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.observability.metrics import platform_metrics
 from orchestrator.core.runtime.requirements import normalize_runtime_kinds
@@ -34,7 +36,9 @@ from orchestrator.storage.models import Run, WebhookJob
 
 logger = logging.getLogger(__name__)
 
-CHILD_DISPATCH_STUCK_ERROR = "Run child completed without moving the run out of dispatching"
+CHILD_DISPATCH_STUCK_ERROR = (
+    "Run child completed without moving the run out of dispatching"
+)
 
 
 class WorkerDependencyFailure(RuntimeError):
@@ -64,10 +68,14 @@ def process_next_run_once(
         def run(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN202
             if self._runner is None:
                 try:
-                    self._runner = build_workflow_runner_for_session(session=self._session)
+                    self._runner = build_workflow_runner_for_session(
+                        session=self._session
+                    )
                 except CodexRuntimeError as exc:
                     platform_metrics.record_worker_failure(kind="dependency")
-                    raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
+                    raise WorkerDependencyFailure(
+                        f"Worker runtime unavailable: {exc}"
+                    ) from exc
             return self._runner.run(*args, **kwargs)
 
     with session_factory() as session:
@@ -76,7 +84,9 @@ def process_next_run_once(
         if not normalized_claimed_run_id:
             raise RuntimeError("Run worker child started without claimed_run_id")
         if not normalized_claim_id:
-            raise RuntimeError(f"Claimed run {normalized_claimed_run_id} missing claim_id")
+            raise RuntimeError(
+                f"Claimed run {normalized_claimed_run_id} missing claim_id"
+            )
         result = process_claimed_run_with_dependencies(
             session=session,
             runner=_LazyWorkflowRunner(session=session),
@@ -112,7 +122,8 @@ def claim_next_run_once(
             failed_status="failed",
             worker_service_instance_id=service_instance_id,
             worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds or set(
+            ready_runtime_kinds=ready_runtime_kinds
+            or set(
                 normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))
             ),
             running_stale_timeout_seconds=max(
@@ -221,7 +232,8 @@ def probe_claimable_run_once(
             queued_status="queued",
             running_status="running",
             worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds or set(
+            ready_runtime_kinds=ready_runtime_kinds
+            or set(
                 normalize_runtime_kinds(getattr(settings, "worker_runtime_kinds", None))
             ),
             running_stale_timeout_seconds=max(

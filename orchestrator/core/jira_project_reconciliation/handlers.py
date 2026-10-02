@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from orchestrator.core.jira_project_reconciliation.dependencies import JiraProjectReconciliationHandlerDeps
+from orchestrator.core.jira_project_reconciliation.dependencies import (
+    JiraProjectReconciliationHandlerDeps,
+)
 from orchestrator.core.jira_project_reconciliation.service import (
     JiraProjectReconciliationStepFailed,
     JiraProjectReconciliationWorkflowService,
@@ -34,19 +36,30 @@ class JiraProjectReconciliationAdvanceHandler:
             raise RuntimeError(f"Tenant {request.tenant_id} was not found")
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant.tenant_id:
-            raise RuntimeError(f"Project {project_id} was not found for tenant {tenant.tenant_id}")
+            raise RuntimeError(
+                f"Project {project_id} was not found for tenant {tenant.tenant_id}"
+            )
         if bool(getattr(project, "is_archived", False)):
-            raise RuntimeError("Jira project reconciliation cannot run for an archived project")
-        jira_project_key = str(getattr(project, "jira_project_key", "") or "").strip().upper()
+            raise RuntimeError(
+                "Jira project reconciliation cannot run for an archived project"
+            )
+        jira_project_key = (
+            str(getattr(project, "jira_project_key", "") or "").strip().upper()
+        )
         if not jira_project_key:
-            raise RuntimeError("Jira project reconciliation requires a project Jira key")
+            raise RuntimeError(
+                "Jira project reconciliation requires a project Jira key"
+            )
 
         lifecycle.ensure_execution(
             display_name=f"Jira reconciliation {jira_project_key}",
             description=f"Reconcile Jira project {jira_project_key} into Master Builder parent planning workflows.",
         )
         max_items = max(1, int(request.payload.get("max_items") or 1000))
-        gateway_factory = self._deps.gateway_factory or build_default_jira_project_reconciliation_gateway
+        gateway_factory = (
+            self._deps.gateway_factory
+            or build_default_jira_project_reconciliation_gateway
+        )
         gateway = gateway_factory(
             session=session,
             settings=settings,

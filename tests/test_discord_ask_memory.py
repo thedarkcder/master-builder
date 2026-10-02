@@ -19,7 +19,9 @@ class DiscordAskMemoryTests(unittest.TestCase):
 
     def test_collect_ask_context_scoped_issue_not_found(self) -> None:
         with (
-            patch.object(ask_memory, "_project_filter_jql", return_value='project = "MAB"'),
+            patch.object(
+                ask_memory, "_project_filter_jql", return_value='project = "MAB"'
+            ),
             patch.object(ask_memory, "_search_jira_issues_for_tenant", return_value=[]),
         ):
             with self.assertRaises(HTTPException) as exc_ctx:
@@ -39,14 +41,20 @@ class DiscordAskMemoryTests(unittest.TestCase):
             self._preview("MAB-3", "Three", "Done"),
         ]
         with (
-            patch.object(ask_memory, "_project_filter_jql", return_value='project = "MAB"'),
-            patch.object(ask_memory, "_search_jira_issues_for_tenant", return_value=issues) as search_mock,
+            patch.object(
+                ask_memory, "_project_filter_jql", return_value='project = "MAB"'
+            ),
+            patch.object(
+                ask_memory, "_search_jira_issues_for_tenant", return_value=issues
+            ) as search_mock,
         ):
-            normalized_issue_key, requested_status, result_issues, counts = ask_memory.collect_ask_context(
-                session=self.session,
-                tenant=self.tenant,
-                channel_id="chan-1",
-                question="show me blocked work",
+            normalized_issue_key, requested_status, result_issues, counts = (
+                ask_memory.collect_ask_context(
+                    session=self.session,
+                    tenant=self.tenant,
+                    channel_id="chan-1",
+                    question="show me blocked work",
+                )
             )
 
         self.assertIsNone(normalized_issue_key)
@@ -57,14 +65,20 @@ class DiscordAskMemoryTests(unittest.TestCase):
 
     def test_collect_ask_context_default_query_path(self) -> None:
         with (
-            patch.object(ask_memory, "_project_filter_jql", return_value='project = "MAB"'),
-            patch.object(ask_memory, "_search_jira_issues_for_tenant", return_value=[] ) as search_mock,
+            patch.object(
+                ask_memory, "_project_filter_jql", return_value='project = "MAB"'
+            ),
+            patch.object(
+                ask_memory, "_search_jira_issues_for_tenant", return_value=[]
+            ) as search_mock,
         ):
-            normalized_issue_key, requested_status, result_issues, counts = ask_memory.collect_ask_context(
-                session=self.session,
-                tenant=self.tenant,
-                channel_id=None,
-                question="latest updates",
+            normalized_issue_key, requested_status, result_issues, counts = (
+                ask_memory.collect_ask_context(
+                    session=self.session,
+                    tenant=self.tenant,
+                    channel_id=None,
+                    question="latest updates",
+                )
             )
 
         self.assertIsNone(normalized_issue_key)
@@ -73,7 +87,9 @@ class DiscordAskMemoryTests(unittest.TestCase):
         self.assertEqual(counts, {})
         self.assertIn("ORDER BY updated DESC", search_mock.call_args.kwargs["jql"])
 
-    def test_collect_ask_context_enriches_issue_with_latest_run_diagnostics(self) -> None:
+    def test_collect_ask_context_enriches_issue_with_latest_run_diagnostics(
+        self,
+    ) -> None:
         issues = [self._preview("MAB-1", "One", "In Progress")]
         self.session.execute.return_value.scalars.return_value = [
             SimpleNamespace(
@@ -84,8 +100,12 @@ class DiscordAskMemoryTests(unittest.TestCase):
             )
         ]
         with (
-            patch.object(ask_memory, "_project_filter_jql", return_value='project = "MAB"'),
-            patch.object(ask_memory, "_search_jira_issues_for_tenant", return_value=issues),
+            patch.object(
+                ask_memory, "_project_filter_jql", return_value='project = "MAB"'
+            ),
+            patch.object(
+                ask_memory, "_search_jira_issues_for_tenant", return_value=issues
+            ),
         ):
             _, _, result_issues, _ = ask_memory.collect_ask_context(
                 session=self.session,
@@ -100,10 +120,17 @@ class DiscordAskMemoryTests(unittest.TestCase):
         self.assertIn("runtime_values", result_issues[0]["latest_run"]["last_error"])
 
     def test_existing_issue_keys_for_tenant_normalizes_and_limits(self) -> None:
-        issues = [self._preview("mab-1", "One", "To Do"), self._preview("MAB-2", "Two", "Done")]
+        issues = [
+            self._preview("mab-1", "One", "To Do"),
+            self._preview("MAB-2", "Two", "Done"),
+        ]
         with (
-            patch.object(ask_memory, "_project_filter_jql", return_value='project = "MAB"'),
-            patch.object(ask_memory, "_search_jira_issues_for_tenant", return_value=issues) as search_mock,
+            patch.object(
+                ask_memory, "_project_filter_jql", return_value='project = "MAB"'
+            ),
+            patch.object(
+                ask_memory, "_search_jira_issues_for_tenant", return_value=issues
+            ) as search_mock,
         ):
             result = ask_memory.existing_issue_keys_for_tenant(
                 session=self.session,
@@ -119,7 +146,13 @@ class DiscordAskMemoryTests(unittest.TestCase):
     def test_prune_and_history_wrapper_paths(self) -> None:
         service = MagicMock()
         service.prune_missing_issue_keys_from_ask_history.return_value = 3
-        service.collect_ask_context_with_history_context.return_value = (None, None, [], {}, [])
+        service.collect_ask_context_with_history_context.return_value = (
+            None,
+            None,
+            [],
+            {},
+            [],
+        )
 
         with patch.object(ask_memory, "_ask_history_service", service):
             pruned = ask_memory.prune_missing_issue_keys_from_ask_history(

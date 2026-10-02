@@ -3,7 +3,8 @@
 This repo is worked on by automated agents and humans. Agents must follow this guide and `.codex/POLICY.md` at all times.
 
 ## 1) How work is triggered
-- Execution work ONLY runs for Jira issues in **To Do** (Backlog is non-executable).
+- Configured Jira-driven automated execution only runs for Jira issues in **To Do** (Backlog is non-executable).
+- Maintainer-authorized public issues, pull requests and direct tasks can be implemented without access to a private Jira project. Apply the same scope, acceptance, risk and verification checks; Jira admission and status updates apply only when work is actually tied to a configured Jira ticket.
 - Code review automation runs on GitHub PR events (opened/updated/CI failure).
 
 ## 2) Before coding (must do)
@@ -16,8 +17,8 @@ This repo is worked on by automated agents and humans. Agents must follow this g
   - `jira.project_keys`
   - `github_repository`
   - current execution mode (`pm` | `dev` | `test`)
-- Validate the Jira ticket is “Good To Do”.
-  - If not, trigger Decision Gate and stop.
+- For ticket-driven automation, validate the Jira ticket is “Good To Do”. For a public issue, pull request or direct maintainer task, validate the equivalent stated requirements.
+  - If a material requirement or design decision is unresolved, trigger Decision Gate and stop the affected implementation.
 
 ### Good To Do checklist
 - Problem clarity (objective, in/out scope, acceptance criteria)
@@ -38,24 +39,39 @@ If GTD is incomplete, stop early, request clarification, and mark blocked.
 - Project/repo selection must come from runtime tenant context.
 - If runtime context is missing, stop and request/derive it explicitly.
 
-## 3) Running locally (fill in for this repo)
-> Update these commands to match this repo. If unsure, search existing package files and CI config.
+## 3) Running locally
+
+Use the [README](../README.md), [configuration guide](../docs/configuration.md) and [contributor guide](../CONTRIBUTING.md). Dependencies are available from public registries; company infrastructure is not required for core development checks.
 
 ### Build / install
-- Java: `./mvnw -q -DskipTests package` (or Gradle equivalent)
-- Node: `pnpm i` / `npm i` / `yarn`
-- Python: `python -m venv .venv && pip install -r requirements.txt`
+
+```bash
+uv sync --frozen --extra dev
+uv build
+```
+
+In `admin-ui`, use `npm ci` and `npm run build`.
 
 ### Tests
-- Use the repo’s test command from the policy pack.
-- Must run tests before opening PR unless explicitly impossible (and then explain why).
+
+```bash
+uv run --frozen pytest
+```
+
+In `admin-ui`, use `npm run test:unit`, install Chromium with `npx playwright install --with-deps chromium`, then run `npm run test:e2e`. These UI tests mock the backend; real backend flows require the separately documented disposable live test setup.
 
 ### Lint / format
-- Use repo scripts if present (`lint`, `format`).
+
+```bash
+uv run --frozen ruff check orchestrator tests scripts
+uv run --frozen ruff format --check orchestrator tests scripts
+```
+
+In `admin-ui`, `npm run lint` runs route type generation and TypeScript checks. Report exact outcomes; passing a subset is not a passing full suite.
 
 ## 4) Branch & PR conventions
-- Branch: `jira/<ISSUE_KEY>-<short-slug>`
-- PR title: `<ISSUE_KEY>: <summary>`
+- Jira automation branch: `jira/<ISSUE_KEY>-<short-slug>`; Jira PR title: `<ISSUE_KEY>: <summary>`.
+- Public/direct tasks: use a descriptive branch (default `codex/<short-slug>`) and PR title, linking the public issue when available.
 - PR body must include:
   - Summary (3 bullets max)
   - How to test (commands + steps)

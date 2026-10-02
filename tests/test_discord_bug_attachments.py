@@ -18,16 +18,27 @@ from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 class _Response:
     def __init__(self, payload: bytes, content_type: str | None = None) -> None:
         self._payload = payload
-        self.headers = {"Content-Type": content_type} if content_type is not None else {}
+        self.headers = (
+            {"Content-Type": content_type} if content_type is not None else {}
+        )
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, size: int = -1) -> bytes:
+        return self._payload[:size] if size >= 0 else self._payload
 
     def __enter__(self):  # noqa: ANN204
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001, ANN204
         return False
+
+
+def _patch_attachment_open(*, return_value=None, side_effect=None):
+    opener = SimpleNamespace(
+        open=MagicMock(return_value=return_value, side_effect=side_effect)
+    )
+    return patch(
+        "orchestrator.api.discord.bug.attachments.build_opener", return_value=opener
+    )
 
 
 class DiscordBugAttachmentsTests(unittest.TestCase):
@@ -45,7 +56,10 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             )
         )
 
-        with patch("orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref", return_value=""):
+        with patch(
+            "orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref",
+            return_value="",
+        ):
             self.assertIsNone(
                 resolve_discord_channel_name(
                     session=session,
@@ -57,8 +71,13 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             )
 
         with (
-            patch("orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.bug.attachments.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.discord.bug.attachments.DiscordApiClient"
+            ) as client_cls,
         ):
             client = client_cls.return_value
             client.get_channel.return_value = {"name": "alerts"}
@@ -78,8 +97,13 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         tenant = SimpleNamespace(tenant_id="t1")
 
         with (
-            patch("orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref", return_value="token"),
-            patch("orchestrator.api.discord.bug.attachments.DiscordApiClient") as client_cls,
+            patch(
+                "orchestrator.api.discord.bug.attachments.resolve_platform_secret_ref",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.discord.bug.attachments.DiscordApiClient"
+            ) as client_cls,
         ):
             client_cls.return_value.get_channel.side_effect = RuntimeError("boom")
             self.assertIsNone(
@@ -93,31 +117,41 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             )
 
     def test_download_discord_attachment_success_and_errors(self) -> None:
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", return_value=_Response(b"data", "text/plain")):
-            payload, content_type = download_discord_attachment(url="https://discord.test/file")
+        with _patch_attachment_open(return_value=_Response(b"data", "text/plain")):
+            payload, content_type = download_discord_attachment(
+                url="https://cdn.discordapp.com/attachments/file"
+            )
         self.assertEqual(payload, b"data")
         self.assertEqual(content_type, "text/plain")
 
         http_error = HTTPError(
-            url="https://discord.test/file",
+            url="https://cdn.discordapp.com/attachments/file",
             code=403,
             msg="Forbidden",
             hdrs=None,
             fp=io.BytesIO(b"denied"),
         )
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=http_error):
+        with _patch_attachment_open(side_effect=http_error):
             with self.assertRaisesRegex(AtlassianOAuthError, "HTTP 403"):
-                download_discord_attachment(url="https://discord.test/file")
+                download_discord_attachment(
+                    url="https://cdn.discordapp.com/attachments/file"
+                )
 
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=URLError("down")):
-            with self.assertRaisesRegex(AtlassianOAuthError, "Failed to download attachment"):
-                download_discord_attachment(url="https://discord.test/file")
+        with _patch_attachment_open(side_effect=URLError("down")):
+            with self.assertRaisesRegex(
+                AtlassianOAuthError, "Failed to download Discord attachment"
+            ):
+                download_discord_attachment(
+                    url="https://cdn.discordapp.com/attachments/file"
+                )
 
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", return_value=_Response(b"", "image/png")):
+        with _patch_attachment_open(return_value=_Response(b"", "image/png")):
             with self.assertRaisesRegex(AtlassianOAuthError, "empty"):
-                download_discord_attachment(url="https://discord.test/file")
+                download_discord_attachment(
+                    url="https://cdn.discordapp.com/attachments/file"
+                )
 
-    def test_download_discord_attachment_uses_bot_auth_for_discord_urls(self) -> None:
+    def test_download_discord_attachment_never_uses_bot_auth(self) -> None:
         seen_headers: dict[str, str] = {}
         seen_urls: list[str] = []
 
@@ -127,20 +161,27 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             seen_urls.append(request.full_url)
             return _Response(b"data", "image/png")
 
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
+        with _patch_attachment_open(side_effect=_fake_urlopen):
             payload, content_type = download_discord_attachment(
                 url="https://cdn.discordapp.com/attachments/1/2/image.png",
-                bot_token="test-token",
             )
 
         self.assertEqual(payload, b"data")
         self.assertEqual(content_type, "image/png")
-        self.assertEqual(seen_headers.get("Authorization"), "Bot test-token")
-        user_agent = seen_headers.get("User-Agent") or seen_headers.get("User-agent") or seen_headers.get("user-agent")
-        self.assertEqual(user_agent, "DiscordBot (https://github.com/thedarkcder/master-builder, 1.0)")
-        self.assertEqual(seen_urls[0], "https://cdn.discordapp.com/attachments/1/2/image.png")
+        self.assertNotIn("Authorization", seen_headers)
+        user_agent = (
+            seen_headers.get("User-Agent")
+            or seen_headers.get("User-agent")
+            or seen_headers.get("user-agent")
+        )
+        self.assertEqual(user_agent, "MasterBuilder-DiscordAttachmentDownloader/1.0")
+        self.assertEqual(
+            seen_urls[0], "https://cdn.discordapp.com/attachments/1/2/image.png"
+        )
 
-    def test_download_discord_attachment_retries_media_host_on_cloudflare_1010(self) -> None:
+    def test_download_discord_attachment_does_not_retry_alternate_media_host(
+        self,
+    ) -> None:
         error = HTTPError(
             url="https://cdn.discordapp.com/attachments/1/2/image.png",
             code=403,
@@ -148,26 +189,24 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             hdrs=None,
             fp=io.BytesIO(b"error code: 1010"),
         )
-        calls: list[str] = []
+        calls = []
 
-        def _fake_urlopen(request, timeout: int = 30):  # noqa: ANN001
+        def open_attachment(request, timeout=30):
             calls.append(request.full_url)
-            if request.full_url.startswith("https://cdn.discordapp.com/"):
-                raise error
-            return _Response(b"data", "image/png")
+            raise error
 
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
-            payload, content_type = download_discord_attachment(
-                url="https://cdn.discordapp.com/attachments/1/2/image.png",
-                bot_token="test-token",
-            )
+        with _patch_attachment_open(side_effect=open_attachment):
+            with self.assertRaisesRegex(AtlassianOAuthError, "HTTP 403"):
+                download_discord_attachment(
+                    url="https://cdn.discordapp.com/attachments/1/2/image.png"
+                )
+        self.assertEqual(
+            calls, ["https://cdn.discordapp.com/attachments/1/2/image.png"]
+        )
 
-        self.assertEqual(payload, b"data")
-        self.assertEqual(content_type, "image/png")
-        self.assertEqual(len(calls), 2)
-        self.assertIn("https://media.discordapp.net/attachments/1/2/image.png", calls[1])
-
-    def test_download_discord_attachment_retries_cdn_host_on_cloudflare_1010(self) -> None:
+    def test_download_discord_attachment_does_not_retry_alternate_cdn_host(
+        self,
+    ) -> None:
         error = HTTPError(
             url="https://media.discordapp.net/attachments/1/2/image.png?width=500&height=500",
             code=403,
@@ -175,24 +214,23 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             hdrs=None,
             fp=io.BytesIO(b"error code: 1010"),
         )
-        calls: list[str] = []
+        calls = []
 
-        def _fake_urlopen(request, timeout: int = 30):  # noqa: ANN001
+        def open_attachment(request, timeout=30):
             calls.append(request.full_url)
-            if request.full_url.startswith("https://media.discordapp.net/"):
-                raise error
-            return _Response(b"data", "image/png")
+            raise error
 
-        with patch("orchestrator.api.discord.bug.attachments.urlopen", side_effect=_fake_urlopen):
-            payload, content_type = download_discord_attachment(
-                url="https://media.discordapp.net/attachments/1/2/image.png?width=500&height=500",
-                bot_token="test-token",
-            )
-
-        self.assertEqual(payload, b"data")
-        self.assertEqual(content_type, "image/png")
-        self.assertEqual(len(calls), 2)
-        self.assertIn("https://cdn.discordapp.com/attachments/1/2/image.png?width=500&height=500", calls[1])
+        with _patch_attachment_open(side_effect=open_attachment):
+            with self.assertRaisesRegex(AtlassianOAuthError, "HTTP 403"):
+                download_discord_attachment(
+                    url="https://media.discordapp.net/attachments/1/2/image.png?width=500&height=500"
+                )
+        self.assertEqual(
+            calls,
+            [
+                "https://media.discordapp.net/attachments/1/2/image.png?width=500&height=500"
+            ],
+        )
 
     def test_upload_discord_attachments_to_jira(self) -> None:
         client = MagicMock()
@@ -215,7 +253,11 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
 
         attachments = [
             {"filename": "missing-url"},
-            {"filename": "ok", "url": "https://discord.test/ok", "content_type": "image/png"},
+            {
+                "filename": "ok",
+                "url": "https://discord.test/ok",
+                "content_type": "image/png",
+            },
             {"filename": "fail", "url": "https://discord.test/bad"},
             {"filename": "fail-value", "url": "https://discord.test/value"},
         ]
@@ -244,7 +286,9 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         self.assertTrue(any(warning.detail == "failed" for warning in warnings))
         self.assertTrue(any(warning.detail == "bad-value" for warning in warnings))
 
-    def test_upload_discord_attachments_to_jira_records_jira_upload_error_metadata(self) -> None:
+    def test_upload_discord_attachments_to_jira_records_jira_upload_error_metadata(
+        self,
+    ) -> None:
         client = MagicMock()
 
         def _download(*, url: str) -> tuple[bytes, str | None]:
@@ -252,7 +296,9 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             return b"payload", "application/octet-stream"
 
         def _upload_issue_attachment(**_: object) -> None:
-            raise AtlassianOAuthError("Jira attachment upload failed (403): permission denied")
+            raise AtlassianOAuthError(
+                "Jira attachment upload failed (403): permission denied"
+            )
 
         client.upload_issue_attachment = _upload_issue_attachment  # type: ignore[attr-defined]
 
@@ -261,7 +307,9 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             access_token="token",
             cloud_id="cloud",
             issue_key="MAB-1",
-            attachments=[{"filename": "fail-upload.png", "url": "https://discord.test/ok"}],
+            attachments=[
+                {"filename": "fail-upload.png", "url": "https://discord.test/ok"}
+            ],
             correlation_id="corr-1",
             download_attachment=_download,
         )
@@ -275,14 +323,18 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
         self.assertEqual(failure.correlation_id, "corr-1")
         self.assertIn("permission denied", failure.response_snippet or "")
 
-    def test_upload_discord_attachments_to_jira_retries_proxy_url(self) -> None:
+    def test_upload_discord_attachments_to_jira_reports_primary_url_failure_without_proxy_retry(
+        self,
+    ) -> None:
         client = MagicMock()
         calls: list[str] = []
 
         def _download(*, url: str) -> tuple[bytes, str | None]:
             calls.append(url)
             if "cdn.discordapp.com" in url:
-                raise AtlassianOAuthError("HTTP 403 downloading attachment: error code: 1010")
+                raise AtlassianOAuthError(
+                    "HTTP 403 downloading attachment: error code: 1010"
+                )
             return b"payload", "image/png"
 
         attachments = [
@@ -302,11 +354,11 @@ class DiscordBugAttachmentsTests(unittest.TestCase):
             download_attachment=_download,
         )
 
-        self.assertEqual(uploaded_count, 1)
-        self.assertEqual(warnings, [])
+        self.assertEqual(uploaded_count, 0)
+        self.assertEqual(len(warnings), 1)
         self.assertEqual(calls[0], "https://cdn.discordapp.com/attachments/test.png")
-        self.assertEqual(calls[1], "https://media.discordapp.net/attachments/test.png")
-        self.assertEqual(client.upload_issue_attachment.call_count, 1)
+        self.assertEqual(len(calls), 1)
+        client.upload_issue_attachment.assert_not_called()
 
 
 if __name__ == "__main__":

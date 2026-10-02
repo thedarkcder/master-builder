@@ -20,7 +20,9 @@ def _capture_exception_with_sentry(
     except Exception:
         return
 
-    scope_factory = getattr(sentry_sdk, "new_scope", None) or getattr(sentry_sdk, "push_scope", None)
+    scope_factory = getattr(sentry_sdk, "new_scope", None) or getattr(
+        sentry_sdk, "push_scope", None
+    )
     if scope_factory is None:
         return
 
@@ -55,7 +57,9 @@ def emit_hard_error(
         "tenant_id": (context or {}).get("tenant_id", log_context.get("tenant_id")),
         "project_id": (context or {}).get("project_id", log_context.get("project_id")),
         "agent_id": (context or {}).get("agent_id", log_context.get("agent_id")),
-        "correlation_id": (context or {}).get("correlation_id", log_context.get("correlation_id")),
+        "correlation_id": (context or {}).get(
+            "correlation_id", log_context.get("correlation_id")
+        ),
         "event_type": event,
         "message": f"HARD_ERROR ref={error_ref}",
         "metadata": {
@@ -64,7 +68,9 @@ def emit_hard_error(
         },
     }
     print(redact_sensitive_text(json.dumps(payload, sort_keys=True)), flush=True)
-    traceback_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    traceback_text = "".join(
+        traceback.format_exception(type(exc), exc, exc.__traceback__)
+    )
     print(redact_sensitive_text(traceback_text), flush=True)
     _capture_exception_with_sentry(
         event=event,

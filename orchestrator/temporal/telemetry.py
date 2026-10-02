@@ -58,7 +58,9 @@ def _activity_attributes(input: Any) -> dict[str, Any]:
         "temporal.activity_type": str(getattr(info, "activity_type", "") or "").strip(),
         "temporal.activity_attempt": int(getattr(info, "attempt", 0) or 0),
         "temporal.workflow_id": str(getattr(info, "workflow_id", "") or "").strip(),
-        "temporal.workflow_run_id": str(getattr(info, "workflow_run_id", "") or "").strip(),
+        "temporal.workflow_run_id": str(
+            getattr(info, "workflow_run_id", "") or ""
+        ).strip(),
         "temporal.workflow_type": str(getattr(info, "workflow_type", "") or "").strip(),
         "temporal.task_queue": str(getattr(info, "task_queue", "") or "").strip(),
     }
@@ -76,28 +78,36 @@ class TemporalClientTelemetryOutboundInterceptor(OutboundInterceptor):
     async def start_workflow(self, input):  # noqa: ANN001
         with telemetry_span(
             "temporal.client.start_workflow",
-            attributes=_client_workflow_attributes(operation="start_workflow", input=input),
+            attributes=_client_workflow_attributes(
+                operation="start_workflow", input=input
+            ),
         ):
             return await super().start_workflow(input)
 
     async def signal_workflow(self, input):  # noqa: ANN001
         with telemetry_span(
             "temporal.client.signal_workflow",
-            attributes=_client_workflow_attributes(operation="signal_workflow", input=input),
+            attributes=_client_workflow_attributes(
+                operation="signal_workflow", input=input
+            ),
         ):
             return await super().signal_workflow(input)
 
     async def query_workflow(self, input):  # noqa: ANN001
         with telemetry_span(
             "temporal.client.query_workflow",
-            attributes=_client_workflow_attributes(operation="query_workflow", input=input),
+            attributes=_client_workflow_attributes(
+                operation="query_workflow", input=input
+            ),
         ):
             return await super().query_workflow(input)
 
     async def start_workflow_update(self, input):  # noqa: ANN001
         with telemetry_span(
             "temporal.client.start_workflow_update",
-            attributes=_client_workflow_attributes(operation="start_workflow_update", input=input),
+            attributes=_client_workflow_attributes(
+                operation="start_workflow_update", input=input
+            ),
         ):
             return await super().start_workflow_update(input)
 
@@ -117,5 +127,7 @@ class TemporalActivityTelemetryInterceptor(ActivityInboundInterceptor):
 
 
 class TemporalWorkerTelemetryInterceptor(WorkerInterceptor):
-    def intercept_activity(self, next: ActivityInboundInterceptor) -> ActivityInboundInterceptor:
+    def intercept_activity(
+        self, next: ActivityInboundInterceptor
+    ) -> ActivityInboundInterceptor:
         return TemporalActivityTelemetryInterceptor(next)

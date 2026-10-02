@@ -4,7 +4,12 @@ from dataclasses import dataclass
 import secrets
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicCredentials, HTTPBearer
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBasic,
+    HTTPBasicCredentials,
+    HTTPBearer,
+)
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -99,7 +104,9 @@ def _resolve_admin_password_hash(*, session: Session) -> str | None:
     )
 
 
-def validate_admin_credentials(*, session: Session, username: str, password: str) -> bool:
+def validate_admin_credentials(
+    *, session: Session, username: str, password: str
+) -> bool:
     settings = get_settings()
     valid_user = secrets.compare_digest(username, settings.admin_username)
     if not valid_user:
@@ -111,9 +118,13 @@ def validate_admin_credentials(*, session: Session, username: str, password: str
     return secrets.compare_digest(password, settings.admin_password)
 
 
-def change_platform_admin_password(*, session: Session, username: str, current_password: str, new_password: str) -> None:
+def change_platform_admin_password(
+    *, session: Session, username: str, current_password: str, new_password: str
+) -> None:
     settings = get_settings()
-    if not validate_admin_credentials(session=session, username=username, password=current_password):
+    if not validate_admin_credentials(
+        session=session, username=username, password=current_password
+    ):
         raise PermissionError("Current password is incorrect")
     if len(new_password) < 8:
         raise ValueError("New password must be at least eight characters")
@@ -137,21 +148,29 @@ def _admin_unauthorized(detail: str = "Invalid admin credentials") -> HTTPExcept
 
 
 def _build_platform_admin_principal(username: str) -> AuthenticatedPrincipal:
-    return AuthenticatedPrincipal(principal_type="platform_super_admin", username=username)
+    return AuthenticatedPrincipal(
+        principal_type="platform_super_admin", username=username
+    )
 
 
-def _load_tenant_memberships(*, session: Session, user_id: str) -> tuple[TenantMembershipPrincipal, ...]:
+def _load_tenant_memberships(
+    *, session: Session, user_id: str
+) -> tuple[TenantMembershipPrincipal, ...]:
     membership_rows = session.execute(
         select(TenantMembership, Tenant)
         .join(Tenant, Tenant.tenant_id == TenantMembership.tenant_id)
         .where(TenantMembership.user_id == user_id)
-        .order_by(TenantMembership.created_at.asc(), TenantMembership.membership_id.asc())
+        .order_by(
+            TenantMembership.created_at.asc(), TenantMembership.membership_id.asc()
+        )
     ).all()
     memberships: list[TenantMembershipPrincipal] = []
     for membership, tenant in membership_rows:
         team_rows = session.execute(
             select(TenantTeam.team_id, TenantTeam.permission_keys)
-            .join(TenantTeamMembership, TenantTeamMembership.team_id == TenantTeam.team_id)
+            .join(
+                TenantTeamMembership, TenantTeamMembership.team_id == TenantTeam.team_id
+            )
             .where(TenantTeamMembership.membership_id == membership.membership_id)
             .order_by(TenantTeam.created_at.asc(), TenantTeam.team_id.asc())
         ).all()
@@ -159,8 +178,12 @@ def _load_tenant_memberships(*, session: Session, user_id: str) -> tuple[TenantM
         team_permissions: list[str] = []
         for _, permission_keys in team_rows:
             if isinstance(permission_keys, list):
-                team_permissions.extend(str(permission) for permission in permission_keys)
-        tenant_default_mode = str((tenant.experience_config or {}).get("default_mode") or MODE_TECHNICAL)
+                team_permissions.extend(
+                    str(permission) for permission in permission_keys
+                )
+        tenant_default_mode = str(
+            (tenant.experience_config or {}).get("default_mode") or MODE_TECHNICAL
+        )
         snapshot = compute_permission_snapshot(
             tenant_default_mode=tenant_default_mode,
             membership_role=membership.role,
@@ -186,7 +209,9 @@ def _load_tenant_memberships(*, session: Session, user_id: str) -> tuple[TenantM
     return tuple(memberships)
 
 
-def load_tenant_user_principal(*, session: Session, user_id: str) -> AuthenticatedPrincipal:
+def load_tenant_user_principal(
+    *, session: Session, user_id: str
+) -> AuthenticatedPrincipal:
     set_tenant_user_rls_context(session=session, user_id=user_id)
     tenant_user = session.get(TenantUser, user_id)
     if tenant_user is None or not tenant_user.is_active:
@@ -239,10 +264,14 @@ def _authenticate_principal(
     if bearer_credentials is not None and bearer_credentials.scheme.lower() == "bearer":
         token = bearer_credentials.credentials
         try:
-            username = parse_admin_access_token(token=token, secret=settings.admin_token_secret)
+            username = parse_admin_access_token(
+                token=token, secret=settings.admin_token_secret
+            )
         except ValueError:
             try:
-                user_id = parse_auth_access_token(token=token, secret=settings.auth_token_secret)
+                user_id = parse_auth_access_token(
+                    token=token, secret=settings.auth_token_secret
+                )
             except ValueError as exc:
                 raise _admin_unauthorized(str(exc)) from exc
             return load_tenant_user_principal(session=session, user_id=user_id)
@@ -251,7 +280,11 @@ def _authenticate_principal(
 
     if basic_credentials is not None:
         set_platform_admin_rls_context(session)
-        if validate_admin_credentials(session=session, username=basic_credentials.username, password=basic_credentials.password):
+        if validate_admin_credentials(
+            session=session,
+            username=basic_credentials.username,
+            password=basic_credentials.password,
+        ):
             return _build_platform_admin_principal(basic_credentials.username)
         raise _admin_unauthorized()
 
@@ -273,7 +306,9 @@ def require_deployment_host_agent(
     if bearer_credentials is None or bearer_credentials.scheme.lower() != "bearer":
         raise _admin_unauthorized("Deployment host authentication required")
     token_hash = hash_deployment_host_token(bearer_credentials.credentials)
-    host = session.execute(select(DeploymentHost).where(DeploymentHost.access_token_hash == token_hash)).scalar_one_or_none()
+    host = session.execute(
+        select(DeploymentHost).where(DeploymentHost.access_token_hash == token_hash)
+    ).scalar_one_or_none()
     if host is None:
         raise _admin_unauthorized("Invalid deployment host credentials")
     set_platform_system_rls_context(session, system_purpose="deployment_host_agent")
@@ -290,12 +325,19 @@ def require_tenant_permission(
         return None
     normalized_permission_key = normalize_permission_key(permission_key)
     if normalized_permission_key is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown tenant permission")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown tenant permission"
+        )
     membership = principal.membership_for_tenant(tenant_id)
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     if normalized_permission_key not in membership.permission_keys:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient tenant permissions",
+        )
     return membership
 
 
@@ -308,24 +350,43 @@ def require_any_tenant_permission(
     if principal.is_platform_super_admin:
         return None
     normalized_permission_keys = tuple(
-        normalized for normalized in (normalize_permission_key(permission_key) for permission_key in permission_keys) if normalized
+        normalized
+        for normalized in (
+            normalize_permission_key(permission_key)
+            for permission_key in permission_keys
+        )
+        if normalized
     )
     if not normalized_permission_keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown tenant permissions")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown tenant permissions"
+        )
     membership = principal.membership_for_tenant(tenant_id)
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    if not any(permission_key in membership.permission_keys for permission_key in normalized_permission_keys):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    if not any(
+        permission_key in membership.permission_keys
+        for permission_key in normalized_permission_keys
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient tenant permissions",
+        )
     return membership
 
 
-def require_tenant_membership(*, principal: AuthenticatedPrincipal, tenant_id: str) -> TenantMembershipPrincipal | None:
+def require_tenant_membership(
+    *, principal: AuthenticatedPrincipal, tenant_id: str
+) -> TenantMembershipPrincipal | None:
     if principal.is_platform_super_admin:
         return None
     membership = principal.membership_for_tenant(tenant_id)
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     return membership
 
 
@@ -340,5 +401,8 @@ def require_tenant_workspace_access(
     if membership is None:
         return None
     if membership.role not in VALID_ROLE_KEYS:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient tenant permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient tenant permissions",
+        )
     return membership

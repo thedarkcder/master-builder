@@ -46,7 +46,9 @@ class TenantSecretService:
         tenant_id: str,
         project_id: str | None = None,
     ) -> str | None:
-        normalized_ref = _validate_tenant_context(secret_ref=secret_ref, tenant_id=tenant_id)
+        normalized_ref = _validate_tenant_context(
+            secret_ref=secret_ref, tenant_id=tenant_id
+        )
         return _resolve_scoped_secret_ref(
             session,
             secret_ref=normalized_ref,
@@ -62,7 +64,9 @@ class TenantSecretService:
         secret_ref: str,
         tenant_id: str,
     ):
-        normalized_ref = _validate_tenant_context(secret_ref=secret_ref, tenant_id=tenant_id)
+        normalized_ref = _validate_tenant_context(
+            secret_ref=secret_ref, tenant_id=tenant_id
+        )
         return _resolve_secret_ref_metadata(
             session,
             secret_ref=normalized_ref,
@@ -87,7 +91,9 @@ class TenantSecretService:
         encryption_key: str,
         tenant_id: str,
     ):
-        normalized_ref = _validate_tenant_context(secret_ref=secret_ref, tenant_id=tenant_id)
+        normalized_ref = _validate_tenant_context(
+            secret_ref=secret_ref, tenant_id=tenant_id
+        )
         return _upsert_managed_secret(
             session,
             secret_ref=normalized_ref,

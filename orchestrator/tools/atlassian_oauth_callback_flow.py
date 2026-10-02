@@ -63,7 +63,9 @@ class AtlassianOAuthCallbackFlow:
         )
         return self._parse_tokens(payload)
 
-    def list_accessible_resources(self, *, access_token: str) -> list[AtlassianOAuthResource]:
+    def list_accessible_resources(
+        self, *, access_token: str
+    ) -> list[AtlassianOAuthResource]:
         payload = self._get_json(
             "https://api.atlassian.com/oauth/token/accessible-resources",
             access_token,
@@ -84,7 +86,9 @@ class AtlassianOAuthCallbackFlow:
                 continue
             if not isinstance(name, str) or not name:
                 name = site_url
-            resources.append(AtlassianOAuthResource(cloud_id=cloud_id, site_url=site_url, name=name))
+            resources.append(
+                AtlassianOAuthResource(cloud_id=cloud_id, site_url=site_url, name=name)
+            )
         return resources
 
     def _parse_tokens(self, payload: dict[str, Any]) -> AtlassianOAuthTokenSet:

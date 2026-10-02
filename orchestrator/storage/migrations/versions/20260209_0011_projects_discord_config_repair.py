@@ -20,14 +20,22 @@ depends_on = None
 def _has_column(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _has_column("projects", "discord_config"):
         with op.batch_alter_table("projects", schema=None) as batch_op:
             batch_op.add_column(
-                sa.Column("discord_config", sa.JSON(), nullable=False, server_default=sa.text("'{}'"))
+                sa.Column(
+                    "discord_config",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'{}'"),
+                )
             )
 
     bind = op.get_bind()
@@ -82,4 +90,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Repair migration is intentionally non-destructive on downgrade.
     pass
-

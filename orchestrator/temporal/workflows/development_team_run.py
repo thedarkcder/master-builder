@@ -12,7 +12,9 @@ from orchestrator.temporal.payloads import (
 
 try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio import workflow
-except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
+except (
+    ImportError
+) as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
 
 
@@ -50,21 +52,31 @@ class DevelopmentTeamRunWorkflow:
         )
 
     @workflow.run
-    async def run(self, payload: DevelopmentTeamRunWorkflowInput) -> WorkflowEngineState:
+    async def run(
+        self, payload: DevelopmentTeamRunWorkflowInput
+    ) -> WorkflowEngineState:
         self._workflow_id = str(payload.workflow_id or "").strip()
         self._issue_key = str(payload.issue_key or "").strip()
         self._active_run_id = str(payload.run_id or "").strip()
-        self._activity_timeout_seconds = max(1, int(payload.activity_start_to_close_timeout_seconds or 0))
-        self._resume_timeout_seconds = max(1, int(payload.human_input_resume_timeout_seconds or 0))
+        self._activity_timeout_seconds = max(
+            1, int(payload.activity_start_to_close_timeout_seconds or 0)
+        )
+        self._resume_timeout_seconds = max(
+            1, int(payload.human_input_resume_timeout_seconds or 0)
+        )
         self._status = "dispatching"
         while self._status in ACTIVE_EXECUTION_STATUSES:
-            await workflow.wait_condition(lambda: self._status not in ACTIVE_EXECUTION_STATUSES)
+            await workflow.wait_condition(
+                lambda: self._status not in ACTIVE_EXECUTION_STATUSES
+            )
         while self._status == "waiting_for_input":
             await workflow.wait_condition(lambda: self._status != "waiting_for_input")
         return self.describe_state()
 
     @workflow.update
-    async def record_run_result(self, payload: DevelopmentTeamRunActivityResult) -> str | None:
+    async def record_run_result(
+        self, payload: DevelopmentTeamRunActivityResult
+    ) -> str | None:
         self._apply_result(payload)
         return self._active_run_id
 
@@ -73,7 +85,10 @@ class DevelopmentTeamRunWorkflow:
         if self._status != "waiting_for_input":
             return self._active_run_id
         normalized_request_id = str(payload.request_id or "").strip()
-        if self._pending_request_id and normalized_request_id != self._pending_request_id:
+        if (
+            self._pending_request_id
+            and normalized_request_id != self._pending_request_id
+        ):
             raise ValueError(
                 f"Workflow {self._workflow_id} is waiting on {self._pending_request_id}, not {normalized_request_id}"
             )

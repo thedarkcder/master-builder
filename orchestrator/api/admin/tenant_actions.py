@@ -4,7 +4,11 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 
-from orchestrator.api.schemas import DiscordAllowlistApprovalResult, DiscordAllowlistRequestRead, JiraWebhookActionResult
+from orchestrator.api.schemas import (
+    DiscordAllowlistApprovalResult,
+    DiscordAllowlistRequestRead,
+    JiraWebhookActionResult,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -18,7 +22,9 @@ def disconnect_tenant_atlassian(
     delete_jira_webhooks_fn,
 ) -> JiraWebhookActionResult:  # noqa: ANN001
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     webhook_delete_ok, delete_details, _ = delete_jira_webhooks_fn(
         session=session,
@@ -55,8 +61,12 @@ def list_discord_allowlist_requests(
 ) -> list[DiscordAllowlistRequestRead]:  # noqa: ANN001
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return parse_discord_allowlist_requests_fn(project.discord_config, project_id=project.project_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    return parse_discord_allowlist_requests_fn(
+        project.discord_config, project_id=project.project_id
+    )
 
 
 def approve_discord_allowlist_request(
@@ -71,20 +81,33 @@ def approve_discord_allowlist_request(
 ) -> DiscordAllowlistApprovalResult:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
 
     normalized_user_id = user_id.strip()
     if not normalized_user_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Discord user ID is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Discord user ID is required",
+        )
 
     discord_config = dict(project.discord_config or {})
-    existing_requests = parse_discord_allowlist_requests_fn(discord_config, project_id=project.project_id)
-    matching_request = next((item for item in existing_requests if item.user_id == normalized_user_id), None)
+    existing_requests = parse_discord_allowlist_requests_fn(
+        discord_config, project_id=project.project_id
+    )
+    matching_request = next(
+        (item for item in existing_requests if item.user_id == normalized_user_id), None
+    )
     if matching_request is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Allowlist request not found"
+        )
 
     allowed_user_ids_raw = discord_config.get("allowed_user_ids")
     allowed_user_ids = (

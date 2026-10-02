@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision.gate import DecisionGateResult
@@ -16,6 +19,7 @@ from orchestrator.core.runtime.payload_models import PrecheckPolicy
 class PrecheckPolicyResult:
     decision_gate: DecisionGateResult
     gtd: GoodToDoValidationResult
+
 
 def evaluate_precheck_policy(
     *,

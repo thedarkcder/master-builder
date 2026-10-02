@@ -19,15 +19,30 @@ depends_on = None
 
 def upgrade() -> None:
     with op.batch_alter_table("run_log_events", recreate="auto") as batch_op:
-        batch_op.add_column(sa.Column("invocation_id", sa.String(length=64), nullable=True))
+        batch_op.add_column(
+            sa.Column("invocation_id", sa.String(length=64), nullable=True)
+        )
         batch_op.add_column(sa.Column("channel", sa.String(length=64), nullable=True))
         batch_op.add_column(sa.Column("command", sa.String(length=128), nullable=True))
-        batch_op.add_column(sa.Column("working_dir", sa.String(length=1024), nullable=True))
-        batch_op.alter_column("run_id", existing_type=sa.String(length=64), nullable=True)
+        batch_op.add_column(
+            sa.Column("working_dir", sa.String(length=1024), nullable=True)
+        )
+        batch_op.alter_column(
+            "run_id", existing_type=sa.String(length=64), nullable=True
+        )
 
-    op.create_index("ix_run_log_events_invocation_id", "run_log_events", ["invocation_id"], unique=False)
-    op.create_index("ix_run_log_events_channel", "run_log_events", ["channel"], unique=False)
-    op.create_index("ix_run_log_events_command", "run_log_events", ["command"], unique=False)
+    op.create_index(
+        "ix_run_log_events_invocation_id",
+        "run_log_events",
+        ["invocation_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_run_log_events_channel", "run_log_events", ["channel"], unique=False
+    )
+    op.create_index(
+        "ix_run_log_events_command", "run_log_events", ["command"], unique=False
+    )
 
 
 def downgrade() -> None:
@@ -36,7 +51,9 @@ def downgrade() -> None:
     op.drop_index("ix_run_log_events_invocation_id", table_name="run_log_events")
 
     with op.batch_alter_table("run_log_events", recreate="auto") as batch_op:
-        batch_op.alter_column("run_id", existing_type=sa.String(length=64), nullable=False)
+        batch_op.alter_column(
+            "run_id", existing_type=sa.String(length=64), nullable=False
+        )
         batch_op.drop_column("working_dir")
         batch_op.drop_column("command")
         batch_op.drop_column("channel")

@@ -37,11 +37,15 @@ class KnowledgePrewarmTests(unittest.TestCase):
         prewarm_mock.assert_called_once_with(local_files_only=True)
         self.assertEqual(result.embedding_model, "BAAI/bge-small-en-v1.5")
 
-    def test_suppress_known_onnxruntime_warning_noise_is_safe_without_runtime(self) -> None:
+    def test_suppress_known_onnxruntime_warning_noise_is_safe_without_runtime(
+        self,
+    ) -> None:
         with patch.dict(sys.modules, {"onnxruntime": None}):
             _suppress_known_onnxruntime_warning_noise()
 
-    def test_suppress_known_onnxruntime_warning_noise_lowers_logger_severity_when_available(self) -> None:
+    def test_suppress_known_onnxruntime_warning_noise_lowers_logger_severity_when_available(
+        self,
+    ) -> None:
         fake_runtime = unittest.mock.Mock()
 
         with patch.dict(sys.modules, {"onnxruntime": fake_runtime}):

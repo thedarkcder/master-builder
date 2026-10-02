@@ -7,10 +7,19 @@ from orchestrator.api.discord.commands.personas import dispatch_persona_command
 from orchestrator.api.discord.commands.parser import resolve_discord_command
 from orchestrator.api.discord.commands.run_controls import dispatch_run_control_command
 from orchestrator.api.discord.commands.dispatcher import dispatch_simple_discord_command
-from orchestrator.api.discord.shared.command_authorization import allow_sensitive_command_bypass
-from orchestrator.api.discord.shared.plain_text_routing import rewrite_plain_text_command
-from orchestrator.api.discord.shared.followup_format import resolve_tenant_jira_browse_base_url
-from orchestrator.api.discord.ingress.service import DiscordIngressDependencies, DiscordIngressHandlers
+from orchestrator.api.discord.shared.command_authorization import (
+    allow_sensitive_command_bypass,
+)
+from orchestrator.api.discord.shared.plain_text_routing import (
+    rewrite_plain_text_command,
+)
+from orchestrator.api.discord.shared.followup_format import (
+    resolve_tenant_jira_browse_base_url,
+)
+from orchestrator.api.discord.ingress.service import (
+    DiscordIngressDependencies,
+    DiscordIngressHandlers,
+)
 
 
 def build_discord_ingress_dependencies(
@@ -56,7 +65,9 @@ def build_discord_ingress_dependencies(
             payload=ctx.payload,
             command_name=ctx.command_name,
             arguments=list(ctx.arguments),
-            jira_browse_base_url=resolve_tenant_jira_browse_base_url(session=ctx.session, tenant=ctx.tenant),
+            jira_browse_base_url=resolve_tenant_jira_browse_base_url(
+                session=ctx.session, tenant=ctx.tenant
+            ),
             scope=ctx.scope,
         ),
         ask=lambda ctx: dispatch_ask_command(
@@ -168,51 +179,63 @@ def build_discord_ingress_dependencies(
     )
     return DiscordIngressDependencies(
         get_tenant=lambda db, current_tenant_id: get_tenant_fn(db, current_tenant_id),
-        resolve_discord_command=lambda current_tenant, raw_command, channel_id, allow_plain: resolve_discord_command(
-            tenant=current_tenant,
-            raw_command=raw_command,
-            channel_id=channel_id,
-            allow_plain_ask=allow_plain,
+        resolve_discord_command=lambda current_tenant, raw_command, channel_id, allow_plain: (
+            resolve_discord_command(
+                tenant=current_tenant,
+                raw_command=raw_command,
+                channel_id=channel_id,
+                allow_plain_ask=allow_plain,
+            )
         ),
-        assert_channel_scope=lambda db, current_tenant, channel_id: assert_channel_scope_fn(
-            db,
-            current_tenant,
-            channel_id,
+        assert_channel_scope=lambda db, current_tenant, channel_id: (
+            assert_channel_scope_fn(
+                db,
+                current_tenant,
+                channel_id,
+            )
         ),
-        assert_sensitive_command_permission=lambda db, current_tenant, command_name, user_id, channel_id: assert_sensitive_command_permission_fn(
-            db,
-            current_tenant,
-            command_name,
-            user_id,
-            channel_id,
+        assert_sensitive_command_permission=lambda db, current_tenant, command_name, user_id, channel_id: (
+            assert_sensitive_command_permission_fn(
+                db,
+                current_tenant,
+                command_name,
+                user_id,
+                channel_id,
+            )
         ),
         resolve_scope=lambda db, current_tenant, channel_id: resolve_scope_fn(
             db,
             current_tenant,
             channel_id,
         ),
-        enrich_scope=lambda db, current_tenant, command_name, arguments, payload, current_scope: enrich_scope_fn(
-            db,
-            current_tenant,
-            command_name,
-            arguments,
-            payload,
-            current_scope,
+        enrich_scope=lambda db, current_tenant, command_name, arguments, payload, current_scope: (
+            enrich_scope_fn(
+                db,
+                current_tenant,
+                command_name,
+                arguments,
+                payload,
+                current_scope,
+            )
         ),
-        rewrite_raw_command=lambda db, current_tenant, payload, policy: rewrite_plain_text_command(
-            session=db,
-            tenant=current_tenant,
-            payload=payload,
-            allow_plain_ask=bool(getattr(policy, "allow_plain_ask", False)),
-            find_seed_followup_context_fn=find_seed_followup_context_fn,
+        rewrite_raw_command=lambda db, current_tenant, payload, policy: (
+            rewrite_plain_text_command(
+                session=db,
+                tenant=current_tenant,
+                payload=payload,
+                allow_plain_ask=bool(getattr(policy, "allow_plain_ask", False)),
+                find_seed_followup_context_fn=find_seed_followup_context_fn,
+            )
         ),
-        allow_sensitive_command_bypass=lambda db, current_tenant, command_name, arguments, payload: allow_sensitive_command_bypass(
-            session=db,
-            tenant=current_tenant,
-            command_name=command_name,
-            arguments=arguments,
-            payload=payload,
-            find_seed_followup_context_fn=find_seed_followup_context_fn,
+        allow_sensitive_command_bypass=lambda db, current_tenant, command_name, arguments, payload: (
+            allow_sensitive_command_bypass(
+                session=db,
+                tenant=current_tenant,
+                command_name=command_name,
+                arguments=arguments,
+                payload=payload,
+                find_seed_followup_context_fn=find_seed_followup_context_fn,
+            )
         ),
         handlers=handlers,
     )

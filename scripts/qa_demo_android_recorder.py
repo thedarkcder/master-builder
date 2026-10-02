@@ -39,7 +39,9 @@ class AndroidElement:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
-        raise RuntimeError("usage: qa_demo_android_recorder.py <input.json> <output.json>")
+        raise RuntimeError(
+            "usage: qa_demo_android_recorder.py <input.json> <output.json>"
+        )
 
     input_path = Path(argv[1]).resolve()
     output_path = Path(argv[2]).resolve()
@@ -61,28 +63,42 @@ def main(argv: list[str]) -> int:
 
     output_dir = Path(str(payload.get("output_dir") or "").strip()).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    device_id = str(os.environ.get("QA_DEMO_ANDROID_DEVICE_ID") or "").strip() or ensure_preferred_android_device(
+    device_id = str(
+        os.environ.get("QA_DEMO_ANDROID_DEVICE_ID") or ""
+    ).strip() or ensure_preferred_android_device(
         timeout_seconds=DEFAULT_ANDROID_EMULATOR_BOOT_TIMEOUT_SECONDS,
     )
     apk_path = Path(
         str(os.environ.get("QA_DEMO_ANDROID_APK") or "").strip()
         or build_debug_apk(
             repo_dir=repo_dir,
-            target_source_paths=_target_source_paths(payload.get("target_source_paths")),
+            target_source_paths=_target_source_paths(
+                payload.get("target_source_paths")
+            ),
         )
     )
-    package_name = str(os.environ.get("QA_DEMO_ANDROID_PACKAGE") or "").strip() or resolve_package_name(apk_path=apk_path)
+    package_name = str(
+        os.environ.get("QA_DEMO_ANDROID_PACKAGE") or ""
+    ).strip() or resolve_package_name(apk_path=apk_path)
     launch_extras = qa_demo_launch_extras(payload)
     install_apk(device_id=device_id, apk_path=apk_path)
-    launch_activity = resolve_launch_activity(device_id=device_id, package_name=package_name)
-    capture_reference = str(payload.get("capture_reference") or "android-emulator://configured").strip()
+    launch_activity = resolve_launch_activity(
+        device_id=device_id, package_name=package_name
+    )
+    capture_reference = str(
+        payload.get("capture_reference") or "android-emulator://configured"
+    ).strip()
 
     recordings: list[dict[str, str]] = []
     for scenario in qa_result.scenarios:
         sanitized_name = sanitize_recording_name(scenario.name)
         local_video_path = output_dir / f"{sanitized_name}.mp4"
         reset_app_state(device_id=device_id, package_name=package_name)
-        launch_app(device_id=device_id, launch_activity=launch_activity, launch_extras=launch_extras)
+        launch_app(
+            device_id=device_id,
+            launch_activity=launch_activity,
+            launch_extras=launch_extras,
+        )
         try:
             record_live_screen_demo(
                 device_id=device_id,
@@ -93,7 +109,9 @@ def main(argv: list[str]) -> int:
                 launch_extras=launch_extras,
             )
         except Exception as exc:  # noqa: BLE001
-            diagnostics = android_failure_diagnostics(device_id=device_id, package_name=package_name)
+            diagnostics = android_failure_diagnostics(
+                device_id=device_id, package_name=package_name
+            )
             failure_path = local_video_path
             try:
                 validate_mp4_recording(local_video_path)
@@ -140,11 +158,15 @@ def main(argv: list[str]) -> int:
             return 1
         recordings.append({"name": scenario.name, "path": str(local_video_path)})
 
-    output_path.write_text(json.dumps({"recordings": recordings}, indent=2), encoding="utf-8")
+    output_path.write_text(
+        json.dumps({"recordings": recordings}, indent=2), encoding="utf-8"
+    )
     return 0
 
 
-def android_failure_message(*, scenario_name: str, error: Exception, diagnostics: str) -> str:
+def android_failure_message(
+    *, scenario_name: str, error: Exception, diagnostics: str
+) -> str:
     parts = [f"QA demo Android scenario failed: {scenario_name}", str(error)]
     if diagnostics:
         parts.append(diagnostics)
@@ -160,13 +182,17 @@ def android_failure_diagnostics(*, device_id: str, package_name: str) -> str:
         )
     except Exception as exc:  # noqa: BLE001
         return f"Android diagnostics unavailable: {exc}"
-    selected = _select_android_failure_log_lines(logcat_output=result.stdout, package_name=package_name)
+    selected = _select_android_failure_log_lines(
+        logcat_output=result.stdout, package_name=package_name
+    )
     if not selected:
         return ""
     return "Android diagnostics:\n" + _bounded_diagnostic_text(selected)
 
 
-def _select_android_failure_log_lines(*, logcat_output: str, package_name: str) -> list[str]:
+def _select_android_failure_log_lines(
+    *, logcat_output: str, package_name: str
+) -> list[str]:
     normalized_package = str(package_name or "").strip()
     crash_markers = (
         "AndroidRuntime",
@@ -211,12 +237,18 @@ def preferred_adb_device(adb_devices_output: str) -> str:
     return devices[0]
 
 
-def ensure_preferred_android_device(*, timeout_seconds: int = DEFAULT_ANDROID_EMULATOR_BOOT_TIMEOUT_SECONDS) -> str:
-    ready_devices = _ready_adb_devices(_run(["adb", "devices"], capture_output=True).stdout)
+def ensure_preferred_android_device(
+    *, timeout_seconds: int = DEFAULT_ANDROID_EMULATOR_BOOT_TIMEOUT_SECONDS
+) -> str:
+    ready_devices = _ready_adb_devices(
+        _run(["adb", "devices"], capture_output=True).stdout
+    )
     if ready_devices:
         return ready_devices[0]
     emulator = resolve_android_emulator()
-    avd = str(os.environ.get("QA_DEMO_ANDROID_AVD") or "").strip() or preferred_android_avd(
+    avd = str(
+        os.environ.get("QA_DEMO_ANDROID_AVD") or ""
+    ).strip() or preferred_android_avd(
         _run([emulator, "-list-avds"], capture_output=True).stdout
     )
     subprocess.Popen(  # noqa: S603 - executable is resolved from Android SDK/PATH above.
@@ -225,16 +257,26 @@ def ensure_preferred_android_device(*, timeout_seconds: int = DEFAULT_ANDROID_EM
         stderr=subprocess.DEVNULL,
         text=True,
     )
-    _run(["adb", "wait-for-device"], capture_output=True, timeout_seconds=timeout_seconds)
-    ready_devices = _ready_adb_devices(_run(["adb", "devices"], capture_output=True, check=False).stdout)
+    _run(
+        ["adb", "wait-for-device"], capture_output=True, timeout_seconds=timeout_seconds
+    )
+    ready_devices = _ready_adb_devices(
+        _run(["adb", "devices"], capture_output=True, check=False).stdout
+    )
     if not ready_devices:
-        raise RuntimeError(f"Android emulator did not become available after adb wait-for-device: {avd}")
+        raise RuntimeError(
+            f"Android emulator did not become available after adb wait-for-device: {avd}"
+        )
     device_id = ready_devices[0]
-    _wait_for_android_boot_completed(device_id=device_id, avd=avd, timeout_seconds=timeout_seconds)
+    _wait_for_android_boot_completed(
+        device_id=device_id, avd=avd, timeout_seconds=timeout_seconds
+    )
     return device_id
 
 
-def _wait_for_android_boot_completed(*, device_id: str, avd: str, timeout_seconds: int) -> None:
+def _wait_for_android_boot_completed(
+    *, device_id: str, avd: str, timeout_seconds: int
+) -> None:
     try:
         _run(
             [
@@ -250,7 +292,9 @@ def _wait_for_android_boot_completed(*, device_id: str, avd: str, timeout_second
             timeout_seconds=timeout_seconds,
         )
     except RuntimeError as exc:
-        raise RuntimeError(f"Android emulator did not boot within {timeout_seconds} seconds: {avd}") from exc
+        raise RuntimeError(
+            f"Android emulator did not boot within {timeout_seconds} seconds: {avd}"
+        ) from exc
 
 
 def _ready_adb_devices(adb_devices_output: str) -> list[str]:
@@ -266,13 +310,19 @@ def _ready_adb_devices(adb_devices_output: str) -> list[str]:
 
 
 def preferred_android_avd(emulator_list_avds_output: str) -> str:
-    avds = [line.strip() for line in emulator_list_avds_output.splitlines() if line.strip()]
+    avds = [
+        line.strip() for line in emulator_list_avds_output.splitlines() if line.strip()
+    ]
     if not avds:
-        raise RuntimeError("Android QA demo recording requires an Android Virtual Device when no adb device is ready")
+        raise RuntimeError(
+            "Android QA demo recording requires an Android Virtual Device when no adb device is ready"
+        )
     configured = str(os.environ.get("QA_DEMO_ANDROID_AVD") or "").strip()
     if configured:
         if configured not in avds:
-            raise RuntimeError(f"Configured Android QA demo AVD does not exist: {configured}")
+            raise RuntimeError(
+                f"Configured Android QA demo AVD does not exist: {configured}"
+            )
         return configured
     return avds[0]
 
@@ -291,10 +341,15 @@ def resolve_android_emulator() -> str:
         if not raw_root:
             continue
         sdk_root = Path(raw_root).expanduser()
-        for candidate in (sdk_root / "emulator" / "emulator", sdk_root / "tools" / "emulator"):
+        for candidate in (
+            sdk_root / "emulator" / "emulator",
+            sdk_root / "tools" / "emulator",
+        ):
             if candidate.is_file():
                 return str(candidate)
-    raise RuntimeError("Android QA demo recording requires the Android emulator on PATH or under the Android SDK")
+    raise RuntimeError(
+        "Android QA demo recording requires the Android emulator on PATH or under the Android SDK"
+    )
 
 
 def _target_source_paths(value: object) -> list[str]:
@@ -307,13 +362,19 @@ def qa_demo_launch_extras(payload: dict[str, object]) -> dict[str, str]:
     return qa_demo_launch_context(payload)
 
 
-def build_debug_apk(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> Path:
+def build_debug_apk(
+    *, repo_dir: Path, target_source_paths: list[str] | None = None
+) -> Path:
     android_project_dir = discover_android_project_dir(
         repo_dir=repo_dir,
         target_source_paths=target_source_paths,
     )
     gradle = android_project_dir / "gradlew"
-    command = [str(gradle), "assembleDebug"] if gradle.exists() else ["gradle", "assembleDebug"]
+    command = (
+        [str(gradle), "assembleDebug"]
+        if gradle.exists()
+        else ["gradle", "assembleDebug"]
+    )
     _run(command, cwd=android_project_dir, capture_output=True)
     candidates = sorted(android_project_dir.glob("**/build/outputs/apk/**/*debug*.apk"))
     if not candidates:
@@ -321,20 +382,33 @@ def build_debug_apk(*, repo_dir: Path, target_source_paths: list[str] | None = N
     return candidates[-1]
 
 
-def discover_android_project_dir(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> Path:
+def discover_android_project_dir(
+    *, repo_dir: Path, target_source_paths: list[str] | None = None
+) -> Path:
     configured = str(os.environ.get("QA_DEMO_ANDROID_PROJECT_DIR") or "").strip()
     if configured:
         configured_path = Path(configured)
-        android_project_dir = configured_path if configured_path.is_absolute() else repo_dir / configured_path
+        android_project_dir = (
+            configured_path
+            if configured_path.is_absolute()
+            else repo_dir / configured_path
+        )
         if not android_project_dir.exists():
-            raise RuntimeError(f"Configured Android project directory does not exist: {android_project_dir}")
+            raise RuntimeError(
+                f"Configured Android project directory does not exist: {android_project_dir}"
+            )
         return android_project_dir.resolve()
     for source_path in target_source_paths or []:
-        candidate = _resolve_repo_relative_source_path(repo_dir=repo_dir, source_path=source_path)
+        candidate = _resolve_repo_relative_source_path(
+            repo_dir=repo_dir, source_path=source_path
+        )
         if candidate.exists() and _directory_declares_android_application(candidate):
             return candidate
     candidates: list[Path] = []
-    for build_file in [*repo_dir.rglob("build.gradle"), *repo_dir.rglob("build.gradle.kts")]:
+    for build_file in [
+        *repo_dir.rglob("build.gradle"),
+        *repo_dir.rglob("build.gradle.kts"),
+    ]:
         try:
             source = build_file.read_text(encoding="utf-8")
         except OSError:
@@ -342,8 +416,15 @@ def discover_android_project_dir(*, repo_dir: Path, target_source_paths: list[st
         if _is_android_application_gradle_source(source):
             candidates.append(build_file.parent)
     if candidates:
-        return sorted(candidates, key=lambda path: (len(path.relative_to(repo_dir).parts), str(path)))[0]
-    if (repo_dir / "gradlew").exists() or (repo_dir / "settings.gradle").exists() or (repo_dir / "settings.gradle.kts").exists():
+        return sorted(
+            candidates,
+            key=lambda path: (len(path.relative_to(repo_dir).parts), str(path)),
+        )[0]
+    if (
+        (repo_dir / "gradlew").exists()
+        or (repo_dir / "settings.gradle").exists()
+        or (repo_dir / "settings.gradle.kts").exists()
+    ):
         return repo_dir
     raise RuntimeError(f"No Android Gradle application project found under {repo_dir}")
 
@@ -351,12 +432,16 @@ def discover_android_project_dir(*, repo_dir: Path, target_source_paths: list[st
 def _resolve_repo_relative_source_path(*, repo_dir: Path, source_path: str) -> Path:
     raw_path = Path(str(source_path or "").strip())
     if raw_path.is_absolute():
-        raise RuntimeError(f"Android project source path must be repo-relative: {source_path}")
+        raise RuntimeError(
+            f"Android project source path must be repo-relative: {source_path}"
+        )
     candidate = (repo_dir / raw_path).resolve()
     try:
         candidate.relative_to(repo_dir.resolve())
     except ValueError as exc:
-        raise RuntimeError(f"Android project source path escapes the repository: {source_path}") from exc
+        raise RuntimeError(
+            f"Android project source path escapes the repository: {source_path}"
+        ) from exc
     return candidate
 
 
@@ -366,7 +451,9 @@ def _directory_declares_android_application(path: Path) -> bool:
         if not build_file.exists():
             continue
         try:
-            if _is_android_application_gradle_source(build_file.read_text(encoding="utf-8")):
+            if _is_android_application_gradle_source(
+                build_file.read_text(encoding="utf-8")
+            ):
                 return True
         except OSError:
             continue
@@ -409,9 +496,13 @@ def resolve_android_build_tool(*, tool_name: str, env_var: str) -> str:
         build_tools_dir = Path(raw_root).expanduser() / "build-tools"
         if not build_tools_dir.exists():
             continue
-        candidates.extend(path for path in build_tools_dir.glob(f"*/{tool_name}") if path.is_file())
+        candidates.extend(
+            path for path in build_tools_dir.glob(f"*/{tool_name}") if path.is_file()
+        )
     if not candidates:
-        raise RuntimeError(f"Android QA demo recording requires {tool_name} on PATH or under an Android SDK build-tools directory")
+        raise RuntimeError(
+            f"Android QA demo recording requires {tool_name} on PATH or under an Android SDK build-tools directory"
+        )
     return str(sorted(candidates, key=_android_build_tool_version_key)[-1])
 
 
@@ -431,18 +522,34 @@ def install_apk(*, device_id: str, apk_path: Path) -> None:
 
 def resolve_launch_activity(*, device_id: str, package_name: str) -> str:
     result = _run(
-        ["adb", "-s", device_id, "shell", "cmd", "package", "resolve-activity", "--brief", package_name],
+        [
+            "adb",
+            "-s",
+            device_id,
+            "shell",
+            "cmd",
+            "package",
+            "resolve-activity",
+            "--brief",
+            package_name,
+        ],
         capture_output=True,
     )
     for raw_line in reversed(result.stdout.splitlines()):
         line = raw_line.strip()
         if "/" in line and not line.startswith("priority="):
             return line
-    raise RuntimeError(f"Unable to resolve Android launch activity for package {package_name}")
+    raise RuntimeError(
+        f"Unable to resolve Android launch activity for package {package_name}"
+    )
 
 
 def reset_app_state(*, device_id: str, package_name: str) -> None:
-    _run(["adb", "-s", device_id, "shell", "pm", "clear", package_name], capture_output=True, check=False)
+    _run(
+        ["adb", "-s", device_id, "shell", "pm", "clear", package_name],
+        capture_output=True,
+        check=False,
+    )
 
 
 def launch_app(
@@ -458,7 +565,17 @@ def launch_app(
         if normalized_key and normalized_value:
             extras_args.extend(["--es", normalized_key, normalized_value])
     _run(
-        ["adb", "-s", device_id, "shell", "am", "start", "-n", launch_activity, *extras_args],
+        [
+            "adb",
+            "-s",
+            device_id,
+            "shell",
+            "am",
+            "start",
+            "-n",
+            launch_activity,
+            *extras_args,
+        ],
         capture_output=True,
     )
 
@@ -491,7 +608,11 @@ def record_live_screen_demo(
     launch_extras: dict[str, str] | None = None,
 ) -> None:
     remote_path = f"/sdcard/Download/master-builder-qa-demo-{sanitize_recording_name(scenario.name)}.mp4"
-    _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
+    _run(
+        ["adb", "-s", device_id, "shell", "rm", "-f", remote_path],
+        capture_output=True,
+        check=False,
+    )
     recorder = subprocess.Popen(
         ["adb", "-s", device_id, "shell", "screenrecord", remote_path],
         stdout=subprocess.DEVNULL,
@@ -515,19 +636,32 @@ def record_live_screen_demo(
             stop_screenrecord(recorder)
         except Exception as exc:  # noqa: BLE001
             stop_error = exc
-    combined_error = combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
+    combined_error = combined_recording_failure(
+        primary_error=primary_error, stop_error=stop_error
+    )
     pull_error: Exception | None = None
     try:
-        _run(["adb", "-s", device_id, "pull", remote_path, str(output_path)], capture_output=True)
+        _run(
+            ["adb", "-s", device_id, "pull", remote_path, str(output_path)],
+            capture_output=True,
+        )
     except Exception as exc:  # noqa: BLE001
         pull_error = exc
     finally:
-        _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
+        _run(
+            ["adb", "-s", device_id, "shell", "rm", "-f", remote_path],
+            capture_output=True,
+            check=False,
+        )
     if combined_error is not None:
         if pull_error is not None:
-            raise RuntimeError(f"{combined_error}\nAndroid failure recording pull failed: {pull_error}") from pull_error
+            raise RuntimeError(
+                f"{combined_error}\nAndroid failure recording pull failed: {pull_error}"
+            ) from pull_error
         if not output_path.exists():
-            raise RuntimeError(f"{combined_error}\nExpected Android QA failure recording missing: {output_path}")
+            raise RuntimeError(
+                f"{combined_error}\nExpected Android QA failure recording missing: {output_path}"
+            )
         raise combined_error
     if pull_error is not None:
         raise pull_error
@@ -547,20 +681,36 @@ def execute_step(
     if step.action == "goto":
         return
     if step.action == "relaunch_app":
-        _run(["adb", "-s", device_id, "shell", "am", "force-stop", package_name], capture_output=True)
-        launch_app(device_id=device_id, launch_activity=launch_activity, launch_extras=launch_extras)
+        _run(
+            ["adb", "-s", device_id, "shell", "am", "force-stop", package_name],
+            capture_output=True,
+        )
+        launch_app(
+            device_id=device_id,
+            launch_activity=launch_activity,
+            launch_extras=launch_extras,
+        )
         return
     if step.action == "click":
         element = find_element(device_id=device_id, selector=require_selector(step))
         x, y = element.center
-        _run(["adb", "-s", device_id, "shell", "input", "tap", str(x), str(y)], capture_output=True)
+        _run(
+            ["adb", "-s", device_id, "shell", "input", "tap", str(x), str(y)],
+            capture_output=True,
+        )
         return
     if step.action == "fill":
         element = find_element(device_id=device_id, selector=require_selector(step))
         x, y = element.center
-        _run(["adb", "-s", device_id, "shell", "input", "tap", str(x), str(y)], capture_output=True)
+        _run(
+            ["adb", "-s", device_id, "shell", "input", "tap", str(x), str(y)],
+            capture_output=True,
+        )
         text = str(step.value or "").replace(" ", "%s")
-        _run(["adb", "-s", device_id, "shell", "input", "text", text], capture_output=True)
+        _run(
+            ["adb", "-s", device_id, "shell", "input", "text", text],
+            capture_output=True,
+        )
         return
     if step.action == "press":
         press_value = str(step.value or "").strip().lower()
@@ -580,14 +730,19 @@ def execute_step(
         }.get(press_value)
         if key_code is None:
             raise RuntimeError(f"Unsupported Android press value: {step.value}")
-        _run(["adb", "-s", device_id, "shell", "input", "keyevent", key_code], capture_output=True)
+        _run(
+            ["adb", "-s", device_id, "shell", "input", "keyevent", key_code],
+            capture_output=True,
+        )
         return
     if step.action in {"assert_visible", "assert_text"}:
         element = find_element(device_id=device_id, selector=require_selector(step))
         if step.action == "assert_text":
             expected = require_value(step)
             if expected not in element.text:
-                raise RuntimeError(f"Expected {expected!r} in Android element text {element.text!r}")
+                raise RuntimeError(
+                    f"Expected {expected!r} in Android element text {element.text!r}"
+                )
         return
     if step.action == "wait_for_text":
         find_element(device_id=device_id, selector=f"text={require_value(step)}")
@@ -605,7 +760,10 @@ def find_element(*, device_id: str, selector: str) -> AndroidElement:
     elif selector.startswith("id="):
         expected = selector.removeprefix("id=")
         for element in elements:
-            if element.resource_id.endswith(f":id/{expected}") or element.resource_id == expected:
+            if (
+                element.resource_id.endswith(f":id/{expected}")
+                or element.resource_id == expected
+            ):
                 return element
     else:
         for element in elements:
@@ -619,8 +777,14 @@ def find_element(*, device_id: str, selector: str) -> AndroidElement:
 
 
 def dump_ui_elements(*, device_id: str) -> list[AndroidElement]:
-    _run(["adb", "-s", device_id, "shell", "uiautomator", "dump", "/sdcard/window.xml"], capture_output=True)
-    xml_payload = _run(["adb", "-s", device_id, "exec-out", "cat", "/sdcard/window.xml"], capture_output=True).stdout
+    _run(
+        ["adb", "-s", device_id, "shell", "uiautomator", "dump", "/sdcard/window.xml"],
+        capture_output=True,
+    )
+    xml_payload = _run(
+        ["adb", "-s", device_id, "exec-out", "cat", "/sdcard/window.xml"],
+        capture_output=True,
+    ).stdout
     root = ET.fromstring(xml_payload)
     elements: list[AndroidElement] = []
     for node in root.iter("node"):
@@ -650,7 +814,9 @@ def validate_mp4_recording(path: Path) -> None:
     if not payload:
         raise RuntimeError(f"Android QA recording is empty: {path}")
     if b"moov" not in payload:
-        raise RuntimeError(f"Android QA recording is incomplete; missing moov atom: {path}")
+        raise RuntimeError(
+            f"Android QA recording is incomplete; missing moov atom: {path}"
+        )
 
 
 def stop_screenrecord(process: subprocess.Popen[str]) -> None:
@@ -663,7 +829,9 @@ def stop_screenrecord(process: subprocess.Popen[str]) -> None:
             process.wait(timeout=5)
             raise RuntimeError("Timed out stopping Android screen recording") from exc
     if process.returncode not in {0, -signal.SIGINT}:
-        raise RuntimeError(f"Android screen recording failed with exit code {process.returncode}")
+        raise RuntimeError(
+            f"Android screen recording failed with exit code {process.returncode}"
+        )
 
 
 def combined_recording_failure(
@@ -675,18 +843,24 @@ def combined_recording_failure(
         return stop_error
     if stop_error is None:
         return primary_error
-    return RuntimeError(f"{primary_error}\nAndroid screen recording shutdown also failed: {stop_error}")
+    return RuntimeError(
+        f"{primary_error}\nAndroid screen recording shutdown also failed: {stop_error}"
+    )
 
 
 def sanitize_recording_name(name: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip("-")
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip(
+        "-"
+    )
     return normalized or "demo"
 
 
 def require_selector(step: QaStep) -> str:
     value = str(step.selector or "").strip()
     if not value:
-        raise RuntimeError(f"Android QA step requires selector for action {step.action}")
+        raise RuntimeError(
+            f"Android QA step requires selector for action {step.action}"
+        )
     return value
 
 
@@ -705,7 +879,11 @@ def _run(
     check: bool = True,
     timeout_seconds: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    effective_timeout_seconds = timeout_seconds if timeout_seconds is not None else _adb_command_timeout_seconds()
+    effective_timeout_seconds = (
+        timeout_seconds
+        if timeout_seconds is not None
+        else _adb_command_timeout_seconds()
+    )
     try:
         return subprocess.run(
             args,
@@ -736,9 +914,13 @@ def _adb_command_timeout_seconds() -> int:
     try:
         configured = int(raw_value)
     except ValueError as exc:
-        raise RuntimeError("QA_DEMO_ANDROID_ADB_TIMEOUT_SECONDS must be an integer") from exc
+        raise RuntimeError(
+            "QA_DEMO_ANDROID_ADB_TIMEOUT_SECONDS must be an integer"
+        ) from exc
     if configured < 1:
-        raise RuntimeError("QA_DEMO_ANDROID_ADB_TIMEOUT_SECONDS must be greater than zero")
+        raise RuntimeError(
+            "QA_DEMO_ANDROID_ADB_TIMEOUT_SECONDS must be greater than zero"
+        )
     return configured
 
 

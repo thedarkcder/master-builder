@@ -136,7 +136,9 @@ def list_workflow_observability_events(
         event_class="execution_log",
         filters=filters,
         limit=limit,
-        before=EventCursor(recorded_at=before_recorded_at, event_sequence=before_sequence),
+        before=EventCursor(
+            recorded_at=before_recorded_at, event_sequence=before_sequence
+        ),
         newest_first=True,
     )
 
@@ -154,7 +156,10 @@ def _event_sequence_from_id(event_id: str | None) -> int | None:
 
 
 def encode_stream_row(row: ProductEvent) -> str:
-    return json.dumps(observability_stream_event_to_payload(row), separators=(",", ":")) + "\n"
+    return (
+        json.dumps(observability_stream_event_to_payload(row), separators=(",", ":"))
+        + "\n"
+    )
 
 
 def initialize_observability_streaming() -> None:

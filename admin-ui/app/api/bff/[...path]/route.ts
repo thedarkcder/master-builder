@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
-import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { SERVER_API_BASE_URL } from "@/lib/server-api";
+import { requireAuthSecret } from "@/lib/auth-secret";
 
 function buildBackendUrl(request: NextRequest, path: string[]): string {
-  const base = DEFAULT_API_BASE_URL.replace(/\/$/, "");
+  const base = SERVER_API_BASE_URL.replace(/\/$/, "");
   const joinedPath = path.map(encodeURIComponent).join("/");
   const url = new URL(`${base}/${joinedPath}`);
   request.nextUrl.searchParams.forEach((value, key) => {
@@ -16,7 +17,7 @@ function buildBackendUrl(request: NextRequest, path: string[]): string {
 async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const token = await getToken({
     req: request,
-    secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret",
+    secret: requireAuthSecret(),
   });
   const accessToken = typeof token?.accessToken === "string" ? token.accessToken : "";
   if (!accessToken) {
@@ -36,6 +37,9 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     headers.set("Accept", accept);
   }
 
+  const range = request.headers.get("range");
+  if (range) headers.set("Range", range);
+
   const init: RequestInit = {
     method: request.method,
     headers,
@@ -52,6 +56,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const responseContentType = response.headers.get("content-type");
   if (responseContentType) {
     proxiedHeaders.set("Content-Type", responseContentType);
+  }
+  for (const name of ["content-range", "accept-ranges", "content-length", "cache-control", "content-disposition", "x-content-type-options", "content-security-policy", "retry-after"]) {
+    const value = response.headers.get(name);
+    if (value) proxiedHeaders.set(name, value);
   }
   return new NextResponse(response.body, {
     status: response.status,

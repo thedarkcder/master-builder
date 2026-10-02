@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Run, Tenant
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 from orchestrator.tools.project_repo_checkout import (
     PreparedExecutionRepo,
     ProjectRepoCheckoutError,
@@ -97,7 +100,9 @@ def prepare_execution_repo_for_run(
             project=project,
         )
     except (GitHubApiError, ProjectRepoCheckoutError, ValueError) as exc:
-        raise TerminalRepoSetupError(f"Repository checkout credentials are unavailable: {exc}") from exc
+        raise TerminalRepoSetupError(
+            f"Repository checkout credentials are unavailable: {exc}"
+        ) from exc
 
     try:
         ensure_project_checkout(

@@ -7,14 +7,21 @@ from unittest.mock import patch
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from orchestrator.api.main import create_app
-from orchestrator.core.observability.agent_observability import reset_agent_observability_for_tests
+from orchestrator.core.observability.agent_observability import (
+    reset_agent_observability_for_tests,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import AtlassianOAuthConnection, Run
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
-from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
+from tests.workflow_test_support import (
+    add_human_input_request,
+    add_run_with_workflow,
+    add_workflow_attempt,
+    make_run,
+)
 
 
 class AdminApiTestHarness(SqliteTemplateApiTestCase):
@@ -121,7 +128,9 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             },
             "repos": {
                 "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
+                "mapping_rules_by_project_key": {
+                    "TP": "https://github.com/example/repo"
+                },
                 "mapping_rules_by_component": {},
                 "fallback_repo": None,
             },
@@ -146,7 +155,9 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             },
         }
 
-    def _insert_jira_connection(self, connection_id: str = "conn-1", scopes: list[str] | None = None) -> None:
+    def _insert_jira_connection(
+        self, connection_id: str = "conn-1", scopes: list[str] | None = None
+    ) -> None:
         session_factory = create_session_factory(self.database_url)
         settings = get_settings()
         now = datetime.now(timezone.utc)
@@ -180,7 +191,7 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
         workflow_id: str,
         run_id: str,
         tenant_id: str = "tenant-a",
-        project_id: str = "tenant-a-default",
+        project_id: str,
         issue_key: str = "TP-1",
         issue_summary: str = "workflow attempt",
         issue_description: str | None = "desc",
@@ -209,11 +220,19 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
                 run_status=run_status,
                 entry_checkpoint_id=checkpoint_id,
                 checkpoint_kind=checkpoint_kind,
-                checkpoint_stage=checkpoint_stage or ("pm" if checkpoint_kind == "pm" else "test"),
+                checkpoint_stage=checkpoint_stage
+                or ("pm" if checkpoint_kind == "pm" else "test"),
                 checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
-                checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
-                failure_reason="human_input_expired" if workflow_status == "failed" else None,
-                last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
+                checkpoint_session_id="checkpoint-session"
+                if checkpoint_kind == "pm"
+                else None,
+                failure_reason="human_input_expired"
+                if workflow_status == "failed"
+                else None,
+                last_error=None
+                if workflow_status != "failed"
+                and run_status not in {"failed", "blocked"}
+                else "run failed",
                 plan=(
                     ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()
                     if checkpoint_id
@@ -223,14 +242,22 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             )
             if checkpoint_id:
                 run_snapshot = ExecutionSnapshot.require(run_row.plan, allow_empty=True)
-                run_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+                run_snapshot.context.execution_context["pre_check_outcome"] = (
+                    "ready_for_agent"
+                )
                 run_row.plan = run_snapshot.dump()
                 assert checkpoint_row is not None
-                checkpoint_snapshot = ExecutionSnapshot.empty(trigger_context={"source": "test"})
-                checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
+                checkpoint_snapshot = ExecutionSnapshot.empty(
+                    trigger_context={"source": "test"}
+                )
+                checkpoint_snapshot.context.execution_context["pre_check_outcome"] = (
+                    "ready_for_agent"
+                )
                 checkpoint_row.payload_json = checkpoint_snapshot.dump()
             if pending_request_id:
-                request_status = "pending" if workflow_status == "waiting_for_input" else "answered"
+                request_status = (
+                    "pending" if workflow_status == "waiting_for_input" else "answered"
+                )
                 add_human_input_request(
                     session,
                     request_id=pending_request_id,
@@ -247,7 +274,9 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
                 )
             session.commit()
 
-    def _persist_run(self, session, *, workflow_status: str | None = None, **run_kwargs) -> Run:
+    def _persist_run(
+        self, session, *, workflow_status: str | None = None, **run_kwargs
+    ) -> Run:
         run = make_run(**run_kwargs)
         add_run_with_workflow(session, run, workflow_status=workflow_status)
         return run

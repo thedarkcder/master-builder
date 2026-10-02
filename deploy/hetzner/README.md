@@ -1,5 +1,7 @@
 # Hetzner Package (Phase 1)
 
+Status: experimental and not verified on a fresh remote host. One-click provisioning and recovery below are acceptance targets, not a production support guarantee. See [the support matrix](../../docs/support-matrix.md).
+
 ## Objective
 Deliver a one-click, non-HA deployment on a fresh Hetzner server.
 

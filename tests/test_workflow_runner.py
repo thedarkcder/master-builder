@@ -1,6 +1,11 @@
 import unittest
 
-from orchestrator.core.workflow.runner import PmPlan, WorkflowRequest, WorkflowResult, WorkflowRunner
+from orchestrator.core.workflow.runner import (
+    PmPlan,
+    WorkflowRequest,
+    WorkflowResult,
+    WorkflowRunner,
+)
 
 
 class _ExecuteOnlyAgents:
@@ -8,7 +13,13 @@ class _ExecuteOnlyAgents:
         self.fail = fail
         self.calls: int = 0
 
-    def execute(self, request: WorkflowRequest, *, test_feedback_hook=None, stage_checkpoint_hook=None) -> WorkflowResult:  # noqa: ANN001
+    def execute(
+        self,
+        request: WorkflowRequest,
+        *,
+        test_feedback_hook=None,
+        stage_checkpoint_hook=None,
+    ) -> WorkflowResult:  # noqa: ANN001
         _ = (test_feedback_hook, stage_checkpoint_hook)
         self.calls += 1
         if self.fail:

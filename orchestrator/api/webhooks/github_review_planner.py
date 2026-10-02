@@ -12,7 +12,10 @@ from orchestrator.core.communications import (
     TransportAction,
 )
 from orchestrator.core.review.pr_review_findings import pr_review_findings_clear
-from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
+from orchestrator.core.workflow.execution_snapshot import (
+    require_github_pr_remediation_context_from_plan,
+)
+
 
 @dataclass(frozen=True)
 class GitHubReviewPlan:
@@ -54,7 +57,15 @@ def plan_pull_request_targets(
     merge_results: list[dict[str, object]] = []
     planned_actions: list[TransportAction] = []
     for pr_number, _review_summary_present in pr_targets:
-        signal = type("Signal", (), {"ready": False, "state": "not_triggered", "message": "review_not_triggered"})()
+        signal = type(
+            "Signal",
+            (),
+            {
+                "ready": False,
+                "state": "not_triggered",
+                "message": "review_not_triggered",
+            },
+        )()
         review_publication_actions: list[TransportAction] = []
         if full_review_trigger:
             try:
@@ -89,7 +100,11 @@ def plan_pull_request_targets(
         pr_details = None
         checks = []
         changed_files = []
-        findings_result = type("FindingsResult", (), {"findings": (), "state": "review_failed", "summary": signal.message})()
+        findings_result = type(
+            "FindingsResult",
+            (),
+            {"findings": (), "state": "review_failed", "summary": signal.message},
+        )()
         findings_evaluated = False
         if full_review_trigger:
             try:
@@ -157,7 +172,9 @@ def plan_pull_request_targets(
         review_clear = findings_evaluated and pr_review_findings_clear(findings_result)
         merge_ready = review_clear and bool(signal.ready)
         if full_review_trigger:
-            review_comment_action = "skipped_clear_review" if review_clear else "planned"
+            review_comment_action = (
+                "skipped_clear_review" if review_clear else "planned"
+            )
             if not review_clear:
                 review_publication_actions.append(
                     GitHubStickyReviewCommentAction(
@@ -166,7 +183,8 @@ def plan_pull_request_targets(
                         pr_number=pr_number,
                         tenant_id=tenant.tenant_id,
                         project_id=project.project_id,
-                        head_sha=str(getattr(pr_details, "head_sha", "") or "").strip() or "unknown",
+                        head_sha=str(getattr(pr_details, "head_sha", "") or "").strip()
+                        or "unknown",
                         signal=signal,
                         findings_result=findings_result,
                         event=github_event,
@@ -198,7 +216,9 @@ def plan_pull_request_targets(
                 GitHubPullRequestReactionAction(
                     repo_full_name=repo_full_name,
                     pr_number=pr_number,
-                    content=_resolve_pull_request_review_reaction(review_clear=review_clear),
+                    content=_resolve_pull_request_review_reaction(
+                        review_clear=review_clear
+                    ),
                 )
             )
             planned_actions.extend(review_publication_actions)
@@ -326,7 +346,11 @@ def plan_pull_request_targets(
         if manual_fix_requested:
             comment = payload.get("comment")
             comment_id = comment.get("id") if isinstance(comment, dict) else None
-            comment_url = str(comment.get("html_url") or "").strip() if isinstance(comment, dict) else ""
+            comment_url = (
+                str(comment.get("html_url") or "").strip()
+                if isinstance(comment, dict)
+                else ""
+            )
             comment_user = comment.get("user") if isinstance(comment, dict) else None
             requested_by = (
                 str(comment_user.get("login") or "").strip()
@@ -335,7 +359,9 @@ def plan_pull_request_targets(
             )
             run_plan = getattr(remediation_result.run, "plan", None)
             try:
-                trigger_context = require_github_pr_remediation_context_from_plan(run_plan)
+                trigger_context = require_github_pr_remediation_context_from_plan(
+                    run_plan
+                )
             except ValueError as exc:
                 logger.warning(
                     "github_manual_fix_invalid_snapshot run_id=%s issue_key=%s pr_number=%s error=%s",
@@ -345,11 +371,23 @@ def plan_pull_request_targets(
                     exc,
                 )
                 trigger_context = None
-            manual_context = trigger_context.manual_fix_request if trigger_context is not None else None
-            instruction_text = manual_context.instruction_text if manual_context is not None else ""
-            requested_comment = manual_context.requested_comment if manual_context is not None else None
-            requested_comment_url = requested_comment.url if requested_comment is not None else ""
-            requested_comment_type = requested_comment.comment_type if requested_comment is not None else ""
+            manual_context = (
+                trigger_context.manual_fix_request
+                if trigger_context is not None
+                else None
+            )
+            instruction_text = (
+                manual_context.instruction_text if manual_context is not None else ""
+            )
+            requested_comment = (
+                manual_context.requested_comment if manual_context is not None else None
+            )
+            requested_comment_url = (
+                requested_comment.url if requested_comment is not None else ""
+            )
+            requested_comment_type = (
+                requested_comment.comment_type if requested_comment is not None else ""
+            )
             effective_comment_type = requested_comment_type
             if not effective_comment_type:
                 if github_event == "pull_request_review_comment":
@@ -369,7 +407,9 @@ def plan_pull_request_targets(
                         project_id=project.project_id,
                         triggering_comment_id=comment_id,
                         requested_by=requested_by or None,
-                        triggering_comment_url=requested_comment_url or comment_url or None,
+                        triggering_comment_url=requested_comment_url
+                        or comment_url
+                        or None,
                         instruction_text=instruction_text or None,
                         issue_key=remediation_result.issue_key,
                         issue_url=issue_url,

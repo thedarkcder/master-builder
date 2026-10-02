@@ -19,10 +19,11 @@ from orchestrator.api.webhooks.contracts import (
     find_tenant_by_installation_id,
     resolve_active_project_for_repo,
     resolve_global_github_webhook_secret,
-    resolve_tenant_github_webhook_secret,
     validate_github_webhook_signature,
 )
-from orchestrator.core.communications.integration_contracts import TransportActionExecutor
+from orchestrator.core.communications.integration_contracts import (
+    TransportActionExecutor,
+)
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
@@ -57,12 +58,13 @@ class GitHubWebhookPreparedRuntime:
     transport_action_executors: tuple[TransportActionExecutor, ...] = ()
 
 
-
 def github_response(*, status_code: int, **content) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=content)
 
 
-async def resolve_github_webhook_context(*, request: Request, session, settings, request_id: str, logger) -> GitHubWebhookContext | JSONResponse:
+async def resolve_github_webhook_context(
+    *, request: Request, session, settings, request_id: str, logger
+) -> GitHubWebhookContext | JSONResponse:
     delivery_id = extract_delivery_id(request) or str(uuid4())
     github_event = (request.headers.get("X-GitHub-Event") or "").strip().lower()
 
@@ -73,20 +75,21 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         github_event or "unknown",
     )
 
-    payload, payload_bytes = await read_json_payload(request, request_id=request_id, source="github")
+    payload, payload_bytes = await read_json_payload(
+        request, request_id=request_id, source="github"
+    )
     global_secret = resolve_global_github_webhook_secret(
         request_id=request_id,
         session=session,
         settings=settings,
     )
-    if global_secret is not None:
-        validate_github_webhook_signature(
-            request=request,
-            payload_bytes=payload_bytes,
-            shared_secret=global_secret,
-            request_id=request_id,
-            tenant_id=None,
-        )
+    validate_github_webhook_signature(
+        request=request,
+        payload_bytes=payload_bytes,
+        shared_secret=global_secret,
+        request_id=request_id,
+        tenant_id=None,
+    )
 
     if github_event == "ping":
         return github_response(
@@ -105,7 +108,10 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
             request_id,
             delivery_id,
         )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing installation identifier")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing installation identifier",
+        )
 
     tenant = find_tenant_by_installation_id(session, installation_id=installation_id)
     if tenant is None:
@@ -141,22 +147,6 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
             accepted=False,
             reason="tenant_disabled",
         )
-
-    if global_secret is None:
-        tenant_secret = resolve_tenant_github_webhook_secret(
-            tenant=tenant,
-            request_id=request_id,
-            session=session,
-            settings=settings,
-        )
-        if tenant_secret is not None:
-            validate_github_webhook_signature(
-                request=request,
-                payload_bytes=payload_bytes,
-                shared_secret=tenant_secret,
-                request_id=request_id,
-                tenant_id=tenant.tenant_id,
-            )
 
     action = payload.get("action")
     normalized_action = action.strip() if isinstance(action, str) else None
@@ -194,7 +184,9 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
     repo_full_name = extract_repository_full_name(payload)
     pr_targets = extract_pull_request_targets(payload)
     ref_name = str(payload.get("ref") or "").strip() or None
-    push_source = extract_push_deployment_source(payload) if github_event == "push" else None
+    push_source = (
+        extract_push_deployment_source(payload) if github_event == "push" else None
+    )
     if repo_full_name is None or (github_event in review_events and not pr_targets):
         return github_response(
             status_code=status.HTTP_202_ACCEPTED,
@@ -251,7 +243,6 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
     )
 
 
-
 def build_github_review_runtime(*, session, settings, tenant, project):
     github_client = github_client_from_tenant_config(
         tenant.github_config,
@@ -272,14 +263,18 @@ def build_github_review_runtime(*, session, settings, tenant, project):
         tenant_policy=dict(getattr(tenant, "policy_config", {}) or {}),
         project_overrides=dict(getattr(project, "policy_overrides", {}) or {}),
         default_codex_model=getattr(settings, "codex_model", None),
-        default_codex_reasoning_effort=getattr(settings, "codex_reasoning_effort", None),
+        default_codex_reasoning_effort=getattr(
+            settings, "codex_reasoning_effort", None
+        ),
     )
     reviewer_gate = ReviewAgentGate(
         github_client,
         require_demo_evidence=bool(effective_policy.get("qa_demo_recording_enabled")),
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
-        demo_artifact_public_base_url=getattr(settings, "qa_demo_artifact_public_base_url", None),
+        demo_artifact_public_base_url=getattr(
+            settings, "qa_demo_artifact_public_base_url", None
+        ),
         demo_evidence_run_id_resolver=lambda pr_url: _latest_run_id_for_pr_url(
             session=session,
             tenant_id=tenant.tenant_id,
@@ -292,11 +287,13 @@ def build_github_review_runtime(*, session, settings, tenant, project):
             project_id=project.project_id,
             run_id=run_id,
         ),
-        demo_proof_status_resolver=lambda pr_url, _head_sha: _qa_demo_proof_status_for_pr_url(
-            session=session,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            pr_url=pr_url,
+        demo_proof_status_resolver=lambda pr_url, _head_sha: (
+            _qa_demo_proof_status_for_pr_url(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                pr_url=pr_url,
+            )
         ),
     )
     return github_client, reviewer_gate
@@ -389,23 +386,36 @@ def _qa_demo_proof_status_for_pr_url(
             WorkflowExecution.project_id == project_id,
             WorkflowExecution.workflow_type_key == "demo_proof",
         )
-        .order_by(WorkflowExecution.updated_at.desc(), WorkflowExecution.workflow_id.desc())
+        .order_by(
+            WorkflowExecution.updated_at.desc(), WorkflowExecution.workflow_id.desc()
+        )
     )
-    for workflow_id, workflow_status, raw_description, updated_at in session.execute(statement):
+    for workflow_id, workflow_status, raw_description, updated_at in session.execute(
+        statement
+    ):
         description = _decode_workflow_description(raw_description)
         if str(description.get("pr_url") or "").strip() != normalized_pr_url:
             continue
-        events = [str(event or "").strip() for event in list(description.get("demo_proof_events") or [])]
+        events = [
+            str(event or "").strip()
+            for event in list(description.get("demo_proof_events") or [])
+        ]
         terminal_event = events[-1] if events else ""
         release_metadata = _demo_proof_event_metadata(description, "ReleaseLive")
-        pr_evidence_metadata = _demo_proof_event_metadata(description, "PREvidenceAttached")
+        pr_evidence_metadata = _demo_proof_event_metadata(
+            description, "PREvidenceAttached"
+        )
         return {
             "workflow_id": workflow_id,
             "status": str(workflow_status or "").strip(),
             "demo_proof_state": str(description.get("demo_proof_state") or "").strip(),
             "terminal_event": terminal_event,
-            "release_commit_sha": str(release_metadata.get("release_commit_sha") or "").strip().lower(),
-            "artifact_url_check_status": str(pr_evidence_metadata.get("artifact_url_check_status") or "").strip(),
+            "release_commit_sha": str(release_metadata.get("release_commit_sha") or "")
+            .strip()
+            .lower(),
+            "artifact_url_check_status": str(
+                pr_evidence_metadata.get("artifact_url_check_status") or ""
+            ).strip(),
             "checked_artifact_urls": tuple(
                 str(url or "").strip()
                 for url in list(pr_evidence_metadata.get("checked_artifact_urls") or [])
@@ -429,7 +439,9 @@ def _decode_workflow_description(raw_description: object) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _demo_proof_event_metadata(description: dict[str, object], event_name: str) -> dict[str, object]:
+def _demo_proof_event_metadata(
+    description: dict[str, object], event_name: str
+) -> dict[str, object]:
     for entry in list(description.get("demo_proof_event_metadata") or []):
         if not isinstance(entry, dict):
             continue

@@ -72,7 +72,11 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
     def test_help_command_returns_supported_commands(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!help"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!help",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
@@ -84,7 +88,11 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
 
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!status"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!status",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
@@ -94,7 +102,11 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
     def test_sensitive_commands_require_allowlisted_user(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!run TP-99"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!run TP-99",
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("allowlisted", response.json()["detail"])
@@ -110,7 +122,11 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
 
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-thread-1", "command": "!help"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-thread-1",
+                "command": "!help",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
@@ -118,7 +134,11 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
     def test_non_registered_channel_is_rejected(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-other-1", "command": "!help"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-other-1",
+                "command": "!help",
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("does not match", response.json()["detail"])
@@ -128,30 +148,44 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
 
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!cancel run-cancel-me"},
+            json={
+                "user_id": "u-admin",
+                "channel_id": "discord-channel-1",
+                "command": "!cancel run-cancel-me",
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["data"]["status"], "cancelled")
 
     def test_run_enqueues_when_jira_issue_is_executable(self) -> None:
-        with patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
-        ), patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
-            return_value=JiraIssueDetail(
-                key="TP-20",
-                summary="Do thing",
-                status="To Do",
-                description="Objective: run command should carry Jira detail context.",
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(
+                    key="TP-20", summary="Do thing", status="To Do"
+                ),
             ),
-        ), patch(
-            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
-            return_value=self._ready_decision_result(),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-20",
+                    summary="Do thing",
+                    status="To Do",
+                    description="Objective: run command should carry Jira detail context.",
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!run TP-20",
+                },
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
@@ -160,13 +194,20 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
         with self.session_factory() as session:
             run = session.get(Run, run_id)
             assert run is not None
-            self.assertEqual(run.issue_description, "Objective: run command should carry Jira detail context.")
+            self.assertEqual(
+                run.issue_description,
+                "Objective: run command should carry Jira detail context.",
+            )
 
-    def test_run_precheck_uses_canonical_issue_description_without_board_context(self) -> None:
+    def test_run_precheck_uses_canonical_issue_description_without_board_context(
+        self,
+    ) -> None:
         with (
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-                return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+                return_value=JiraIssuePreview(
+                    key="TP-20", summary="Do thing", status="To Do"
+                ),
             ),
             patch(
                 "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
@@ -182,8 +223,12 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
                 return_value=[
                     JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
-                    JiraIssuePreview(key="TP-21", summary="Sibling ticket A", status="To Do"),
-                    JiraIssuePreview(key="TP-22", summary="Sibling ticket B", status="Testing"),
+                    JiraIssuePreview(
+                        key="TP-21", summary="Sibling ticket A", status="To Do"
+                    ),
+                    JiraIssuePreview(
+                        key="TP-22", summary="Sibling ticket B", status="Testing"
+                    ),
                 ],
             ),
             patch(
@@ -193,26 +238,46 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!run TP-20",
+                },
             )
 
         self.assertEqual(response.status_code, 200)
-        issue_description = str(decision_mock.call_args.kwargs["event"].issue_description)
-        self.assertIn("agent:ready", decision_mock.call_args.kwargs["event"].issue_labels)
-        self.assertEqual(issue_description, "Objective: run command should carry Jira detail context.")
+        issue_description = str(
+            decision_mock.call_args.kwargs["event"].issue_description
+        )
+        self.assertIn(
+            "agent:ready", decision_mock.call_args.kwargs["event"].issue_labels
+        )
+        self.assertEqual(
+            issue_description,
+            "Objective: run command should carry Jira detail context.",
+        )
 
     def test_run_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-active-1", issue_key="TP-20", status="running")
-        with patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
-        ), patch(
-            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
-            return_value=self._ready_decision_result(),
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(
+                    key="TP-20", summary="Do thing", status="To Do"
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!run TP-20"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!run TP-20",
+                },
             )
         self.assertEqual(response.status_code, 409)
         self.assertIn("run_already_active", response.json()["detail"])
@@ -221,24 +286,34 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
 
     def test_retry_enqueues_from_latest_failed_run(self) -> None:
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")
-        with patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
-        ), patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
-            return_value=JiraIssueDetail(
-                key="TP-30",
-                summary="Retry thing",
-                status="To Do",
-                description="Objective: refreshed from Jira for retry.",
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(
+                    key="TP-30", summary="Retry thing", status="To Do"
+                ),
             ),
-        ), patch(
-            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
-            return_value=self._ready_decision_result(),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-30",
+                    summary="Retry thing",
+                    status="To Do",
+                    description="Objective: refreshed from Jira for retry.",
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!retry run-failed-1"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!retry run-failed-1",
+                },
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
@@ -246,24 +321,34 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
 
     def test_retry_allows_in_progress_issue_status(self) -> None:
         self._queue_run(run_id="run-failed-2", issue_key="TP-31", status="failed")
-        with patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-31", summary="Retry thing", status="In Progress"),
-        ), patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
-            return_value=JiraIssueDetail(
-                key="TP-31",
-                summary="Retry thing",
-                status="In Progress",
-                description="Objective: refreshed from Jira for retry.",
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(
+                    key="TP-31", summary="Retry thing", status="In Progress"
+                ),
             ),
-        ), patch(
-            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
-            return_value=self._ready_decision_result(),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-31",
+                    summary="Retry thing",
+                    status="In Progress",
+                    description="Objective: refreshed from Jira for retry.",
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!retry run-failed-2"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!retry run-failed-2",
+                },
             )
 
         self.assertEqual(response.status_code, 200)
@@ -273,69 +358,130 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
     def test_retry_conflict_includes_active_run_details(self) -> None:
         self._queue_run(run_id="run-failed-1", issue_key="TP-30", status="failed")
         self._queue_run(run_id="run-active-2", issue_key="TP-30", status="queued")
-        with patch(
-            "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
-        ), patch(
-            "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
-            return_value=self._ready_decision_result(),
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(
+                    key="TP-30", summary="Retry thing", status="To Do"
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-channel-1", "command": "!retry run-failed-1"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!retry run-failed-1",
+                },
             )
         self.assertEqual(response.status_code, 409)
         self.assertIn("run_already_active", response.json()["detail"])
         self.assertIn("run-active-2", response.json()["detail"])
 
     def test_link_rejects_issue_outside_mapped_project_scope(self) -> None:
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        self._create_project(
+            project_id=f"{self.tenant_id}-other",
+            jira_project_key="OTH",
+            channel_id="discord-other-1",
+        )
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-other-1", "command": "!link TP-20"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-other-1",
+                "command": "!link TP-20",
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_run_rejects_issue_outside_mapped_project_scope(self) -> None:
         other_project_id = f"{self.tenant_id}-other"
-        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
-        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
+        self._create_project(
+            project_id=other_project_id,
+            jira_project_key="OTH",
+            channel_id="discord-other-1",
+        )
+        self._set_project_allowed_users(
+            project_id=other_project_id, user_ids=["u-admin"]
+        )
         with patch(
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-20", summary="Do thing", status="To Do"),
+            return_value=JiraIssuePreview(
+                key="TP-20", summary="Do thing", status="To Do"
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-other-1", "command": "!run TP-20"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-other-1",
+                    "command": "!run TP-20",
+                },
             )
         self.assertEqual(response.status_code, 403)
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_retry_rejects_run_outside_mapped_project_scope(self) -> None:
         other_project_id = f"{self.tenant_id}-other"
-        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
-        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
-        self._queue_run(run_id="run-tp-1", issue_key="TP-30", status="failed", project_id=f"{self.tenant_id}-default")
+        self._create_project(
+            project_id=other_project_id,
+            jira_project_key="OTH",
+            channel_id="discord-other-1",
+        )
+        self._set_project_allowed_users(
+            project_id=other_project_id, user_ids=["u-admin"]
+        )
+        self._queue_run(
+            run_id="run-tp-1",
+            issue_key="TP-30",
+            status="failed",
+            project_id=f"{self.tenant_id}-default",
+        )
         with patch(
             "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
-            return_value=JiraIssuePreview(key="TP-30", summary="Retry thing", status="To Do"),
+            return_value=JiraIssuePreview(
+                key="TP-30", summary="Retry thing", status="To Do"
+            ),
         ):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-admin", "channel_id": "discord-other-1", "command": "!retry run-tp-1"},
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-other-1",
+                    "command": "!retry run-tp-1",
+                },
             )
         self.assertEqual(response.status_code, 403)
         self.assertIn("outside the mapped project scope", response.json()["detail"])
 
     def test_cancel_rejects_run_outside_mapped_project_scope(self) -> None:
         other_project_id = f"{self.tenant_id}-other"
-        self._create_project(project_id=other_project_id, jira_project_key="OTH", channel_id="discord-other-1")
-        self._set_project_allowed_users(project_id=other_project_id, user_ids=["u-admin"])
-        self._queue_run(run_id="run-tp-cancel", issue_key="TP-31", status="queued", project_id=f"{self.tenant_id}-default")
+        self._create_project(
+            project_id=other_project_id,
+            jira_project_key="OTH",
+            channel_id="discord-other-1",
+        )
+        self._set_project_allowed_users(
+            project_id=other_project_id, user_ids=["u-admin"]
+        )
+        self._queue_run(
+            run_id="run-tp-cancel",
+            issue_key="TP-31",
+            status="queued",
+            project_id=f"{self.tenant_id}-default",
+        )
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-admin", "channel_id": "discord-other-1", "command": "!cancel run-tp-cancel"},
+            json={
+                "user_id": "u-admin",
+                "channel_id": "discord-other-1",
+                "command": "!cancel run-tp-cancel",
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("outside the mapped project scope", response.json()["detail"])
@@ -347,7 +493,10 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
                 "name": "Archived Project",
                 "github_repository": "https://github.com/example/archived",
                 "jira_project_key": "ARC",
-                "discord": {"channel_id": "discord-archived-project", "notify_events": []},
+                "discord": {
+                    "channel_id": "discord-archived-project",
+                    "notify_events": [],
+                },
             },
             auth=("admin", "secret"),
         )
@@ -362,7 +511,11 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
 
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-archived-project", "command": "!help"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-archived-project",
+                "command": "!help",
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn("does not match", response.json()["detail"])
@@ -382,26 +535,50 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
         other_project_id = create_project.json()["project_id"]
 
         self._queue_run(run_id="run-default-queued", issue_key="TP-10", status="queued")
-        self._queue_run(run_id="run-default-running", issue_key="TP-11", status="running")
-        self._queue_run(run_id="run-other-queued", issue_key="OTH-10", status="queued", project_id=other_project_id)
-        self._queue_run(run_id="run-other-running", issue_key="OTH-11", status="running", project_id=other_project_id)
+        self._queue_run(
+            run_id="run-default-running", issue_key="TP-11", status="running"
+        )
+        self._queue_run(
+            run_id="run-other-queued",
+            issue_key="OTH-10",
+            status="queued",
+            project_id=other_project_id,
+        )
+        self._queue_run(
+            run_id="run-other-running",
+            issue_key="OTH-11",
+            status="running",
+            project_id=other_project_id,
+        )
 
         status_response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-2", "command": "!status"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-2",
+                "command": "!status",
+            },
         )
         self.assertEqual(status_response.status_code, 200)
         self.assertNotIn("webhook_last_seen", status_response.json()["data"])
         self.assertEqual(status_response.json()["data"]["queue_depth"], 1)
         self.assertEqual(len(status_response.json()["data"]["active_runs"]), 1)
-        self.assertEqual(status_response.json()["data"]["active_runs"][0]["issue_key"], "OTH-11")
+        self.assertEqual(
+            status_response.json()["data"]["active_runs"][0]["issue_key"], "OTH-11"
+        )
 
         runs_response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-2", "command": "!runs 10"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-2",
+                "command": "!runs 10",
+            },
         )
         self.assertEqual(runs_response.status_code, 200)
-        run_issue_keys = [entry["issue_key"] for entry in runs_response.json()["data"]["runs"]]
+        run_issue_keys = [
+            entry["issue_key"] for entry in runs_response.json()["data"]["runs"]
+        ]
         self.assertIn("OTH-10", run_issue_keys)
         self.assertIn("OTH-11", run_issue_keys)
         self.assertNotIn("TP-10", run_issue_keys)
@@ -422,7 +599,12 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
         other_project_id = create_project.json()["project_id"]
 
         self._queue_run(run_id="run-default-queued", issue_key="TP-10", status="queued")
-        self._queue_run(run_id="run-other-running", issue_key="OTH-11", status="running", project_id=other_project_id)
+        self._queue_run(
+            run_id="run-other-running",
+            issue_key="OTH-11",
+            status="running",
+            project_id=other_project_id,
+        )
 
         status_response = self.client.post(
             f"/discord/command/{self.tenant_id}",
@@ -431,13 +613,17 @@ class DiscordRunControlScopeFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.json()["data"]["queue_depth"], 1)
         self.assertEqual(len(status_response.json()["data"]["active_runs"]), 1)
-        self.assertEqual(status_response.json()["data"]["active_runs"][0]["issue_key"], "OTH-11")
+        self.assertEqual(
+            status_response.json()["data"]["active_runs"][0]["issue_key"], "OTH-11"
+        )
 
         runs_response = self.client.post(
             f"/discord/command/{self.tenant_id}",
             json={"user_id": "u-viewer", "channel_id": None, "command": "!runs 10"},
         )
         self.assertEqual(runs_response.status_code, 200)
-        run_issue_keys = {entry["issue_key"] for entry in runs_response.json()["data"]["runs"]}
+        run_issue_keys = {
+            entry["issue_key"] for entry in runs_response.json()["data"]["runs"]
+        }
         self.assertIn("TP-10", run_issue_keys)
         self.assertIn("OTH-11", run_issue_keys)

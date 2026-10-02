@@ -16,11 +16,21 @@ class PlanningPackageAssembler:
             for stage in result.stages
         }
         architect_stage = next(
-            (stage for stage in result.stages if isinstance(stage, ArchitectStageOutput)),
+            (
+                stage
+                for stage in result.stages
+                if isinstance(stage, ArchitectStageOutput)
+            ),
             None,
         )
-        child_issues = [spec.to_payload() for spec in architect_stage.child_ticket_specs] if architect_stage else []
-        architect_required_tasks = architect_stage.required_tasks if architect_stage else ()
+        child_issues = (
+            [spec.to_payload() for spec in architect_stage.child_ticket_specs]
+            if architect_stage
+            else []
+        )
+        architect_required_tasks = (
+            architect_stage.required_tasks if architect_stage else ()
+        )
         if (
             result.planning_state == PLANNING_STATE_COMPLETED
             and architect_stage is not None
@@ -34,12 +44,19 @@ class PlanningPackageAssembler:
             "planning_state": result.planning_state,
             "specialist_outputs": stage_payloads,
             "child_issues": child_issues,
-            "technical_decisions": [decision.to_payload() for decision in result.technical_decisions],
-            "pm_decision_requests": [request.to_payload() for request in result.pm_decision_requests],
+            "technical_decisions": [
+                decision.to_payload() for decision in result.technical_decisions
+            ],
+            "pm_decision_requests": [
+                request.to_payload() for request in result.pm_decision_requests
+            ],
         }
         if result.architecture_summary:
             payload["architecture_summary"] = list(result.architecture_summary)
-        if isinstance(result.architecture_diagram, str) and result.architecture_diagram.strip():
+        if (
+            isinstance(result.architecture_diagram, str)
+            and result.architecture_diagram.strip()
+        ):
             payload["architecture_diagram"] = result.architecture_diagram.strip()
         return payload
 

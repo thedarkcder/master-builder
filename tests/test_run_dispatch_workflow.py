@@ -55,7 +55,9 @@ def _deps(**overrides) -> RunDispatchWorkflowDeps:
     stage_updates = overrides.pop(
         "stage_updates",
         RunStageUpdateGateway(
-            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_discord_message_fn=MagicMock(
+                return_value=SimpleNamespace(sent=True, reason=None)
+            ),
             send_jira_message_fn=MagicMock(),
             lock_acquired_update_fn=MagicMock(
                 side_effect=lambda **kwargs: {
@@ -125,10 +127,14 @@ class RunDispatchWorkflowTests(unittest.TestCase):
             pr_url=None,
         )
         tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
-        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        project = SimpleNamespace(
+            project_id="project-1", policy_overrides={}, is_archived=False
+        )
         session = MagicMock()
         fail_guardrail_violation_fn = MagicMock(
-            return_value=SimpleNamespace(run_id="run-1", status="failed", last_error="failed")
+            return_value=SimpleNamespace(
+                run_id="run-1", status="failed", last_error="failed"
+            )
         )
         deps = _deps(
             project=RunProjectGateway(
@@ -136,7 +142,9 @@ class RunDispatchWorkflowTests(unittest.TestCase):
                 fail_missing_project_mapping_fn=MagicMock(),
                 block_archived_project_fn=MagicMock(),
                 bind_run_project_fn=MagicMock(return_value=run),
-                tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
+                tenant_jira_issue_url_fn=MagicMock(
+                    return_value="https://jira.example/browse/GP-122"
+                ),
                 transition_issue_status_fn=MagicMock(),
             ),
             execution=RunExecutionGateway(
@@ -210,10 +218,14 @@ class RunDispatchWorkflowTests(unittest.TestCase):
             pr_url=None,
         )
         tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
-        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        project = SimpleNamespace(
+            project_id="project-1", policy_overrides={}, is_archived=False
+        )
         session = MagicMock()
 
-        def _promote(_session, *, run, expected_worker_service_instance_id, expected_claim_id):  # noqa: ANN001
+        def _promote(
+            _session, *, run, expected_worker_service_instance_id, expected_claim_id
+        ):  # noqa: ANN001
             _ = expected_worker_service_instance_id
             _ = expected_claim_id
             order.append("promote")
@@ -224,11 +236,15 @@ class RunDispatchWorkflowTests(unittest.TestCase):
 
         deps = _deps(
             project=RunProjectGateway(
-                resolve_project_for_run_fn=lambda *_args, **_kwargs: (order.append("resolve_project") or project),
+                resolve_project_for_run_fn=lambda *_args, **_kwargs: (
+                    order.append("resolve_project") or project
+                ),
                 fail_missing_project_mapping_fn=MagicMock(),
                 block_archived_project_fn=MagicMock(),
                 bind_run_project_fn=MagicMock(return_value=run),
-                tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
+                tenant_jira_issue_url_fn=MagicMock(
+                    return_value="https://jira.example/browse/GP-122"
+                ),
                 transition_issue_status_fn=MagicMock(),
             ),
             execution=RunExecutionGateway(

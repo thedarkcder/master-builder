@@ -1,28 +1,42 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 from typing import Literal
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator"
+    database_url: str = Field(min_length=1)
     allow_sqlite_for_tests: bool = False
-    db_pool_size: int = 10
-    db_pool_max_overflow: int = 20
-    db_pool_timeout_seconds: int = 60
-    db_pool_recycle_seconds: int = 1800
+    db_pool_size: int = Field(default=10, ge=1)
+    db_pool_max_overflow: int = Field(default=20, ge=0)
+    db_pool_timeout_seconds: int = Field(default=60, ge=1)
+    db_pool_recycle_seconds: int = Field(default=1800, ge=1)
     db_pool_pre_ping: bool = True
     log_level: str = "INFO"
     admin_username: str = "admin"
-    admin_password: str = "change-me"
-    admin_token_secret: str = "local-dev-admin-token-secret"
+    admin_password: str = Field(min_length=1)
+    admin_token_secret: str = Field(min_length=32)
     admin_token_ttl_seconds: int = 28800
-    auth_token_secret: str = "local-dev-auth-token-secret"
+    auth_token_secret: str = Field(min_length=32)
     auth_token_ttl_seconds: int = 28800
+    public_registration_enabled: bool = False
+    auth_login_window_seconds: int = Field(default=900, ge=1, le=86400)
+    auth_login_peer_limit: int = Field(default=60, ge=1)
+    auth_login_account_limit: int = Field(default=10, ge=1)
+    auth_reset_window_seconds: int = Field(default=3600, ge=1, le=86400)
+    auth_reset_peer_limit: int = Field(default=30, ge=1)
+    auth_reset_account_limit: int = Field(default=3, ge=1)
+    auth_registration_window_seconds: int = Field(default=3600, ge=1, le=86400)
+    auth_registration_peer_limit: int = Field(default=5, ge=1)
+    auth_registration_global_limit: int = Field(default=20, ge=1)
     discord_oauth_client_id: str = ""
     discord_oauth_client_secret: str = ""
-    discord_oauth_redirect_url: str = "http://localhost:60001/api/public/discord/oauth/callback"
-    discord_install_state_secret: str = "local-dev-discord-install-secret"
+    discord_oauth_redirect_url: str = (
+        "http://localhost:60001/api/public/discord/oauth/callback"
+    )
+    discord_install_state_secret: str = ""
     discord_bot_permissions: int = 3224728621023057
     email_delivery_provider: Literal["smtp", "resend"] = "smtp"
     email_from_name: str = "Master Builder"
@@ -35,14 +49,15 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = False
     smtp_use_ssl: bool = False
     resend_api_key: str = ""
+    trusted_hosts: str = "localhost,127.0.0.1,[::1]"
     cors_origins: str = "http://localhost:60002,http://127.0.0.1:60002"
     cors_origin_regex: str = ""
     admin_ui_base_url: str = "http://localhost:60002"
-    jira_action_token_secret: str = "local-dev-jira-action-token-secret"
-    github_install_state_secret: str = "local-dev-change-me"
+    jira_action_token_secret: str = ""
+    github_install_state_secret: str = ""
     github_app_slug: str = ""
     public_api_base_url: str = "http://localhost:60001"
-    atlassian_oauth_state_secret: str = "local-dev-change-me"
+    atlassian_oauth_state_secret: str = ""
     secrets_encryption_key: str = ""
     discord_guild_id: str = ""
     discord_channel_name_template: str = "{project_name}"
@@ -90,7 +105,9 @@ class Settings(BaseSettings):
     event_stream_poll_ms: int = 500
     knowledge_injection_enabled: bool = True
     knowledge_base_enabled_default: bool = True
-    knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = "aggressive"
+    knowledge_auto_answer_mode_default: Literal["safe", "balanced", "aggressive"] = (
+        "aggressive"
+    )
     knowledge_context_top_k: int = 5
     knowledge_context_max_chars: int = 3200
     knowledge_embedding_model: str = "BAAI/bge-small-en-v1.5"
@@ -120,7 +137,9 @@ class Settings(BaseSettings):
     deployment_host_agent_bootstrap_token_path: str = ""
     deployment_host_agent_access_token: str = ""
     deployment_host_agent_access_token_path: str = ""
-    deployment_host_agent_capabilities: str = "restore_database,postgres,mysql,mariadb,local_preview_routes"
+    deployment_host_agent_capabilities: str = (
+        "restore_database,postgres,mysql,mariadb,local_preview_routes"
+    )
     deployment_host_agent_poll_seconds: int = 5
     deployment_host_agent_heartbeat_interval_seconds: int = 30
     deployment_host_agent_command_timeout_seconds: int = 900
@@ -158,7 +177,10 @@ class Settings(BaseSettings):
     qa_demo_max_attempts: int = 3
     qa_demo_recorder_process_timeout_seconds: float = 900.0
     qa_demo_release_health_timeout_seconds: float = 10.0
-    qa_demo_artifact_url_timeout_seconds: float = 10.0
+    qa_demo_artifact_max_download_bytes: int = Field(default=104857600, ge=1)
+    qa_demo_artifact_url_timeout_seconds: float = Field(
+        default=10.0, gt=0, allow_inf_nan=False
+    )
     qa_demo_playwright_module_dir: str = ""
     qa_demo_ios_recorder_command: str = ""
     qa_demo_ios_capture_reference: str = ""
@@ -174,7 +196,7 @@ class Settings(BaseSettings):
     discord_gateway_poll_seconds: int = 3
     discord_live_voice_lock_key: int = 947102033129
     discord_live_voice_poll_seconds: int = 3
-    auto_migrate_on_startup: bool = True
+    auto_migrate_on_startup: bool = False
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
     sentry_release: str = ""
@@ -185,9 +207,51 @@ class Settings(BaseSettings):
     worker_workspace_key: str = ""
     discord_command_sync_lock_key: int = 947102033130
 
+    @field_validator("admin_token_secret", "auth_token_secret")
+    @classmethod
+    def validate_authentication_signing_secret(cls, value: str) -> str:
+        if len(value.strip()) < 32:
+            raise ValueError(
+                "Configure a randomly generated authentication signing secret of at least 32 characters"
+            )
+        return value
+
+    @field_validator("public_api_base_url", "admin_ui_base_url", "cors_origins")
+    @classmethod
+    def validate_external_tls(cls, value: str) -> str:
+        for origin in value.split(","):
+            parsed = urlparse(origin.strip())
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                or (
+                    parsed.scheme == "http"
+                    and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+                )
+            ):
+                raise ValueError(
+                    "Public origins require HTTPS; HTTP is permitted only for loopback development"
+                )
+        return value
+
+    @field_validator("trusted_hosts")
+    @classmethod
+    def validate_trusted_hosts(cls, value: str) -> str:
+        hosts = value.split(",")
+        if any(not host.strip() or any(c in host for c in "*/@ ") for host in hosts):
+            raise ValueError(
+                "Configure exact trusted ingress host names without wildcard or URL"
+            )
+        return value
+
     model_config = SettingsConfigDict(
         env_prefix="ORCHESTRATOR_",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
 

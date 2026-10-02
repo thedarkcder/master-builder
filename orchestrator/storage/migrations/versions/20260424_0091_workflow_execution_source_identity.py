@@ -22,11 +22,17 @@ ACTIVE_WORKFLOW_STATUS_FILTER = "status IN ('queued', 'running', 'waiting_for_in
 
 
 def _columns() -> set[str]:
-    return {column["name"] for column in sa.inspect(op.get_bind()).get_columns("workflow_executions")}
+    return {
+        column["name"]
+        for column in sa.inspect(op.get_bind()).get_columns("workflow_executions")
+    }
 
 
 def _has_index(index_name: str) -> bool:
-    return index_name in {index["name"] for index in sa.inspect(op.get_bind()).get_indexes("workflow_executions")}
+    return index_name in {
+        index["name"]
+        for index in sa.inspect(op.get_bind()).get_indexes("workflow_executions")
+    }
 
 
 def upgrade() -> None:
@@ -35,12 +41,23 @@ def upgrade() -> None:
         raise RuntimeError("workflow_executions is missing source identity columns")
     if "issue_key" in columns:
         if _has_index("ix_workflow_executions_issue_key"):
-            op.drop_index("ix_workflow_executions_issue_key", table_name="workflow_executions")
+            op.drop_index(
+                "ix_workflow_executions_issue_key", table_name="workflow_executions"
+            )
         if _has_index("uq_workflow_executions_active_scope"):
-            op.drop_index("uq_workflow_executions_active_scope", table_name="workflow_executions")
+            op.drop_index(
+                "uq_workflow_executions_active_scope", table_name="workflow_executions"
+            )
         with op.batch_alter_table("workflow_executions") as batch_op:
             if "source_system" not in columns:
-                batch_op.add_column(sa.Column("source_system", sa.String(length=64), nullable=False, server_default="jira"))
+                batch_op.add_column(
+                    sa.Column(
+                        "source_system",
+                        sa.String(length=64),
+                        nullable=False,
+                        server_default="jira",
+                    )
+                )
             batch_op.alter_column(
                 "issue_key",
                 new_column_name="source_ref",
@@ -49,7 +66,12 @@ def upgrade() -> None:
                 nullable=False,
             )
             if "issue_summary" in columns:
-                batch_op.alter_column("issue_summary", new_column_name="display_name", existing_type=sa.Text(), nullable=True)
+                batch_op.alter_column(
+                    "issue_summary",
+                    new_column_name="display_name",
+                    existing_type=sa.Text(),
+                    nullable=True,
+                )
             if "issue_description" in columns:
                 batch_op.alter_column(
                     "issue_description",
@@ -58,7 +80,12 @@ def upgrade() -> None:
                     nullable=True,
                 )
     if not _has_index("ix_workflow_executions_source"):
-        op.create_index("ix_workflow_executions_source", "workflow_executions", ["source_system", "source_ref"], unique=False)
+        op.create_index(
+            "ix_workflow_executions_source",
+            "workflow_executions",
+            ["source_system", "source_ref"],
+            unique=False,
+        )
     if not _has_index("uq_workflow_executions_active_scope"):
         op.create_index(
             "uq_workflow_executions_active_scope",
@@ -71,14 +98,37 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("uq_workflow_executions_active_scope", table_name="workflow_executions")
+    op.drop_index(
+        "uq_workflow_executions_active_scope", table_name="workflow_executions"
+    )
     op.drop_index("ix_workflow_executions_source", table_name="workflow_executions")
     with op.batch_alter_table("workflow_executions") as batch_op:
-        batch_op.alter_column("source_ref", new_column_name="issue_key", existing_type=sa.String(length=255), type_=sa.String(length=64), nullable=False)
-        batch_op.alter_column("display_name", new_column_name="issue_summary", existing_type=sa.Text(), nullable=True)
-        batch_op.alter_column("source_description", new_column_name="issue_description", existing_type=sa.Text(), nullable=True)
+        batch_op.alter_column(
+            "source_ref",
+            new_column_name="issue_key",
+            existing_type=sa.String(length=255),
+            type_=sa.String(length=64),
+            nullable=False,
+        )
+        batch_op.alter_column(
+            "display_name",
+            new_column_name="issue_summary",
+            existing_type=sa.Text(),
+            nullable=True,
+        )
+        batch_op.alter_column(
+            "source_description",
+            new_column_name="issue_description",
+            existing_type=sa.Text(),
+            nullable=True,
+        )
         batch_op.drop_column("source_system")
-    op.create_index("ix_workflow_executions_issue_key", "workflow_executions", ["issue_key"], unique=False)
+    op.create_index(
+        "ix_workflow_executions_issue_key",
+        "workflow_executions",
+        ["issue_key"],
+        unique=False,
+    )
     op.create_index(
         "uq_workflow_executions_active_scope",
         "workflow_executions",

@@ -5,13 +5,21 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.development.executable_work_items import child_work_item_id, parent_work_item_id
+from orchestrator.core.development.executable_work_items import (
+    child_work_item_id,
+    parent_work_item_id,
+)
 from orchestrator.core.jira_project_reconciliation.models import (
     ClassifiedJiraIssue,
     ISSUE_CLASS_ENGINEERING_CHILD,
     ISSUE_CLASS_PARENT,
 )
-from orchestrator.storage.models import Project, Tenant, WorkflowExecutableWorkItem, WorkflowExecution
+from orchestrator.storage.models import (
+    Project,
+    Tenant,
+    WorkflowExecutableWorkItem,
+    WorkflowExecution,
+)
 
 
 def _now() -> datetime:
@@ -39,9 +47,7 @@ def sync_executable_work_items_for_project(
     """Update the project executable-work projection from a Jira reconciliation result."""
     timestamp = seen_at or _now()
     parent_items = [
-        item
-        for item in classified_issues
-        if item.classification == ISSUE_CLASS_PARENT
+        item for item in classified_issues if item.classification == ISSUE_CLASS_PARENT
     ]
     child_items = [
         item
@@ -58,7 +64,10 @@ def sync_executable_work_items_for_project(
     retained_work_item_ids: set[str] = set()
     for item in parent_items:
         workflow = parent_workflows_by_issue_key.get(item.issue.key)
-        if workflow is None or str(workflow.status or "").strip().casefold() == "cancelled":
+        if (
+            workflow is None
+            or str(workflow.status or "").strip().casefold() == "cancelled"
+        ):
             continue
         work_item_id = parent_work_item_id(execution_id=workflow.execution_id)
         retained_work_item_ids.add(work_item_id)
@@ -92,9 +101,14 @@ def sync_executable_work_items_for_project(
     for item in child_items:
         parent_key = str(item.issue.parent_key or "").strip().upper()
         workflow = parent_workflows_by_issue_key.get(parent_key)
-        if workflow is None or str(workflow.status or "").strip().casefold() == "cancelled":
+        if (
+            workflow is None
+            or str(workflow.status or "").strip().casefold() == "cancelled"
+        ):
             continue
-        work_item_id = child_work_item_id(execution_id=workflow.execution_id, issue_key=item.issue.key)
+        work_item_id = child_work_item_id(
+            execution_id=workflow.execution_id, issue_key=item.issue.key
+        )
         retained_work_item_ids.add(work_item_id)
         _upsert_work_item(
             session=session,
@@ -121,7 +135,9 @@ def sync_executable_work_items_for_project(
             WorkflowExecutableWorkItem.project_id == project.project_id,
         )
         if retained_work_item_ids:
-            stale_query = stale_query.where(WorkflowExecutableWorkItem.work_item_id.not_in(retained_work_item_ids))
+            stale_query = stale_query.where(
+                WorkflowExecutableWorkItem.work_item_id.not_in(retained_work_item_ids)
+            )
         session.execute(stale_query)
 
 
@@ -132,7 +148,13 @@ def _parent_workflows_by_issue_key(
     project_id: str,
     issue_keys: list[str],
 ) -> dict[str, WorkflowExecution]:
-    normalized_issue_keys = sorted({str(issue_key or "").strip().upper() for issue_key in issue_keys if str(issue_key or "").strip()})
+    normalized_issue_keys = sorted(
+        {
+            str(issue_key or "").strip().upper()
+            for issue_key in issue_keys
+            if str(issue_key or "").strip()
+        }
+    )
     if not normalized_issue_keys:
         return {}
     rows = session.execute(

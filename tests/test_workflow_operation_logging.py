@@ -6,18 +6,26 @@ from unittest.mock import patch
 from orchestrator.core.workflow.operation_logging import emit_workflow_operation_log
 from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 class WorkflowOperationLoggingTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-operation-logging")
+        self.database_url = self._prepare_test_database(
+            name_prefix="workflow-operation-logging"
+        )
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
 
-    def test_emit_workflow_operation_log_includes_execution_and_attempt_context(self) -> None:
+    def test_emit_workflow_operation_log_includes_execution_and_attempt_context(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -120,7 +128,9 @@ class WorkflowOperationLoggingTests(SqliteTemplateDbTestCase):
         assert extra["metadata"]["attempt_number"] == 3
         assert extra["metadata"]["error_category"] == "content_limit"
 
-    def test_emit_workflow_operation_log_requires_attempt_ref_operation_match(self) -> None:
+    def test_emit_workflow_operation_log_requires_attempt_ref_operation_match(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:

@@ -1,6 +1,12 @@
 import type { APIRequestContext } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 
+export function requireLiveSetting(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required for disposable live-backend tests`);
+  return value;
+}
+
 export const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL ?? "http://localhost:60001";
 
 export type TenantProjectRecord = {
@@ -18,10 +24,7 @@ export type TenantProjectCreatePayload = {
 };
 
 function psycopgDatabaseUrl(): string {
-  const databaseUrl =
-    process.env.ORCHESTRATOR_DATABASE_URL ??
-    process.env.POSTGRES_URL ??
-    "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator";
+  const databaseUrl = requireLiveSetting("ORCHESTRATOR_DATABASE_URL");
   return databaseUrl.replace("postgresql+psycopg://", "postgresql://");
 }
 
@@ -53,7 +56,7 @@ export async function archiveTenant(
   accessToken?: string,
 ): Promise<void> {
   const username = process.env.ORCHESTRATOR_ADMIN_USERNAME ?? "admin";
-  const password = process.env.ORCHESTRATOR_ADMIN_PASSWORD ?? "change-me";
+  const password = accessToken ? "" : requireLiveSetting("ORCHESTRATOR_ADMIN_PASSWORD");
   const basicAuth = Buffer.from(`${username}:${password}`).toString("base64");
   const response = await request.post(`${API_BASE_URL}/api/admin/tenants/${tenantId}/archive`, {
     headers: {

@@ -12,7 +12,9 @@ class RunLogsUsageTests(unittest.TestCase):
         )
         self.assertIsNone(parsed)
 
-    def test_extract_turn_completed_usage_prefers_split_tokens_when_present(self) -> None:
+    def test_extract_turn_completed_usage_prefers_split_tokens_when_present(
+        self,
+    ) -> None:
         parsed = extract_turn_completed_usage(
             '{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":5,"total_tokens":99}}'
         )

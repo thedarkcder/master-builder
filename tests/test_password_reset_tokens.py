@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from orchestrator.core.platform.password_reset_tokens import issue_password_reset_token, parse_password_reset_token
+from orchestrator.core.platform.password_reset_tokens import (
+    issue_password_reset_token,
+    parse_password_reset_token,
+)
 
 
 def test_issue_password_reset_token_treats_naive_password_updated_at_as_utc() -> None:
@@ -15,4 +18,7 @@ def test_issue_password_reset_token_treats_naive_password_updated_at_as_utc() ->
 
     payload = parse_password_reset_token(token=token, secret="secret")
 
-    assert payload.password_updated_at == datetime(2026, 4, 7, 12, 0, 0, tzinfo=UTC).isoformat()
+    assert (
+        payload.password_updated_at
+        == datetime(2026, 4, 7, 12, 0, 0, tzinfo=UTC).isoformat()
+    )

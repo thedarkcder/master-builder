@@ -26,7 +26,10 @@ from orchestrator.core.runtime.runtime import (
 
 class CodexRuntimeErrorTests(unittest.TestCase):
     def test_str_includes_payload_preview(self) -> None:
-        err = CodexRuntimeError("Runtime HTTP request failed with status 400", payload_preview='{"error":"Unknown model"}')
+        err = CodexRuntimeError(
+            "Runtime HTTP request failed with status 400",
+            payload_preview='{"error":"Unknown model"}',
+        )
         self.assertIn("400", str(err))
         self.assertIn("Unknown model", str(err))
 
@@ -34,13 +37,17 @@ class CodexRuntimeErrorTests(unittest.TestCase):
 class OpenAiCompatibleBaseUrlTests(unittest.TestCase):
     def test_lm_studio_appends_v1_when_missing(self) -> None:
         self.assertEqual(
-            _openai_compatible_base_url_for_local_server(base_url="http://127.0.0.1:1234", runtime_kind="lm_studio"),
+            _openai_compatible_base_url_for_local_server(
+                base_url="http://127.0.0.1:1234", runtime_kind="lm_studio"
+            ),
             "http://127.0.0.1:1234/v1",
         )
 
     def test_lm_studio_preserves_existing_v1(self) -> None:
         self.assertEqual(
-            _openai_compatible_base_url_for_local_server(base_url="http://host.docker.internal:1234/v1", runtime_kind="lm_studio"),
+            _openai_compatible_base_url_for_local_server(
+                base_url="http://host.docker.internal:1234/v1", runtime_kind="lm_studio"
+            ),
             "http://host.docker.internal:1234/v1",
         )
 
@@ -69,7 +76,9 @@ class ExtractJsonPayloadTests(unittest.TestCase):
         )
         self.assertEqual(payload, {"decision_gate_required": False, "reason": "ok"})
 
-    def test_extract_session_id_from_json_line_accepts_thread_and_session_meta(self) -> None:
+    def test_extract_session_id_from_json_line_accepts_thread_and_session_meta(
+        self,
+    ) -> None:
         self.assertEqual(
             _extract_session_id_from_json_line(
                 '{"type":"thread.started","thread_id":"11111111-2222-3333-4444-555555555555"}'
@@ -83,7 +92,9 @@ class ExtractJsonPayloadTests(unittest.TestCase):
             "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
         )
 
-    def test_extract_usage_from_json_stdout_detects_prompt_and_completion_tokens(self) -> None:
+    def test_extract_usage_from_json_stdout_detects_prompt_and_completion_tokens(
+        self,
+    ) -> None:
         usage = _extract_usage_from_json_stdout(
             [
                 '{"type":"response.started"}\n',
@@ -121,7 +132,7 @@ class CodexRuntimeTests(unittest.TestCase):
             model="m",
             max_output_tokens=1000,
             command="override",
-            _request=lambda _s, _u, _w, _l=None: " {\"ok\": true} ",
+            _request=lambda _s, _u, _w, _l=None: ' {"ok": true} ',
         )
         text = runtime.run_text(system_prompt="sys", user_prompt="usr")
         self.assertEqual(text, '{"ok": true}')
@@ -189,14 +200,21 @@ class CodexRuntimeTests(unittest.TestCase):
             on_usage=lambda usage: captured_usage.update(usage),
         )
         self.assertEqual(payload, {"ok": True})
-        self.assertEqual(captured_usage, {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17})
+        self.assertEqual(
+            captured_usage,
+            {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+        )
 
-    def test_runtime_with_fallback_uses_secondary_runtime_after_primary_failure(self) -> None:
+    def test_runtime_with_fallback_uses_secondary_runtime_after_primary_failure(
+        self,
+    ) -> None:
         primary_runtime = CodexRuntime(
             model="primary",
             max_output_tokens=1000,
             command="primary",
-            _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(CodexRuntimeError("primary failed")),
+            _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                CodexRuntimeError("primary failed")
+            ),
         )
         fallback_runtime = CodexRuntime(
             model="fallback",
@@ -215,7 +233,9 @@ class CodexRuntimeTests(unittest.TestCase):
 
 
 class BuildCodexRuntimeDefaultProfileTests(unittest.TestCase):
-    def test_build_codex_runtime_does_not_require_global_codex_model_setting(self) -> None:
+    def test_build_codex_runtime_does_not_require_global_codex_model_setting(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
             codex_max_output_tokens=512,
@@ -289,7 +309,11 @@ class BuildHttpRuntimeTests(unittest.TestCase):
                             }
                         }
                     ],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    },
                 },
                 {
                     "choices": [
@@ -304,7 +328,11 @@ class BuildHttpRuntimeTests(unittest.TestCase):
                             }
                         }
                     ],
-                    "usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26},
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 6,
+                        "total_tokens": 26,
+                    },
                 },
             ]
         )
@@ -313,7 +341,10 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             request_payloads.append(json.loads(request.data.decode("utf-8")))
             return _FakeHttpResponse(next(responses))
 
-        with patch("orchestrator.core.runtime.runtime.urllib_request.urlopen", side_effect=fake_urlopen):
+        with patch(
+            "orchestrator.core.runtime.runtime.urllib_request.urlopen",
+            side_effect=fake_urlopen,
+        ):
             runtime = build_http_runtime(
                 settings=settings,
                 runtime_kind="openai",
@@ -325,13 +356,17 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             first = runtime.run_json(
                 system_prompt="system",
                 user_prompt="initial user request",
-                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+                on_session_id=lambda session_id: captured_session_ids.append(
+                    session_id
+                ),
             )
             second = runtime.run_json(
                 system_prompt="system",
                 user_prompt='Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
                 resume_session_id=captured_session_ids[0],
-                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+                on_session_id=lambda session_id: captured_session_ids.append(
+                    session_id
+                ),
             )
 
         self.assertEqual(first["type"], "tool_request")
@@ -423,7 +458,10 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             request_payloads.append(json.loads(request.data.decode("utf-8")))
             return _FakeHttpResponse(next(responses))
 
-        with patch("orchestrator.core.runtime.runtime.urllib_request.urlopen", side_effect=fake_urlopen):
+        with patch(
+            "orchestrator.core.runtime.runtime.urllib_request.urlopen",
+            side_effect=fake_urlopen,
+        ):
             runtime = build_http_runtime(
                 settings=settings,
                 runtime_kind="claude",
@@ -435,13 +473,17 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             first = runtime.run_json(
                 system_prompt="system",
                 user_prompt="initial user request",
-                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+                on_session_id=lambda session_id: captured_session_ids.append(
+                    session_id
+                ),
             )
             second = runtime.run_json(
                 system_prompt="system",
                 user_prompt='Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
                 resume_session_id=captured_session_ids[0],
-                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+                on_session_id=lambda session_id: captured_session_ids.append(
+                    session_id
+                ),
             )
 
         self.assertEqual(first["type"], "tool_request")
@@ -495,7 +537,10 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
                 return None
 
-        with patch("orchestrator.core.runtime.runtime.urllib_request.urlopen", return_value=_FakeHttpResponse()):
+        with patch(
+            "orchestrator.core.runtime.runtime.urllib_request.urlopen",
+            return_value=_FakeHttpResponse(),
+        ):
             runtime = build_http_runtime(
                 settings=settings,
                 runtime_kind="claude",
@@ -612,12 +657,20 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx], output_text="json-output")
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_write_output) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen_write_output,
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(
-                runtime.run_text(system_prompt="s", user_prompt="u", working_dir="/tmp/repo"),
+                runtime.run_text(
+                    system_prompt="s", user_prompt="u", working_dir="/tmp/repo"
+                ),
                 "json-output",
             )
             self.assertEqual(popen_mock.call_args.kwargs["cwd"], "/tmp/repo")
@@ -626,9 +679,13 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 settings.database_url,
             )
 
-    def test_cli_request_uses_explicit_tool_database_url_override_when_configured(self) -> None:
+    def test_cli_request_uses_explicit_tool_database_url_override_when_configured(
+        self,
+    ) -> None:
         settings = self._settings()
-        settings.codex_tool_database_url = "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:5500/orchestrator"
+        settings.codex_tool_database_url = (
+            "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:5500/orchestrator"
+        )
 
         class _FakePipe:
             def readline(self) -> str:
@@ -662,18 +719,28 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
-            self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+            self.assertEqual(
+                runtime.run_text(system_prompt="s", user_prompt="u"), "json-output"
+            )
 
         self.assertEqual(
             popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
             settings.codex_tool_database_url,
         )
 
-    def test_cli_request_does_not_inherit_unrelated_parent_environment_values(self) -> None:
+    def test_cli_request_does_not_inherit_unrelated_parent_environment_values(
+        self,
+    ) -> None:
         settings = self._settings()
 
         class _FakePipe:
@@ -714,6 +781,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         os.environ["HOME"] = "/Users/example-user"
         os.environ["XDG_CONFIG_HOME"] = "/Users/example-user/.config"
         try:
+
             def fake_which(command: str) -> str | None:
                 mapping = {
                     "codex": "/usr/bin/codex",
@@ -723,11 +791,19 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return mapping.get(command)
 
             with (
-                patch("orchestrator.core.runtime.runtime.shutil.which", side_effect=fake_which),
-                patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+                patch(
+                    "orchestrator.core.runtime.runtime.shutil.which",
+                    side_effect=fake_which,
+                ),
+                patch(
+                    "orchestrator.core.runtime.runtime.subprocess.Popen",
+                    side_effect=fake_popen,
+                ) as popen_mock,
             ):
                 runtime = build_codex_runtime(settings=settings)
-                self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+                self.assertEqual(
+                    runtime.run_text(system_prompt="s", user_prompt="u"), "json-output"
+                )
 
             child_env = popen_mock.call_args.kwargs["env"]
             self.assertNotIn("UNRELATED_PARENT_SECRET", child_env)
@@ -741,7 +817,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 f"{settings.runtime_home}/.config",
             )
             self.assertEqual(child_env["CODEX_HOME"], f"{settings.runtime_home}/.codex")
-            self.assertEqual(child_env["ORCHESTRATOR_REAL_XCODEBUILD"], "/usr/bin/xcodebuild")
+            self.assertEqual(
+                child_env["ORCHESTRATOR_REAL_XCODEBUILD"], "/usr/bin/xcodebuild"
+            )
             self.assertEqual(child_env["ORCHESTRATOR_REAL_XCRUN"], "/usr/bin/xcrun")
             shim_dir = Path(child_env["PATH"].split(":", 1)[0])
             self.assertEqual(shim_dir, Path(settings.runtime_home) / ".tool-shims")
@@ -801,6 +879,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             Path(working_dir).mkdir(parents=True, exist_ok=True)
             runtime_home_root = Path(temp_dir) / "home"
             with patch.dict(os.environ, {"HOME": str(runtime_home_root)}, clear=False):
+
                 def fake_which(command: str) -> str | None:
                     mapping = {
                         "codex": "/usr/bin/codex",
@@ -810,27 +889,44 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                     return mapping.get(command)
 
                 with (
-                    patch("orchestrator.core.runtime.runtime.shutil.which", side_effect=fake_which),
-                    patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+                    patch(
+                        "orchestrator.core.runtime.runtime.shutil.which",
+                        side_effect=fake_which,
+                    ),
+                    patch(
+                        "orchestrator.core.runtime.runtime.subprocess.Popen",
+                        side_effect=fake_popen,
+                    ) as popen_mock,
                 ):
                     runtime = build_codex_runtime(settings=settings)
                     self.assertEqual(
-                        runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
+                        runtime.run_text(
+                            system_prompt="s", user_prompt="u", working_dir=working_dir
+                        ),
                         "json-output",
                     )
 
             child_env = popen_mock.call_args.kwargs["env"]
-            expected_runtime_home = str(runtime_home_root / ".master-builder" / "runtime" / "worker-macos-local")
+            expected_runtime_home = str(
+                runtime_home_root / ".master-builder" / "runtime" / "worker-macos-local"
+            )
             self.assertEqual(child_env["HOME"], str(runtime_home_root))
-            self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
-            self.assertEqual(child_env["CODEX_HOME"], str(Path(expected_runtime_home) / ".codex"))
+            self.assertEqual(
+                child_env["XDG_CONFIG_HOME"],
+                str(Path(expected_runtime_home) / ".config"),
+            )
+            self.assertEqual(
+                child_env["CODEX_HOME"], str(Path(expected_runtime_home) / ".codex")
+            )
             self.assertEqual(child_env["ORCHESTRATOR_EXECUTION_REPO_DIR"], working_dir)
             self.assertEqual(
                 Path(child_env["PATH"].split(":", 1)[0]),
                 Path(expected_runtime_home) / ".tool-shims",
             )
 
-    def test_cli_request_falls_back_to_runtime_home_when_parent_home_missing(self) -> None:
+    def test_cli_request_falls_back_to_runtime_home_when_parent_home_missing(
+        self,
+    ) -> None:
         settings = self._settings()
         settings.runtime_home = ""
 
@@ -870,20 +966,34 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             Path(working_dir).mkdir(parents=True, exist_ok=True)
             with patch.dict(os.environ, {}, clear=True):
                 with (
-                    patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-                    patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+                    patch(
+                        "orchestrator.core.runtime.runtime.shutil.which",
+                        return_value="/usr/bin/codex",
+                    ),
+                    patch(
+                        "orchestrator.core.runtime.runtime.subprocess.Popen",
+                        side_effect=fake_popen,
+                    ) as popen_mock,
                 ):
                     runtime = build_codex_runtime(settings=settings)
                     self.assertEqual(
-                        runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
+                        runtime.run_text(
+                            system_prompt="s", user_prompt="u", working_dir=working_dir
+                        ),
                         "json-output",
                     )
 
         child_env = popen_mock.call_args.kwargs["env"]
-        expected_runtime_home = str(Path.home() / ".master-builder" / "runtime" / "worker-macos-local")
+        expected_runtime_home = str(
+            Path.home() / ".master-builder" / "runtime" / "worker-macos-local"
+        )
         self.assertEqual(child_env["HOME"], expected_runtime_home)
-        self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
-        self.assertEqual(child_env["CODEX_HOME"], str(Path(expected_runtime_home) / ".codex"))
+        self.assertEqual(
+            child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config")
+        )
+        self.assertEqual(
+            child_env["CODEX_HOME"], str(Path(expected_runtime_home) / ".codex")
+        )
 
     def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:
         settings = self._settings()
@@ -921,11 +1031,19 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
-            self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+            self.assertEqual(
+                runtime.run_text(system_prompt="s", user_prompt="u"), "json-output"
+            )
 
         self.assertEqual(
             popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
@@ -981,11 +1099,19 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
-            runtime.run_text(system_prompt="s", user_prompt="u", model_override="gpt-5.4-mini")
+            runtime.run_text(
+                system_prompt="s", user_prompt="u", model_override="gpt-5.4-mini"
+            )
 
         args = popen_mock.call_args.args[0]
         self.assertEqual(args[args.index("--model") + 1], "gpt-5.4-mini")
@@ -993,20 +1119,32 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         call_args = list(popen_mock.call_args.args[0])
         sandbox_idx = call_args.index("--sandbox") + 1
         self.assertEqual(call_args[sandbox_idx], "workspace-write")
-        config_values = [call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"]
+        config_values = [
+            call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"
+        ]
         self.assertIn('reasoning.effort="medium"', config_values)
         self.assertIn('web_search="disabled"', config_values)
 
         def fake_popen_stdout(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
-            return _FakePopen(args[output_idx], stdout_lines=["stdout-output\n"], output_text="")
+            return _FakePopen(
+                args[output_idx], stdout_lines=["stdout-output\n"], output_text=""
+            )
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_stdout),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen_stdout,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
-            self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "stdout-output")
+            self.assertEqual(
+                runtime.run_text(system_prompt="s", user_prompt="u"), "stdout-output"
+            )
 
     def test_cli_request_waits_with_polling_timeout(self) -> None:
         settings = self._settings()
@@ -1049,11 +1187,19 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return proc
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
-            self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+            self.assertEqual(
+                runtime.run_text(system_prompt="s", user_prompt="u"), "json-output"
+            )
             self.assertIn("proc", holder)
             self.assertEqual(holder["proc"].last_wait_timeout, 1.0)
 
@@ -1110,9 +1256,18 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return 140.0
 
         with (
-            patch("orchestrator.core.runtime.runtime.time.monotonic", side_effect=_fake_monotonic),
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "orchestrator.core.runtime.runtime.time.monotonic",
+                side_effect=_fake_monotonic,
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -1187,10 +1342,21 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return 31.0
 
         with (
-            patch("orchestrator.core.runtime.runtime.time.monotonic", side_effect=_fake_monotonic),
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.os.killpg", side_effect=fake_killpg) as killpg_mock,
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.time.monotonic",
+                side_effect=_fake_monotonic,
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.os.killpg", side_effect=fake_killpg
+            ) as killpg_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -1198,7 +1364,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 runtime.run_text(
                     system_prompt="s",
                     user_prompt="u",
-                    on_log_line=lambda stream, message: logged.append((stream, message)),
+                    on_log_line=lambda stream, message: logged.append(
+                        (stream, message)
+                    ),
                 )
 
         self.assertIn("timed out after 30.0 seconds", str(raised.exception))
@@ -1254,8 +1422,14 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -1265,7 +1439,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 on_log_line=lambda stream, message: logged.append((stream, message)),
             )
             self.assertEqual(payload, {"ok": True})
-            self.assertEqual(logged, [("stdout", "out-1"), ("stdout", "out-2"), ("stderr", "err-1")])
+            self.assertEqual(
+                logged, [("stdout", "out-1"), ("stdout", "out-2"), ("stderr", "err-1")]
+            )
 
     def test_cli_request_suppresses_stderr_log_lines_when_disabled(self) -> None:
         settings = self._settings()
@@ -1311,8 +1487,14 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -1368,8 +1550,14 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -1430,11 +1618,15 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         def fake_popen_auth(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
-            return _FakePopen(args[output_idx], returncode=1, stderr_lines=["auth required\n"])
+            return _FakePopen(
+                args[output_idx], returncode=1, stderr_lines=["auth required\n"]
+            )
 
         def fake_run_not_logged_in(args: list[str], **_kwargs: object):
             if args[1:] == ["login", "status"]:
-                return subprocess.CompletedProcess(args=args, returncode=1, stdout="Not logged in\n", stderr="")
+                return subprocess.CompletedProcess(
+                    args=args, returncode=1, stdout="Not logged in\n", stderr=""
+                )
             self.assertEqual(args[1:], ["login", "--device-auth"])
             raise subprocess.TimeoutExpired(
                 cmd=args,
@@ -1443,9 +1635,18 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             )
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_auth),
-            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_not_logged_in),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen_auth,
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.run",
+                side_effect=fake_run_not_logged_in,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
@@ -1461,12 +1662,23 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         def fake_run_logged_in(args: list[str], **_kwargs: object):
             self.assertEqual(args[1:], ["login", "status"])
-            return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in\n", stderr="")
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout="Logged in\n", stderr=""
+            )
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_boom),
-            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_logged_in),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen_boom,
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.run",
+                side_effect=fake_run_logged_in,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
@@ -1481,13 +1693,24 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                     '{"type":"error","message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}\n',
                     '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}}\n',
                 ],
-                stderr_lines=["Warning: no last agent message; wrote empty content to /tmp/tmp.txt\n"],
+                stderr_lines=[
+                    "Warning: no last agent message; wrote empty content to /tmp/tmp.txt\n"
+                ],
             )
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_structured_limit),
-            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_logged_in),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen_structured_limit,
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.run",
+                side_effect=fake_run_logged_in,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
@@ -1500,9 +1723,18 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             return _FakePopen(args[output_idx], output_text="")
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_empty),
-            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_logged_in),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                side_effect=fake_popen_empty,
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.run",
+                side_effect=fake_run_logged_in,
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
@@ -1551,8 +1783,14 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return None
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                return_value=_FakePopen(),
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             captured_session_ids: list[str] = []
@@ -1560,19 +1798,38 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 system_prompt="s",
                 user_prompt="u",
                 resume_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+                on_session_id=lambda session_id: captured_session_ids.append(
+                    session_id
+                ),
             )
             self.assertEqual(output, "resume-output")
             call_args = list(popen_mock.call_args.args[0])
-            self.assertEqual(call_args[:4], ["codex", "exec", "resume", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"])
-            self.assertEqual(call_args[4:8], ["--disable", "apps", "--disable", "plugins"])
-            self.assertNotIn("--sandbox", call_args)
-            self.assertIn("--full-auto", call_args)
-            config_values = [call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"]
+            self.assertEqual(
+                call_args[:6],
+                [
+                    "codex",
+                    "exec",
+                    "--sandbox",
+                    "workspace-write",
+                    "resume",
+                    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                ],
+            )
+            self.assertEqual(
+                call_args[6:10], ["--disable", "apps", "--disable", "plugins"]
+            )
+            self.assertNotIn("--full-auto", call_args)
+            config_values = [
+                call_args[index + 1]
+                for index, item in enumerate(call_args)
+                if item == "-c"
+            ]
             self.assertIn('web_search="disabled"', config_values)
             self.assertIn("--json", call_args)
             self.assertNotIn("--output-last-message", call_args)
-            self.assertEqual(captured_session_ids, ["11111111-2222-3333-4444-555555555555"])
+            self.assertEqual(
+                captured_session_ids, ["11111111-2222-3333-4444-555555555555"]
+            )
 
     def test_cli_resume_extracts_agent_message_from_item_completed_events(self) -> None:
         settings = self._settings()
@@ -1617,8 +1874,14 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return None
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", return_value=_FakePopen()),
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                return_value=_FakePopen(),
+            ),
         ):
             runtime = build_codex_runtime(settings=settings)
             payload = runtime.run_json(
@@ -1671,8 +1934,14 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return None
 
         with (
-            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.runtime.runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
+            patch(
+                "orchestrator.core.runtime.runtime.shutil.which",
+                return_value="/usr/bin/codex",
+            ),
+            patch(
+                "orchestrator.core.runtime.runtime.subprocess.Popen",
+                return_value=_FakePopen(),
+            ) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             output = runtime.run_text(

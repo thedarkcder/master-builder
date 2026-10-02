@@ -33,7 +33,9 @@ class WorkflowBootstrapTests(unittest.TestCase):
             )
             self.assertTrue(result.readme_updated)
             self.assertTrue((target_repo / ".github" / "workflows" / "ci.yml").exists())
-            self.assertTrue((target_repo / ".github" / "workflows" / "security.yml").exists())
+            self.assertTrue(
+                (target_repo / ".github" / "workflows" / "security.yml").exists()
+            )
             readme = (target_repo / "README.md").read_text(encoding="utf-8")
             self.assertIn("## CI and Security Checks", readme)
 
@@ -52,7 +54,9 @@ class WorkflowBootstrapTests(unittest.TestCase):
 
 
 class CodexBootstrapTests(unittest.TestCase):
-    def test_codex_bootstrap_creates_required_assets_and_preflight_context(self) -> None:
+    def test_codex_bootstrap_creates_required_assets_and_preflight_context(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp_dir:
             target_repo = Path(tmp_dir) / "target-repo"
             target_repo.mkdir(parents=True, exist_ok=True)

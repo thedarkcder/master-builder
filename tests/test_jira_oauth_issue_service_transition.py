@@ -15,7 +15,11 @@ def test_transition_issue_by_target_status_name() -> None:
         if method == "GET" and url.endswith("/transitions"):
             return {
                 "transitions": [
-                    {"id": "11", "name": "Start progress", "to": {"name": "In Progress"}},
+                    {
+                        "id": "11",
+                        "name": "Start progress",
+                        "to": {"name": "In Progress"},
+                    },
                     {"id": "21", "name": "Done", "to": {"name": "Done"}},
                 ]
             }

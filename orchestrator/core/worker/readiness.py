@@ -6,7 +6,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.gate import DecisionGateResult
-from orchestrator.core.decision.state_machine import resolve_worker_decision_from_precheck
+from orchestrator.core.decision.state_machine import (
+    resolve_worker_decision_from_precheck,
+)
 from orchestrator.core.decision.types import (
     DecisionClassification,
     PrecheckOutcome,
@@ -16,7 +18,10 @@ from orchestrator.core.precheck.pre_run_check import (
     PreRunCheckResult,
     evaluate_pre_run_check,
 )
-from orchestrator.core.runs.service import is_ready_for_agent_precheck, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.runs.service import (
+    is_ready_for_agent_precheck,
+    resolve_precheck_outcome_for_enqueue,
+)
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
@@ -48,7 +53,9 @@ def evaluate_worker_decision(
     issue_labels: list[str] | None = None,
     settings=None,  # noqa: ANN001
     tenant_atlassian_oauth_context_fn: Callable[..., Any] | None = None,
-    evaluate_pre_run_check_fn: Callable[..., PreRunCheckResult] = evaluate_pre_run_check,
+    evaluate_pre_run_check_fn: Callable[
+        ..., PreRunCheckResult
+    ] = evaluate_pre_run_check,
     evaluate_decision_gate_fn: Callable[..., DecisionGateResult] | None = None,
 ) -> WorkerDecision:
     _ = (
@@ -67,12 +74,16 @@ def evaluate_worker_decision(
         evaluate_decision_gate_fn,
     )
     if is_ready_for_agent_precheck(run_plan):
-        return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
+        return WorkerDecision(
+            allowed=True, decision_gate=None, configuration_error=None
+        )
 
     if is_pr_remediation_run(
         run_plan=run_plan,
     ):
-        return WorkerDecision(allowed=True, decision_gate=None, configuration_error=None)
+        return WorkerDecision(
+            allowed=True, decision_gate=None, configuration_error=None
+        )
 
     snapshot = ExecutionSnapshot.load(run_plan)
     if snapshot is None:
@@ -121,6 +132,7 @@ def evaluate_worker_decision(
         block_reason=PrecheckOutcome.POLICY_EVAL_FAILED.value,
         classification=DecisionClassification.CLEAR,
     )
+
 
 def _worker_decision_from_precheck(*, pre_check: PreRunCheckResult) -> WorkerDecision:
     return resolve_worker_decision_from_precheck(pre_check=pre_check)

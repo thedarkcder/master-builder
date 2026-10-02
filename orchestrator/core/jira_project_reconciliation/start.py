@@ -6,13 +6,32 @@ from datetime import datetime, timezone
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.jira_project_reconciliation.dependencies import JiraProjectReconciliationHandlerDeps
-from orchestrator.core.jira_project_reconciliation.handlers import JiraProjectReconciliationAdvanceHandler
-from orchestrator.core.jira_project_reconciliation.retry import JiraProjectReconciliationOperationRetryHandler
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.jira_project_reconciliation.dependencies import (
+    JiraProjectReconciliationHandlerDeps,
+)
+from orchestrator.core.jira_project_reconciliation.handlers import (
+    JiraProjectReconciliationAdvanceHandler,
+)
+from orchestrator.core.jira_project_reconciliation.retry import (
+    JiraProjectReconciliationOperationRetryHandler,
+)
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
 from orchestrator.core.workflow.handler_registry import build_workflow_handler_registry
-from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger, build_workflow_runtime
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.core.workflow.runtime import (
+    WorkflowAdvanceRequest,
+    WorkflowTrigger,
+    build_workflow_runtime,
+)
+from orchestrator.storage.models import (
+    Project,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 
 @dataclass(frozen=True)
@@ -38,7 +57,10 @@ def _request_id(*, tenant: Tenant, project: Project, trigger_event: str) -> str:
 def _latest_attempt_id(*, session: Session, workflow_id: str) -> str | None:
     attempt = session.execute(
         select(WorkflowOperationAttempt)
-        .join(WorkflowOperation, WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id)
+        .join(
+            WorkflowOperation,
+            WorkflowOperation.operation_id == WorkflowOperationAttempt.operation_id,
+        )
         .where(WorkflowOperation.workflow_id == workflow_id)
         .order_by(desc(WorkflowOperationAttempt.created_at))
         .limit(1)
@@ -63,20 +85,28 @@ def start_jira_project_reconciliation(
     if project is None:
         raise ValueError("Jira project reconciliation start requires project")
     if project.tenant_id != tenant.tenant_id:
-        raise ValueError("Jira project reconciliation project must belong to the supplied tenant")
-    jira_project_key = str(getattr(project, "jira_project_key", "") or "").strip().upper()
+        raise ValueError(
+            "Jira project reconciliation project must belong to the supplied tenant"
+        )
+    jira_project_key = (
+        str(getattr(project, "jira_project_key", "") or "").strip().upper()
+    )
     if not jira_project_key:
         raise ValueError("Jira project reconciliation start requires project Jira key")
 
     handler_registry = build_workflow_handler_registry(
         advance_handlers={
             "jira_project_reconciliation": JiraProjectReconciliationAdvanceHandler(
-                deps=JiraProjectReconciliationHandlerDeps(gateway_factory=gateway_factory),
+                deps=JiraProjectReconciliationHandlerDeps(
+                    gateway_factory=gateway_factory
+                ),
             ),
         },
         operation_retry_handlers={
             "jira_project_reconciliation": JiraProjectReconciliationOperationRetryHandler(
-                deps=JiraProjectReconciliationHandlerDeps(gateway_factory=gateway_factory),
+                deps=JiraProjectReconciliationHandlerDeps(
+                    gateway_factory=gateway_factory
+                ),
             ),
         },
     )
@@ -105,14 +135,17 @@ def start_jira_project_reconciliation(
                 ),
             ),
             payload={
-                "request_id": _request_id(tenant=tenant, project=project, trigger_event=trigger_event),
+                "request_id": _request_id(
+                    tenant=tenant, project=project, trigger_event=trigger_event
+                ),
                 "max_items": max(1, int(max_items)),
             },
             trigger=WorkflowTrigger(event=trigger_event),
         )
     )
     workflow = session.execute(
-        select(WorkflowExecution).where(
+        select(WorkflowExecution)
+        .where(
             WorkflowExecution.workflow_type_key == "jira_project_reconciliation",
             WorkflowExecution.project_id == project.project_id,
         )
@@ -120,12 +153,16 @@ def start_jira_project_reconciliation(
         .limit(1)
     ).scalar_one_or_none()
     if workflow is None:
-        raise RuntimeError("Jira project reconciliation did not create a durable workflow execution")
+        raise RuntimeError(
+            "Jira project reconciliation did not create a durable workflow execution"
+        )
     _ = result
     return WorkflowExecutionStartResult(
         execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,
         workflow_type_key=workflow.workflow_type_key,
         status=workflow.status,
-        started_attempt_id=_latest_attempt_id(session=session, workflow_id=workflow.workflow_id),
+        started_attempt_id=_latest_attempt_id(
+            session=session, workflow_id=workflow.workflow_id
+        ),
     )

@@ -17,7 +17,10 @@ from orchestrator.core.observability.otel import (
 class ObservabilityContractTests(unittest.TestCase):
     def test_otel_collector_accepts_configured_log_exporter_signal(self) -> None:
         config = (
-            Path(__file__).resolve().parents[1] / "ops" / "observability" / "otel-collector-config.yaml"
+            Path(__file__).resolve().parents[1]
+            / "ops"
+            / "observability"
+            / "otel-collector-config.yaml"
         ).read_text(encoding="utf-8")
 
         self.assertIn("logs:", config)
@@ -25,7 +28,9 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertIn("exporters: [debug]", config)
 
     def test_formatter_emits_required_contract_fields(self) -> None:
-        formatter = ObservabilityJsonFormatter(environment="test", platform_version="v-test")
+        formatter = ObservabilityJsonFormatter(
+            environment="test", platform_version="v-test"
+        )
         record = logging.LogRecord(
             name="test.logger",
             level=logging.INFO,
@@ -51,7 +56,12 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertIn("span_id", payload)
 
     def test_context_is_applied_and_reset(self) -> None:
-        tokens = set_log_context(correlation_id="cid-1", tenant_id="tenant-1", project_id="project-1", agent_id="agent-1")
+        tokens = set_log_context(
+            correlation_id="cid-1",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            agent_id="agent-1",
+        )
         self.assertEqual(
             current_log_context(),
             {
@@ -77,7 +87,9 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertIn("environment", missing)
         self.assertIn("metadata", missing)
 
-    def test_formatter_normalizes_empty_scope_fields_and_uses_default_agent_id(self) -> None:
+    def test_formatter_normalizes_empty_scope_fields_and_uses_default_agent_id(
+        self,
+    ) -> None:
         formatter = ObservabilityJsonFormatter(
             environment="test",
             platform_version="v-test",
@@ -103,7 +115,12 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertEqual(payload["agent_id"], "api")
 
     def test_scoped_log_context_applies_and_resets_context(self) -> None:
-        with scoped_log_context(correlation_id="cid-2", tenant_id="tenant-2", project_id="project-2", agent_id="agent-2"):
+        with scoped_log_context(
+            correlation_id="cid-2",
+            tenant_id="tenant-2",
+            project_id="project-2",
+            agent_id="agent-2",
+        ):
             self.assertEqual(
                 current_log_context(),
                 {

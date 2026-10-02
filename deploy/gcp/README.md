@@ -1,5 +1,7 @@
 # GCP Package (Phase 3, HA)
 
+Status: design specification only. This directory has no complete deployment installer or verified HA implementation. See [the support matrix](../../docs/support-matrix.md).
+
 ## Objective
 Deliver a single-region HA GCP deployment.
 

@@ -22,13 +22,18 @@ _RUN_HEARTBEAT_LOCK_KEY = 202603200030
 def _has_column(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -40,9 +45,17 @@ def upgrade() -> None:
         )
 
     if not _has_column("runs", "last_heartbeat_at"):
-        op.add_column("runs", sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True))
+        op.add_column(
+            "runs",
+            sa.Column("last_heartbeat_at", sa.DateTime(timezone=True), nullable=True),
+        )
     if not _has_column("runs", "worker_service_instance_id"):
-        op.add_column("runs", sa.Column("worker_service_instance_id", sa.String(length=128), nullable=True))
+        op.add_column(
+            "runs",
+            sa.Column(
+                "worker_service_instance_id", sa.String(length=128), nullable=True
+            ),
+        )
 
     for index_name, columns in (
         ("ix_runs_last_heartbeat_at", ["last_heartbeat_at"]),

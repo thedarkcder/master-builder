@@ -66,16 +66,24 @@ def _emit_reauth_notification(*, session, tenant_id: str, connection) -> None:  
     session.commit()
 
 
-def _resolve_connection_for_tenant(*, session, tenant_id: str, tenant_model, resolve_tenant_atlassian_connection_fn):  # noqa: ANN001
+def _resolve_connection_for_tenant(
+    *, session, tenant_id: str, tenant_model, resolve_tenant_atlassian_connection_fn
+):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     connection = resolve_tenant_atlassian_connection_fn(session=session, tenant=tenant)
     return tenant, connection
 
 
 def _require_scopes(*, connection, scopes: set[str]) -> None:  # noqa: ANN001
-    granted = {str(scope or "").strip() for scope in getattr(connection, "scopes", []) if str(scope or "").strip()}
+    granted = {
+        str(scope or "").strip()
+        for scope in getattr(connection, "scopes", [])
+        if str(scope or "").strip()
+    }
     missing = sorted(scopes - granted)
     if missing:
         raise HTTPException(
@@ -113,8 +121,13 @@ def list_confluence_spaces_for_tenant(
         )
     except (ValueError, AtlassianOAuthError) as exc:
         if _requires_reauth(exc):
-            _emit_reauth_notification(session=session, tenant_id=tenant.tenant_id, connection=connection)
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Atlassian connection requires reauthentication.") from exc
+            _emit_reauth_notification(
+                session=session, tenant_id=tenant.tenant_id, connection=connection
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Atlassian connection requires reauthentication.",
+            ) from exc
         raise
     client = atlassian_oauth_client_fn(session=session, settings=settings)
     spaces = client.list_confluence_spaces(
@@ -131,7 +144,9 @@ def list_confluence_spaces_for_tenant(
     return {
         "items": [
             {"space_id": space.space_id, "key": space.key, "name": space.name}
-            for space in sorted(spaces, key=lambda item: (item.name.casefold(), item.key.casefold()))
+            for space in sorted(
+                spaces, key=lambda item: (item.name.casefold(), item.key.casefold())
+            )
         ],
         "create_space_url": f"{str(connection.site_url or '').rstrip('/')}/wiki/spaces/create",
     }
@@ -155,7 +170,10 @@ def list_confluence_pages_for_tenant(
         tenant_model=tenant_model,
         resolve_tenant_atlassian_connection_fn=resolve_tenant_atlassian_connection_fn,
     )
-    _require_scopes(connection=connection, scopes={CONFLUENCE_SPACE_READ_SCOPE, CONFLUENCE_PAGE_READ_SCOPE})
+    _require_scopes(
+        connection=connection,
+        scopes={CONFLUENCE_SPACE_READ_SCOPE, CONFLUENCE_PAGE_READ_SCOPE},
+    )
     try:
         access_token = refresh_atlassian_connection_tokens_fn(
             session,
@@ -164,8 +182,13 @@ def list_confluence_pages_for_tenant(
         )
     except (ValueError, AtlassianOAuthError) as exc:
         if _requires_reauth(exc):
-            _emit_reauth_notification(session=session, tenant_id=tenant.tenant_id, connection=connection)
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Atlassian connection requires reauthentication.") from exc
+            _emit_reauth_notification(
+                session=session, tenant_id=tenant.tenant_id, connection=connection
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Atlassian connection requires reauthentication.",
+            ) from exc
         raise
     client = atlassian_oauth_client_fn(session=session, settings=settings)
     space = client.get_confluence_space_by_key(
@@ -180,7 +203,9 @@ def list_confluence_pages_for_tenant(
         space_id=space.space_id,
     )
     normalized_selected_page_id = str(selected_page_id or "").strip()
-    if normalized_selected_page_id and all(page.page_id != normalized_selected_page_id for page in pages):
+    if normalized_selected_page_id and all(
+        page.page_id != normalized_selected_page_id for page in pages
+    ):
         selected_page = client.get_confluence_page(
             access_token=access_token,
             cloud_id=connection.cloud_id,
@@ -200,5 +225,7 @@ def list_confluence_pages_for_tenant(
         deduped_pages[page.page_id] = page
     return [
         {"page_id": page.page_id, "title": page.title, "webui_url": page.webui_url}
-        for page in sorted(deduped_pages.values(), key=lambda item: item.title.casefold())
+        for page in sorted(
+            deduped_pages.values(), key=lambda item: item.title.casefold()
+        )
     ]

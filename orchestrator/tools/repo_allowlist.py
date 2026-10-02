@@ -23,4 +23,6 @@ def enforce_repo_match(repo_url: str, github_repository: str) -> None:
     normalized_repo = normalize_repo_identifier(repo_url)
     normalized_target = normalize_repo_identifier(github_repository)
     if normalized_repo != normalized_target:
-        raise PermissionError(f"Repo '{repo_url}' does not match tenant github_repository")
+        raise PermissionError(
+            f"Repo '{repo_url}' does not match tenant github_repository"
+        )

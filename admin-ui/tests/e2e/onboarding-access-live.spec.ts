@@ -89,7 +89,9 @@ test("accepts a real invite through the browser flow and lands in member onboard
     await expect(page.getByRole("heading", { name: "Finish onboarding" })).toBeVisible();
     await page.getByRole("button", { name: "Finish" }).click();
     await expect(page).toHaveURL(new RegExp(`/${tenantId}/dashboard$`), { timeout: 30000 });
-    await expect(page.getByRole("heading", { name: tenantName })).toBeVisible();
+    await expect(page.getByRole("complementary").getByText(tenantName, { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Home", exact: true })).toHaveAttribute("href", `/${tenantId}/dashboard`);
+    await expect(page.getByText("Capacity used today", { exact: true })).toBeVisible();
   } finally {
     if (tenantId) {
       await archiveTenant(request, tenantId);

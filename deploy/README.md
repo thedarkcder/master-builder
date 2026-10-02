@@ -1,4 +1,6 @@
 # Deployment Workspace
+
+Status: Hetzner provisioning is experimental and unverified; AWS/GCP directories are design specifications without complete installers. See [the support matrix](../docs/support-matrix.md).
 This directory contains provider-specific deployment packages and shared runtime contracts.
 
 ## Structure

@@ -6,7 +6,9 @@ from orchestrator.api.schemas import IntegrationTestResult
 from orchestrator.core.decision.types import (
     JiraConfigKey,
 )
-from orchestrator.core.platform.operational_health_service import tenant_integration_snapshot
+from orchestrator.core.platform.operational_health_service import (
+    tenant_integration_snapshot,
+)
 from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
@@ -21,22 +23,30 @@ def test_atlassian_connection(
 ) -> IntegrationTestResult:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     integration = tenant_integration_snapshot(tenant=tenant)
     missing: list[str] = []
     if not integration.jira_project_keys:
         missing.append(JiraConfigKey.PROJECT_KEYS.value)
     if missing:
-        return IntegrationTestResult(ok=False, details=f"Missing Jira fields: {', '.join(missing)}")
+        return IntegrationTestResult(
+            ok=False, details=f"Missing Jira fields: {', '.join(missing)}"
+        )
 
     connection_id = integration.atlassian_connection_id
     if not connection_id:
-        return IntegrationTestResult(ok=False, details="Atlassian connection is not linked for this tenant")
+        return IntegrationTestResult(
+            ok=False, details="Atlassian connection is not linked for this tenant"
+        )
 
     connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
-        return IntegrationTestResult(ok=False, details="Configured Atlassian connection was not found")
+        return IntegrationTestResult(
+            ok=False, details="Configured Atlassian connection was not found"
+        )
 
     try:
         access_token = refresh_atlassian_connection_tokens_fn(
@@ -45,10 +55,16 @@ def test_atlassian_connection(
             settings=settings,
             tenant_id=tenant_id,
         )
-        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
-        projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
+        client = atlassian_oauth_client_fn(
+            session=session, settings=settings, tenant_id=tenant_id
+        )
+        projects = client.list_projects(
+            access_token=access_token, cloud_id=connection.cloud_id
+        )
     except (ValueError, AtlassianOAuthError) as exc:
-        return IntegrationTestResult(ok=False, details=f"Atlassian validation failed: {exc}")
+        return IntegrationTestResult(
+            ok=False, details=f"Atlassian validation failed: {exc}"
+        )
 
     return IntegrationTestResult(
         ok=True,
@@ -71,7 +87,9 @@ def test_github_connection(
 ) -> IntegrationTestResult:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     github = tenant.github_config
     if not github.get("installation_id"):

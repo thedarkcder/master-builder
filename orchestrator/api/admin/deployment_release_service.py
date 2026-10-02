@@ -19,7 +19,9 @@ from orchestrator.core.deployment_setup.compose_normalizer import (
     normalize_generated_compose_for_coolify,
     normalize_compose_for_coolify,
 )
-from orchestrator.core.local_preview_route_sync import ensure_local_preview_route_cleanup_command
+from orchestrator.core.local_preview_route_sync import (
+    ensure_local_preview_route_cleanup_command,
+)
 from orchestrator.core.node_release_contracts import (
     INVALID_LEGACY_EXPO_WEB_START_COMMAND,
     LEGACY_EXPO_CLI_INSTALL_COMMAND,
@@ -38,7 +40,10 @@ from orchestrator.core.node_release_contracts import (
     STALE_LEGACY_EXPO_WEB_START_COMMAND,
 )
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
-from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_manager import (
+    normalize_secret_ref,
+    resolve_scoped_secret_ref,
+)
 from orchestrator.api.admin.deployment_config_service import (
     get_project_default_app,
     get_project_app,
@@ -58,15 +63,43 @@ from orchestrator.api.deployment_schemas import (
     ProjectDeploymentServiceUrlRead,
     redact_deployment_config_secrets,
 )
-from orchestrator.storage.models import Project, ProjectApp, ProjectDeploymentRelease, Run, Tenant
-from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.storage.models import (
+    Project,
+    ProjectApp,
+    ProjectDeploymentRelease,
+    Run,
+    Tenant,
+)
+from orchestrator.tools.coolify_api import (
+    CoolifyApiClient,
+    CoolifyApiConfig,
+    CoolifyApiError,
+)
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 
 _ACTIVE_DEPLOYMENT_PLANE_STATES = {"active", "degraded"}
 _QUEUED_RELEASE_STATUS = "queued"
 _RELEASE_ALLOWED_TRANSITIONS = {
-    "queued": {"provisioning", "deploying", "route_activating", "live", "failed", "rolled_back", "destroyed"},
-    "provisioning": {"deploying", "route_activating", "live", "failed", "rolled_back", "destroyed"},
+    "queued": {
+        "provisioning",
+        "deploying",
+        "route_activating",
+        "live",
+        "failed",
+        "rolled_back",
+        "destroyed",
+    },
+    "provisioning": {
+        "deploying",
+        "route_activating",
+        "live",
+        "failed",
+        "rolled_back",
+        "destroyed",
+    },
     "deploying": {"route_activating", "live", "failed", "destroyed"},
     "route_activating": {"deploying", "live", "failed", "rolled_back", "destroyed"},
     "live": {"rolled_back", "destroyed"},
@@ -117,7 +150,9 @@ def _mark_demo_proof_lease_destroyed(
         return
     updated_lease = dict(lease_metadata)
     updated_lease["state"] = _DEMO_PROOF_LEASE_DESTROYED_STATE
-    updated_lease["destroy_reason"] = _normalize_optional_string(reason) or "preview_cleanup"
+    updated_lease["destroy_reason"] = (
+        _normalize_optional_string(reason) or "preview_cleanup"
+    )
     updated_lease["destroyed_at"] = destroyed_at.isoformat()
     delivery_metadata[_DEMO_PROOF_LEASE_METADATA_KEY] = updated_lease
     release.delivery_metadata = delivery_metadata
@@ -135,7 +170,9 @@ def _route_binding_external_url(value: dict[str, object]) -> str | None:
     return f"{scheme}://{netloc}{path}"
 
 
-def _normalize_route_binding(value: object, *, release_id: str, default_status: str = "active") -> dict[str, object] | None:
+def _normalize_route_binding(
+    value: object, *, release_id: str, default_status: str = "active"
+) -> dict[str, object] | None:
     if not isinstance(value, dict):
         return None
     service_key = _normalize_optional_string(value.get("service_key"))
@@ -163,7 +200,9 @@ def _normalize_route_binding(value: object, *, release_id: str, default_status: 
         url=url,
         url_kind="custom" if url_kind == "custom" else "generated",
         internal_url=internal_url,
-        status=status_value if status_value in {"pending", "active", "failed"} else default_status,
+        status=status_value
+        if status_value in {"pending", "active", "failed"}
+        else default_status,
         port=port,
         proxy_port=proxy_port,
         host=host,
@@ -172,7 +211,9 @@ def _normalize_route_binding(value: object, *, release_id: str, default_status: 
     ).model_dump(exclude_none=True)
 
 
-def _release_service_urls(release: ProjectDeploymentRelease) -> list[ProjectDeploymentServiceUrlRead]:
+def _release_service_urls(
+    release: ProjectDeploymentRelease,
+) -> list[ProjectDeploymentServiceUrlRead]:
     provider_context = _coerce_dict(release.provider_context)
     raw_route_bindings = provider_context.get("route_bindings")
     normalized: list[dict[str, object]] = []
@@ -183,7 +224,11 @@ def _release_service_urls(release: ProjectDeploymentRelease) -> list[ProjectDepl
             service_url = _normalize_route_binding(
                 item,
                 release_id=release.release_id,
-                default_status="failed" if release_failed else "active" if release_is_live else "pending",
+                default_status="failed"
+                if release_failed
+                else "active"
+                if release_is_live
+                else "pending",
             )
             if service_url is not None:
                 if release_is_live and service_url.get("status") == "pending":
@@ -203,14 +248,22 @@ def verify_release_route_bindings(
     if not service_urls:
         return RouteVerificationResult(ok=True)
     for service_url in service_urls:
-        result = fetch_url_fn(service_url.url) if fetch_url_fn is not None else _fetch_route_activation(service_url)
+        result = (
+            fetch_url_fn(service_url.url)
+            if fetch_url_fn is not None
+            else _fetch_route_activation(service_url)
+        )
         if result is not None:
-            return RouteVerificationResult(ok=False, error=f"{service_url.url}: {result}")
+            return RouteVerificationResult(
+                ok=False, error=f"{service_url.url}: {result}"
+            )
     return RouteVerificationResult(ok=True)
 
 
 def _fetch_route_activation(service_url: ProjectDeploymentServiceUrlRead) -> str | None:
-    probe_url = _normalize_probe_url_for_current_runtime(service_url.internal_url or service_url.url)
+    probe_url = _normalize_probe_url_for_current_runtime(
+        service_url.internal_url or service_url.url
+    )
     headers = {"User-Agent": "master-builder-route-verifier/1.0"}
     if service_url.internal_url and service_url.host:
         headers["Host"] = service_url.host
@@ -241,7 +294,9 @@ def _normalize_probe_url_for_current_runtime(url: str) -> str:
     netloc = "localhost"
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
-    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def _resolve_project_app_scope(
@@ -260,11 +315,17 @@ def _resolve_project_app_scope(
             app_id=normalized_app_id,
         )
         if app is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+            )
         return app
-    app = get_project_default_app(session=session, tenant_id=tenant_id, project_id=project.project_id)
+    app = get_project_default_app(
+        session=session, tenant_id=tenant_id, project_id=project.project_id
+    )
     if app is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+        )
     return app
 
 
@@ -293,14 +354,20 @@ def project_deployment_release_to_schema(
         source_strategy=release.source_strategy,
         git_ref=release.git_ref,
         commit_sha=release.commit_sha,
-        release_name=deployment_release_name(git_ref=release.git_ref, commit_sha=release.commit_sha),
+        release_name=deployment_release_name(
+            git_ref=release.git_ref, commit_sha=release.commit_sha
+        ),
         source_run_id=release.source_run_id,
         source_issue_key=source_run.issue_key if source_run is not None else None,
-        source_issue_summary=source_run.issue_summary if source_run is not None else None,
+        source_issue_summary=source_run.issue_summary
+        if source_run is not None
+        else None,
         source_issue_url=source_issue_url,
         pr_number=release.pr_number,
         requested_by_user_id=release.requested_by_user_id,
-        deployment_snapshot=redact_deployment_config_secrets(_coerce_dict(release.deployment_snapshot)),
+        deployment_snapshot=redact_deployment_config_secrets(
+            _coerce_dict(release.deployment_snapshot)
+        ),
         provider_context=_coerce_dict(release.provider_context),
         delivery_metadata=_coerce_dict(release.delivery_metadata),
         service_urls=_release_service_urls(release),
@@ -337,19 +404,25 @@ def _source_runs_by_id_for_releases(
     )
     if not source_run_ids:
         return {}
-    rows = session.execute(
-        select(Run).where(
-            Run.tenant_id == tenant_id,
-            Run.run_id.in_(source_run_ids),
+    rows = (
+        session.execute(
+            select(Run).where(
+                Run.tenant_id == tenant_id,
+                Run.run_id.in_(source_run_ids),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {run.run_id: run for run in rows}
 
 
 def _source_issue_url(*, session, tenant: Tenant, source_run: Run | None) -> str | None:  # noqa: ANN001
     if source_run is None:
         return None
-    return tenant_jira_issue_url(session=session, tenant=tenant, issue_key=source_run.issue_key)
+    return tenant_jira_issue_url(
+        session=session, tenant=tenant, issue_key=source_run.issue_key
+    )
 
 
 def _project_deployment_release_to_schema_with_source(
@@ -358,13 +431,19 @@ def _project_deployment_release_to_schema_with_source(
     tenant: Tenant,
     release: ProjectDeploymentRelease,
 ) -> ProjectDeploymentReleaseRead:  # noqa: ANN001
-    source_run = session.get(Run, release.source_run_id) if release.source_run_id is not None else None
+    source_run = (
+        session.get(Run, release.source_run_id)
+        if release.source_run_id is not None
+        else None
+    )
     if source_run is not None and source_run.tenant_id != release.tenant_id:
         source_run = None
     return project_deployment_release_to_schema(
         release,
         source_run=source_run,
-        source_issue_url=_source_issue_url(session=session, tenant=tenant, source_run=source_run),
+        source_issue_url=_source_issue_url(
+            session=session, tenant=tenant, source_run=source_run
+        ),
     )
 
 
@@ -377,10 +456,14 @@ def list_project_deployment_releases(
 ) -> list[ProjectDeploymentReleaseRead]:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     project_app = _resolve_project_app_scope(
         session=session,
         tenant_id=tenant_id,
@@ -388,16 +471,22 @@ def list_project_deployment_releases(
         app_id=app_id,
     )
 
-    releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            *_release_scope_filter(project_app=project_app),
+    releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                *_release_scope_filter(project_app=project_app),
+            )
+            .order_by(ProjectDeploymentRelease.created_at.desc())
         )
-        .order_by(ProjectDeploymentRelease.created_at.desc())
-    ).scalars().all()
-    source_runs_by_id = _source_runs_by_id_for_releases(session=session, tenant_id=tenant_id, releases=list(releases))
+        .scalars()
+        .all()
+    )
+    source_runs_by_id = _source_runs_by_id_for_releases(
+        session=session, tenant_id=tenant_id, releases=list(releases)
+    )
     return [
         project_deployment_release_to_schema(
             release,
@@ -405,7 +494,9 @@ def list_project_deployment_releases(
             source_issue_url=_source_issue_url(
                 session=session,
                 tenant=tenant,
-                source_run=source_runs_by_id.get(str(release.source_run_id or "").strip()),
+                source_run=source_runs_by_id.get(
+                    str(release.source_run_id or "").strip()
+                ),
             ),
         )
         for release in releases
@@ -422,10 +513,14 @@ def get_project_deployment_release(
 ) -> ProjectDeploymentReleaseRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     project_app = _resolve_project_app_scope(
         session=session,
         tenant_id=tenant_id,
@@ -433,15 +528,28 @@ def get_project_deployment_release(
         app_id=app_id,
     )
     release = session.get(ProjectDeploymentRelease, release_id)
-    if release is None or release.tenant_id != tenant_id or release.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+    if (
+        release is None
+        or release.tenant_id != tenant_id
+        or release.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
     release_app_id = _normalize_optional_string(release.app_id)
     if project_app.source_path == ".":
         if release_app_id is not None and release_app_id != project_app.app_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Deployment release not found",
+            )
     elif release_app_id != project_app.app_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
-    return _project_deployment_release_to_schema_with_source(session=session, tenant=tenant, release=release)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
+    return _project_deployment_release_to_schema_with_source(
+        session=session, tenant=tenant, release=release
+    )
 
 
 def get_project_deployment_release_logs(
@@ -454,10 +562,14 @@ def get_project_deployment_release_logs(
 ) -> ProjectDeploymentReleaseLogsRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     project_app = _resolve_project_app_scope(
         session=session,
         tenant_id=tenant_id,
@@ -465,23 +577,43 @@ def get_project_deployment_release_logs(
         app_id=app_id,
     )
     release = session.get(ProjectDeploymentRelease, release_id)
-    if release is None or release.tenant_id != tenant_id or release.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+    if (
+        release is None
+        or release.tenant_id != tenant_id
+        or release.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
     release_app_id = _normalize_optional_string(release.app_id)
     if project_app.source_path == ".":
         if release_app_id is not None and release_app_id != project_app.app_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Deployment release not found",
+            )
     elif release_app_id != project_app.app_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
 
     if release.provider != "internal_coolify":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Deployment release is not backed by Coolify")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Deployment release is not backed by Coolify",
+        )
 
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
-    client = _coolify_client_for_release(session=session, tenant=tenant, project=project, tenant_plane=tenant_plane)
+    client = _coolify_client_for_release(
+        session=session, tenant=tenant, project=project, tenant_plane=tenant_plane
+    )
     provider_context = _coerce_dict(release.provider_context)
-    deployment_uuid = _normalize_optional_string(provider_context.get("deployment_uuid"))
-    application_uuid = _normalize_optional_string(provider_context.get("application_uuid"))
+    deployment_uuid = _normalize_optional_string(
+        provider_context.get("deployment_uuid")
+    )
+    application_uuid = _normalize_optional_string(
+        provider_context.get("application_uuid")
+    )
     service_uuid = _normalize_optional_string(provider_context.get("service_uuid"))
     try:
         payload = _coolify_deployment_payload_for_logs(
@@ -491,14 +623,18 @@ def get_project_deployment_release_logs(
             service_uuid=service_uuid,
         )
     except CoolifyApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Coolify logs unavailable: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Coolify logs unavailable: {exc}",
+        ) from exc
 
     logs, truncated = _bounded_provider_logs(_logs_from_provider_payload(payload))
     application_payload = _coerce_dict(payload.get("application"))
     return ProjectDeploymentReleaseLogsRead(
         provider=release.provider,
         release_id=release.release_id,
-        deployment_uuid=_normalize_optional_string(payload.get("deployment_uuid")) or deployment_uuid,
+        deployment_uuid=_normalize_optional_string(payload.get("deployment_uuid"))
+        or deployment_uuid,
         application_uuid=(
             _normalize_optional_string(payload.get("application_id"))
             or _normalize_optional_string(application_payload.get("uuid"))
@@ -522,10 +658,14 @@ def create_project_deployment_release(
 ) -> ProjectDeploymentReleaseRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
 
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
     project_app = _resolve_project_app_scope(
@@ -546,34 +686,46 @@ def create_project_deployment_release(
         project_deployment=project_deployment,
         payload=payload,
     )
-    latest_releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            *_release_scope_filter(project_app=project_app),
-            ProjectDeploymentRelease.provider == prepared_release.provider,
-            ProjectDeploymentRelease.release_kind == payload.release_kind,
-            *(
-                [ProjectDeploymentRelease.source_run_id == payload.source_run_id]
-                if payload.release_kind == "run_preview" and payload.source_run_id is not None
-                else []
-            ),
+    latest_releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                *_release_scope_filter(project_app=project_app),
+                ProjectDeploymentRelease.provider == prepared_release.provider,
+                ProjectDeploymentRelease.release_kind == payload.release_kind,
+                *(
+                    [ProjectDeploymentRelease.source_run_id == payload.source_run_id]
+                    if payload.release_kind == "run_preview"
+                    and payload.source_run_id is not None
+                    else []
+                ),
+            )
+            .order_by(ProjectDeploymentRelease.created_at.desc())
         )
-        .order_by(ProjectDeploymentRelease.created_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     existing_application_uuid = None
     existing_service_uuid = None
     for latest_release in latest_releases:
         latest_provider_context = _coerce_dict(latest_release.provider_context)
-        if payload.release_kind == "run_preview" and not _run_preview_release_can_reuse_existing_application(
-            provider_context=latest_provider_context,
-            release_status=latest_release.status,
-            tenant_plane=tenant_plane,
+        if (
+            payload.release_kind == "run_preview"
+            and not _run_preview_release_can_reuse_existing_application(
+                provider_context=latest_provider_context,
+                release_status=latest_release.status,
+                tenant_plane=tenant_plane,
+            )
         ):
             continue
-        existing_application_uuid = str(latest_provider_context.get("application_uuid") or "").strip() or None
-        existing_service_uuid = str(latest_provider_context.get("service_uuid") or "").strip() or None
+        existing_application_uuid = (
+            str(latest_provider_context.get("application_uuid") or "").strip() or None
+        )
+        existing_service_uuid = (
+            str(latest_provider_context.get("service_uuid") or "").strip() or None
+        )
         if existing_application_uuid or existing_service_uuid:
             break
 
@@ -648,13 +800,18 @@ def create_project_deployment_release(
     release.status = "provisioning"
     release.started_at = submitted_at
     release.updated_at = submitted_at
-    release.provider_context = {**prepared_release.provider_context, **provider_submission}
+    release.provider_context = {
+        **prepared_release.provider_context,
+        **provider_submission,
+    }
     if payload.release_kind == "production":
         project_app.status = "deploying"
         project_app.updated_at = submitted_at
     session.commit()
     session.refresh(release)
-    return _project_deployment_release_to_schema_with_source(session=session, tenant=tenant, release=release)
+    return _project_deployment_release_to_schema_with_source(
+        session=session, tenant=tenant, release=release
+    )
 
 
 def update_project_deployment_release_status(
@@ -668,10 +825,14 @@ def update_project_deployment_release_status(
 ) -> ProjectDeploymentReleaseRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     project_app = _resolve_project_app_scope(
         session=session,
         tenant_id=tenant_id,
@@ -679,18 +840,32 @@ def update_project_deployment_release_status(
         app_id=app_id,
     )
     release = session.get(ProjectDeploymentRelease, release_id)
-    if release is None or release.tenant_id != tenant_id or release.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+    if (
+        release is None
+        or release.tenant_id != tenant_id
+        or release.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
     release_app_id = _normalize_optional_string(release.app_id)
     if project_app.source_path == ".":
         if release_app_id is not None and release_app_id != project_app.app_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Deployment release not found",
+            )
     elif release_app_id != project_app.app_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
 
     current_status = str(release.status or "").strip()
     next_status = str(payload.status or "").strip()
-    if current_status != next_status and next_status not in _RELEASE_ALLOWED_TRANSITIONS.get(current_status, set()):
+    if (
+        current_status != next_status
+        and next_status not in _RELEASE_ALLOWED_TRANSITIONS.get(current_status, set())
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Deployment release status cannot transition from '{current_status}' to '{next_status}'",
@@ -714,7 +889,9 @@ def update_project_deployment_release_status(
     elif current_status != next_status:
         release.completed_at = None
 
-    project_app = _resolve_project_app_scope(session=session, tenant_id=tenant_id, project=project, app_id=release.app_id)
+    project_app = _resolve_project_app_scope(
+        session=session, tenant_id=tenant_id, project=project, app_id=release.app_id
+    )
     if str(release.release_kind or "").strip() == "production":
         if next_status in {"provisioning", "deploying", "route_activating"}:
             project_app.status = "deploying"
@@ -728,7 +905,9 @@ def update_project_deployment_release_status(
 
     session.commit()
     session.refresh(release)
-    return _project_deployment_release_to_schema_with_source(session=session, tenant=tenant, release=release)
+    return _project_deployment_release_to_schema_with_source(
+        session=session, tenant=tenant, release=release
+    )
 
 
 def destroy_project_deployment_preview_release(
@@ -741,15 +920,28 @@ def destroy_project_deployment_preview_release(
 ) -> ProjectDeploymentReleaseRead:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     release = session.get(ProjectDeploymentRelease, release_id)
-    if release is None or release.tenant_id != tenant_id or release.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found")
+    if (
+        release is None
+        or release.tenant_id != tenant_id
+        or release.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Deployment release not found"
+        )
     if str(release.release_kind or "").strip() != "run_preview":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only run preview releases can be destroyed here")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only run preview releases can be destroyed here",
+        )
     if str(release.status or "").strip() == "destroyed":
         _mark_demo_proof_lease_destroyed(
             release=release,
@@ -758,13 +950,23 @@ def destroy_project_deployment_preview_release(
         )
         session.commit()
         session.refresh(release)
-        return _project_deployment_release_to_schema_with_source(session=session, tenant=tenant, release=release)
+        return _project_deployment_release_to_schema_with_source(
+            session=session, tenant=tenant, release=release
+        )
 
     provider_context = _coerce_dict(release.provider_context)
-    application_uuid = _normalize_optional_string(provider_context.get("application_uuid"))
-    provider_context["status_before_destroy"] = _normalize_optional_string(release.status) or "unknown"
-    should_delete_application = _should_delete_preview_application_on_destroy(reason=reason)
-    provider_context["destroy_reason"] = _normalize_optional_string(reason) or "preview_cleanup"
+    application_uuid = _normalize_optional_string(
+        provider_context.get("application_uuid")
+    )
+    provider_context["status_before_destroy"] = (
+        _normalize_optional_string(release.status) or "unknown"
+    )
+    should_delete_application = _should_delete_preview_application_on_destroy(
+        reason=reason
+    )
+    provider_context["destroy_reason"] = (
+        _normalize_optional_string(reason) or "preview_cleanup"
+    )
     release.provider_context = provider_context
     _mark_demo_proof_lease_destroyed(
         release=release,
@@ -781,7 +983,9 @@ def destroy_project_deployment_preview_release(
     if application_uuid is not None and should_delete_application:
         tenant_plane = tenant_deployment_plane_to_schema(tenant)
         settings = get_settings()
-        api_token_ref = str((tenant_plane.secret_refs or {}).get("coolify_api_token") or "").strip()
+        api_token_ref = str(
+            (tenant_plane.secret_refs or {}).get("coolify_api_token") or ""
+        ).strip()
         if not api_token_ref:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -799,7 +1003,12 @@ def destroy_project_deployment_preview_release(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Tenant deployment plane references missing Coolify API token",
             )
-        client = CoolifyApiClient(CoolifyApiConfig(base_url=_coolify_api_base_url(tenant_plane=tenant_plane), bearer_token=api_token))
+        client = CoolifyApiClient(
+            CoolifyApiConfig(
+                base_url=_coolify_api_base_url(tenant_plane=tenant_plane),
+                bearer_token=api_token,
+            )
+        )
         try:
             client.delete_application(application_uuid=application_uuid)
         except CoolifyApiError as exc:
@@ -815,7 +1024,9 @@ def destroy_project_deployment_preview_release(
         project_id=project_id,
         release_id=release_id,
         app_id=release.app_id,
-        payload=ProjectDeploymentReleaseStatusUpdate(status="destroyed", last_error=None),
+        payload=ProjectDeploymentReleaseStatusUpdate(
+            status="destroyed", last_error=None
+        ),
     )
     return updated
 
@@ -851,7 +1062,10 @@ def prepare_project_deployment_release(
             ("coolify_server_uuid", tenant_plane.coolify_server_uuid),
             ("coolify_destination_uuid", tenant_plane.coolify_destination_uuid),
             ("coolify_github_app_uuid", tenant_plane.coolify_github_app_uuid),
-            ("secret_refs.coolify_api_token", (tenant_plane.secret_refs or {}).get("coolify_api_token")),
+            (
+                "secret_refs.coolify_api_token",
+                (tenant_plane.secret_refs or {}).get("coolify_api_token"),
+            ),
         )
         if _normalize_optional_string(value) is None
     ]
@@ -892,10 +1106,22 @@ def prepare_project_deployment_release(
         "source_strategy": project_deployment.source_strategy,
         "environment": dict(project_deployment.environment or {}),
         "secret_refs": dict(project_deployment.secret_refs or {}),
-        "domains": [domain.model_dump(exclude_none=True) for domain in project_deployment.domains],
-        "services": [service.model_dump(exclude_none=True) for service in project_deployment.services],
-        "resources": [resource.model_dump(exclude_none=True) for resource in project_deployment.resources],
-        "volumes": [volume.model_dump(exclude_none=True) for volume in project_deployment.volumes],
+        "domains": [
+            domain.model_dump(exclude_none=True)
+            for domain in project_deployment.domains
+        ],
+        "services": [
+            service.model_dump(exclude_none=True)
+            for service in project_deployment.services
+        ],
+        "resources": [
+            resource.model_dump(exclude_none=True)
+            for resource in project_deployment.resources
+        ],
+        "volumes": [
+            volume.model_dump(exclude_none=True)
+            for volume in project_deployment.volumes
+        ],
         "backup_policies": [
             backup_policy.model_dump(exclude_none=True)
             for backup_policy in project_deployment.backup_policies
@@ -943,7 +1169,10 @@ def _project_deployment_config_for_release(
 ) -> ProjectDeploymentConfigRead:
     if deployment_config_override is None:
         return project_deployment_config_to_schema(project_app)
-    merged_config = {**_coerce_dict(project_app.deployment_config), **deployment_config_override}
+    merged_config = {
+        **_coerce_dict(project_app.deployment_config),
+        **deployment_config_override,
+    }
     return ProjectDeploymentConfigRead.model_validate(merged_config)
 
 
@@ -963,7 +1192,9 @@ def submit_internal_coolify_release(
     settings = get_settings()
     encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
 
-    api_token_ref = str((tenant_plane.secret_refs or {}).get("coolify_api_token") or "").strip()
+    api_token_ref = str(
+        (tenant_plane.secret_refs or {}).get("coolify_api_token") or ""
+    ).strip()
     if not api_token_ref:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -983,14 +1214,22 @@ def submit_internal_coolify_release(
         )
 
     api_base_url = _coolify_api_base_url(tenant_plane=tenant_plane)
-    project_uuid = _required_plane_value(tenant_plane.coolify_project_uuid, "coolify_project_uuid")
+    project_uuid = _required_plane_value(
+        tenant_plane.coolify_project_uuid, "coolify_project_uuid"
+    )
     environment_name = _required_plane_value(
         tenant_plane.coolify_environment_name or project_deployment.environment_name,
         "coolify_environment_name",
     )
-    server_uuid = _required_plane_value(tenant_plane.coolify_server_uuid, "coolify_server_uuid")
-    destination_uuid = _required_plane_value(tenant_plane.coolify_destination_uuid, "coolify_destination_uuid")
-    github_app_uuid = _required_plane_value(tenant_plane.coolify_github_app_uuid, "coolify_github_app_uuid")
+    server_uuid = _required_plane_value(
+        tenant_plane.coolify_server_uuid, "coolify_server_uuid"
+    )
+    destination_uuid = _required_plane_value(
+        tenant_plane.coolify_destination_uuid, "coolify_destination_uuid"
+    )
+    github_app_uuid = _required_plane_value(
+        tenant_plane.coolify_github_app_uuid, "coolify_github_app_uuid"
+    )
 
     git_branch = _normalize_git_branch(payload.git_ref)
     coolify_git_repository = _coolify_github_repository(project.github_repository)
@@ -1002,7 +1241,9 @@ def submit_internal_coolify_release(
         git_ref=git_branch,
         encryption_key=encryption_key,
     )
-    name = _coolify_application_name(project_app=project_app, payload=payload, release_id=release_id)
+    name = _coolify_application_name(
+        project_app=project_app, payload=payload, release_id=release_id
+    )
     source_path = _normalize_source_path(project_app.source_path)
     compose_location = _compose_location_for_source(source_path)
     base_directory = _coolify_base_directory(source_path)
@@ -1011,7 +1252,9 @@ def submit_internal_coolify_release(
     docker_compose_ports: dict[str, str] = {}
     route_bindings = []
     if project_deployment.source_strategy == "docker_compose":
-        generated_compose_raw = _normalize_optional_string(project_deployment.generated_compose_raw)
+        generated_compose_raw = _normalize_optional_string(
+            project_deployment.generated_compose_raw
+        )
         compose_result = _load_normalized_compose_for_release(
             session=session,
             tenant=tenant,
@@ -1022,20 +1265,24 @@ def submit_internal_coolify_release(
             encryption_key=encryption_key,
             generated_compose_raw=generated_compose_raw,
         )
-        docker_compose_routes, docker_compose_ports, route_bindings = _coolify_docker_compose_routes(
-            tenant=tenant,
-            project=project,
-            project_app=project_app,
-            tenant_plane=tenant_plane,
-            project_deployment=project_deployment,
-            git_ref=git_branch,
-            release_id=release_id,
-            release_kind=payload.release_kind,
-            exposed_ports_by_service=compose_result.exposed_ports_by_service,
+        docker_compose_routes, docker_compose_ports, route_bindings = (
+            _coolify_docker_compose_routes(
+                tenant=tenant,
+                project=project,
+                project_app=project_app,
+                tenant_plane=tenant_plane,
+                project_deployment=project_deployment,
+                git_ref=git_branch,
+                release_id=release_id,
+                release_kind=payload.release_kind,
+                exposed_ports_by_service=compose_result.exposed_ports_by_service,
+            )
         )
         docker_compose_raw = compose_result.compose_raw
 
-    client = CoolifyApiClient(CoolifyApiConfig(base_url=api_base_url, bearer_token=api_token))
+    client = CoolifyApiClient(
+        CoolifyApiConfig(base_url=api_base_url, bearer_token=api_token)
+    )
     existing_application_uuid = _resolve_existing_coolify_application_uuid(
         client=client,
         application_uuid=existing_application_uuid,
@@ -1047,7 +1294,9 @@ def submit_internal_coolify_release(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Docker Compose release preparation did not produce compose content",
                 )
-            compose_location = _normalize_optional_string(project_deployment.deployment_compose_path)
+            compose_location = _normalize_optional_string(
+                project_deployment.deployment_compose_path
+            )
             if compose_location is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -1084,13 +1333,17 @@ def submit_internal_coolify_release(
                     payload=_coolify_application_update_payload(application_payload),
                 )
             else:
-                application_uuid = client.create_private_github_app_application(payload=application_payload)
+                application_uuid = client.create_private_github_app_application(
+                    payload=application_payload
+                )
             if env_payload:
                 client.bulk_update_application_envs(
                     application_uuid=application_uuid,
                     payload={"data": env_payload},
                 )
-            deployment_uuid = client.start_application(application_uuid=application_uuid)
+            deployment_uuid = client.start_application(
+                application_uuid=application_uuid
+            )
             return {
                 "api_base_url": api_base_url,
                 "application_uuid": application_uuid,
@@ -1116,18 +1369,28 @@ def submit_internal_coolify_release(
             "autogenerate_domain": False,
             "base_directory": base_directory,
         }
-        start_command = _coolify_start_command(project_app=project_app, project_deployment=project_deployment)
+        start_command = _coolify_start_command(
+            project_app=project_app, project_deployment=project_deployment
+        )
         if start_command is not None:
             application_payload["start_command"] = start_command
-        install_command = _coolify_install_command(project_app=project_app, project_deployment=project_deployment)
+        install_command = _coolify_install_command(
+            project_app=project_app, project_deployment=project_deployment
+        )
         if install_command is not None:
             application_payload["install_command"] = install_command
-        build_command = _normalize_optional_string(getattr(project_deployment, "build_command", None))
+        build_command = _normalize_optional_string(
+            getattr(project_deployment, "build_command", None)
+        )
         if build_command is not None:
             application_payload["build_command"] = build_command
         if project_deployment.source_strategy == "dockerfile":
             application_payload["dockerfile_location"] = "/Dockerfile"
-        domains = "" if payload.release_kind == "run_preview" else ",".join(_domain_url(domain) for domain in project_deployment.domains)
+        domains = (
+            ""
+            if payload.release_kind == "run_preview"
+            else ",".join(_domain_url(domain) for domain in project_deployment.domains)
+        )
         application_payload["domains"] = domains
         application_payload["autogenerate_domain"] = not bool(domains)
         commit_sha = _normalize_optional_string(payload.commit_sha)
@@ -1141,7 +1404,9 @@ def submit_internal_coolify_release(
                 payload=_coolify_application_update_payload(application_payload),
             )
         else:
-            application_uuid = client.create_private_github_app_application(payload=application_payload)
+            application_uuid = client.create_private_github_app_application(
+                payload=application_payload
+            )
 
         if env_payload:
             client.bulk_update_application_envs(
@@ -1156,7 +1421,10 @@ def submit_internal_coolify_release(
             detail=f"Coolify deployment submission failed: {exc}",
         ) from exc
 
-    if payload.release_kind == "run_preview" and project_deployment.source_strategy != "docker_compose":
+    if (
+        payload.release_kind == "run_preview"
+        and project_deployment.source_strategy != "docker_compose"
+    ):
         base_domain = _required_plane_value(tenant_plane.base_domain, "base_domain")
         scheme = _generated_route_scheme(base_domain=base_domain)
         host = _generated_service_host(
@@ -1186,7 +1454,11 @@ def submit_internal_coolify_release(
             }
         )
     fqdn = _normalize_optional_string(application.get("fqdn"))
-    if fqdn is not None and project_deployment.source_strategy != "docker_compose" and payload.release_kind != "run_preview":
+    if (
+        fqdn is not None
+        and project_deployment.source_strategy != "docker_compose"
+        and payload.release_kind != "run_preview"
+    ):
         route_binding = _route_binding_from_url(
             service_key=project_app.slug,
             service_name=project_app.name,
@@ -1213,7 +1485,9 @@ def _normalize_source_path(value: object) -> str:
     return normalized.strip("/")
 
 
-def _coolify_application_update_payload(payload: dict[str, object]) -> dict[str, object]:
+def _coolify_application_update_payload(
+    payload: dict[str, object],
+) -> dict[str, object]:
     create_only_fields = {
         "project_uuid",
         "environment_name",
@@ -1223,7 +1497,9 @@ def _coolify_application_update_payload(payload: dict[str, object]) -> dict[str,
         "docker_compose_domains",
         "autogenerate_domain",
     }
-    return {key: value for key, value in payload.items() if key not in create_only_fields}
+    return {
+        key: value for key, value in payload.items() if key not in create_only_fields
+    }
 
 
 def _resolve_existing_coolify_application_uuid(
@@ -1341,14 +1617,16 @@ def _coolify_docker_compose_routes(
                 resource_config={},
                 exposed_ports_by_service=exposed_ports_by_service,
             )
-            route_bindings.append(_route_binding_from_url(
-                service_key=domain.service_key,
-                service_name=domain.service_key,
-                service_kind="website",
-                url=url,
-                url_kind="custom",
-                domain_key=_normalize_optional_string(domain.key),
-            ))
+            route_bindings.append(
+                _route_binding_from_url(
+                    service_key=domain.service_key,
+                    service_name=domain.service_key,
+                    service_kind="website",
+                    url=url,
+                    url_kind="custom",
+                    domain_key=_normalize_optional_string(domain.key),
+                )
+            )
         return routes, ports, route_bindings
 
     base_domain = _required_plane_value(tenant_plane.base_domain, "base_domain")
@@ -1413,7 +1691,9 @@ def _service_container_port(
         for item in configured_ports:
             if not isinstance(item, dict):
                 continue
-            configured = _normalize_optional_string(item.get("container_port") or item.get("target"))
+            configured = _normalize_optional_string(
+                item.get("container_port") or item.get("target")
+            )
             if configured is not None:
                 return configured
     exposed_ports = exposed_ports_by_service.get(service_key) or []
@@ -1488,7 +1768,12 @@ def _generated_service_host(
             )
         return ".".join(
             [
-                _preview_dns_label(service_key, project_app.slug or project_app.name, git_ref, normalized_release_id),
+                _preview_dns_label(
+                    service_key,
+                    project_app.slug or project_app.name,
+                    git_ref,
+                    normalized_release_id,
+                ),
                 _dns_label(project.name or project.project_id),
                 normalized_base_domain,
             ]
@@ -1552,7 +1837,11 @@ def deployment_release_routes_match_base_domain(
             return False
         if _normalize_optional_string(route_binding.get("scheme")) != expected_scheme:
             return False
-        if expected_internal_url is not None and _normalize_optional_string(route_binding.get("internal_url")) != expected_internal_url:
+        if (
+            expected_internal_url is not None
+            and _normalize_optional_string(route_binding.get("internal_url"))
+            != expected_internal_url
+        ):
             return False
         if require_preview_wildcard_shape and not _host_matches_preview_wildcard_shape(
             host=_normalize_optional_string(route_binding.get("host")),
@@ -1570,7 +1859,9 @@ def _run_preview_release_can_reuse_existing_application(
 ) -> bool:
     if _normalize_optional_string(release_status) != "live":
         return False
-    existing_base_domain = _normalize_optional_string(provider_context.get("base_domain"))
+    existing_base_domain = _normalize_optional_string(
+        provider_context.get("base_domain")
+    )
     current_base_domain = _normalize_optional_string(tenant_plane.base_domain)
     if existing_base_domain is None or current_base_domain is None:
         return False
@@ -1599,7 +1890,9 @@ def _local_base_domain_probe_url(value: str) -> str | None:
     is_local_coolify_proxy = port in {8088, 8443}
     if not is_localhost_domain and not is_local_coolify_proxy:
         return None
-    netloc = f"host.docker.internal:{port}" if port is not None else "host.docker.internal"
+    netloc = (
+        f"host.docker.internal:{port}" if port is not None else "host.docker.internal"
+    )
     scheme = _generated_route_scheme(base_domain=value)
     return f"{scheme}://{netloc}"
 
@@ -1680,7 +1973,9 @@ def _coolify_ports_exposes(*, project_app: ProjectApp) -> str:
     return str(int(project_app.exposed_port))
 
 
-def _uses_stale_legacy_expo_contract(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> bool:
+def _uses_stale_legacy_expo_contract(
+    *, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead
+) -> bool:
     if _normalize_optional_string(project_app.detected_runtime) != "react_native_web":
         return False
     return _normalize_optional_string(project_app.start_command) in {
@@ -1703,14 +1998,22 @@ def _uses_stale_legacy_expo_contract(*, project_app: ProjectApp, project_deploym
     }
 
 
-def _coolify_start_command(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> str | None:
-    if _uses_stale_legacy_expo_contract(project_app=project_app, project_deployment=project_deployment):
+def _coolify_start_command(
+    *, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead
+) -> str | None:
+    if _uses_stale_legacy_expo_contract(
+        project_app=project_app, project_deployment=project_deployment
+    ):
         return LEGACY_EXPO_WEB_START_COMMAND
     return _normalize_optional_string(project_app.start_command)
 
 
-def _coolify_install_command(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> str | None:
-    if _uses_stale_legacy_expo_contract(project_app=project_app, project_deployment=project_deployment):
+def _coolify_install_command(
+    *, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead
+) -> str | None:
+    if _uses_stale_legacy_expo_contract(
+        project_app=project_app, project_deployment=project_deployment
+    ):
         return LEGACY_EXPO_CLI_INSTALL_COMMAND
     return _normalize_optional_string(project_deployment.install_command)
 
@@ -1722,7 +2025,9 @@ def _release_environment_overrides(
 ) -> dict[str, str]:
     normalized_runtime = _normalize_optional_string(project_app.detected_runtime)
     normalized_start_command = _normalize_optional_string(project_app.start_command)
-    normalized_install_command = _normalize_optional_string(project_deployment.install_command)
+    normalized_install_command = _normalize_optional_string(
+        project_deployment.install_command
+    )
     if normalized_runtime != "react_native_web":
         return {}
     if normalized_start_command not in {
@@ -1793,7 +2098,9 @@ def _normalize_local_coolify_api_base_url(configured: str) -> str:
     netloc = "localhost"
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
-    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def _normalize_git_branch(git_ref: str | None) -> str:
@@ -1803,7 +2110,7 @@ def _normalize_git_branch(git_ref: str | None) -> str:
     prefixes = ("refs/heads/", "origin/")
     for prefix in prefixes:
         if normalized.startswith(prefix):
-            branch = normalized[len(prefix):].strip()
+            branch = normalized[len(prefix) :].strip()
             if not branch:
                 raise ValueError("Deployment release requires git_ref")
             return branch
@@ -1874,7 +2181,9 @@ def _coolify_client_for_release(
     tenant_plane: TenantDeploymentPlaneRead,
 ) -> CoolifyApiClient:  # noqa: ANN001
     settings = get_settings()
-    api_token_ref = str((tenant_plane.secret_refs or {}).get("coolify_api_token") or "").strip()
+    api_token_ref = str(
+        (tenant_plane.secret_refs or {}).get("coolify_api_token") or ""
+    ).strip()
     if not api_token_ref:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1892,7 +2201,12 @@ def _coolify_client_for_release(
             status_code=status.HTTP_409_CONFLICT,
             detail="Tenant deployment plane references missing Coolify API token",
         )
-    return CoolifyApiClient(CoolifyApiConfig(base_url=_coolify_api_base_url(tenant_plane=tenant_plane), bearer_token=api_token))
+    return CoolifyApiClient(
+        CoolifyApiConfig(
+            base_url=_coolify_api_base_url(tenant_plane=tenant_plane),
+            bearer_token=api_token,
+        )
+    )
 
 
 def _coolify_deployment_payload_for_logs(
@@ -1909,7 +2223,9 @@ def _coolify_deployment_payload_for_logs(
             if exc.status_code != status.HTTP_404_NOT_FOUND or application_uuid is None:
                 raise
     if application_uuid is not None:
-        deployments = client.list_application_deployments(application_uuid=application_uuid, take=1)
+        deployments = client.list_application_deployments(
+            application_uuid=application_uuid, take=1
+        )
         if deployments:
             return deployments[0]
     if service_uuid is not None:
@@ -1939,8 +2255,12 @@ def _bounded_provider_logs(logs: str) -> tuple[str, bool]:
     return logs[-_MAX_PROVIDER_LOG_CHARS:], True
 
 
-def _policy_branch_settings(*, project: Project, git_ref: str) -> tuple[dict[str, str], dict[str, str]]:
-    deployment_policy = ProjectDeploymentPolicyRead.model_validate(dict(project.deployment_config or {}))
+def _policy_branch_settings(
+    *, project: Project, git_ref: str
+) -> tuple[dict[str, str], dict[str, str]]:
+    deployment_policy = ProjectDeploymentPolicyRead.model_validate(
+        dict(project.deployment_config or {})
+    )
     branch = _normalize_git_branch(git_ref)
     settings = deployment_policy.branch_settings.get(branch)
     if settings is None:
@@ -1961,7 +2281,9 @@ def _merged_environment_literals(
         if normalized_key is None or normalized_value is None:
             continue
         environment[normalized_key] = normalized_value
-    policy_environment, _policy_secret_refs = _policy_branch_settings(project=project, git_ref=git_ref)
+    policy_environment, _policy_secret_refs = _policy_branch_settings(
+        project=project, git_ref=git_ref
+    )
     for key, value in sorted(policy_environment.items()):
         normalized_key = _normalize_optional_string(key)
         normalized_value = _normalize_optional_string(value)
@@ -1990,7 +2312,9 @@ def _merged_secret_refs(
         if normalized_key is None or normalized_secret_ref is None:
             continue
         secret_refs[normalized_key] = normalized_secret_ref
-    _policy_environment, policy_secret_refs = _policy_branch_settings(project=project, git_ref=git_ref)
+    _policy_environment, policy_secret_refs = _policy_branch_settings(
+        project=project, git_ref=git_ref
+    )
     for key, secret_ref in sorted(policy_secret_refs.items()):
         normalized_key = _normalize_optional_string(key)
         normalized_secret_ref = _normalize_optional_string(secret_ref)
@@ -2014,8 +2338,14 @@ def build_deployment_environment_values(
     git_ref: str,
     encryption_key: str,
 ) -> dict[str, str]:  # noqa: ANN001
-    environment = _merged_environment_literals(project=project, project_deployment=project_deployment, git_ref=git_ref)
-    for key, secret_ref in sorted(_merged_secret_refs(project=project, project_deployment=project_deployment, git_ref=git_ref).items()):
+    environment = _merged_environment_literals(
+        project=project, project_deployment=project_deployment, git_ref=git_ref
+    )
+    for key, secret_ref in sorted(
+        _merged_secret_refs(
+            project=project, project_deployment=project_deployment, git_ref=git_ref
+        ).items()
+    ):
         resolved_secret = _resolve_secret_value(
             session=session,
             secret_ref=secret_ref,
@@ -2042,7 +2372,11 @@ def _build_coolify_environment_payload(
     encryption_key: str,
 ) -> list[dict[str, object]]:  # noqa: ANN001
     payload: list[dict[str, object]] = []
-    literal_keys = set(_merged_environment_literals(project=project, project_deployment=project_deployment, git_ref=git_ref))
+    literal_keys = set(
+        _merged_environment_literals(
+            project=project, project_deployment=project_deployment, git_ref=git_ref
+        )
+    )
     resolved_environment = build_deployment_environment_values(
         session=session,
         project=project,

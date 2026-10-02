@@ -49,4 +49,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Stale active workflow operation attempt repair cannot be downgraded")
+    raise RuntimeError(
+        "Stale active workflow operation attempt repair cannot be downgraded"
+    )

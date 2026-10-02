@@ -19,7 +19,9 @@ pytestmark = pytest.mark.contract
 
 
 class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
-    def _create_project(self, *, project_id: str, jira_project_key: str, channel_id: str) -> None:
+    def _create_project(
+        self, *, project_id: str, jira_project_key: str, channel_id: str
+    ) -> None:
         with self.session_factory() as session:
             now = datetime.now(timezone.utc)
             session.add(
@@ -43,7 +45,11 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
     def test_bug_command_requires_summary(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!bug"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!bug",
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !bug", response.json()["detail"])
@@ -52,7 +58,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         with patch(
             "orchestrator.api.discord.ingress.bug_runtime.create_discord_bug_issue",
             return_value=(
-                "Bug logged: [TP-501](https://example.atlassian.net/browse/TP-501)",
+                "Bug logged: [TP-501](https://example-2.atlassian.net/browse/TP-501)",
                 {"created_issue_keys": ["TP-501"]},
             ),
         ) as create_bug_mock:
@@ -101,7 +107,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                     account_id="acct-1",
                     account_email="dev@example.com",
                     cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
+                    site_url="https://example-2.atlassian.net",
                     scopes=["read:jira-work", "write:jira-work"],
                     access_token_encrypted="enc",
                     refresh_token_encrypted="enc",
@@ -131,9 +137,18 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
-            patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value="triage-bugs"),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name",
+                return_value="triage-bugs",
+            ),
             patch(
                 "orchestrator.api.discord.ingress.bug_runtime.download_discord_attachment",
                 return_value=(b"image-bytes", "image/png"),
@@ -149,7 +164,12 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                 reporter_user_id="u-viewer",
                 channel_id="discord-channel-1",
                 related_issue_key=None,
-                attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+                attachments=[
+                    {
+                        "filename": "screen.png",
+                        "url": "https://cdn.discordapp.com/x.png",
+                    }
+                ],
                 selected_project_key="TP",
             )
 
@@ -176,7 +196,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                     account_id="acct-1",
                     account_email="dev@example.com",
                     cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
+                    site_url="https://example-2.atlassian.net",
                     scopes=["read:jira-work", "write:jira-work"],
                     access_token_encrypted="enc",
                     refresh_token_encrypted="enc",
@@ -200,14 +220,25 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
 
             def upload_issue_attachment(self, **kwargs: object) -> list[dict]:
                 del kwargs
-                raise AtlassianOAuthError("Jira attachment upload failed (403): permission denied")
+                raise AtlassianOAuthError(
+                    "Jira attachment upload failed (403): permission denied"
+                )
 
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
-            patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value="triage-bugs"),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name",
+                return_value="triage-bugs",
+            ),
             patch(
                 "orchestrator.api.discord.ingress.bug_runtime.download_discord_attachment",
                 return_value=(b"image-bytes", "image/png"),
@@ -224,7 +255,12 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                     reporter_user_id="u-viewer",
                     channel_id="discord-channel-1",
                     related_issue_key=None,
-                    attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+                    attachments=[
+                        {
+                            "filename": "screen.png",
+                            "url": "https://cdn.discordapp.com/x.png",
+                        }
+                    ],
                     selected_project_key="TP",
                 )
         self.assertEqual(exc.exception.status_code, 502)
@@ -232,7 +268,9 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertIn("permission denied", str(exc.exception.detail))
         self.assertIn("Jira upload", str(exc.exception.detail))
 
-    def test_bug_creation_falls_back_to_channel_id_when_name_lookup_unavailable(self) -> None:
+    def test_bug_creation_falls_back_to_channel_id_when_name_lookup_unavailable(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
@@ -246,7 +284,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                     account_id="acct-1",
                     account_email="dev@example.com",
                     cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
+                    site_url="https://example-2.atlassian.net",
                     scopes=["read:jira-work", "write:jira-work"],
                     access_token_encrypted="enc",
                     refresh_token_encrypted="enc",
@@ -274,9 +312,18 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
-            patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value=None),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name",
+                return_value=None,
+            ),
             patch(
                 "orchestrator.api.discord.ingress.bug_runtime.download_discord_attachment",
                 return_value=(b"image-bytes", "image/png"),
@@ -292,7 +339,12 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                 reporter_user_id="u-viewer",
                 channel_id="discord-channel-1",
                 related_issue_key=None,
-                attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+                attachments=[
+                    {
+                        "filename": "screen.png",
+                        "url": "https://cdn.discordapp.com/x.png",
+                    }
+                ],
                 selected_project_key="TP",
             )
         description = str(fake_client.created_issues[0].description)
@@ -300,7 +352,11 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
 
     def test_bug_creation_uses_selected_scoped_project_key(self) -> None:
         now = datetime.now(timezone.utc)
-        self._create_project(project_id=f"{self.tenant_id}-other", jira_project_key="OTH", channel_id="discord-other-1")
+        self._create_project(
+            project_id=f"{self.tenant_id}-other",
+            jira_project_key="OTH",
+            channel_id="discord-other-1",
+        )
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -313,7 +369,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
                     account_id="acct-1",
                     account_email="dev@example.com",
                     cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
+                    site_url="https://example-2.atlassian.net",
                     scopes=["read:jira-work", "write:jira-work"],
                     access_token_encrypted="enc",
                     refresh_token_encrypted="enc",
@@ -341,9 +397,18 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
-            patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value="other"),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens",
+                return_value="token",
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name",
+                return_value="other",
+            ),
         ):
             tenant = session.get(Tenant, self.tenant_id)
             self.assertIsNotNone(tenant)
@@ -380,14 +445,18 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(exc.exception.status_code, 409)
         self.assertIn("project-scoped", str(exc.exception.detail))
 
-    def test_build_discord_bug_description_lists_attachments_without_hyperlinks(self) -> None:
+    def test_build_discord_bug_description_lists_attachments_without_hyperlinks(
+        self,
+    ) -> None:
         description = build_discord_bug_description(
             summary="Login fails",
             details="Details",
             reporter_user_id="u-viewer",
             channel_id="triage-bugs (discord-channel-1)",
             related_issue_key="TP-77",
-            attachments=[{"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}],
+            attachments=[
+                {"filename": "screen.png", "url": "https://cdn.discordapp.com/x.png"}
+            ],
         )
         self.assertIn("screen.png", description)
         self.assertNotIn("https://cdn.discordapp.com/x.png", description)

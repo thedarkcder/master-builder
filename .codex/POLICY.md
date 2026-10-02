@@ -11,7 +11,7 @@ These rules apply to both agents and humans. Violations should block the PR.
 - Never auto-merge PRs.
 
 ## Required behaviors
-- If ticket is not “Good To Do”, trigger Decision Gate and STOP.
+- For configured ticket-driven automation, if the ticket is not “Good To Do”, trigger Decision Gate and STOP. Maintainer-authorized public issues, pull requests and direct tasks do not require private Jira access; validate equivalent requirements and verification intent before implementation.
 - If design choice affects NFRs (MVP vs scale-ready), trigger Decision Gate and STOP.
 - Keep diffs minimal; do not reformat unrelated files.
 - Update/add tests when behavior changes.

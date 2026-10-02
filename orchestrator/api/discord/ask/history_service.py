@@ -39,7 +39,8 @@ class DiscordAskHistoryService:
                     "channel_id": channel_id,
                     "question": question,
                     "answer": answer,
-                    "issue_key": str(entry.get("issue_key") or "").strip().upper() or None,
+                    "issue_key": str(entry.get("issue_key") or "").strip().upper()
+                    or None,
                     "status": str(entry.get("status") or "").strip() or None,
                     "created_at": str(entry.get("created_at") or "").strip()
                     or datetime.now(timezone.utc).isoformat(),
@@ -63,7 +64,12 @@ class DiscordAskHistoryService:
         ]
         if not scoped:
             return []
-        history_limit = max(1, limit if isinstance(limit, int) and limit > 0 else self._max_history_context)
+        history_limit = max(
+            1,
+            limit
+            if isinstance(limit, int) and limit > 0
+            else self._max_history_context,
+        )
         return scoped[-history_limit:]
 
     def store_ask_history_entry(
@@ -86,8 +92,12 @@ class DiscordAskHistoryService:
                 "channel_id": channel_id,
                 "question": question.strip(),
                 "answer": answer.strip(),
-                "issue_key": issue_key.strip().upper() if isinstance(issue_key, str) and issue_key.strip() else None,
-                "status": status_name.strip() if isinstance(status_name, str) and status_name.strip() else None,
+                "issue_key": issue_key.strip().upper()
+                if isinstance(issue_key, str) and issue_key.strip()
+                else None,
+                "status": status_name.strip()
+                if isinstance(status_name, str) and status_name.strip()
+                else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         )
@@ -110,13 +120,19 @@ class DiscordAskHistoryService:
     ) -> dict:
         discord_config = dict(tenant.discord_config or {})
         raw_pending = discord_config.get("pending_ask_actions")
-        pending = [entry for entry in raw_pending if isinstance(entry, dict)] if isinstance(raw_pending, list) else []
+        pending = (
+            [entry for entry in raw_pending if isinstance(entry, dict)]
+            if isinstance(raw_pending, list)
+            else []
+        )
         created_at = datetime.now(timezone.utc).isoformat()
         pending.append(
             {
                 "request_id": request_id,
                 "user_id": user_id.strip(),
-                "channel_id": channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
+                "channel_id": channel_id.strip()
+                if isinstance(channel_id, str) and channel_id.strip()
+                else None,
                 "question": question.strip(),
                 "summary": summary.strip(),
                 "proposed_command": proposed_command.strip(),
@@ -141,7 +157,11 @@ class DiscordAskHistoryService:
             return None
         discord_config = dict(tenant.discord_config or {})
         raw_pending = discord_config.get("pending_ask_actions")
-        pending = [entry for entry in raw_pending if isinstance(entry, dict)] if isinstance(raw_pending, list) else []
+        pending = (
+            [entry for entry in raw_pending if isinstance(entry, dict)]
+            if isinstance(raw_pending, list)
+            else []
+        )
         matched: dict | None = None
         kept: list[dict] = []
         for entry in pending:
@@ -205,7 +225,9 @@ class DiscordAskHistoryService:
         channel_id: str,
         existing_issue_keys_fn: Callable[..., set[str]],
     ) -> int:
-        connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+        connection_id = tenant_jira_config_text(
+            tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+        )
         if not connection_id:
             return 0
 
@@ -249,7 +271,9 @@ class DiscordAskHistoryService:
         channel_id: str,
         question: str,
         scoped_issue_key: str | None,
-        collect_ask_context_fn: Callable[..., tuple[str | None, str | None, list[dict], dict[str, int]]],
+        collect_ask_context_fn: Callable[
+            ..., tuple[str | None, str | None, list[dict], dict[str, int]]
+        ],
         existing_issue_keys_fn: Callable[..., set[str]],
         prune_history: bool = True,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
@@ -281,11 +305,19 @@ class DiscordAskHistoryService:
                     effective_scoped_issue_key = candidate_issue_key
                     break
 
-        normalized_issue_key, requested_status, issues, status_counts = collect_ask_context_fn(
-            session=session,
-            tenant=tenant,
-            channel_id=channel_id,
-            question=question,
-            scoped_issue_key=effective_scoped_issue_key,
+        normalized_issue_key, requested_status, issues, status_counts = (
+            collect_ask_context_fn(
+                session=session,
+                tenant=tenant,
+                channel_id=channel_id,
+                question=question,
+                scoped_issue_key=effective_scoped_issue_key,
+            )
         )
-        return normalized_issue_key, requested_status, issues, status_counts, history_context
+        return (
+            normalized_issue_key,
+            requested_status,
+            issues,
+            status_counts,
+            history_context,
+        )

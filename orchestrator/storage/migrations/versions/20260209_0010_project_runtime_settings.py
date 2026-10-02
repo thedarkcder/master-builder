@@ -20,13 +20,22 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("projects", schema=None) as batch_op:
         batch_op.add_column(
-            sa.Column("environment", sa.JSON(), nullable=False, server_default=sa.text("'{}'"))
+            sa.Column(
+                "environment", sa.JSON(), nullable=False, server_default=sa.text("'{}'")
+            )
         )
         batch_op.add_column(
-            sa.Column("secret_refs", sa.JSON(), nullable=False, server_default=sa.text("'{}'"))
+            sa.Column(
+                "secret_refs", sa.JSON(), nullable=False, server_default=sa.text("'{}'")
+            )
         )
         batch_op.add_column(
-            sa.Column("discord_config", sa.JSON(), nullable=False, server_default=sa.text("'{}'"))
+            sa.Column(
+                "discord_config",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            )
         )
 
     bind = op.get_bind()

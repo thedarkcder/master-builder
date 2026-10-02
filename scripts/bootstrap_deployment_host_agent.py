@@ -56,7 +56,9 @@ class AdminApiClient:
             "Accept": "application/json",
             "User-Agent": "master-builder-deployment-host-bootstrap",
         }
-        effective_auth_header = _normalize_optional_string(auth_header) or self._auth_header
+        effective_auth_header = (
+            _normalize_optional_string(auth_header) or self._auth_header
+        )
         if effective_auth_header is not None:
             headers["Authorization"] = effective_auth_header
         body = None
@@ -70,7 +72,9 @@ class AdminApiClient:
                 raw = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
-            raise BootstrapApiError(f"{method} {path} failed with HTTP {exc.code}: {error_body}") from exc
+            raise BootstrapApiError(
+                f"{method} {path} failed with HTTP {exc.code}: {error_body}"
+            ) from exc
         except URLError as exc:
             raise BootstrapApiError(f"{method} {path} failed: {exc.reason}") from exc
 
@@ -83,7 +87,9 @@ class AdminApiClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise BootstrapApiError(f"{method} {path} returned invalid JSON: {raw[:200]}") from exc
+            raise BootstrapApiError(
+                f"{method} {path} returned invalid JSON: {raw[:200]}"
+            ) from exc
 
     def list_deployment_hosts(self) -> list[dict[str, Any]]:
         response = self._request_json(
@@ -139,7 +145,9 @@ class AdminApiClient:
             raise BootstrapApiError("Expected tenant deployment plane response object")
         return response
 
-    def update_tenant_deployment_plane(self, *, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_tenant_deployment_plane(
+        self, *, tenant_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         response = self._request_json(
             method="PUT",
             path=f"/api/admin/tenants/{tenant_id}/deployment-plane",
@@ -147,7 +155,9 @@ class AdminApiClient:
             expected_statuses={200},
         )
         if not isinstance(response, dict):
-            raise BootstrapApiError("Expected tenant deployment plane update response object")
+            raise BootstrapApiError(
+                "Expected tenant deployment plane update response object"
+            )
         return response
 
     def register_deployment_host(
@@ -169,7 +179,9 @@ class AdminApiClient:
             auth_header=None,
         )
         if not isinstance(response, dict):
-            raise BootstrapApiError("Expected deployment host registration response object")
+            raise BootstrapApiError(
+                "Expected deployment host registration response object"
+            )
         return response
 
     def heartbeat_deployment_host(
@@ -192,7 +204,9 @@ class AdminApiClient:
             auth_header=f"Bearer {access_token}",
         )
         if not isinstance(response, dict):
-            raise BootstrapApiError("Expected deployment host heartbeat response object")
+            raise BootstrapApiError(
+                "Expected deployment host heartbeat response object"
+            )
         return response
 
 
@@ -233,14 +247,20 @@ def _normalize_capabilities(raw_value: object) -> tuple[str, ...]:
 
 
 def _resolve_auth_header(*, args: argparse.Namespace, environ: dict[str, str]) -> str:
-    bearer = _normalize_optional_string(args.admin_bearer_token) or _normalize_optional_string(
+    bearer = _normalize_optional_string(
+        args.admin_bearer_token
+    ) or _normalize_optional_string(
         environ.get("MB_ADMIN_BEARER_TOKEN"),
     )
     if bearer is not None:
         return f"Bearer {bearer}"
 
-    username = _normalize_optional_string(args.admin_username) or _normalize_optional_string(environ.get("MB_ADMIN_USERNAME"))
-    password = _normalize_optional_string(args.admin_password) or _normalize_optional_string(environ.get("MB_ADMIN_PASSWORD"))
+    username = _normalize_optional_string(
+        args.admin_username
+    ) or _normalize_optional_string(environ.get("MB_ADMIN_USERNAME"))
+    password = _normalize_optional_string(
+        args.admin_password
+    ) or _normalize_optional_string(environ.get("MB_ADMIN_PASSWORD"))
     if username is None or password is None:
         raise BootstrapConfigError(
             "Provide --admin-bearer-token or admin basic credentials "
@@ -313,7 +333,8 @@ def _resolved_tenant_ids(
     return tuple(
         tenant_id
         for tenant in tenants
-        if (tenant_id := _normalize_optional_string(tenant.get("tenant_id"))) is not None
+        if (tenant_id := _normalize_optional_string(tenant.get("tenant_id")))
+        is not None
     )
 
 
@@ -345,10 +366,16 @@ def _assign_host_to_tenants(
     return updated
 
 
-def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> dict[str, object]:
-    client = AdminApiClient(base_url=config.api_base_url, auth_header=config.auth_header)
+def ensure_deployment_host_bootstrap(
+    config: DeploymentHostBootstrapConfig,
+) -> dict[str, object]:
+    client = AdminApiClient(
+        base_url=config.api_base_url, auth_header=config.auth_header
+    )
     if _has_access_token(config.access_token_path):
-        access_token = _normalize_optional_string(config.access_token_path.read_text(encoding="utf-8"))
+        access_token = _normalize_optional_string(
+            config.access_token_path.read_text(encoding="utf-8")
+        )
         if access_token is not None:
             try:
                 heartbeat = client.heartbeat_deployment_host(
@@ -356,7 +383,9 @@ def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> d
                     agent_version="bootstrap",
                     advertised_capabilities=config.capabilities,
                 )
-                host_id = _normalize_required_string(heartbeat.get("host_id"), field_name="host_id")
+                host_id = _normalize_required_string(
+                    heartbeat.get("host_id"), field_name="host_id"
+                )
                 assigned_tenants = _assign_host_to_tenants(
                     client=client,
                     host_id=host_id,
@@ -382,9 +411,13 @@ def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> d
                 agent_version="bootstrap",
                 advertised_capabilities=config.capabilities,
             )
-            access_token = _normalize_required_string(registration.get("access_token"), field_name="access_token")
+            access_token = _normalize_required_string(
+                registration.get("access_token"), field_name="access_token"
+            )
             host = dict(registration.get("host") or {})
-            host_id = _normalize_required_string(host.get("host_id"), field_name="host_id")
+            host_id = _normalize_required_string(
+                host.get("host_id"), field_name="host_id"
+            )
             _write_secret_file(config.access_token_path, access_token)
             assigned_tenants = _assign_host_to_tenants(
                 client=client,
@@ -412,14 +445,18 @@ def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> d
         capabilities=config.capabilities,
     )
     host = dict(created.get("host") or {})
-    bootstrap_token = _normalize_required_string(created.get("bootstrap_token"), field_name="bootstrap_token")
+    bootstrap_token = _normalize_required_string(
+        created.get("bootstrap_token"), field_name="bootstrap_token"
+    )
     _write_secret_file(config.bootstrap_token_path, bootstrap_token)
     registration = client.register_deployment_host(
         bootstrap_token=bootstrap_token,
         agent_version="bootstrap",
         advertised_capabilities=config.capabilities,
     )
-    access_token = _normalize_required_string(registration.get("access_token"), field_name="access_token")
+    access_token = _normalize_required_string(
+        registration.get("access_token"), field_name="access_token"
+    )
     _write_secret_file(config.access_token_path, access_token)
     host_id = _normalize_required_string(host.get("host_id"), field_name="host_id")
     assigned_tenants = _assign_host_to_tenants(
@@ -439,13 +476,37 @@ def ensure_deployment_host_bootstrap(config: DeploymentHostBootstrapConfig) -> d
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Provision and bootstrap the managed deployment host agent.")
-    parser.add_argument("--api-base-url", required=True, help="Admin API base URL, for example http://api:4000")
-    parser.add_argument("--admin-bearer-token", default="", help="Admin bearer token. If omitted, basic auth is used.")
-    parser.add_argument("--admin-username", default="", help="Admin username for basic auth when bearer token is omitted.")
-    parser.add_argument("--admin-password", default="", help="Admin password for basic auth when bearer token is omitted.")
-    parser.add_argument("--host-label", default="", help="Managed host label. Defaults to managed-$HOSTNAME.")
-    parser.add_argument("--infrastructure-provider", choices=("aws", "hetzner"), default=None)
+    parser = argparse.ArgumentParser(
+        description="Provision and bootstrap the managed deployment host agent."
+    )
+    parser.add_argument(
+        "--api-base-url",
+        required=True,
+        help="Admin API base URL, for example http://api:4000",
+    )
+    parser.add_argument(
+        "--admin-bearer-token",
+        default="",
+        help="Admin bearer token. If omitted, basic auth is used.",
+    )
+    parser.add_argument(
+        "--admin-username",
+        default="",
+        help="Admin username for basic auth when bearer token is omitted.",
+    )
+    parser.add_argument(
+        "--admin-password",
+        default="",
+        help="Admin password for basic auth when bearer token is omitted.",
+    )
+    parser.add_argument(
+        "--host-label",
+        default="",
+        help="Managed host label. Defaults to managed-$HOSTNAME.",
+    )
+    parser.add_argument(
+        "--infrastructure-provider", choices=("aws", "hetzner"), default=None
+    )
     parser.add_argument("--region", default=None)
     parser.add_argument(
         "--capabilities",
@@ -476,15 +537,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def build_config(*, args: argparse.Namespace, environ: dict[str, str] | None = None) -> DeploymentHostBootstrapConfig:
+def build_config(
+    *, args: argparse.Namespace, environ: dict[str, str] | None = None
+) -> DeploymentHostBootstrapConfig:
     env = os.environ if environ is None else environ
-    host_label = _normalize_optional_string(args.host_label) or _normalize_optional_string(env.get("MASTER_BUILDER_DEPLOYMENT_HOST_LABEL")) or _default_host_label()
-    infrastructure_provider = _normalize_optional_string(args.infrastructure_provider) or _normalize_optional_string(
+    host_label = (
+        _normalize_optional_string(args.host_label)
+        or _normalize_optional_string(env.get("MASTER_BUILDER_DEPLOYMENT_HOST_LABEL"))
+        or _default_host_label()
+    )
+    infrastructure_provider = _normalize_optional_string(
+        args.infrastructure_provider
+    ) or _normalize_optional_string(
         env.get("MASTER_BUILDER_DEPLOYMENT_HOST_INFRASTRUCTURE_PROVIDER"),
     )
-    region = _normalize_optional_string(args.region) or _normalize_optional_string(env.get("MASTER_BUILDER_DEPLOYMENT_HOST_REGION"))
+    region = _normalize_optional_string(args.region) or _normalize_optional_string(
+        env.get("MASTER_BUILDER_DEPLOYMENT_HOST_REGION")
+    )
     capabilities = _normalize_capabilities(
-        _normalize_optional_string(args.capabilities) or env.get("MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES"),
+        _normalize_optional_string(args.capabilities)
+        or env.get("MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES"),
     )
     if not capabilities:
         capabilities = ("restore_database", "postgres", "mysql", "mariadb")

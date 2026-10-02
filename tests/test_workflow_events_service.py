@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from orchestrator.api.admin.workflows.events_service import list_workflow_telemetry_events
+from orchestrator.api.admin.workflows.events_service import (
+    list_workflow_telemetry_events,
+)
 from orchestrator.core.observability.events import ProductEvent
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
@@ -11,7 +13,9 @@ from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 class WorkflowEventsServiceTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-events-service")
+        self.database_url = self._prepare_test_database(
+            name_prefix="workflow-events-service"
+        )
 
     def tearDown(self) -> None:
         self._cleanup_test_database()

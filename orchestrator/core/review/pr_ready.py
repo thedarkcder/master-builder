@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.prompt_templates import render_prompt
@@ -27,14 +30,18 @@ def _required_string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     normalized: list[str] = []
     for item in value:
         if not isinstance(item, str):
-            raise RuntimeError(f"Runtime PR readiness evaluation returned invalid {field} item")
+            raise RuntimeError(
+                f"Runtime PR readiness evaluation returned invalid {field} item"
+            )
         stripped = item.strip()
         if stripped:
             normalized.append(stripped)
     return tuple(normalized)
 
 
-def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[dict[str, str | None]]:
+def _workflow_checks_payload(
+    workflow_checks: list[WorkflowCheckSuite],
+) -> list[dict[str, str | None]]:
     return [
         {
             "name": check.name,
@@ -71,7 +78,9 @@ def _evaluate_pr_readiness_with_runtime(
                 "policy/pr_ready_user.j2",
                 review_summary_markdown=(review_summary_markdown or ""),
                 required_workflows_json=json.dumps(required_workflows),
-                workflow_checks_json=json.dumps(_workflow_checks_payload(workflow_checks)),
+                workflow_checks_json=json.dumps(
+                    _workflow_checks_payload(workflow_checks)
+                ),
             ),
         )
     except CodexRuntimeError as exc:
@@ -80,16 +89,24 @@ def _evaluate_pr_readiness_with_runtime(
     ready = bool(payload.get("ready"))
     state = str(payload.get("state") or "").strip()
     reason = str(payload.get("reason") or "").strip()
-    missing_workflows = _required_string_tuple(payload.get("missing_workflows"), field="missing_workflows")
-    pending_workflows = _required_string_tuple(payload.get("pending_workflows"), field="pending_workflows")
-    failing_workflows = _required_string_tuple(payload.get("failing_workflows"), field="failing_workflows")
+    missing_workflows = _required_string_tuple(
+        payload.get("missing_workflows"), field="missing_workflows"
+    )
+    pending_workflows = _required_string_tuple(
+        payload.get("pending_workflows"), field="pending_workflows"
+    )
+    failing_workflows = _required_string_tuple(
+        payload.get("failing_workflows"), field="failing_workflows"
+    )
     missing_review_sections = _required_string_tuple(
         payload.get("missing_review_sections"),
         field="missing_review_sections",
     )
 
     if not state or not reason:
-        raise RuntimeError("Runtime PR readiness evaluation returned incomplete payload")
+        raise RuntimeError(
+            "Runtime PR readiness evaluation returned incomplete payload"
+        )
 
     return PrReadinessResult(
         ready=ready,

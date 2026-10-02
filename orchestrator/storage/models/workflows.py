@@ -51,7 +51,9 @@ class WorkflowExecution(Base):
             "source_ref",
             "dedupe_scope",
             unique=True,
-            postgresql_where=text("status IN ('queued', 'running', 'waiting_for_input')"),
+            postgresql_where=text(
+                "status IN ('queued', 'running', 'waiting_for_input')"
+            ),
             sqlite_where=text("status IN ('queued', 'running', 'waiting_for_input')"),
         ),
     )
@@ -64,7 +66,9 @@ class WorkflowExecution(Base):
         index=True,
         default=lambda: uuid4().hex,
     )
-    workflow_type_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    workflow_type_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
     tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
@@ -84,7 +88,9 @@ class WorkflowExecution(Base):
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     orchestration_backend: Mapped[str] = mapped_column(String(32), nullable=False)
-    dedupe_scope: Mapped[str] = mapped_column(String(32), nullable=False, default="issue_execution")
+    dedupe_scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="issue_execution"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     active_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -95,10 +101,18 @@ class WorkflowExecution(Base):
         nullable=True,
     )
     source_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class WorkflowCheckpoint(Base):
@@ -108,7 +122,9 @@ class WorkflowCheckpoint(Base):
         Index("ix_workflow_checkpoints_run_id", "run_id"),
         Index("ix_workflow_checkpoints_kind", "checkpoint_kind"),
         Index("ix_workflow_checkpoints_created_at", "created_at"),
-        UniqueConstraint("run_id", "checkpoint_kind", name="uq_workflow_checkpoints_run_kind"),
+        UniqueConstraint(
+            "run_id", "checkpoint_kind", name="uq_workflow_checkpoints_run_kind"
+        ),
     )
 
     checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -126,21 +142,31 @@ class WorkflowCheckpoint(Base):
     stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     codex_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class WorkflowExecutionArtifact(Base):
     __tablename__ = "workflow_execution_artifacts"
     __table_args__ = (
-        Index("ix_workflow_execution_artifacts_tenant_project", "tenant_id", "project_id"),
+        Index(
+            "ix_workflow_execution_artifacts_tenant_project", "tenant_id", "project_id"
+        ),
         Index("ix_workflow_execution_artifacts_workflow_id", "workflow_id"),
         Index("ix_workflow_execution_artifacts_run_id", "run_id"),
         Index("ix_workflow_execution_artifacts_status", "status"),
-        UniqueConstraint("run_id", "artifact_kind", name="uq_workflow_execution_artifacts_run_kind"),
+        UniqueConstraint(
+            "run_id", "artifact_kind", name="uq_workflow_execution_artifacts_run_kind"
+        ),
     )
 
-    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: uuid4().hex)
+    artifact_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: uuid4().hex
+    )
     tenant_id: Mapped[str] = mapped_column(
         String(128),
         ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
@@ -167,18 +193,38 @@ class WorkflowExecutionArtifact(Base):
     branch: Mapped[str] = mapped_column(String(255), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
     diff_stat_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pushed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class WorkflowExecutableWorkItem(Base):
     __tablename__ = "workflow_executable_work_items"
     __table_args__ = (
-        CheckConstraint("item_kind IN ('parent', 'child')", name="ck_workflow_executable_work_items_kind"),
-        Index("ix_workflow_executable_work_items_tenant_project", "tenant_id", "project_id"),
-        Index("ix_workflow_executable_work_items_parent_workflow", "parent_workflow_id"),
-        Index("ix_workflow_executable_work_items_issue", "tenant_id", "project_id", "issue_key"),
+        CheckConstraint(
+            "item_kind IN ('parent', 'child')",
+            name="ck_workflow_executable_work_items_kind",
+        ),
+        Index(
+            "ix_workflow_executable_work_items_tenant_project",
+            "tenant_id",
+            "project_id",
+        ),
+        Index(
+            "ix_workflow_executable_work_items_parent_workflow", "parent_workflow_id"
+        ),
+        Index(
+            "ix_workflow_executable_work_items_issue",
+            "tenant_id",
+            "project_id",
+            "issue_key",
+        ),
         UniqueConstraint(
             "parent_workflow_id",
             "item_kind",
@@ -211,9 +257,19 @@ class WorkflowExecutableWorkItem(Base):
     issue_status: Mapped[str | None] = mapped_column(String(128), nullable=True)
     issue_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     mb_work_state: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    source_system: Mapped[str] = mapped_column(String(64), nullable=False, default="jira")
+    source_system: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="jira"
+    )
     source_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    source_payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_payload_json: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

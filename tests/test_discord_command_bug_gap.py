@@ -37,13 +37,17 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             issue_key_pattern=self.issue_key_pattern,
             scoped_project_keys=scoped_project_keys or [],
             run_gap_analysis=run_gap_analysis or Mock(),
-            normalize_discord_attachments=normalize_discord_attachments or Mock(return_value=[]),
-            create_discord_bug_issue=create_discord_bug_issue or Mock(return_value=("ok", {"created_issue_keys": []})),
+            normalize_discord_attachments=normalize_discord_attachments
+            or Mock(return_value=[]),
+            create_discord_bug_issue=create_discord_bug_issue
+            or Mock(return_value=("ok", {"created_issue_keys": []})),
         )
 
     def test_returns_none_for_non_bug_gap_commands(self) -> None:
         response = self._dispatch(
-            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!help"),
+            payload=DiscordCommandRequest(
+                user_id="u1", channel_id="c1", command="!help"
+            ),
             command_name="help",
             arguments=[],
         )
@@ -52,7 +56,9 @@ class DiscordCommandBugGapTests(unittest.TestCase):
     def test_gap_requires_issue_key(self) -> None:
         with self.assertRaises(HTTPException) as exc:
             self._dispatch(
-                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!gap"),
+                payload=DiscordCommandRequest(
+                    user_id="u1", channel_id="c1", command="!gap"
+                ),
                 command_name="gap",
                 arguments=[],
             )
@@ -62,7 +68,9 @@ class DiscordCommandBugGapTests(unittest.TestCase):
     def test_gap_returns_analysis(self) -> None:
         run_gap_analysis = Mock(return_value=("Gap body", {"issue_key": "TP-77"}))
         response = self._dispatch(
-            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!gap TP-77"),
+            payload=DiscordCommandRequest(
+                user_id="u1", channel_id="c1", command="!gap TP-77"
+            ),
             command_name="gap",
             arguments=["TP-77"],
             run_gap_analysis=run_gap_analysis,
@@ -78,7 +86,9 @@ class DiscordCommandBugGapTests(unittest.TestCase):
     def test_bug_requires_summary(self) -> None:
         with self.assertRaises(HTTPException) as exc:
             self._dispatch(
-                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug"),
+                payload=DiscordCommandRequest(
+                    user_id="u1", channel_id="c1", command="!bug"
+                ),
                 command_name="bug",
                 arguments=[],
             )
@@ -86,7 +96,11 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         self.assertIn("Usage: !bug", str(exc.exception.detail))
 
     def test_bug_uses_command_params_and_attachments(self) -> None:
-        normalize_attachments = Mock(return_value=[{"filename": "screenshot.png", "url": "https://example.com/a.png"}])
+        normalize_attachments = Mock(
+            return_value=[
+                {"filename": "screenshot.png", "url": "https://example.com/a.png"}
+            ]
+        )
         create_bug = Mock(
             return_value=("Bug logged: TP-501", {"created_issue_keys": ["TP-501"]})
         )
@@ -100,7 +114,9 @@ class DiscordCommandBugGapTests(unittest.TestCase):
                     "details": "Spinner never ends",
                     "issue_key": "TP-7",
                 },
-                attachments=[{"filename": "screenshot.png", "url": "https://example.com/a.png"}],
+                attachments=[
+                    {"filename": "screenshot.png", "url": "https://example.com/a.png"}
+                ],
             ),
             command_name="bug",
             arguments=[],
@@ -126,7 +142,9 @@ class DiscordCommandBugGapTests(unittest.TestCase):
             return_value=("Bug logged: TP-502", {"created_issue_keys": ["TP-502"]})
         )
         response = self._dispatch(
-            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug login -- details"),
+            payload=DiscordCommandRequest(
+                user_id="u1", channel_id="c1", command="!bug login -- details"
+            ),
             command_name="bug",
             arguments=["login", "--", "details"],
             scoped_project_id="project-1",
@@ -141,9 +159,13 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         self.assertEqual(kwargs["details"], "details")
 
     def test_bug_uses_first_scoped_project_key_when_available(self) -> None:
-        create_bug = Mock(return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]}))
+        create_bug = Mock(
+            return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]})
+        )
         self._dispatch(
-            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
+            payload=DiscordCommandRequest(
+                user_id="u1", channel_id="c1", command="!bug scoped"
+            ),
             command_name="bug",
             arguments=["scoped"],
             scoped_project_id="project-2",
@@ -153,10 +175,16 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         self.assertEqual(create_bug.call_args.kwargs["selected_project_key"], "OTH")
 
     def test_bug_attachment_failure_is_hard_error(self) -> None:
-        create_bug = Mock(side_effect=HTTPException(status_code=502, detail="attachment upload failed"))
+        create_bug = Mock(
+            side_effect=HTTPException(
+                status_code=502, detail="attachment upload failed"
+            )
+        )
         with self.assertRaises(HTTPException) as exc:
             self._dispatch(
-                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug login fails"),
+                payload=DiscordCommandRequest(
+                    user_id="u1", channel_id="c1", command="!bug login fails"
+                ),
                 command_name="bug",
                 arguments=["login", "fails"],
                 scoped_project_id="project-1",
@@ -166,9 +194,13 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         self.assertEqual(exc.exception.status_code, 502)
 
     def test_bug_with_tenant_scope_fallback_does_not_select_project_key(self) -> None:
-        create_bug = Mock(return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]}))
+        create_bug = Mock(
+            return_value=("Bug logged: OTH-1", {"created_issue_keys": ["OTH-1"]})
+        )
         self._dispatch(
-            payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
+            payload=DiscordCommandRequest(
+                user_id="u1", channel_id="c1", command="!bug scoped"
+            ),
             command_name="bug",
             arguments=["scoped"],
             scoped_project_id=None,
@@ -178,10 +210,17 @@ class DiscordCommandBugGapTests(unittest.TestCase):
         self.assertIsNone(create_bug.call_args.kwargs["selected_project_key"])
 
     def test_bug_without_scoped_project_key_surfaces_scope_error(self) -> None:
-        create_bug = Mock(side_effect=HTTPException(status_code=409, detail="Bug creation requires a project-scoped Discord channel"))
+        create_bug = Mock(
+            side_effect=HTTPException(
+                status_code=409,
+                detail="Bug creation requires a project-scoped Discord channel",
+            )
+        )
         with self.assertRaises(HTTPException) as exc:
             self._dispatch(
-                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!bug scoped"),
+                payload=DiscordCommandRequest(
+                    user_id="u1", channel_id="c1", command="!bug scoped"
+                ),
                 command_name="bug",
                 arguments=["scoped"],
                 scoped_project_keys=[],

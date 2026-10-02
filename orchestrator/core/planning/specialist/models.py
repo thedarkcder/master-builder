@@ -45,7 +45,9 @@ class SpecialistPlanningRequest:
     work_unit_keys_by_stage: dict[str, str] = field(default_factory=dict)
 
 
-SpecialistPlanningStageResult = ArchitectStageOutput | SecurityStageOutput | TestingStageOutput
+SpecialistPlanningStageResult = (
+    ArchitectStageOutput | SecurityStageOutput | TestingStageOutput
+)
 
 __all__ = [
     "ArchitectStageOutput",
@@ -84,15 +86,22 @@ class SpecialistPlanningResult:
             "findings": list(self.findings),
             "recommendations": list(self.recommendations),
             "required_tasks": list(self.required_tasks),
-            "technical_decisions": [decision.to_payload() for decision in self.technical_decisions],
-            "pm_decision_requests": [request.to_payload() for request in self.pm_decision_requests],
+            "technical_decisions": [
+                decision.to_payload() for decision in self.technical_decisions
+            ],
+            "pm_decision_requests": [
+                request.to_payload() for request in self.pm_decision_requests
+            ],
             "acceptance_impacts": list(self.acceptance_impacts),
             "blocked_stage_states": list(self.blocked_stage_states),
             "block_reason": self.block_reason,
         }
         if self.architecture_summary:
             payload["architecture_summary"] = list(self.architecture_summary)
-        if isinstance(self.architecture_diagram, str) and self.architecture_diagram.strip():
+        if (
+            isinstance(self.architecture_diagram, str)
+            and self.architecture_diagram.strip()
+        ):
             payload["architecture_diagram"] = self.architecture_diagram.strip()
         return payload
 

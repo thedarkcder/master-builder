@@ -19,14 +19,30 @@ from orchestrator.core.runtime.models import normalize_codex_reasoning_effort
 from orchestrator.core.observability.audit import record_audit_event
 from orchestrator.core.config import get_settings
 from orchestrator.core.guardrails import redact_sensitive_text
-from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode, build_knowledge_prompt_context
+from orchestrator.core.knowledge.base import (
+    KnowledgeEmbeddingAccessMode,
+    build_knowledge_prompt_context,
+)
 from orchestrator.core.projects.policy import resolve_effective_policy
-from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError, normalize_runtime_token_usage
+from orchestrator.core.runtime.runtime import (
+    CodexRuntime,
+    CodexRuntimeError,
+    normalize_runtime_token_usage,
+)
 from orchestrator.core.observability.telemetry import build_runtime_log_sink
-from orchestrator.core.observability.logging_pane import emit_logging_pane_event, emit_logging_pane_events_batch
+from orchestrator.core.observability.logging_pane import (
+    emit_logging_pane_event,
+    emit_logging_pane_events_batch,
+)
 from orchestrator.core.observability.logging_pane import extract_turn_completed_usage
-from orchestrator.core.observability.observability_stream import record_observability_stream_event
-from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage, normalize_checkpoint_stage, upsert_workflow_checkpoint
+from orchestrator.core.observability.observability_stream import (
+    record_observability_stream_event,
+)
+from orchestrator.core.workflow.checkpoints import (
+    checkpoint_kind_for_stage,
+    normalize_checkpoint_stage,
+    upsert_workflow_checkpoint,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Run, Tenant
 
@@ -113,7 +129,9 @@ class _AsyncRuntimeLogWriter:
         self._pending_failures: dict[str, str] = {}
         self._pending_lock = threading.Lock()
         self._pending_cond = threading.Condition(self._pending_lock)
-        self._worker = threading.Thread(target=self._run, daemon=True, name="runtime-log-writer")
+        self._worker = threading.Thread(
+            target=self._run, daemon=True, name="runtime-log-writer"
+        )
         self._worker.start()
         settings = get_settings()
         self._batch_size = max(
@@ -137,13 +155,17 @@ class _AsyncRuntimeLogWriter:
             ),
         )
 
-    def enqueue(self, *, context: AgentInvocationContext, stream: str, message: str) -> bool:
+    def enqueue(
+        self, *, context: AgentInvocationContext, stream: str, message: str
+    ) -> bool:
         invocation_id = str(context.invocation_id or "").strip()
         if not invocation_id:
             raise ValueError("Runtime log persistence requires invocation_id")
         item = _QueuedLogLine(context=context, stream=stream, message=message)
         with self._pending_cond:
-            self._pending_counts[invocation_id] = self._pending_counts.get(invocation_id, 0) + 1
+            self._pending_counts[invocation_id] = (
+                self._pending_counts.get(invocation_id, 0) + 1
+            )
         try:
             self._queue.put_nowait(item)
         except Full:
@@ -154,12 +176,19 @@ class _AsyncRuntimeLogWriter:
                 else:
                     self._pending_counts[invocation_id] = current - 1
                 self._pending_cond.notify_all()
-                self._pending_failures[invocation_id] = "Runtime log persistence queue is full"
-            logger.warning("runtime_log_enqueue_dropped invocation_id=%s reason=queue_full", invocation_id)
+                self._pending_failures[invocation_id] = (
+                    "Runtime log persistence queue is full"
+                )
+            logger.warning(
+                "runtime_log_enqueue_dropped invocation_id=%s reason=queue_full",
+                invocation_id,
+            )
             return False
         return True
 
-    def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> _RuntimeLogFlushResult:
+    def flush_invocation(
+        self, *, invocation_id: str, timeout_seconds: float = 3.0
+    ) -> _RuntimeLogFlushResult:
         normalized_invocation_id = str(invocation_id or "").strip()
         if not normalized_invocation_id:
             return _RuntimeLogFlushResult(invocation_id="", completed=True)
@@ -183,16 +212,16 @@ class _AsyncRuntimeLogWriter:
                 self._pending_cond.wait(timeout=remaining)
             failure = self._pending_failures.pop(normalized_invocation_id, None)
             if failure is not None:
-                failure_message = (
-                    f"Runtime log persistence failed for invocation_id={normalized_invocation_id}: {failure}"
-                )
+                failure_message = f"Runtime log persistence failed for invocation_id={normalized_invocation_id}: {failure}"
                 logger.warning("runtime_log_flush_failed %s", failure_message)
                 return _RuntimeLogFlushResult(
                     invocation_id=normalized_invocation_id,
                     completed=True,
                     failure_message=failure_message,
                 )
-            return _RuntimeLogFlushResult(invocation_id=normalized_invocation_id, completed=True)
+            return _RuntimeLogFlushResult(
+                invocation_id=normalized_invocation_id, completed=True
+            )
 
     def _run(self) -> None:
         while True:
@@ -215,7 +244,9 @@ class _AsyncRuntimeLogWriter:
                 for queued in items
                 if str(queued.context.invocation_id or "").strip()
             }
-            grouped_items: dict[str, list[_QueuedLogLine]] = {invocation_id: [] for invocation_id in invocation_ids}
+            grouped_items: dict[str, list[_QueuedLogLine]] = {
+                invocation_id: [] for invocation_id in invocation_ids
+            }
             for queued in items:
                 invocation_id = str(queued.context.invocation_id or "").strip()
                 if invocation_id:
@@ -241,7 +272,8 @@ class _AsyncRuntimeLogWriter:
                         decremented = sum(
                             1
                             for queued in items
-                            if str(queued.context.invocation_id or "").strip() == invocation_id
+                            if str(queued.context.invocation_id or "").strip()
+                            == invocation_id
                         )
                         remaining = current - decremented
                         if remaining <= 0:
@@ -304,7 +336,9 @@ def _collect_context_injection_metrics(*, working_dir: str) -> dict[str, int | b
                 continue
             policy_pack_count += 1
             try:
-                policy_pack_total_chars += len(policy_pack_path.read_text(encoding="utf-8"))
+                policy_pack_total_chars += len(
+                    policy_pack_path.read_text(encoding="utf-8")
+                )
             except OSError:
                 continue
 
@@ -323,7 +357,9 @@ def _resolve_knowledge_policy_for_context(
 ) -> tuple[str | None, bool, str, str | None, str, bool]:
     settings = get_settings()
     database_url = str(getattr(settings, "database_url", "") or "").strip()
-    default_reasoning_effort = str(getattr(settings, "codex_reasoning_effort", "medium") or "medium")
+    default_reasoning_effort = str(
+        getattr(settings, "codex_reasoning_effort", "medium") or "medium"
+    )
     tenant_id = str(context.tenant_id or "").strip()
     if not tenant_id:
         return (
@@ -347,8 +383,12 @@ def _resolve_knowledge_policy_for_context(
     session_factory = create_session_factory(database_url=database_url)
     resolved_project_id = context.project_id
     knowledge_enabled = bool(getattr(settings, "knowledge_base_enabled_default", True))
-    knowledge_mode = str(getattr(settings, "knowledge_auto_answer_mode_default", "aggressive"))
-    codex_model_override = str(getattr(settings, "codex_model", "") or "").strip() or None
+    knowledge_mode = str(
+        getattr(settings, "knowledge_auto_answer_mode_default", "aggressive")
+    )
+    codex_model_override = (
+        str(getattr(settings, "codex_model", "") or "").strip() or None
+    )
     codex_reasoning_effort = default_reasoning_effort
     has_explicit_reasoning_override = False
     try:
@@ -374,8 +414,14 @@ def _resolve_knowledge_policy_for_context(
                 if project is not None and project.tenant_id == tenant_id:
                     project_overrides = project.policy_overrides or {}
             has_explicit_reasoning_override = (
-                normalize_codex_reasoning_effort(project_overrides.get("codex_reasoning_effort")) is not None
-                or normalize_codex_reasoning_effort(tenant_policy.get("codex_reasoning_effort")) is not None
+                normalize_codex_reasoning_effort(
+                    project_overrides.get("codex_reasoning_effort")
+                )
+                is not None
+                or normalize_codex_reasoning_effort(
+                    tenant_policy.get("codex_reasoning_effort")
+                )
+                is not None
             )
             effective = resolve_effective_policy(
                 tenant_policy=tenant_policy,
@@ -383,15 +429,21 @@ def _resolve_knowledge_policy_for_context(
                 default_codex_model=None,
                 default_codex_reasoning_effort=default_reasoning_effort,
             )
-            knowledge_enabled = bool(effective.get("knowledge_base_enabled", knowledge_enabled))
-            normalized_mode = str(effective.get("knowledge_auto_answer_mode") or "").strip().lower()
+            knowledge_enabled = bool(
+                effective.get("knowledge_base_enabled", knowledge_enabled)
+            )
+            normalized_mode = (
+                str(effective.get("knowledge_auto_answer_mode") or "").strip().lower()
+            )
             if normalized_mode in {"safe", "balanced", "aggressive"}:
                 knowledge_mode = normalized_mode
             normalized_model = str(effective.get("codex_model") or "").strip()
             if normalized_model:
                 codex_model_override = normalized_model
             codex_reasoning_effort = (
-                str(effective.get("codex_reasoning_effort") or codex_reasoning_effort).strip().lower()
+                str(effective.get("codex_reasoning_effort") or codex_reasoning_effort)
+                .strip()
+                .lower()
                 or codex_reasoning_effort
             )
     except Exception as exc:  # noqa: BLE001
@@ -418,11 +470,15 @@ def _augment_prompt_with_knowledge_context(
     user_prompt: str,
 ) -> tuple[str, dict[str, object], str | None, str, bool]:
     settings = get_settings()
-    default_codex_reasoning_effort = str(getattr(settings, "codex_reasoning_effort", "medium") or "medium")
+    default_codex_reasoning_effort = str(
+        getattr(settings, "codex_reasoning_effort", "medium") or "medium"
+    )
     database_url = str(getattr(settings, "database_url", "") or "").strip()
     tenant_id = str(context.tenant_id or "").strip()
     resolved_codex_reasoning_effort = default_codex_reasoning_effort
-    resolved_model_override = str(getattr(settings, "codex_model", "") or "").strip() or None
+    resolved_model_override = (
+        str(getattr(settings, "codex_model", "") or "").strip() or None
+    )
     has_explicit_reasoning_override = False
     if tenant_id:
         (
@@ -432,9 +488,7 @@ def _augment_prompt_with_knowledge_context(
             resolved_model_override,
             resolved_codex_reasoning_effort,
             has_explicit_reasoning_override,
-        ) = _resolve_knowledge_policy_for_context(
-            context=context
-        )
+        ) = _resolve_knowledge_policy_for_context(context=context)
     if not bool(getattr(settings, "knowledge_injection_enabled", True)):
         return (
             user_prompt,
@@ -478,7 +532,14 @@ def _augment_prompt_with_knowledge_context(
         )
 
     query_text = "\n".join(
-        part for part in [str(context.command or ""), str(context.stage or ""), user_prompt, system_prompt[:1200]] if part.strip()
+        part
+        for part in [
+            str(context.command or ""),
+            str(context.stage or ""),
+            user_prompt,
+            system_prompt[:1200],
+        ]
+        if part.strip()
     )
     session_factory = create_session_factory(database_url=database_url)
     try:
@@ -490,7 +551,9 @@ def _augment_prompt_with_knowledge_context(
                 issue_key=context.issue_key,
                 query=query_text,
                 max_items=max(1, int(getattr(settings, "knowledge_context_top_k", 5))),
-                max_chars=max(500, int(getattr(settings, "knowledge_context_max_chars", 3200))),
+                max_chars=max(
+                    500, int(getattr(settings, "knowledge_context_max_chars", 3200))
+                ),
                 embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
             )
     except Exception as exc:  # noqa: BLE001
@@ -527,11 +590,17 @@ def _augment_prompt_with_knowledge_context(
             f"Knowledge answer mode: {knowledge_mode}",
         ]
     ).strip()
-    return augmented, {
-        "kb_lookup_attempted": True,
-        "kb_hits": len(context_payload.citations),
-        "kb_context_chars": len(context_text),
-    }, resolved_model_override, codex_reasoning_effort, has_explicit_reasoning_override
+    return (
+        augmented,
+        {
+            "kb_lookup_attempted": True,
+            "kb_hits": len(context_payload.citations),
+            "kb_context_chars": len(context_text),
+        },
+        resolved_model_override,
+        codex_reasoning_effort,
+        has_explicit_reasoning_override,
+    )
 
 
 def _emit_invocation_event(
@@ -573,7 +642,9 @@ def _emit_invocation_event(
         if value is None or isinstance(value, (str, int, float, bool)):
             live_metadata[key] = value
             continue
-        live_metadata[f"{key}_json"] = redact_sensitive_text(json.dumps(value, sort_keys=True, ensure_ascii=False))
+        live_metadata[f"{key}_json"] = redact_sensitive_text(
+            json.dumps(value, sort_keys=True, ensure_ascii=False)
+        )
 
     def _record(session: Session) -> None:
         row = record_observability_stream_event(
@@ -668,7 +739,12 @@ def _persist_checkpoint_session_id(
     normalized_run_id = str(run_id or "").strip()
     normalized_session_id = str(session_id or "").strip()
     normalized_kind = str(checkpoint_kind or "").strip().lower()
-    if not normalized_workflow_id or not normalized_run_id or not normalized_session_id or not normalized_kind:
+    if (
+        not normalized_workflow_id
+        or not normalized_run_id
+        or not normalized_session_id
+        or not normalized_kind
+    ):
         return
     settings = get_settings()
     session_factory = create_session_factory(database_url=settings.database_url)
@@ -728,10 +804,17 @@ def _append_raw_log_line(
         logger.exception("codex_raw_log_write_failed path=%s", raw_path)
 
 
-def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> bool:
+def _enqueue_runtime_log_line(
+    *, context: AgentInvocationContext, stream: str, message: str
+) -> bool:
     try:
         if context.db_session is not None:
-            _persist_runtime_log_line_with_session(session=context.db_session, context=context, stream=stream, message=message)
+            _persist_runtime_log_line_with_session(
+                session=context.db_session,
+                context=context,
+                stream=stream,
+                message=message,
+            )
             return True
         writer = _get_log_writer()
         return writer.enqueue(context=context, stream=stream, message=message)
@@ -829,8 +912,12 @@ def invoke_runtime_json_with_tools(
     resume_session_id = str(context.codex_session_id or "").strip() or None
     current_user_prompt = user_prompt
     original_user_prompt = user_prompt
-    normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
-    normalized_required_tools = {str(tool).strip() for tool in required_tools or set() if str(tool).strip()}
+    normalized_allowed_tools = {
+        str(tool).strip() for tool in allowed_tools if str(tool).strip()
+    }
+    normalized_required_tools = {
+        str(tool).strip() for tool in required_tools or set() if str(tool).strip()
+    }
     tool_hops_used = 0
     final_response_requested = False
     native_tool_policy_repair_requested = False
@@ -896,16 +983,22 @@ def invoke_runtime_json_with_tools(
                     )
                 ):
                     governed_tool_availability_repair_requested = True
-                    current_user_prompt = _build_governed_tool_availability_repair_prompt(
-                        original_user_prompt=original_user_prompt,
-                        blocker_result=result,
-                        allowed_tools=normalized_allowed_tools,
+                    current_user_prompt = (
+                        _build_governed_tool_availability_repair_prompt(
+                            original_user_prompt=original_user_prompt,
+                            blocker_result=result,
+                            allowed_tools=normalized_allowed_tools,
+                        )
                     )
                     continue
                 return result
-            raise ToolBridgeProtocolError("Runtime tool bridge final_response must contain an object result")
+            raise ToolBridgeProtocolError(
+                "Runtime tool bridge final_response must contain an object result"
+            )
         if response_type != _TOOL_REQUEST_TYPE:
-            raise ToolBridgeProtocolError(f"Runtime tool bridge returned unsupported response type '{response_type}'")
+            raise ToolBridgeProtocolError(
+                f"Runtime tool bridge returned unsupported response type '{response_type}'"
+            )
         if tool_hops_used >= max_tool_hops:
             if final_response_requested:
                 raise ToolBridgeExhaustedError("Runtime tool hop limit exceeded")
@@ -925,16 +1018,22 @@ def invoke_runtime_json_with_tools(
 
         tool_name = str(payload.get("tool_name") or "").strip()
         if not tool_name:
-            raise ToolBridgeProtocolError("Runtime tool bridge tool_request missing tool_name")
+            raise ToolBridgeProtocolError(
+                "Runtime tool bridge tool_request missing tool_name"
+            )
         if tool_name not in normalized_allowed_tools:
-            raise ToolBridgeProtocolError(f"Runtime tool bridge requested disallowed tool '{tool_name}'")
+            raise ToolBridgeProtocolError(
+                f"Runtime tool bridge requested disallowed tool '{tool_name}'"
+            )
         raw_tool_args = payload.get("tool_args")
         if raw_tool_args is None:
             tool_args: dict[str, object] = {}
         elif isinstance(raw_tool_args, dict):
             tool_args = dict(raw_tool_args)
         else:
-            raise ToolBridgeProtocolError("Runtime tool bridge tool_request tool_args must be an object")
+            raise ToolBridgeProtocolError(
+                "Runtime tool bridge tool_request tool_args must be an object"
+            )
         _emit_invocation_event(
             context=context,
             event_kind="tool_request",
@@ -1005,7 +1104,9 @@ def invoke_runtime_json_with_tools(
 
         current_user_prompt = _build_tool_result_prompt(tool_result=bridge_result)
 
-    raise ToolBridgeExhaustedError("Runtime tool bridge could not obtain a final response")
+    raise ToolBridgeExhaustedError(
+        "Runtime tool bridge could not obtain a final response"
+    )
 
 
 def _invoke_runtime_json_once(
@@ -1031,15 +1132,20 @@ def _invoke_runtime_json_once(
     if has_explicit_reasoning_override:
         effective_reasoning_effort = resolved_reasoning_effort
     else:
-        effective_reasoning_effort = context.reasoning_effort or resolved_reasoning_effort
+        effective_reasoning_effort = (
+            context.reasoning_effort or resolved_reasoning_effort
+        )
     invocation_id = context.invocation_id or uuid4().hex
     prompt_metrics = {
         "system_prompt_chars": len(system_prompt),
         "user_prompt_chars": len(effective_user_prompt),
-        "estimated_prompt_tokens": _estimate_token_count(system_prompt) + _estimate_token_count(effective_user_prompt),
+        "estimated_prompt_tokens": _estimate_token_count(system_prompt)
+        + _estimate_token_count(effective_user_prompt),
         "issue_description_chars": max(0, int(context.issue_description_chars or 0)),
     }
-    context_metrics = _collect_context_injection_metrics(working_dir=context.working_dir)
+    context_metrics = _collect_context_injection_metrics(
+        working_dir=context.working_dir
+    )
     checkpoint_kind = _checkpoint_kind_for_context(context=context)
     resume_session_id = str(context.codex_session_id or "").strip() or None
     invocation_started_monotonic = time.monotonic()
@@ -1138,14 +1244,18 @@ def _invoke_runtime_json_once(
                 usage=usage,
             ),
         )
-        native_tool_policy_violations = str(sink_state.get("native_tool_policy_violations") or "").strip()
+        native_tool_policy_violations = str(
+            sink_state.get("native_tool_policy_violations") or ""
+        ).strip()
         if native_tool_policy_violations:
             raise NativeToolPolicyError(
                 "Runtime used disallowed native tool(s): "
                 f"{native_tool_policy_violations}. "
                 "Native runtime tools must be enabled through the stage tool allowlist."
             )
-        governed_shell_policy_violations = str(sink_state.get("governed_shell_policy_violations") or "").strip()
+        governed_shell_policy_violations = str(
+            sink_state.get("governed_shell_policy_violations") or ""
+        ).strip()
         if governed_shell_policy_violations:
             raise GovernedToolShellPolicyError(
                 "Runtime used shell command(s) that bypass governed GitHub tools: "
@@ -1164,8 +1274,12 @@ def _invoke_runtime_json_once(
         failure_reason_lower = failure_reason.lower()
         if "empty response" in failure_reason_lower:
             sink_state["no_assistant_output_detected"] = True
-        if isinstance(exc, CodexRuntimeError) and any(marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS):
-            raise RuntimeJsonContractError(f"Runtime did not return a JSON object: {failure_reason}") from exc
+        if isinstance(exc, CodexRuntimeError) and any(
+            marker in failure_reason_lower for marker in _JSON_PARSE_ERROR_MARKERS
+        ):
+            raise RuntimeJsonContractError(
+                f"Runtime did not return a JSON object: {failure_reason}"
+            ) from exc
         raise
     finally:
         duration_ms = int((time.monotonic() - invocation_started_monotonic) * 1000)
@@ -1176,17 +1290,28 @@ def _invoke_runtime_json_once(
                 "status": "succeeded" if failure_reason is None else "failed",
                 "duration_ms": duration_ms,
                 "turn_context_events": int(sink_state["turn_context_events"]),
-                "no_assistant_output_detected": bool(sink_state["no_assistant_output_detected"]),
+                "no_assistant_output_detected": bool(
+                    sink_state["no_assistant_output_detected"]
+                ),
                 "db_persisted_lines": int(sink_state["db_persisted_lines"]),
                 "raw_lines_written": int(sink_state["raw_lines_written"]),
-                "runtime_log_persistence_failed": int(sink_state["runtime_log_persistence_failures"]) > 0,
-                "runtime_log_persistence_failures": int(sink_state["runtime_log_persistence_failures"]),
-                "runtime_log_persistence_error": str(sink_state["runtime_log_persistence_error"]),
+                "runtime_log_persistence_failed": int(
+                    sink_state["runtime_log_persistence_failures"]
+                )
+                > 0,
+                "runtime_log_persistence_failures": int(
+                    sink_state["runtime_log_persistence_failures"]
+                ),
+                "runtime_log_persistence_error": str(
+                    sink_state["runtime_log_persistence_error"]
+                ),
                 "resumed_session": bool(resume_session_id),
                 "codex_session_id": str(sink_state.get("codex_session_id") or ""),
                 "model": resolved_model_override,
                 "reasoning_effort": effective_reasoning_effort,
-                "output_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+                "output_keys": sorted(payload.keys())
+                if isinstance(payload, dict)
+                else [],
                 "error": redact_sensitive_text(failure_reason or ""),
                 "failure_payload_preview": (
                     redact_sensitive_text(failure_payload_preview)
@@ -1197,7 +1322,9 @@ def _invoke_runtime_json_once(
                 "actual_completion_tokens": usage_state.get("completion_tokens"),
                 "actual_total_tokens": usage_state.get("total_tokens"),
                 "actual_cached_input_tokens": usage_state.get("cached_input_tokens"),
-                "actual_usage_observed": any(value is not None for value in usage_state.values()),
+                "actual_usage_observed": any(
+                    value is not None for value in usage_state.values()
+                ),
                 **prompt_metrics,
                 **context_metrics,
                 **knowledge_metrics,
@@ -1214,23 +1341,21 @@ def _invoke_runtime_json_once(
             )
 
 
-def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_response: bool = False) -> str:
+def _build_tool_result_prompt(
+    *, tool_result: dict[str, object], require_final_response: bool = False
+) -> str:
     continuation = "Continue from this result and return JSON only. "
     if tool_result.get("ok") is False:
         failure_policy = str(tool_result.get("failure_policy") or "").strip()
         if failure_policy == "correctable_request":
-            continuation += (
-                "This tool failure means the request shape or permission was invalid, not that the evidence is unavailable. "
-            )
+            continuation += "This tool failure means the request shape or permission was invalid, not that the evidence is unavailable. "
             if tool_result.get("required") is True:
                 continuation += (
                     "This failed tool is required evidence. Issue a corrected allowed tool_request unless that is impossible; "
                     "if impossible, return a blocker that states the failed tool and the evidence still needed. "
                 )
             else:
-                continuation += (
-                    "If this evidence is needed, issue a corrected allowed tool_request; otherwise explain why the evidence is unnecessary in the final_response. "
-                )
+                continuation += "If this evidence is needed, issue a corrected allowed tool_request; otherwise explain why the evidence is unnecessary in the final_response. "
         elif failure_policy == "recoverable_tool_failure":
             continuation += (
                 "The allowed tool failed while executing. Treat this as recoverable: issue a corrected or narrower allowed tool_request if that can resolve it. "
@@ -1242,24 +1367,18 @@ def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_r
                 "Return the best final_response from the evidence already gathered, or return a blocker that names the missing evidence. "
             )
         elif tool_result.get("required") is True:
-            continuation += (
-                "This failed tool is required evidence. Do not treat it as advisory; return a blocker unless a corrected allowed tool_request can obtain the same evidence. "
-            )
+            continuation += "This failed tool is required evidence. Do not treat it as advisory; return a blocker unless a corrected allowed tool_request can obtain the same evidence. "
         else:
-            continuation += (
-                "This failed tool is advisory only when independent evidence is sufficient; otherwise return a blocker that names the missing evidence. "
-            )
+            continuation += "This failed tool is advisory only when independent evidence is sufficient; otherwise return a blocker that names the missing evidence. "
     else:
         continuation += "Use the tool result as evidence for the next tool_request or final_response. "
     if require_final_response:
-        continuation += "Do not issue another tool_request. Return a final_response now."
+        continuation += (
+            "Do not issue another tool_request. Return a final_response now."
+        )
     else:
         continuation += "Return either another tool_request or a final_response."
-    return (
-        "Tool result:\n"
-        f"{json.dumps(tool_result, sort_keys=True)}\n\n"
-        f"{continuation}"
-    )
+    return f"Tool result:\n{json.dumps(tool_result, sort_keys=True)}\n\n{continuation}"
 
 
 def _build_native_tool_policy_repair_prompt(
@@ -1309,7 +1428,8 @@ def _requires_governed_tool_availability_repair(
     if "does not expose a callable governed" in normalized_message:
         return True
     if (
-        {"github.push_branch", "github.open_pr"} & {tool.lower() for tool in allowed_tools}
+        {"github.push_branch", "github.open_pr"}
+        & {tool.lower() for tool in allowed_tools}
         and "governed pr publication" in normalized_message
         and (
             "could not be executed" in normalized_message
@@ -1352,7 +1472,7 @@ def _build_governed_tool_availability_repair_prompt(
         "Retry from the original prompt. The allowed governed tool list is authoritative for this bridge. "
         "Do not use native `tool_search`, plugin discovery, or deferred tool lookup to decide whether an allowed "
         "governed tool exists. If you need one of the allowed governed tools, issue the corresponding `tool_request` "
-        "directly. Only return `outcome=\"blocked\"` for tool unavailability after an actual `tool_request` fails. "
+        'directly. Only return `outcome="blocked"` for tool unavailability after an actual `tool_request` fails. '
         "Return JSON only.\n\n"
         "Original prompt:\n"
         f"{original_user_prompt}"
@@ -1415,11 +1535,18 @@ def _capture_session_id(
     )
 
 
-def _capture_usage_metrics(*, usage_state: dict[str, int | None], usage: dict[str, int]) -> None:
+def _capture_usage_metrics(
+    *, usage_state: dict[str, int | None], usage: dict[str, int]
+) -> None:
     normalized_usage = normalize_runtime_token_usage(usage)
     if normalized_usage is None:
         return
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_input_tokens"):
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cached_input_tokens",
+    ):
         value = normalized_usage.get(key)
         if not isinstance(value, int) or value < 0:
             continue
@@ -1475,7 +1602,9 @@ def _native_tool_names_from_log_payload(payload: object) -> set[str]:
     return _native_tool_names_from_log_payload_with_depth(payload, depth=0)
 
 
-def _native_tool_names_from_log_payload_with_depth(payload: object, *, depth: int) -> set[str]:
+def _native_tool_names_from_log_payload_with_depth(
+    payload: object, *, depth: int
+) -> set[str]:
     observed: set[str] = set()
     if depth > 4:
         return observed
@@ -1486,7 +1615,9 @@ def _native_tool_names_from_log_payload_with_depth(payload: object, *, depth: in
                 parsed_payload = json.loads(normalized)
             except json.JSONDecodeError:
                 return observed
-            return _native_tool_names_from_log_payload_with_depth(parsed_payload, depth=depth + 1)
+            return _native_tool_names_from_log_payload_with_depth(
+                parsed_payload, depth=depth + 1
+            )
         return observed
     if isinstance(payload, dict):
         for key in ("tool_name", "tool", "name", "type"):
@@ -1494,10 +1625,14 @@ def _native_tool_names_from_log_payload_with_depth(payload: object, *, depth: in
             if native_tool_name is not None:
                 observed.add(native_tool_name)
         for value in payload.values():
-            observed.update(_native_tool_names_from_log_payload_with_depth(value, depth=depth + 1))
+            observed.update(
+                _native_tool_names_from_log_payload_with_depth(value, depth=depth + 1)
+            )
     elif isinstance(payload, list):
         for item in payload:
-            observed.update(_native_tool_names_from_log_payload_with_depth(item, depth=depth + 1))
+            observed.update(
+                _native_tool_names_from_log_payload_with_depth(item, depth=depth + 1)
+            )
     return observed
 
 
@@ -1520,7 +1655,9 @@ def _record_native_tool_policy_observations(
         return
     existing = {
         item.strip()
-        for item in str(sink_state.get("native_tool_policy_violations") or "").split(",")
+        for item in str(sink_state.get("native_tool_policy_violations") or "").split(
+            ","
+        )
         if item.strip()
     }
     existing.update(disallowed)
@@ -1560,14 +1697,18 @@ def _github_api_url_from_shell_token(token: str) -> str | None:
     return normalized
 
 
-def _governed_github_shell_policy_violation(command: str, *, depth: int = 0) -> str | None:
+def _governed_github_shell_policy_violation(
+    command: str, *, depth: int = 0
+) -> str | None:
     normalized = str(command or "").strip()
     if not normalized or depth > 3:
         return None
     for separator in ("&&", "||", ";"):
         if separator in normalized:
             for segment in normalized.split(separator):
-                violation = _governed_github_shell_policy_violation(segment, depth=depth + 1)
+                violation = _governed_github_shell_policy_violation(
+                    segment, depth=depth + 1
+                )
                 if violation:
                     return violation
             return None
@@ -1578,13 +1719,17 @@ def _governed_github_shell_policy_violation(command: str, *, depth: int = 0) -> 
     if executable in {"bash", "sh", "zsh"}:
         for idx, token in enumerate(tokens[:-1]):
             if token in {"-c", "-lc"}:
-                return _governed_github_shell_policy_violation(tokens[idx + 1], depth=depth + 1)
+                return _governed_github_shell_policy_violation(
+                    tokens[idx + 1], depth=depth + 1
+                )
         return None
     if executable == "git" and len(tokens) >= 2 and tokens[1] == "push":
         return f"raw git push: {redact_sensitive_text(normalized)}"
     if executable == "gh" and len(tokens) >= 2 and tokens[1] == "pr":
         return f"raw gh pr command: {redact_sensitive_text(normalized)}"
-    if executable in {"curl", "wget"} and any(_github_api_url_from_shell_token(token) for token in tokens[1:]):
+    if executable in {"curl", "wget"} and any(
+        _github_api_url_from_shell_token(token) for token in tokens[1:]
+    ):
         return f"raw GitHub API command: {redact_sensitive_text(normalized)}"
     return None
 
@@ -1607,7 +1752,9 @@ def _extract_command_from_exec_payload(payload: object) -> str | None:
     return None
 
 
-def _governed_shell_policy_violations_from_log_payload(payload: object, *, depth: int = 0) -> set[str]:
+def _governed_shell_policy_violations_from_log_payload(
+    payload: object, *, depth: int = 0
+) -> set[str]:
     violations: set[str] = set()
     if depth > 5:
         return violations
@@ -1618,20 +1765,32 @@ def _governed_shell_policy_violations_from_log_payload(payload: object, *, depth
                 parsed = json.loads(normalized)
             except json.JSONDecodeError:
                 return violations
-            return _governed_shell_policy_violations_from_log_payload(parsed, depth=depth + 1)
+            return _governed_shell_policy_violations_from_log_payload(
+                parsed, depth=depth + 1
+            )
         return violations
     if isinstance(payload, dict):
         name = str(payload.get("name") or payload.get("tool_name") or "").strip()
         if name in {"exec_command", "functions.exec_command"}:
-            command = _extract_command_from_exec_payload(payload.get("arguments") or payload.get("tool_args"))
+            command = _extract_command_from_exec_payload(
+                payload.get("arguments") or payload.get("tool_args")
+            )
             violation = _governed_github_shell_policy_violation(command or "")
             if violation:
                 violations.add(violation)
         for value in payload.values():
-            violations.update(_governed_shell_policy_violations_from_log_payload(value, depth=depth + 1))
+            violations.update(
+                _governed_shell_policy_violations_from_log_payload(
+                    value, depth=depth + 1
+                )
+            )
     elif isinstance(payload, list):
         for item in payload:
-            violations.update(_governed_shell_policy_violations_from_log_payload(item, depth=depth + 1))
+            violations.update(
+                _governed_shell_policy_violations_from_log_payload(
+                    item, depth=depth + 1
+                )
+            )
     return violations
 
 
@@ -1649,7 +1808,9 @@ def _record_governed_shell_policy_observations(
         return
     existing = {
         item.strip()
-        for item in str(sink_state.get("governed_shell_policy_violations") or "").split("\n")
+        for item in str(sink_state.get("governed_shell_policy_violations") or "").split(
+            "\n"
+        )
         if item.strip()
     }
     existing.update(observed)
@@ -1705,21 +1866,31 @@ def _combined_log_sink(
         line_counter = int(sink_state.get("raw_lines_written", 0)) + 1
         sink_state["raw_lines_written"] = line_counter
         if "turn_context" in message_text:
-            sink_state["turn_context_events"] = int(sink_state.get("turn_context_events", 0)) + 1
+            sink_state["turn_context_events"] = (
+                int(sink_state.get("turn_context_events", 0)) + 1
+            )
         if (
             "task_complete" in message_text
             and "last_agent_message" in message_text
             and "null" in message_text
         ):
             sink_state["no_assistant_output_detected"] = True
-            _append_raw_log_line(context=context, stream=stream, message=sanitized_message)
-        if _enqueue_runtime_log_line(context=context, stream=stream, message=sanitized_message):
-            sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
+            _append_raw_log_line(
+                context=context, stream=stream, message=sanitized_message
+            )
+        if _enqueue_runtime_log_line(
+            context=context, stream=stream, message=sanitized_message
+        ):
+            sink_state["db_persisted_lines"] = (
+                int(sink_state.get("db_persisted_lines", 0)) + 1
+            )
         else:
-            sink_state["runtime_log_persistence_failures"] = int(
-                sink_state.get("runtime_log_persistence_failures", 0)
-            ) + 1
-            sink_state["runtime_log_persistence_error"] = "Runtime log write failed; see worker logs"
+            sink_state["runtime_log_persistence_failures"] = (
+                int(sink_state.get("runtime_log_persistence_failures", 0)) + 1
+            )
+            sink_state["runtime_log_persistence_error"] = (
+                "Runtime log write failed; see worker logs"
+            )
         if extra_on_log_line is not None:
             extra_on_log_line(stream, message)
 
@@ -1764,19 +1935,39 @@ def _persist_runtime_log_lines(*, items: list[_QueuedLogLine]) -> None:
             emit_logging_pane_event(
                 session=session,
                 tenant_id=str(single["tenant_id"]),
-                project_id=single["project_id"] if isinstance(single["project_id"], str) else None,
-                workflow_id=single["workflow_id"] if isinstance(single["workflow_id"], str) else None,
-                operation_id=single["operation_id"] if isinstance(single["operation_id"], str) else None,
-                attempt_id=single["attempt_id"] if isinstance(single["attempt_id"], str) else None,
+                project_id=single["project_id"]
+                if isinstance(single["project_id"], str)
+                else None,
+                workflow_id=single["workflow_id"]
+                if isinstance(single["workflow_id"], str)
+                else None,
+                operation_id=single["operation_id"]
+                if isinstance(single["operation_id"], str)
+                else None,
+                attempt_id=single["attempt_id"]
+                if isinstance(single["attempt_id"], str)
+                else None,
                 run_id=single["run_id"] if isinstance(single["run_id"], str) else None,
-                issue_key=single["issue_key"] if isinstance(single["issue_key"], str) else None,
+                issue_key=single["issue_key"]
+                if isinstance(single["issue_key"], str)
+                else None,
                 agent_id=str(single["agent_id"]),
-                invocation_id=single["invocation_id"] if isinstance(single["invocation_id"], str) else None,
-                channel=single["channel"] if isinstance(single["channel"], str) else None,
-                command=single["command"] if isinstance(single["command"], str) else None,
-                working_dir=single["working_dir"] if isinstance(single["working_dir"], str) else None,
+                invocation_id=single["invocation_id"]
+                if isinstance(single["invocation_id"], str)
+                else None,
+                channel=single["channel"]
+                if isinstance(single["channel"], str)
+                else None,
+                command=single["command"]
+                if isinstance(single["command"], str)
+                else None,
+                working_dir=single["working_dir"]
+                if isinstance(single["working_dir"], str)
+                else None,
                 stage=str(single["stage"]),
-                attempt=single["attempt"] if isinstance(single["attempt"], int) else None,
+                attempt=single["attempt"]
+                if isinstance(single["attempt"], int)
+                else None,
                 stream=str(single["stream"]),
                 message=str(single["message"]),
             )

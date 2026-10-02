@@ -3,7 +3,11 @@ from __future__ import annotations
 from html import escape
 from urllib.parse import quote, urlencode, urljoin
 
-from orchestrator.tools.atlassian_oauth_models import ConfluencePage, ConfluenceSpace, AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth_models import (
+    ConfluencePage,
+    ConfluenceSpace,
+    AtlassianOAuthError,
+)
 
 
 class AtlassianOAuthConfluenceService:
@@ -16,7 +20,9 @@ class AtlassianOAuthConfluenceService:
         self._get_json = get_json
         self._request_json = request_json
 
-    def get_space_by_key(self, *, access_token: str, cloud_id: str, space_key: str) -> ConfluenceSpace:
+    def get_space_by_key(
+        self, *, access_token: str, cloud_id: str, space_key: str
+    ) -> ConfluenceSpace:
         normalized_space_key = str(space_key or "").strip()
         if not normalized_space_key:
             raise AtlassianOAuthError("Confluence space key is required")
@@ -30,13 +36,19 @@ class AtlassianOAuthConfluenceService:
             raise AtlassianOAuthError("Confluence space response missing results list")
         for index, item in enumerate(results):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Confluence space response item {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Confluence space response item {index} was not an object"
+                )
             space = _parse_confluence_space(item)
             if space.key == normalized_space_key:
                 return space
-        raise AtlassianOAuthError(f"Confluence space '{normalized_space_key}' was not found")
+        raise AtlassianOAuthError(
+            f"Confluence space '{normalized_space_key}' was not found"
+        )
 
-    def list_spaces(self, *, access_token: str, cloud_id: str, limit: int = 250) -> list[ConfluenceSpace]:
+    def list_spaces(
+        self, *, access_token: str, cloud_id: str, limit: int = 250
+    ) -> list[ConfluenceSpace]:
         payload = self._get_json(
             url=f"https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/api/v2/spaces?{urlencode({'limit': max(1, min(limit, 250))})}",
             access_token=access_token,
@@ -47,7 +59,9 @@ class AtlassianOAuthConfluenceService:
         spaces: list[ConfluenceSpace] = []
         for index, item in enumerate(results):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Confluence space response item {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Confluence space response item {index} was not an object"
+                )
             space = _parse_confluence_space(item)
             spaces.append(space)
         return spaces
@@ -64,7 +78,9 @@ class AtlassianOAuthConfluenceService:
         normalized_space_id = str(space_id or "").strip()
         if not normalized_space_id:
             raise AtlassianOAuthError("Confluence page listing requires a space id")
-        query = urlencode({"space-id": normalized_space_id, "limit": max(1, min(limit, 250))})
+        query = urlencode(
+            {"space-id": normalized_space_id, "limit": max(1, min(limit, 250))}
+        )
         payload = self._get_json(
             url=f"https://api.atlassian.com/ex/confluence/{cloud_id}/wiki/api/v2/pages?{query}",
             access_token=access_token,
@@ -75,7 +91,9 @@ class AtlassianOAuthConfluenceService:
         pages: list[ConfluencePage] = []
         for index, item in enumerate(results):
             if not isinstance(item, dict):
-                raise AtlassianOAuthError(f"Confluence page response item {index} was not an object")
+                raise AtlassianOAuthError(
+                    f"Confluence page response item {index} was not an object"
+                )
             pages.append(_parse_confluence_page(response=item, site_url=site_url))
         return pages
 
@@ -166,10 +184,14 @@ class AtlassianOAuthConfluenceService:
         return _parse_confluence_page(response=response, site_url=site_url)
 
 
-def confluence_storage_template(*, title: str, parent_issue_key: str, issue_summary: str) -> str:
+def confluence_storage_template(
+    *, title: str, parent_issue_key: str, issue_summary: str
+) -> str:
     normalized_title = escape(str(title or "").strip())
     normalized_parent_issue_key = escape(str(parent_issue_key or "").strip())
-    normalized_issue_summary = escape(str(issue_summary or "").strip() or "Add the epic summary here.")
+    normalized_issue_summary = escape(
+        str(issue_summary or "").strip() or "Add the epic summary here."
+    )
     sections = (
         "Architecture Overview",
         "System Diagrams",
@@ -210,12 +232,19 @@ def _parse_confluence_page(*, response, site_url: str) -> ConfluencePage:  # noq
     webui = str(links.get("webui") or "").strip()
     if not webui:
         raise AtlassianOAuthError("Confluence page response is missing the web UI path")
-    canonical_url = webui if webui.startswith("http://") or webui.startswith("https://") else urljoin(
-        str(links.get("base") or "").strip() or str(site_url or "").strip().rstrip("/") + "/",
-        webui,
+    canonical_url = (
+        webui
+        if webui.startswith("http://") or webui.startswith("https://")
+        else urljoin(
+            str(links.get("base") or "").strip()
+            or str(site_url or "").strip().rstrip("/") + "/",
+            webui,
+        )
     )
     if not canonical_url:
-        raise AtlassianOAuthError("Confluence page response did not yield a canonical URL")
+        raise AtlassianOAuthError(
+            "Confluence page response did not yield a canonical URL"
+        )
     return ConfluencePage(page_id=page_id, title=title, webui_url=canonical_url)
 
 
@@ -224,5 +253,7 @@ def _parse_confluence_space(response: dict) -> ConfluenceSpace:
     space_id = str(response.get("id") or "").strip()
     name = str(response.get("name") or "").strip()
     if not key or not space_id or not name:
-        raise AtlassianOAuthError("Confluence space response is missing id, key, or name")
+        raise AtlassianOAuthError(
+            "Confluence space response is missing id, key, or name"
+        )
     return ConfluenceSpace(space_id=space_id, key=key, name=name)

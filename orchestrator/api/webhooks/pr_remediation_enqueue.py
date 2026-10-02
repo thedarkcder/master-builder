@@ -42,7 +42,9 @@ def _build_manual_fix_trigger_context(
     }
 
 
-def _bootstrap_plan_for_pr_remediation(*, trigger_context: dict[str, object]) -> dict[str, object]:
+def _bootstrap_plan_for_pr_remediation(
+    *, trigger_context: dict[str, object]
+) -> dict[str, object]:
     snapshot = ExecutionSnapshot.empty(trigger_context=trigger_context)
     snapshot.context.execution_context["orchestration_mode"] = "orchestrated_subagents"
     return snapshot.dump()
@@ -68,7 +70,8 @@ def enqueue_pr_remediation_run(
 ):
     manual_requested_comment = (
         dict(manual_fix_request.get("requested_comment"))
-        if isinstance(manual_fix_request, dict) and isinstance(manual_fix_request.get("requested_comment"), dict)
+        if isinstance(manual_fix_request, dict)
+        and isinstance(manual_fix_request.get("requested_comment"), dict)
         else None
     )
     manual_requested_by = (
@@ -122,7 +125,11 @@ def enqueue_pr_remediation_run(
             "issue_key": issue_key,
             "issue_created": issue_created,
             "failing_checks": [
-                {"name": check.name, "status": check.status, "conclusion": check.conclusion}
+                {
+                    "name": check.name,
+                    "status": check.status,
+                    "conclusion": check.conclusion,
+                }
                 for check in checks
                 if check.conclusion not in {None, "success"}
             ],
@@ -137,14 +144,21 @@ def enqueue_pr_remediation_run(
                 if review.state.strip().upper() == "CHANGES_REQUESTED"
             ],
             "review_comments": [
-                {"id": comment.comment_id, "body": comment.body, "path": comment.path, "line": comment.line}
+                {
+                    "id": comment.comment_id,
+                    "body": comment.body,
+                    "path": comment.path,
+                    "line": comment.line,
+                }
                 for comment in review_comments
             ],
             "issue_comments": [
                 {"id": comment.comment_id, "body": comment.body}
                 for comment in issue_comments
             ],
-            "manual_fix_request": dict(manual_fix_request) if isinstance(manual_fix_request, dict) else None,
+            "manual_fix_request": dict(manual_fix_request)
+            if isinstance(manual_fix_request, dict)
+            else None,
             "requested_comment": manual_requested_comment,
         }
 
@@ -157,12 +171,13 @@ def enqueue_pr_remediation_run(
         issue_description=(
             f"Automated remediation run triggered from GitHub PR #{pr_number} ({details.html_url}).\n"
             f"Event: {normalized_event}/{normalized_action}\n"
-            f"Head SHA: {details.head_sha}"
-            + manual_context_suffix
+            f"Head SHA: {details.head_sha}" + manual_context_suffix
         ),
         repo_url=project.github_repository,
         delivery_id=None,
-        precheck_outcome=resolve_enqueue_precheck_outcome(source="github_pr_remediation"),
+        precheck_outcome=resolve_enqueue_precheck_outcome(
+            source="github_pr_remediation"
+        ),
         max_concurrent_runs=max_concurrent_runs,
         dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
         bootstrap=RunBootstrap(

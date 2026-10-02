@@ -20,7 +20,9 @@ def test_temporal_retry_activity_dispatches_projectless_workflow(monkeypatch):
         workflow_id=workflow.workflow_id,
         operation_type="tenant_operation",
     )
-    registry = SimpleNamespace(resolve_operation_retry_handler=lambda _handler_key: None)
+    registry = SimpleNamespace(
+        resolve_operation_retry_handler=lambda _handler_key: None
+    )
     captured: dict[str, object] = {}
 
     class ProjectlessRetrySession:
@@ -30,7 +32,9 @@ def test_temporal_retry_activity_dispatches_projectless_workflow(monkeypatch):
                 return workflow if key == workflow.workflow_id else None
             if model_name == "WorkflowOperation":
                 return operation if key == operation.operation_id else None
-            raise AssertionError(f"Retry activity should not load {model_name} before handler dispatch")
+            raise AssertionError(
+                f"Retry activity should not load {model_name} before handler dispatch"
+            )
 
         def commit(self):
             captured["committed"] = True
@@ -68,10 +72,14 @@ def test_temporal_retry_activity_dispatches_projectless_workflow(monkeypatch):
         retry_use_case,
     )
 
-    from orchestrator.temporal.activities.handler_workflow import retry_handler_workflow_operation_activity
+    from orchestrator.temporal.activities.handler_workflow import (
+        retry_handler_workflow_operation_activity,
+    )
 
     result = retry_handler_workflow_operation_activity(
-        WorkflowOperationRetryInput(workflow_id=workflow.workflow_id, operation_id=operation.operation_id)
+        WorkflowOperationRetryInput(
+            workflow_id=workflow.workflow_id, operation_id=operation.operation_id
+        )
     )
 
     assert result.workflow_id == workflow.workflow_id

@@ -54,7 +54,9 @@ def build_opus_encoder() -> Any:
     return Encoder()
 
 
-def decode_opus_packets_to_pcm(*, packets: list[bytes], decoder: Any) -> tuple[bytes, int, int]:
+def decode_opus_packets_to_pcm(
+    *, packets: list[bytes], decoder: Any
+) -> tuple[bytes, int, int]:
     if not packets:
         return b"", 48_000, 2
 
@@ -65,7 +67,9 @@ def decode_opus_packets_to_pcm(*, packets: list[bytes], decoder: Any) -> tuple[b
         try:
             pcm = decoder.decode(packet)
         except Exception as exc:  # noqa: BLE001
-            raise LiveVoiceAudioError("Live voice input audio contained a corrupt Opus frame.") from exc
+            raise LiveVoiceAudioError(
+                "Live voice input audio contained a corrupt Opus frame."
+            ) from exc
         if pcm:
             pcm_chunks.append(pcm)
 
@@ -95,7 +99,9 @@ def encode_wav_to_opus_frames(*, wav_bytes: bytes) -> list[bytes]:
         try:
             frames.append(encoder.encode(chunk, samples_per_frame))
         except Exception as exc:  # noqa: BLE001
-            raise LiveVoiceAudioError("Live voice reply audio failed to encode to Opus.") from exc
+            raise LiveVoiceAudioError(
+                "Live voice reply audio failed to encode to Opus."
+            ) from exc
     return frames
 
 
@@ -128,12 +134,16 @@ def _normalize_wav_to_pcm_48k_stereo(*, wav_bytes: bytes) -> bytes:
             check=False,
         )
     except OSError as exc:  # pragma: no cover
-        raise LiveVoiceAudioError("ffmpeg is required for live voice reply encoding.") from exc
+        raise LiveVoiceAudioError(
+            "ffmpeg is required for live voice reply encoding."
+        ) from exc
 
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="ignore").strip()
         detail = f": {stderr}" if stderr else ""
-        raise LiveVoiceAudioError(f"ffmpeg failed to normalize live voice reply audio{detail}")
+        raise LiveVoiceAudioError(
+            f"ffmpeg failed to normalize live voice reply audio{detail}"
+        )
 
     return bytes(result.stdout)
 

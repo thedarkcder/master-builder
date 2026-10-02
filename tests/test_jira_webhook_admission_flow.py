@@ -22,12 +22,17 @@ pytestmark = pytest.mark.contract
 
 
 class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
-    def test_webhook_pm_parent_or_sync_blocked_issue_never_surfaces_ready_for_agent(self) -> None:
+    def test_webhook_pm_parent_or_sync_blocked_issue_never_surfaces_ready_for_agent(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-webhook")
             project = session.execute(
                 select(Project)
-                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.jira_project_key == "TP",
+                )
                 .limit(1)
             ).scalar_one()
             assert tenant is not None
@@ -62,18 +67,30 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
         self.assertFalse(plan.content["enqueued"])
         self.assertNotIn("ready_for_agent", plan.content)
 
-    def test_webhook_backlog_pre_run_check_reports_ready_for_agent_without_enqueue(self) -> None:
+    def test_webhook_backlog_pre_run_check_reports_ready_for_agent_without_enqueue(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             project = session.execute(
                 select(Project)
-                .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                .where(
+                    Project.tenant_id == "tenant-webhook",
+                    Project.jira_project_key == "TP",
+                )
                 .limit(1)
             ).scalar_one()
-            project.policy_overrides = {**dict(project.policy_overrides or {}), "run_board_id": 1}
+            project.policy_overrides = {
+                **dict(project.policy_overrides or {}),
+                "run_board_id": 1,
+            }
             session.commit()
 
-        payload = self._jira_issue_payload(issue_key="TP-777", status_name="To Do", labels=["agent:ready"])
-        payload["issue"]["fields"]["summary"] = "Objective scope acceptance context how to test mvp risk"
+        payload = self._jira_issue_payload(
+            issue_key="TP-777", status_name="To Do", labels=["agent:ready"]
+        )
+        payload["issue"]["fields"]["summary"] = (
+            "Objective scope acceptance context how to test mvp risk"
+        )
         payload["issue"]["fields"]["description"] = {
             "type": "doc",
             "version": 1,
@@ -94,12 +111,17 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
             ],
         }
         with (
-            patch("orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location", return_value=("backlog", None)),
+            patch(
+                "orchestrator.api.webhooks.jira_board_location._fetch_issue_board_location",
+                return_value=("backlog", None),
+            ),
             patch(
                 "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
                 return_value=self._pre_run_check(),
             ),
-            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
+            patch(
+                "orchestrator.core.discord.transport_executor.send_tenant_discord_message"
+            ) as notify_mock,
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -107,7 +129,9 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
         self.assertEqual(body["webhook_event"], "issue_updated")
         notify_mock.assert_not_called()
 
-    def test_evaluate_precheck_decision_with_labels_writes_open_questions_to_jira(self) -> None:
+    def test_evaluate_precheck_decision_with_labels_writes_open_questions_to_jira(
+        self,
+    ) -> None:
         self._default_precheck_decision_patch.stop()
         try:
             from orchestrator.api.webhooks import jira_admission_flow
@@ -138,7 +162,10 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                 tenant = session.get(Tenant, "tenant-webhook")
                 project = session.execute(
                     select(Project)
-                    .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                    .where(
+                        Project.tenant_id == "tenant-webhook",
+                        Project.jira_project_key == "TP",
+                    )
                     .limit(1)
                 ).scalar_one()
                 assert tenant is not None
@@ -172,14 +199,17 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                     cycle_id="cycle-1",
                 )
 
-                with patch.object(
-                    jira_admission_flow,
-                    "evaluate_issue_clarification_state",
-                    return_value=decision_result,
-                ), patch.object(
-                    jira_admission_flow,
-                    "tenant_atlassian_oauth_context",
-                    return_value=oauth_context,
+                with (
+                    patch.object(
+                        jira_admission_flow,
+                        "evaluate_issue_clarification_state",
+                        return_value=decision_result,
+                    ),
+                    patch.object(
+                        jira_admission_flow,
+                        "tenant_atlassian_oauth_context",
+                        return_value=oauth_context,
+                    ),
                 ):
                     result = jira_admission_flow.evaluate_precheck_decision_with_labels(
                         context=context,
@@ -189,21 +219,35 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
 
             self.assertIs(result, decision_result)
             oauth_client.update_issue_summary_and_description.assert_called_once()
-            updated_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
-            self.assertIn("Decision Gate reason: Cross-account relink policy is missing.", updated_description)
-            self.assertIn("What happens when a device relinks to another user?", updated_description)
+            updated_description = (
+                oauth_client.update_issue_summary_and_description.call_args.kwargs[
+                    "description"
+                ]
+            )
+            self.assertIn(
+                "Decision Gate reason: Cross-account relink policy is missing.",
+                updated_description,
+            )
+            self.assertIn(
+                "What happens when a device relinks to another user?",
+                updated_description,
+            )
             self.assertEqual(context.issue_description, updated_description)
         finally:
             self._default_precheck_decision_patch.start()
 
-    def test_evaluate_precheck_decision_with_labels_removes_resolved_question_block_from_jira(self) -> None:
+    def test_evaluate_precheck_decision_with_labels_removes_resolved_question_block_from_jira(
+        self,
+    ) -> None:
         self._default_precheck_decision_patch.stop()
         try:
             from orchestrator.api.webhooks import jira_admission_flow
 
             existing_block = build_precheck_questions_block(
                 decision_gate_reason="Cross-account relink policy is missing.",
-                decision_gate_questions=["What happens when a device relinks to another user?"],
+                decision_gate_questions=[
+                    "What happens when a device relinks to another user?"
+                ],
                 gtd_questions=[],
             )
             assert existing_block is not None
@@ -213,7 +257,10 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                 tenant = session.get(Tenant, "tenant-webhook")
                 project = session.execute(
                     select(Project)
-                    .where(Project.tenant_id == "tenant-webhook", Project.jira_project_key == "TP")
+                    .where(
+                        Project.tenant_id == "tenant-webhook",
+                        Project.jira_project_key == "TP",
+                    )
                     .limit(1)
                 ).scalar_one()
                 assert tenant is not None
@@ -247,14 +294,17 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                     cycle_id="cycle-2",
                 )
 
-                with patch.object(
-                    jira_admission_flow,
-                    "evaluate_issue_clarification_state",
-                    return_value=decision_result,
-                ), patch.object(
-                    jira_admission_flow,
-                    "tenant_atlassian_oauth_context",
-                    return_value=oauth_context,
+                with (
+                    patch.object(
+                        jira_admission_flow,
+                        "evaluate_issue_clarification_state",
+                        return_value=decision_result,
+                    ),
+                    patch.object(
+                        jira_admission_flow,
+                        "tenant_atlassian_oauth_context",
+                        return_value=oauth_context,
+                    ),
                 ):
                     result = jira_admission_flow.evaluate_precheck_decision_with_labels(
                         context=context,
@@ -264,7 +314,11 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
 
             self.assertIs(result, decision_result)
             oauth_client.update_issue_summary_and_description.assert_called_once()
-            updated_description = oauth_client.update_issue_summary_and_description.call_args.kwargs["description"]
+            updated_description = (
+                oauth_client.update_issue_summary_and_description.call_args.kwargs[
+                    "description"
+                ]
+            )
             self.assertIn("Original description.", updated_description)
             self.assertNotIn("Decision Gate reason:", updated_description)
             self.assertEqual(context.issue_description, updated_description)
@@ -272,7 +326,9 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
             self._default_precheck_decision_patch.start()
 
     def test_webhook_applies_ready_label_when_precheck_reports_missing(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-140", status_name="To Do", labels=["worker:linux"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-140", status_name="To Do", labels=["worker:linux"]
+        )
         oauth_client = MagicMock()
         oauth_context = SimpleNamespace(
             access_token="tok",
@@ -317,17 +373,24 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
         oauth_client.add_issue_labels.assert_not_called()
 
     def test_webhook_marks_issue_created_backlog_ready_without_enqueue(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"])
+        payload = self._jira_issue_payload(
+            issue_key="TP-130", status_name="Ready for Agent", labels=["agent:ready"]
+        )
         payload["webhookEvent"] = "jira:issue_created"
 
-        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch(
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+            return_value=self._pre_run_check(),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         body = self._assert_jira_issue_event_queued(response, issue_key="TP-130")
         self.assertEqual(body["webhook_event"], "issue_created")
 
     def test_webhook_marks_backlog_status_ready_for_agent_without_enqueue(self) -> None:
-        payload = self._jira_issue_payload(issue_key="TP-803", status_name="In Progress")
+        payload = self._jira_issue_payload(
+            issue_key="TP-803", status_name="In Progress"
+        )
 
         response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -356,8 +419,13 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
 
         payload = self._jira_issue_payload(issue_key="TP-804", status_name="To Do")
         with (
-            patch("orchestrator.core.discord.transport_executor.send_tenant_discord_message") as notify_mock,
-            patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()),
+            patch(
+                "orchestrator.core.discord.transport_executor.send_tenant_discord_message"
+            ) as notify_mock,
+            patch(
+                "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+                return_value=self._pre_run_check(),
+            ),
         ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
@@ -386,13 +454,20 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
             session.commit()
 
         payload = self._jira_issue_payload(issue_key="TP-805", status_name="To Do")
-        with patch("orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check", return_value=self._pre_run_check()):
+        with patch(
+            "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
+            return_value=self._pre_run_check(),
+        ):
             response = self.client.post("/jira/webhook/tenant-webhook", json=payload)
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-805")
 
-    def test_webhook_transition_only_mode_allows_transition_into_ready_status(self) -> None:
-        self._create_tenant("tenant-transition-only-2", ready_trigger_mode="transition_only")
+    def test_webhook_transition_only_mode_allows_transition_into_ready_status(
+        self,
+    ) -> None:
+        self._create_tenant(
+            "tenant-transition-only-2", ready_trigger_mode="transition_only"
+        )
         payload = self._jira_issue_payload(issue_key="TP-130", labels=["agent:ready"])
         payload["changelog"] = {
             "items": [
@@ -404,6 +479,8 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
             ]
         }
 
-        response = self.client.post("/jira/webhook/tenant-transition-only-2", json=payload)
+        response = self.client.post(
+            "/jira/webhook/tenant-transition-only-2", json=payload
+        )
 
         self._assert_jira_issue_event_queued(response, issue_key="TP-130")

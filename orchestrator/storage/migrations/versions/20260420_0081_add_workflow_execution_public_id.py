@@ -30,7 +30,9 @@ def _workflow_execution_indexes(bind: sa.engine.Connection) -> set[str]:
     return {index["name"] for index in inspector.get_indexes("workflow_executions")}
 
 
-def _needs_public_execution_id(*, workflow_id: str, execution_id: str, seen: set[str]) -> bool:
+def _needs_public_execution_id(
+    *, workflow_id: str, execution_id: str, seen: set[str]
+) -> bool:
     normalized_workflow_id = str(workflow_id or "").strip()
     normalized_execution_id = str(execution_id or "").strip()
     if not normalized_execution_id:
@@ -47,7 +49,10 @@ def upgrade() -> None:
     columns = _workflow_execution_columns(bind)
 
     if "execution_id" not in columns:
-        op.add_column("workflow_executions", sa.Column("execution_id", sa.String(length=64), nullable=True))
+        op.add_column(
+            "workflow_executions",
+            sa.Column("execution_id", sa.String(length=64), nullable=True),
+        )
 
     rows = bind.execute(
         sa.text(
@@ -97,9 +102,16 @@ def upgrade() -> None:
 
     if bind.dialect.name == "sqlite":
         with op.batch_alter_table("workflow_executions") as batch_op:
-            batch_op.alter_column("execution_id", existing_type=sa.String(length=64), nullable=False)
+            batch_op.alter_column(
+                "execution_id", existing_type=sa.String(length=64), nullable=False
+            )
     else:
-        op.alter_column("workflow_executions", "execution_id", existing_type=sa.String(length=64), nullable=False)
+        op.alter_column(
+            "workflow_executions",
+            "execution_id",
+            existing_type=sa.String(length=64),
+            nullable=False,
+        )
 
 
 def downgrade() -> None:
@@ -110,7 +122,9 @@ def downgrade() -> None:
 
     indexes = _workflow_execution_indexes(bind)
     if "ix_workflow_executions_execution_id" in indexes:
-        op.drop_index("ix_workflow_executions_execution_id", table_name="workflow_executions")
+        op.drop_index(
+            "ix_workflow_executions_execution_id", table_name="workflow_executions"
+        )
 
     if bind.dialect.name == "sqlite":
         with op.batch_alter_table("workflow_executions") as batch_op:

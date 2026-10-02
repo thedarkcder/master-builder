@@ -77,7 +77,9 @@ class JiraClient:
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Jira API request failed ({exc.code}) {path}: {body}") from exc
+            raise RuntimeError(
+                f"Jira API request failed ({exc.code}) {path}: {body}"
+            ) from exc
 
     def search_issues(self, *, jql: str) -> list[JiraIssue]:
         next_page_token = ""
@@ -93,7 +95,9 @@ class JiraClient:
                 payload["nextPageToken"] = next_page_token
 
             # Jira Cloud removed /rest/api/3/search and requires /rest/api/3/search/jql.
-            data = self._request_json(method="POST", path="/rest/api/3/search/jql", payload=payload)
+            data = self._request_json(
+                method="POST", path="/rest/api/3/search/jql", payload=payload
+            )
             issues = data.get("issues", [])
             for issue in issues:
                 fields = issue.get("fields", {})
@@ -101,7 +105,11 @@ class JiraClient:
                 collected.append(
                     JiraIssue(
                         key=str(issue.get("key", "")).strip(),
-                        labels=[str(label).strip() for label in fields.get("labels", []) if str(label).strip()],
+                        labels=[
+                            str(label).strip()
+                            for label in fields.get("labels", [])
+                            if str(label).strip()
+                        ],
                         status_name=str(status.get("name", "")).strip(),
                     )
                 )
@@ -112,29 +120,60 @@ class JiraClient:
             if not issues or not raw_next_page_token:
                 break
             if raw_next_page_token in seen_page_tokens:
-                raise RuntimeError("Jira search pagination loop detected (repeated nextPageToken)")
+                raise RuntimeError(
+                    "Jira search pagination loop detected (repeated nextPageToken)"
+                )
             seen_page_tokens.add(raw_next_page_token)
             next_page_token = raw_next_page_token
         return collected
 
     def update_issue_labels(self, *, issue_key: str, labels: list[str]) -> None:
         payload = {"fields": {"labels": labels}}
-        self._request_json(method="PUT", path=f"/rest/api/3/issue/{issue_key}", payload=payload)
+        self._request_json(
+            method="PUT", path=f"/rest/api/3/issue/{issue_key}", payload=payload
+        )
 
     def add_comment(self, *, issue_key: str, comment: str) -> None:
-        payload = {"body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}]}}
-        self._request_json(method="POST", path=f"/rest/api/3/issue/{issue_key}/comment", payload=payload)
+        payload = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [{"type": "text", "text": comment}],
+                    }
+                ],
+            }
+        }
+        self._request_json(
+            method="POST",
+            path=f"/rest/api/3/issue/{issue_key}/comment",
+            payload=payload,
+        )
 
     def get_transitions(self, *, issue_key: str) -> list[dict[str, Any]]:
-        data = self._request_json(method="GET", path=f"/rest/api/3/issue/{issue_key}/transitions")
-        return [transition for transition in data.get("transitions", []) if isinstance(transition, dict)]
+        data = self._request_json(
+            method="GET", path=f"/rest/api/3/issue/{issue_key}/transitions"
+        )
+        return [
+            transition
+            for transition in data.get("transitions", [])
+            if isinstance(transition, dict)
+        ]
 
     def transition_issue(self, *, issue_key: str, transition_id: str) -> None:
         payload = {"transition": {"id": transition_id}}
-        self._request_json(method="POST", path=f"/rest/api/3/issue/{issue_key}/transitions", payload=payload)
+        self._request_json(
+            method="POST",
+            path=f"/rest/api/3/issue/{issue_key}/transitions",
+            payload=payload,
+        )
 
     def project_id(self, *, project_key: str) -> str:
-        data = self._request_json(method="GET", path=f"/rest/api/3/project/{project_key}")
+        data = self._request_json(
+            method="GET", path=f"/rest/api/3/project/{project_key}"
+        )
         if not isinstance(data, dict):
             raise RuntimeError(f"Unexpected Jira project response for {project_key}")
         project_id = str(data.get("id", "")).strip()
@@ -142,7 +181,9 @@ class JiraClient:
             raise RuntimeError(f"Unable to resolve Jira project id for {project_key}")
         return project_id
 
-    def find_version(self, *, project_id: str, version_name: str) -> dict[str, Any] | None:
+    def find_version(
+        self, *, project_id: str, version_name: str
+    ) -> dict[str, Any] | None:
         start_at = 0
         while True:
             data = self._request_json(
@@ -158,11 +199,15 @@ class JiraClient:
                 return None
 
             if not isinstance(data, dict):
-                raise RuntimeError(f"Unexpected Jira version response for project id {project_id}")
+                raise RuntimeError(
+                    f"Unexpected Jira version response for project id {project_id}"
+                )
 
             versions = data.get("values", [])
             if not isinstance(versions, list):
-                raise RuntimeError(f"Unexpected Jira version list payload for project id {project_id}")
+                raise RuntimeError(
+                    f"Unexpected Jira version list payload for project id {project_id}"
+                )
 
             for raw_version in versions:
                 if not isinstance(raw_version, dict):
@@ -173,11 +218,15 @@ class JiraClient:
             is_last = bool(data.get("isLast", True))
             if is_last:
                 break
-            page_size = int(data.get("maxResults", len(versions)) or len(versions) or 50)
+            page_size = int(
+                data.get("maxResults", len(versions)) or len(versions) or 50
+            )
             start_at += page_size
         return None
 
-    def create_version(self, *, project_id: str, version_name: str, released: bool) -> None:
+    def create_version(
+        self, *, project_id: str, version_name: str, released: bool
+    ) -> None:
         payload = {
             "name": version_name,
             "projectId": int(project_id),
@@ -191,11 +240,15 @@ class JiraClient:
         payload = {"released": released}
         if released:
             payload["releaseDate"] = date.today().isoformat()
-        self._request_json(method="PUT", path=f"/rest/api/3/version/{version_id}", payload=payload)
+        self._request_json(
+            method="PUT", path=f"/rest/api/3/version/{version_id}", payload=payload
+        )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Assign and close Jira release-train issues.")
+    parser = argparse.ArgumentParser(
+        description="Assign and close Jira release-train issues."
+    )
     parser.add_argument(
         "mode",
         choices=["assign", "close", "keys", "release", "count-ready"],
@@ -209,7 +262,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ready-status", default="READY TO RELEASE")
     parser.add_argument("--done-status", default="Done")
     parser.add_argument("--release-version", default="")
-    parser.add_argument("--comment", action="store_true", help="Add Jira comments when assigning/closing.")
+    parser.add_argument(
+        "--comment",
+        action="store_true",
+        help="Add Jira comments when assigning/closing.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -263,7 +320,9 @@ def assign_release_label(
                 issue_key=issue.key,
                 comment=f"Automatically assigned to release train {release_version}.",
             )
-    print(f"assign summary: scanned={len(issues)} updated={updated_count} release={release_version}")
+    print(
+        f"assign summary: scanned={len(issues)} updated={updated_count} release={release_version}"
+    )
     return 0
 
 
@@ -349,21 +408,29 @@ def ensure_jira_release_version(
     project_id = client.project_id(project_key=project_key)
     existing = client.find_version(project_id=project_id, version_name=release_version)
     if existing is None:
-        print(f"[release] create project={project_key} version={release_version} released=true")
+        print(
+            f"[release] create project={project_key} version={release_version} released=true"
+        )
         if not dry_run:
-            client.create_version(project_id=project_id, version_name=release_version, released=True)
+            client.create_version(
+                project_id=project_id, version_name=release_version, released=True
+            )
         return 0
 
     version_id = str(existing.get("id", "")).strip()
     is_released = bool(existing.get("released"))
     if is_released:
-        print(f"[release] exists project={project_key} version={release_version} released=true")
+        print(
+            f"[release] exists project={project_key} version={release_version} released=true"
+        )
         return 0
 
     if not version_id:
         raise RuntimeError(f"Jira version '{release_version}' exists but id is missing")
 
-    print(f"[release] update project={project_key} version={release_version} set released=true")
+    print(
+        f"[release] update project={project_key} version={release_version} set released=true"
+    )
     if not dry_run:
         client.update_version_release(version_id=version_id, released=True)
     return 0

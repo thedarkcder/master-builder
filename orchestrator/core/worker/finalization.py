@@ -9,7 +9,9 @@ from uuid import uuid4
 from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.runs.service import mark_run_terminal
-from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
+from orchestrator.core.worker.manual_pr_remediation_completion import (
+    publish_manual_pr_remediation_completion,
+)
 from orchestrator.core.workflow.runner import WorkflowResult
 
 
@@ -91,7 +93,9 @@ class WorkflowFinalizer:
                     status="failed",
                     error_class=type(exc).__name__,
                     error_message=str(exc),
-                    stack_trace="".join(format_exception(type(exc), exc, exc.__traceback__)),
+                    stack_trace="".join(
+                        format_exception(type(exc), exc, exc.__traceback__)
+                    ),
                 )
             except Exception:  # noqa: BLE001
                 self._logger.exception(
@@ -112,9 +116,13 @@ class WorkflowFinalizer:
             return FinalizationPlan(
                 run=finalized_run,
                 workflow_result=workflow_result,
-                persisted_status=getattr(finalized_run, "status", self._run_status_failed),
+                persisted_status=getattr(
+                    finalized_run, "status", self._run_status_failed
+                ),
                 last_error=getattr(finalized_run, "last_error", failure_message),
-                persisted_plan=dict(getattr(finalized_run, "plan", {}) or {}) if isinstance(getattr(finalized_run, "plan", None), dict) else None,
+                persisted_plan=dict(getattr(finalized_run, "plan", {}) or {})
+                if isinstance(getattr(finalized_run, "plan", None), dict)
+                else None,
                 event_types=("RUN_FAILED", "TASK_FAILED"),
                 tail_steps=(),
             )
@@ -129,15 +137,24 @@ class WorkflowFinalizer:
         return FinalizationPlan(
             run=finalized_run,
             workflow_result=workflow_result,
-            persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower(),
-            last_error=str(getattr(finalized_run, "last_error", "") or "").strip() or None,
-            persisted_plan=dict(getattr(finalized_run, "plan", {}) or {}) if isinstance(getattr(finalized_run, "plan", None), dict) else None,
+            persisted_status=str(getattr(finalized_run, "status", "") or "")
+            .strip()
+            .lower(),
+            last_error=str(getattr(finalized_run, "last_error", "") or "").strip()
+            or None,
+            persisted_plan=dict(getattr(finalized_run, "plan", {}) or {})
+            if isinstance(getattr(finalized_run, "plan", None), dict)
+            else None,
             event_types=_event_types_for(
                 workflow_result=workflow_result,
-                persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower(),
+                persisted_status=str(getattr(finalized_run, "status", "") or "")
+                .strip()
+                .lower(),
             ),
             tail_steps=_tail_steps_for_status(
-                persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower()
+                persisted_status=str(getattr(finalized_run, "status", "") or "")
+                .strip()
+                .lower()
             ),
         )
 
@@ -178,6 +195,7 @@ class CompletionTailExecutor:
         failures: list[dict[str, str]] = []
         for step in plan.tail_steps:
             if step == "orchestration_trace":
+
                 def fn() -> None:
                     _emit_orchestrated_trace_logs(
                         session=self._session,
@@ -186,6 +204,7 @@ class CompletionTailExecutor:
                         agent_id=self._agent_id,
                     )
             elif step == "jira_feedback":
+
                 def fn() -> None:
                     _emit_detailed_jira_feedback(
                         session=self._session,
@@ -196,6 +215,7 @@ class CompletionTailExecutor:
                         send_jira_message_fn=self._send_jira_message_fn,
                     )
             elif step == "manual_pr_reporting":
+
                 def fn() -> None:
                     publish_manual_pr_remediation_completion(
                         session=self._session,
@@ -209,6 +229,7 @@ class CompletionTailExecutor:
                         terminal_status=getattr(run, "status", None),
                     )
             elif step == "workspace_cleanup":
+
                 def fn() -> None:
                     self._cleanup_run_workspaces_fn(
                         base_dir=self._base_dir,
@@ -230,7 +251,9 @@ class CompletionTailExecutor:
             )
 
 
-def _event_types_for(*, workflow_result: WorkflowResult, persisted_status: str) -> tuple[str, ...]:
+def _event_types_for(
+    *, workflow_result: WorkflowResult, persisted_status: str
+) -> tuple[str, ...]:
     if persisted_status == "succeeded":
         return ("TASK_COMPLETED",)
     if persisted_status == "blocked":

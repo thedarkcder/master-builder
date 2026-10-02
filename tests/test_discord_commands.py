@@ -33,17 +33,28 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with (
             patch(
                 "orchestrator.api.discord.ingress.ask_runtime._search_jira_issues_for_tenant",
-                return_value=[JiraIssuePreview(key="OTH-50", summary="Scoped issue", status="To Do")],
+                return_value=[
+                    JiraIssuePreview(
+                        key="OTH-50", summary="Scoped issue", status="To Do"
+                    )
+                ],
             ) as search_mock,
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
                 return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Scoped answer"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
+                return_value="Scoped answer",
+            ),
         ):
             mapped = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-viewer", "channel_id": "discord-channel-2", "command": "!ask scoped"},
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": "discord-channel-2",
+                    "command": "!ask scoped",
+                },
             )
             self.assertEqual(mapped.status_code, 200)
             mapped_jql = str(search_mock.call_args.kwargs["jql"])
@@ -51,7 +62,11 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
 
             dm = self.client.post(
                 f"/discord/command/{self.tenant_id}",
-                json={"user_id": "u-viewer", "channel_id": None, "command": "!ask unscoped"},
+                json={
+                    "user_id": "u-viewer",
+                    "channel_id": None,
+                    "command": "!ask unscoped",
+                },
             )
             self.assertEqual(dm.status_code, 409)
             self.assertIn("requires a single mapped project scope", dm.json()["detail"])
@@ -69,11 +84,17 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
                         ingress_source="jira_comment",
                     )
             self.assertEqual(jira_ctx.exception.status_code, 409)
-            self.assertIn("requires a single mapped project scope", str(jira_ctx.exception.detail))
+            self.assertIn(
+                "requires a single mapped project scope", str(jira_ctx.exception.detail)
+            )
 
         unmapped = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-unmapped", "command": "!ask blocked"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-unmapped",
+                "command": "!ask blocked",
+            },
         )
         self.assertEqual(unmapped.status_code, 403)
         self.assertIn("does not match", unmapped.json()["detail"])
@@ -105,7 +126,9 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         def _collect_stub(*, scoped_issue_key, **_kwargs):  # type: ignore[no-untyped-def]
             collect_calls.append(scoped_issue_key)
             return (
-                scoped_issue_key.strip().upper() if isinstance(scoped_issue_key, str) and scoped_issue_key.strip() else None,
+                scoped_issue_key.strip().upper()
+                if isinstance(scoped_issue_key, str) and scoped_issue_key.strip()
+                else None,
                 None,
                 [{"key": "TP-77", "summary": "Investigate", "status": "To Do"}],
                 {"To Do": 1},
@@ -114,13 +137,22 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
 
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.ask_history_runtime.existing_issue_keys_for_tenant", return_value=set()),
-            patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
+            patch(
+                "orchestrator.api.discord.ingress.ask_history_runtime.existing_issue_keys_for_tenant",
+                return_value=set(),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
+                side_effect=_collect_stub,
+            ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
                 return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
-            patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
+            patch(
+                "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
+                return_value="Board answer",
+            ),
         ):
             response = execute_discord_command(
                 tenant_id=self.tenant_id,
@@ -142,10 +174,14 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
             history_entries = [
                 entry
                 for entry in (tenant.discord_config or {}).get("ask_history", [])
-                if entry.get("user_id") == "u-viewer" and entry.get("channel_id") == "discord-channel-1"
+                if entry.get("user_id") == "u-viewer"
+                and entry.get("channel_id") == "discord-channel-1"
             ]
         self.assertFalse(
-            any(str(entry.get("issue_key") or "").strip().upper() == "TP-404" for entry in history_entries)
+            any(
+                str(entry.get("issue_key") or "").strip().upper() == "TP-404"
+                for entry in history_entries
+            )
         )
 
     def test_plain_text_is_treated_as_implicit_ask_when_enabled(self) -> None:
@@ -181,7 +217,11 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
     def test_gap_command_requires_issue_key(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!gap"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!gap",
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !gap", response.json()["detail"])
@@ -190,10 +230,10 @@ class DiscordCommandApiTests(DiscordCommandApiTestHarness):
         with patch(
             "orchestrator.api.discord.ingress.gap_runtime.run_gap_analysis",
             return_value=(
-                "Gap analysis for [TP-77](https://example.atlassian.net/browse/TP-77)",
+                "Gap analysis for [TP-77](https://example-2.atlassian.net/browse/TP-77)",
                 {
                     "issue_key": "TP-77",
-                    "jira_url": "https://example.atlassian.net/browse/TP-77",
+                    "jira_url": "https://example-2.atlassian.net/browse/TP-77",
                     "pr_url": "https://github.com/example/repo/pull/12",
                     "confidence": "medium",
                 },

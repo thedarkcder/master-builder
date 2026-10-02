@@ -13,9 +13,15 @@ def prompt_model_from_dataclass(model_type: type) -> dict[str, object]:
     model_name = str(getattr(model_type, "__prompt_model_name__", model_type.__name__))
     include_fields = tuple(getattr(model_type, "__prompt_include_fields__", ()))
     aliases: dict[str, str] = dict(getattr(model_type, "__prompt_field_aliases__", {}))
-    enums: dict[str, tuple[str, ...]] = dict(getattr(model_type, "__prompt_field_enums__", {}))
-    nested_types: dict[str, type] = dict(getattr(model_type, "__prompt_nested_types__", {}))
-    required_overrides: dict[str, bool] = dict(getattr(model_type, "__prompt_field_required__", {}))
+    enums: dict[str, tuple[str, ...]] = dict(
+        getattr(model_type, "__prompt_field_enums__", {})
+    )
+    nested_types: dict[str, type] = dict(
+        getattr(model_type, "__prompt_nested_types__", {})
+    )
+    required_overrides: dict[str, bool] = dict(
+        getattr(model_type, "__prompt_field_required__", {})
+    )
     type_hints = get_type_hints(model_type)
     dataclass_fields = fields(model_type)
     field_names = include_fields or tuple(field.name for field in dataclass_fields)
@@ -24,7 +30,9 @@ def prompt_model_from_dataclass(model_type: type) -> dict[str, object]:
     rendered_fields: list[dict[str, object]] = []
     for field_name in field_names:
         if field_name not in known_field_names:
-            raise TypeError(f"{model_type.__name__} prompt field {field_name!r} is not a dataclass field")
+            raise TypeError(
+                f"{model_type.__name__} prompt field {field_name!r} is not a dataclass field"
+            )
         annotation = nested_types.get(field_name, type_hints.get(field_name, Any))
         required = required_overrides.get(field_name)
         rendered_field = _prompt_field(
@@ -66,11 +74,15 @@ def _unwrap_optional(annotation: object) -> tuple[bool, object]:
         args = tuple(arg for arg in get_args(annotation))
         if NoneType in args:
             non_none_args = tuple(arg for arg in args if arg is not NoneType)
-            return True, non_none_args[0] if len(non_none_args) == 1 else Union[non_none_args]  # type: ignore[index]
+            return True, non_none_args[0] if len(non_none_args) == 1 else Union[
+                non_none_args
+            ]  # type: ignore[index]
     return False, annotation
 
 
-def _prompt_kind(annotation: object) -> tuple[str, list[dict[str, object]] | None, tuple[str, ...]]:
+def _prompt_kind(
+    annotation: object,
+) -> tuple[str, list[dict[str, object]] | None, tuple[str, ...]]:
     origin = get_origin(annotation)
     if origin is Literal:
         literal_values = tuple(str(value) for value in get_args(annotation))

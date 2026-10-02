@@ -22,7 +22,11 @@ def _service_block(compose: str, service_name: str) -> str:
     while next_service != -1:
         candidate = compose[next_service + 1 :]
         line = candidate.splitlines()[0]
-        if line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
+        if (
+            line.startswith("  ")
+            and not line.startswith("    ")
+            and line.rstrip().endswith(":")
+        ):
             return compose[start:next_service]
         next_service = compose.find("\n  ", next_service + 1)
     return compose[start:]
@@ -30,7 +34,10 @@ def _service_block(compose: str, service_name: str) -> str:
 
 class DeploymentMigrationStartupTests(unittest.TestCase):
     def test_compose_files_use_one_shot_migration_service(self) -> None:
-        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+        for relative_path in (
+            "docker-compose.yml",
+            "deploy/hetzner/docker-compose.prod.yml",
+        ):
             compose = (ROOT / relative_path).read_text(encoding="utf-8")
             migrate_block = _service_block(compose, "migrate")
 
@@ -59,7 +66,10 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
                 )
 
     def test_postgres_healthcheck_rejects_crash_recovery(self) -> None:
-        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+        for relative_path in (
+            "docker-compose.yml",
+            "deploy/hetzner/docker-compose.prod.yml",
+        ):
             compose = (ROOT / relative_path).read_text(encoding="utf-8")
             postgres_block = _service_block(compose, "postgres")
 
@@ -69,11 +79,16 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
             self.assertIn("grep -qx t", postgres_block)
 
     def test_api_healthcheck_allows_loaded_dev_api_to_respond(self) -> None:
-        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+        for relative_path in (
+            "docker-compose.yml",
+            "deploy/hetzner/docker-compose.prod.yml",
+        ):
             compose = (ROOT / relative_path).read_text(encoding="utf-8")
             api_block = _service_block(compose, "api")
 
-            self.assertIn("urlopen('http://127.0.0.1:4000/health', timeout=10)", api_block)
+            self.assertIn(
+                "urlopen('http://127.0.0.1:4000/health', timeout=10)", api_block
+            )
             self.assertIn("timeout: 15s", api_block)
 
     def test_dockerfile_default_commands_do_not_run_migrations(self) -> None:
@@ -82,9 +97,13 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
         self.assertNotIn("python -m orchestrator migrate && uvicorn", dockerfile)
 
     def test_hetzner_bootstrap_runs_migration_job_before_runtime_stack(self) -> None:
-        bootstrap = (ROOT / "deploy" / "hetzner" / "bootstrap.sh").read_text(encoding="utf-8")
+        bootstrap = (ROOT / "deploy" / "hetzner" / "bootstrap.sh").read_text(
+            encoding="utf-8"
+        )
 
-        migrate_index = bootstrap.index("up --build --force-recreate --exit-code-from migrate migrate")
+        migrate_index = bootstrap.index(
+            "up --build --force-recreate --exit-code-from migrate migrate"
+        )
         stack_index = bootstrap.index("up -d --build")
 
         self.assertLess(
@@ -94,7 +113,9 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
         )
 
     def test_hybrid_worker_script_runs_migration_job_before_runtime_stack(self) -> None:
-        script = (ROOT / "scripts" / "run_hybrid_workers.sh").read_text(encoding="utf-8")
+        script = (ROOT / "scripts" / "run_hybrid_workers.sh").read_text(
+            encoding="utf-8"
+        )
 
         infra_index = script.index('"${DOCKER_BASE_SERVICES[@]}"')
         migrate_index = script.index("docker_compose run --rm --no-deps migrate")

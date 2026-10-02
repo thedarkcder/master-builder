@@ -32,7 +32,9 @@ def execute_pm_tool_calls(
         if tool == "stitch.synthesize_screen":
             prompt = str(arguments.get("prompt") or "").strip()
             if not prompt:
-                raise RuntimeError("PM tool call stitch.synthesize_screen missing prompt")
+                raise RuntimeError(
+                    "PM tool call stitch.synthesize_screen missing prompt"
+                )
             artifact = maybe_invoke_stitch_tool_for_stage_plan(
                 brief=prompt,
                 tenant_id=tenant_id,

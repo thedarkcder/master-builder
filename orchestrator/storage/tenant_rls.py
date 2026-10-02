@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,57 @@ class RLSContractIssue:
     issue: str
 
 
+_SESSION_RLS_CONTEXT_KEY = "master_builder_rls_context"
+
+
+class RLSSession(Session):
+    """Own one operation's claims; closing ends its authentication lifecycle."""
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            self.info.pop(_SESSION_RLS_CONTEXT_KEY, None)
+
+    def reset(self) -> None:
+        try:
+            super().reset()
+        finally:
+            self.info.pop(_SESSION_RLS_CONTEXT_KEY, None)
+
+    def invalidate(self) -> None:
+        try:
+            super().invalidate()
+        finally:
+            self.info.pop(_SESSION_RLS_CONTEXT_KEY, None)
+
+
+def _apply_transaction_rls_context(
+    connection: Connection | Session, context: dict[str, str]
+) -> None:
+    connection.execute(
+        text(
+            "SELECT set_config('app.principal_type', :principal, true), "
+            "set_config('app.tenant_id', :tenant, true), "
+            "set_config('app.user_id', :user, true), "
+            "set_config('app.system_purpose', :purpose, true)"
+        ),
+        context,
+    )
+
+
+@event.listens_for(Session, "after_begin")
+def _restore_session_rls_context(
+    session: Session, _transaction: object, connection: Connection
+) -> None:
+    # Claims belong to this operation's Session. SET LOCAL clears them when its
+    # transaction ends; reapply only to a new transaction owned by that Session.
+    # A new Session has no claims, even when it reuses the same pooled connection.
+    context = session.info.get(_SESSION_RLS_CONTEXT_KEY)
+    if connection.dialect.name == "postgresql" and context is not None:
+        _apply_transaction_rls_context(connection, context)
+
+
 def set_rls_context(
     session: Session | Connection,
     *,
@@ -38,20 +89,31 @@ def set_rls_context(
     principal = RLSPrincipalType(str(principal_type))
     if principal is RLSPrincipalType.TENANT_USER and not user_id:
         raise ValueError("tenant_user RLS context requires user_id")
-    if principal is RLSPrincipalType.TENANT_SYSTEM and (not tenant_id or not system_purpose):
-        raise ValueError("tenant_system RLS context requires tenant_id and system_purpose")
+    if principal is RLSPrincipalType.TENANT_SYSTEM and (
+        not tenant_id or not system_purpose
+    ):
+        raise ValueError(
+            "tenant_system RLS context requires tenant_id and system_purpose"
+        )
 
-    session.execute(text("SELECT set_config('app.principal_type', :value, true)"), {"value": principal.value})
-    session.execute(text("SELECT set_config('app.tenant_id', :value, true)"), {"value": tenant_id or ""})
-    session.execute(text("SELECT set_config('app.user_id', :value, true)"), {"value": user_id or ""})
-    session.execute(text("SELECT set_config('app.system_purpose', :value, true)"), {"value": system_purpose or ""})
+    context = {
+        "principal": principal.value,
+        "tenant": tenant_id or "",
+        "user": user_id or "",
+        "purpose": system_purpose or "",
+    }
+    if isinstance(session, Session):
+        session.info[_SESSION_RLS_CONTEXT_KEY] = context
+    _apply_transaction_rls_context(session, context)
 
 
 def set_platform_admin_rls_context(session: Session | Connection) -> None:
     set_rls_context(session, principal_type=RLSPrincipalType.PLATFORM_ADMIN)
 
 
-def set_platform_system_rls_context(session: Session | Connection, *, system_purpose: str) -> None:
+def set_platform_system_rls_context(
+    session: Session | Connection, *, system_purpose: str
+) -> None:
     if not system_purpose:
         raise ValueError("platform_system RLS context requires system_purpose")
     set_rls_context(
@@ -61,7 +123,9 @@ def set_platform_system_rls_context(session: Session | Connection, *, system_pur
     )
 
 
-def set_tenant_user_rls_context(session: Session | Connection, *, user_id: str, tenant_id: str | None = None) -> None:
+def set_tenant_user_rls_context(
+    session: Session | Connection, *, user_id: str, tenant_id: str | None = None
+) -> None:
     set_rls_context(
         session,
         principal_type=RLSPrincipalType.TENANT_USER,
@@ -74,7 +138,9 @@ def set_identity_auth_rls_context(session: Session | Connection) -> None:
     set_rls_context(session, principal_type=RLSPrincipalType.IDENTITY_AUTH)
 
 
-def set_tenant_system_rls_context(session: Session | Connection, *, tenant_id: str, system_purpose: str) -> None:
+def set_tenant_system_rls_context(
+    session: Session | Connection, *, tenant_id: str, system_purpose: str
+) -> None:
     set_rls_context(
         session,
         principal_type=RLSPrincipalType.TENANT_SYSTEM,
@@ -140,7 +206,9 @@ def nullable_tenant_id_tables_from_database(connection: Connection) -> tuple[str
     return tuple(rows)
 
 
-def annotated_rls_protected_table_names_from_database(connection: Connection) -> tuple[str, ...]:
+def annotated_rls_protected_table_names_from_database(
+    connection: Connection,
+) -> tuple[str, ...]:
     rows = connection.execute(
         text(
             """
@@ -167,7 +235,9 @@ def rls_protected_table_names_from_database(connection: Connection) -> tuple[str
     )
 
 
-def audit_live_tenant_rls_contract(connection: Connection) -> tuple[RLSContractIssue, ...]:
+def audit_live_tenant_rls_contract(
+    connection: Connection,
+) -> tuple[RLSContractIssue, ...]:
     protected_tables = rls_protected_table_names_from_database(connection)
     issues: list[RLSContractIssue] = [
         RLSContractIssue(table_name=table_name, issue="tenant_id is nullable")
@@ -206,14 +276,22 @@ def audit_live_tenant_rls_contract(connection: Connection) -> tuple[RLSContractI
     for table_name in protected_tables:
         row = catalog_rows.get(table_name)
         if row is None:
-            issues.append(RLSContractIssue(table_name=table_name, issue="missing pg_class row"))
+            issues.append(
+                RLSContractIssue(table_name=table_name, issue="missing pg_class row")
+            )
             continue
         if not row["relrowsecurity"]:
-            issues.append(RLSContractIssue(table_name=table_name, issue="RLS is not enabled"))
+            issues.append(
+                RLSContractIssue(table_name=table_name, issue="RLS is not enabled")
+            )
         if not row["relforcerowsecurity"]:
-            issues.append(RLSContractIssue(table_name=table_name, issue="RLS is not forced"))
+            issues.append(
+                RLSContractIssue(table_name=table_name, issue="RLS is not forced")
+            )
         if table_name not in policy_tables:
-            issues.append(RLSContractIssue(table_name=table_name, issue="missing RLS policy"))
+            issues.append(
+                RLSContractIssue(table_name=table_name, issue="missing RLS policy")
+            )
     return tuple(issues)
 
 

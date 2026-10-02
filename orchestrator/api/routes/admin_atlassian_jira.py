@@ -16,13 +16,19 @@ from orchestrator.core.security import (
     require_any_tenant_permission,
     require_authenticated_principal,
 )
-from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.access import (
+    PERMISSION_PROJECTS_MANAGE,
+    PERMISSION_WORKSPACE_MANAGE,
+)
 from orchestrator.storage.models import AtlassianOAuthConnection
 
 router = APIRouter(prefix="/api/admin", tags=["admin", "atlassian-jira"])
 
 
-@router.get("/atlassian/connections/{connection_id}/jira-projects", response_model=list[JiraProjectRead])
+@router.get(
+    "/atlassian/connections/{connection_id}/jira-projects",
+    response_model=list[JiraProjectRead],
+)
 def list_jira_projects_for_connection(
     connection_id: str,
     tenant_id: str | None = Query(default=None),

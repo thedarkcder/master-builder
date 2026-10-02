@@ -42,7 +42,9 @@ class WorkerStageNotifierTests(unittest.TestCase):
         discord_calls: list[dict[str, object]] = []
         jira_calls: list[dict[str, object]] = []
 
-        def fake_discord(*, session, tenant, project, message: str, settings, event: str):  # noqa: ANN001
+        def fake_discord(
+            *, session, tenant, project, message: str, settings, event: str
+        ):  # noqa: ANN001
             discord_calls.append(
                 {
                     "session": session,
@@ -55,7 +57,9 @@ class WorkerStageNotifierTests(unittest.TestCase):
             )
             return SimpleNamespace(sent=True, reason=None)
 
-        def fake_jira(*, session, tenant, issue_key: str, stage: str, message: str, settings):  # noqa: ANN001
+        def fake_jira(
+            *, session, tenant, issue_key: str, stage: str, message: str, settings
+        ):  # noqa: ANN001
             jira_calls.append(
                 {
                     "session": session,

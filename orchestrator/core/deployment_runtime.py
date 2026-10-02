@@ -12,13 +12,18 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestrator.api.admin.deployment_config_service import tenant_deployment_plane_to_schema
+from orchestrator.api.admin.deployment_config_service import (
+    tenant_deployment_plane_to_schema,
+)
 from orchestrator.api.admin.deployment_release_service import (
     _normalize_local_coolify_api_base_url,
     update_project_deployment_release_status,
     verify_release_route_bindings,
 )
-from orchestrator.api.schemas import ProjectDeploymentReleaseStatusUpdate, TenantDeploymentPlaneRead
+from orchestrator.api.schemas import (
+    ProjectDeploymentReleaseStatusUpdate,
+    TenantDeploymentPlaneRead,
+)
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.local_preview_route_sync import (
     LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
@@ -41,25 +46,72 @@ from orchestrator.core.node_release_contracts import (
     STALE_LEGACY_EXPO_WEB_START_COMMAND,
 )
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
-from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_manager import (
+    normalize_secret_ref,
+    resolve_scoped_secret_ref,
+)
 from orchestrator.core.observability.logging import configure_logging
-from orchestrator.core.observability.otel_telemetry import initialize_telemetry, shutdown_telemetry
+from orchestrator.core.observability.otel_telemetry import (
+    initialize_telemetry,
+    shutdown_telemetry,
+)
 from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.database_recovery import (
     database_recovery_retry_delay_seconds,
     retryable_database_recovery_error,
 )
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import DeploymentHostCommand, Project, ProjectApp, ProjectDeploymentRelease, Tenant
-from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
+from orchestrator.storage.models import (
+    DeploymentHostCommand,
+    Project,
+    ProjectApp,
+    ProjectDeploymentRelease,
+    Tenant,
+)
+from orchestrator.tools.coolify_api import (
+    CoolifyApiClient,
+    CoolifyApiConfig,
+    CoolifyApiError,
+)
 
 logger = logging.getLogger(__name__)
 
-_DEPLOYMENT_PROGRESS_ORDER = ("queued", "provisioning", "deploying", "route_activating", "live")
-_DEPLOYMENT_FAILURE_STATUSES = {"failed", "error", "crashed", "failure", "timeout", "unhealthy"}
+_DEPLOYMENT_PROGRESS_ORDER = (
+    "queued",
+    "provisioning",
+    "deploying",
+    "route_activating",
+    "live",
+)
+_DEPLOYMENT_FAILURE_STATUSES = {
+    "failed",
+    "error",
+    "crashed",
+    "failure",
+    "timeout",
+    "unhealthy",
+}
 _DEPLOYMENT_CANCELLED_STATUSES = {"cancelled", "canceled", "rollback", "rolled_back"}
-_DEPLOYMENT_SUCCESS_STATUSES = {"success", "succeeded", "complete", "completed", "done", "finished", "healthy"}
-_DEPLOYMENT_PROGRESS_STATUSES = {"queued", "provisioning", "deploying", "building", "running", "starting", "started", "pending", "preparing"}
+_DEPLOYMENT_SUCCESS_STATUSES = {
+    "success",
+    "succeeded",
+    "complete",
+    "completed",
+    "done",
+    "finished",
+    "healthy",
+}
+_DEPLOYMENT_PROGRESS_STATUSES = {
+    "queued",
+    "provisioning",
+    "deploying",
+    "building",
+    "running",
+    "starting",
+    "started",
+    "pending",
+    "preparing",
+}
 _LOCAL_PREVIEW_ROUTE_SYNC_MAX_ATTEMPTS = 5
 _STALE_LEGACY_EXPO_PROVIDER_START_COMMANDS = {
     "npm run web",
@@ -172,13 +224,17 @@ def _stale_active_release_error(
     observed = _normalize_release_status(observation.status)
     if current not in DEPLOYMENT_RELEASE_ACTIVE_STATUSES:
         return None
-    if observed not in _DEPLOYMENT_PROGRESS_STATUSES and "deploy" not in (observed or "") and "progress" not in (
-        observed or ""
+    if (
+        observed not in _DEPLOYMENT_PROGRESS_STATUSES
+        and "deploy" not in (observed or "")
+        and "progress" not in (observed or "")
     ):
         return None
     timeout_seconds = max(60, int(settings.deployment_release_stale_timeout_seconds))
     anchor = _release_activity_anchor(release=release, observation=observation)
-    if anchor is None or now.astimezone(timezone.utc) - anchor <= timedelta(seconds=timeout_seconds):
+    if anchor is None or now.astimezone(timezone.utc) - anchor <= timedelta(
+        seconds=timeout_seconds
+    ):
         return None
     return (
         f"Deployment provider remained in progress status '{observation.status}' for more than "
@@ -186,11 +242,15 @@ def _stale_active_release_error(
     )
 
 
-def _release_observation_failure_error(*, observation: CoolifyDeploymentObservation) -> str:
+def _release_observation_failure_error(
+    *, observation: CoolifyDeploymentObservation
+) -> str:
     observed_status = _normalize_optional_string(observation.status) or "unknown"
     application_status = _normalize_optional_string(observation.application_status)
     if application_status is None:
-        return f"Deployment provider reported terminal failure status '{observed_status}'."
+        return (
+            f"Deployment provider reported terminal failure status '{observed_status}'."
+        )
     return (
         f"Deployment provider reported status '{observed_status}', "
         f"but application status was '{application_status}'."
@@ -200,7 +260,9 @@ def _release_observation_failure_error(*, observation: CoolifyDeploymentObservat
 def _release_has_route_bindings(release: ProjectDeploymentRelease) -> bool:
     provider_context = _coerce_dict(release.provider_context)
     route_bindings = provider_context.get("route_bindings")
-    return isinstance(route_bindings, list) and any(isinstance(route, dict) for route in route_bindings)
+    return isinstance(route_bindings, list) and any(
+        isinstance(route, dict) for route in route_bindings
+    )
 
 
 def _should_defer_unhealthy_success_to_route_verification(
@@ -214,9 +276,13 @@ def _should_defer_unhealthy_success_to_route_verification(
         return False
     observed = _normalize_release_status(observation.status)
     application = _normalize_release_status(observation.application_status)
-    if observed not in _DEPLOYMENT_SUCCESS_STATUSES and "success" not in (observed or ""):
+    if observed not in _DEPLOYMENT_SUCCESS_STATUSES and "success" not in (
+        observed or ""
+    ):
         return False
-    return application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in (application or "")
+    return application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in (
+        application or ""
+    )
 
 
 def _required_plane_value(value: str | None, field_name: str) -> str:
@@ -266,33 +332,51 @@ def _resolve_secret_value(
 
 
 def _deployment_release_query(session: Session) -> list[ProjectDeploymentRelease]:
-    return session.execute(
-        select(ProjectDeploymentRelease)
-        .where(ProjectDeploymentRelease.status.in_(tuple(DEPLOYMENT_RELEASE_ACTIVE_STATUSES)))
-        .order_by(ProjectDeploymentRelease.created_at.asc())
-    ).scalars().all()
+    return (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.status.in_(
+                    tuple(DEPLOYMENT_RELEASE_ACTIVE_STATUSES)
+                )
+            )
+            .order_by(ProjectDeploymentRelease.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
 
 
-def _tenant_for_release(session: Session, *, release: ProjectDeploymentRelease) -> Tenant | None:
+def _tenant_for_release(
+    session: Session, *, release: ProjectDeploymentRelease
+) -> Tenant | None:
     tenant = session.get(Tenant, release.tenant_id)
     if tenant is None:
         return None
     return tenant
 
 
-def _project_for_release(session: Session, *, release: ProjectDeploymentRelease) -> Project | None:
+def _project_for_release(
+    session: Session, *, release: ProjectDeploymentRelease
+) -> Project | None:
     project = session.get(Project, release.project_id)
     if project is None or project.tenant_id != release.tenant_id:
         return None
     return project
 
 
-def _project_app_for_release(session: Session, *, release: ProjectDeploymentRelease) -> ProjectApp | None:
+def _project_app_for_release(
+    session: Session, *, release: ProjectDeploymentRelease
+) -> ProjectApp | None:
     app_id = _normalize_optional_string(release.app_id)
     if app_id is None:
         return None
     project_app = session.get(ProjectApp, app_id)
-    if project_app is None or project_app.tenant_id != release.tenant_id or project_app.project_id != release.project_id:
+    if (
+        project_app is None
+        or project_app.tenant_id != release.tenant_id
+        or project_app.project_id != release.project_id
+    ):
         return None
     return project_app
 
@@ -305,7 +389,9 @@ def _coolify_client_for_tenant(
 ) -> CoolifyApiClient:
     settings = _settings_from_session(session=session)
     encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
-    api_token_ref = str((tenant_plane.secret_refs or {}).get("coolify_api_token") or "").strip()
+    api_token_ref = str(
+        (tenant_plane.secret_refs or {}).get("coolify_api_token") or ""
+    ).strip()
     if not api_token_ref:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -342,15 +428,21 @@ def _coolify_observation_for_release(
     release: ProjectDeploymentRelease,
 ) -> CoolifyDeploymentObservation | None:
     provider_context = _coerce_dict(release.provider_context)
-    deployment_uuid = _normalize_optional_string(provider_context.get("deployment_uuid"))
-    application_uuid = _normalize_optional_string(provider_context.get("application_uuid"))
+    deployment_uuid = _normalize_optional_string(
+        provider_context.get("deployment_uuid")
+    )
+    application_uuid = _normalize_optional_string(
+        provider_context.get("application_uuid")
+    )
     service_uuid = _normalize_optional_string(provider_context.get("service_uuid"))
 
     payload: dict[str, object] | None = None
     if deployment_uuid is not None:
         payload = client.get_deployment(deployment_uuid=deployment_uuid)
     elif application_uuid is not None:
-        deployments = client.list_application_deployments(application_uuid=application_uuid)
+        deployments = client.list_application_deployments(
+            application_uuid=application_uuid
+        )
         if deployments:
             payload = deployments[0]
     elif service_uuid is not None:
@@ -363,7 +455,9 @@ def _coolify_observation_for_release(
         return None
     application_payload = _coerce_dict(payload.get("application"))
     application_status = _normalize_optional_string(application_payload.get("status"))
-    observed_deployment_uuid = _normalize_optional_string(payload.get("deployment_uuid")) or deployment_uuid
+    observed_deployment_uuid = (
+        _normalize_optional_string(payload.get("deployment_uuid")) or deployment_uuid
+    )
     observed_application_uuid = (
         _normalize_optional_string(application_payload.get("uuid"))
         or application_uuid
@@ -380,7 +474,9 @@ def _coolify_observation_for_release(
         application_uuid=observed_application_uuid,
         status=observed_status,
         application_status=application_status,
-        provider_updated_at=_parse_provider_datetime(payload.get("updated_at") or payload.get("created_at")),
+        provider_updated_at=_parse_provider_datetime(
+            payload.get("updated_at") or payload.get("created_at")
+        ),
         provider_log_updated_at=_latest_coolify_log_timestamp(payload.get("logs")),
         last_error=last_error,
     )
@@ -410,11 +506,17 @@ def _stale_provider_application_contract_error(
 ) -> str | None:
     if str(release.release_kind or "").strip() != "run_preview":
         return None
-    if project_app is None or _normalize_optional_string(project_app.detected_runtime) != "react_native_web":
+    if (
+        project_app is None
+        or _normalize_optional_string(project_app.detected_runtime)
+        != "react_native_web"
+    ):
         return None
-    provider_start_command, provider_install_command = _provider_application_release_commands(
-        client=client,
-        observation=observation,
+    provider_start_command, provider_install_command = (
+        _provider_application_release_commands(
+            client=client,
+            observation=observation,
+        )
     )
     if provider_start_command in _STALE_LEGACY_EXPO_PROVIDER_START_COMMANDS:
         return (
@@ -429,16 +531,22 @@ def _stale_provider_application_contract_error(
     return None
 
 
-def _local_preview_route_sync_attempt_count(*, session: Session, release_id: str) -> int:
-    return len(session.execute(
-        select(DeploymentHostCommand.command_id).where(
-            DeploymentHostCommand.release_id == release_id,
-            DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
-        )
-    ).all())
+def _local_preview_route_sync_attempt_count(
+    *, session: Session, release_id: str
+) -> int:
+    return len(
+        session.execute(
+            select(DeploymentHostCommand.command_id).where(
+                DeploymentHostCommand.release_id == release_id,
+                DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
+            )
+        ).all()
+    )
 
 
-def list_reconcilable_deployment_releases(*, session: Session) -> list[ProjectDeploymentRelease]:
+def list_reconcilable_deployment_releases(
+    *, session: Session
+) -> list[ProjectDeploymentRelease]:
     return _deployment_release_query(session)
 
 
@@ -453,10 +561,15 @@ def reconcile_deployment_release(
         return False
 
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
-    if tenant_plane.provider != "internal_coolify" or tenant_plane.state not in {"active", "degraded"}:
+    if tenant_plane.provider != "internal_coolify" or tenant_plane.state not in {
+        "active",
+        "degraded",
+    }:
         return False
 
-    client = _coolify_client_for_tenant(session=session, tenant=tenant, tenant_plane=tenant_plane)
+    client = _coolify_client_for_tenant(
+        session=session, tenant=tenant, tenant_plane=tenant_plane
+    )
     try:
         observation = _coolify_observation_for_release(client=client, release=release)
     except CoolifyApiError as exc:
@@ -550,7 +663,10 @@ def reconcile_deployment_release(
     if next_status is None:
         return False
     last_error = observation.last_error
-    if next_status in {"failed", "rolled_back"} and _should_defer_unhealthy_success_to_route_verification(
+    if next_status in {
+        "failed",
+        "rolled_back",
+    } and _should_defer_unhealthy_success_to_route_verification(
         release=release,
         observation=observation,
     ):
@@ -561,7 +677,9 @@ def reconcile_deployment_release(
     if next_status == "live":
         verification = verify_release_route_bindings(release)
         if not verification.ok:
-            latest_route_command = latest_local_preview_route_command(session=session, release_id=release.release_id)
+            latest_route_command = latest_local_preview_route_command(
+                session=session, release_id=release.release_id
+            )
             if str(release.release_kind or "").strip() == "run_preview":
                 if latest_route_command.command is None:
                     ensure_local_preview_route_sync_command(
@@ -573,7 +691,9 @@ def reconcile_deployment_release(
                     )
                     next_status = "route_activating"
                     last_error = verification.error
-                elif latest_route_command.deployment_uuid != observation.deployment_uuid:
+                elif (
+                    latest_route_command.deployment_uuid != observation.deployment_uuid
+                ):
                     ensure_local_preview_route_sync_command(
                         session=session,
                         tenant=tenant,
@@ -583,7 +703,11 @@ def reconcile_deployment_release(
                     )
                     next_status = "route_activating"
                     last_error = verification.error
-                elif latest_route_command.command.status in {"queued", "claimed", "running"}:
+                elif latest_route_command.command.status in {
+                    "queued",
+                    "claimed",
+                    "running",
+                }:
                     next_status = "route_activating"
                     last_error = verification.error
                 elif latest_route_command.command.status == "failed":
@@ -594,7 +718,9 @@ def reconcile_deployment_release(
                         else "Local preview route sync failed"
                     )
                 else:
-                    attempt_count = _local_preview_route_sync_attempt_count(session=session, release_id=release.release_id)
+                    attempt_count = _local_preview_route_sync_attempt_count(
+                        session=session, release_id=release.release_id
+                    )
                     if attempt_count >= _LOCAL_PREVIEW_ROUTE_SYNC_MAX_ATTEMPTS:
                         next_status = "failed"
                         last_error = f"Local preview route remained inactive after sync: {verification.error}"
@@ -647,11 +773,20 @@ def reconcile_deployment_releases_once(
     batch_size = max(1, int(limit or 25))
     reconciled_release_ids: set[str] = set()
     with session_factory() as session:
-        release_ids = [release.release_id for release in list_reconcilable_deployment_releases(session=session)[:batch_size]]
+        release_ids = [
+            release.release_id
+            for release in list_reconcilable_deployment_releases(session=session)[
+                :batch_size
+            ]
+        ]
     for release_id in release_ids:
         with session_factory() as session:
             release = session.get(ProjectDeploymentRelease, release_id)
-            if release is None or str(release.status or "").strip() not in DEPLOYMENT_RELEASE_ACTIVE_STATUSES:
+            if (
+                release is None
+                or str(release.status or "").strip()
+                not in DEPLOYMENT_RELEASE_ACTIVE_STATUSES
+            ):
                 continue
             tenant_id = release.tenant_id
             project_id = release.project_id
@@ -682,7 +817,9 @@ def reconcile_deployment_releases_once(
                     exc,
                 )
     with session_factory() as session:
-        from orchestrator.core.deployment_previews import cleanup_stale_run_preview_deployments
+        from orchestrator.core.deployment_previews import (
+            cleanup_stale_run_preview_deployments,
+        )
 
         cleanup_result = cleanup_stale_run_preview_deployments(
             session=session,
@@ -702,7 +839,9 @@ async def run_deployment_reconciliation_loop(
     settings: Settings,
     stop_event: asyncio.Event,
 ) -> None:
-    poll_interval_seconds = max(5, int(getattr(settings, "deployment_reconcile_poll_seconds", 30)))
+    poll_interval_seconds = max(
+        5, int(getattr(settings, "deployment_reconcile_poll_seconds", 30))
+    )
     db_recovery_attempts = 0
     while not stop_event.is_set():
         try:
@@ -713,11 +852,15 @@ async def run_deployment_reconciliation_loop(
             )
             db_recovery_attempts = 0
             if processed:
-                logger.info("deployment_reconcile_cycle_completed processed=%s", processed)
+                logger.info(
+                    "deployment_reconcile_cycle_completed processed=%s", processed
+                )
         except Exception as exc:
             if retryable_database_recovery_error(exc):
                 db_recovery_attempts += 1
-                retry_delay_seconds = database_recovery_retry_delay_seconds(attempt=db_recovery_attempts)
+                retry_delay_seconds = database_recovery_retry_delay_seconds(
+                    attempt=db_recovery_attempts
+                )
                 logger.warning(
                     "deployment_reconcile_database_unavailable attempt=%s retry_in_seconds=%.1f error=%s",
                     db_recovery_attempts,
@@ -725,7 +868,9 @@ async def run_deployment_reconciliation_loop(
                     exc,
                 )
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=retry_delay_seconds)
+                    await asyncio.wait_for(
+                        stop_event.wait(), timeout=retry_delay_seconds
+                    )
                 except asyncio.TimeoutError:
                     continue
                 continue
@@ -763,7 +908,10 @@ def run_deployment_reconciler() -> None:
             try:
                 loop.add_signal_handler(signum, _request_stop)
             except NotImplementedError:  # pragma: no cover - Windows event loops only.
-                signal.signal(signum, lambda _sig, _frame: loop.call_soon_threadsafe(_request_stop))
+                signal.signal(
+                    signum,
+                    lambda _sig, _frame: loop.call_soon_threadsafe(_request_stop),
+                )
 
         logger.info("deployment_reconciler_runtime_started")
         await run_deployment_reconciliation_loop(
@@ -779,7 +927,9 @@ def run_deployment_reconciler() -> None:
 
 
 def _extract_webhook_secret_ref(tenant_plane: TenantDeploymentPlaneRead) -> str | None:
-    secret_ref = str((tenant_plane.secret_refs or {}).get("coolify_webhook_token") or "").strip()
+    secret_ref = str(
+        (tenant_plane.secret_refs or {}).get("coolify_webhook_token") or ""
+    ).strip()
     return secret_ref or None
 
 
@@ -869,13 +1019,26 @@ def _resolve_release_observation_transition(
     if observed is None:
         return None
 
-    if observed in _DEPLOYMENT_PROGRESS_STATUSES or "deploy" in observed or "progress" in observed or observed == "in_progress":
-        if current in {"queued", "provisioning", "deploying", "route_activating", "live"}:
+    if (
+        observed in _DEPLOYMENT_PROGRESS_STATUSES
+        or "deploy" in observed
+        or "progress" in observed
+        or observed == "in_progress"
+    ):
+        if current in {
+            "queued",
+            "provisioning",
+            "deploying",
+            "route_activating",
+            "live",
+        }:
             return "deploying" if current != "live" else None
         return "provisioning"
 
     if observed in _DEPLOYMENT_SUCCESS_STATUSES or "success" in observed:
-        if application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in (application or ""):
+        if application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in (
+            application or ""
+        ):
             return "rolled_back" if current == "live" else "failed"
         return "live"
 
@@ -907,7 +1070,11 @@ def _resolve_release_status_transition(
         return "rolled_back" if current == "live" else "failed"
     if signal in _DEPLOYMENT_CANCELLED_STATUSES:
         return "rolled_back"
-    if signal in _DEPLOYMENT_SUCCESS_STATUSES or "success" in signal or "healthy" in signal:
+    if (
+        signal in _DEPLOYMENT_SUCCESS_STATUSES
+        or "success" in signal
+        or "healthy" in signal
+    ):
         if current == "deploying":
             return "live"
         return _next_progress_status(current or "queued")
@@ -915,7 +1082,13 @@ def _resolve_release_status_transition(
         if current == "deploying":
             return "live"
         return _next_progress_status(current or "queued")
-    if signal in _DEPLOYMENT_PROGRESS_STATUSES or "deploy" in signal or "progress" in signal or "status" in signal or "container" in signal:
+    if (
+        signal in _DEPLOYMENT_PROGRESS_STATUSES
+        or "deploy" in signal
+        or "progress" in signal
+        or "status" in signal
+        or "container" in signal
+    ):
         return _next_progress_status(current or "queued")
     return None
 
@@ -930,43 +1103,57 @@ def _select_release_for_event(
 ) -> ProjectDeploymentRelease | None:
     if deployment_uuid is None and application_uuid is None:
         return None
-    releases = session.execute(
-        select(ProjectDeploymentRelease)
-        .where(
-            ProjectDeploymentRelease.tenant_id == tenant_id,
-            ProjectDeploymentRelease.project_id == project_id,
-            ProjectDeploymentRelease.provider == "internal_coolify",
+    releases = (
+        session.execute(
+            select(ProjectDeploymentRelease)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.provider == "internal_coolify",
+            )
+            .order_by(ProjectDeploymentRelease.created_at.desc())
         )
-        .order_by(ProjectDeploymentRelease.created_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not releases:
         return None
 
     for release in releases:
         provider_context = _coerce_dict(release.provider_context)
-        release_deployment_uuid = _normalize_optional_string(provider_context.get("deployment_uuid"))
-        release_application_uuid = _normalize_optional_string(provider_context.get("application_uuid"))
+        release_deployment_uuid = _normalize_optional_string(
+            provider_context.get("deployment_uuid")
+        )
+        release_application_uuid = _normalize_optional_string(
+            provider_context.get("application_uuid")
+        )
         if deployment_uuid is not None and release_deployment_uuid == deployment_uuid:
             return release
-        if application_uuid is not None and release_application_uuid == application_uuid:
+        if (
+            application_uuid is not None
+            and release_application_uuid == application_uuid
+        ):
             return release
     return None
 
 
-def ingest_coolify_deployment_event(
+def authorize_coolify_deployment_webhook(
     *,
     session: Session,
     tenant_id: str,
     project_id: str,
     webhook_token: str,
-    payload: dict[str, object],
-) -> dict[str, object]:
+) -> None:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
 
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
     if tenant_plane.provider != "internal_coolify":
@@ -981,12 +1168,34 @@ def ingest_coolify_deployment_event(
         project_id=project_id,
     )
     if not webhook_token or not secrets.compare_digest(webhook_token, expected_token):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Coolify webhook token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Coolify webhook token",
+        )
 
+
+def ingest_coolify_deployment_event(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    webhook_token: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    authorize_coolify_deployment_webhook(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        webhook_token=webhook_token,
+    )
     observed_status = _extract_event_status(payload)
-    event_type = _extract_event_identifier(payload, "event_type", "event", "type", "status")
+    event_type = _extract_event_identifier(
+        payload, "event_type", "event", "type", "status"
+    )
     deployment_uuid = _extract_event_identifier(payload, "deployment_uuid", "uuid")
-    application_uuid = _extract_event_identifier(payload, "application_uuid", "application_id")
+    application_uuid = _extract_event_identifier(
+        payload, "application_uuid", "application_id"
+    )
     release = _select_release_for_event(
         session=session,
         tenant_id=tenant_id,

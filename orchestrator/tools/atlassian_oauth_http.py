@@ -6,7 +6,10 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError, AtlassianOAuthHttpError
+from orchestrator.tools.atlassian_oauth_models import (
+    AtlassianOAuthError,
+    AtlassianOAuthHttpError,
+)
 
 
 class AtlassianOAuthHttpClient:
@@ -21,7 +24,9 @@ class AtlassianOAuthHttpClient:
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             method="POST",
         )
-        return self._read_json_response(request=request, error_prefix="Atlassian request failed")
+        return self._read_json_response(
+            request=request, error_prefix="Atlassian request failed"
+        )
 
     def get_json(self, *, url: str, access_token: str) -> dict[str, Any] | list[Any]:
         request = Request(
@@ -32,7 +37,9 @@ class AtlassianOAuthHttpClient:
             },
             method="GET",
         )
-        return self._read_json_response(request=request, error_prefix="Atlassian API request failed")
+        return self._read_json_response(
+            request=request, error_prefix="Atlassian API request failed"
+        )
 
     def request_json(
         self,
@@ -56,7 +63,9 @@ class AtlassianOAuthHttpClient:
             },
             method=method,
         )
-        return self._read_json_response(request=request, error_prefix="Atlassian API request failed")
+        return self._read_json_response(
+            request=request, error_prefix="Atlassian API request failed"
+        )
 
     def get_bytes(self, *, url: str, access_token: str) -> bytes:
         request = Request(
@@ -72,7 +81,9 @@ class AtlassianOAuthHttpClient:
                 return response.read()
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="ignore")
-            raise AtlassianOAuthError(f"Jira API request failed ({exc.code}): {error_body}") from exc
+            raise AtlassianOAuthError(
+                f"Jira API request failed ({exc.code}): {error_body}"
+            ) from exc
 
     def post_multipart(
         self,
@@ -89,7 +100,9 @@ class AtlassianOAuthHttpClient:
         payload = BytesIO()
         payload.write(f"--{boundary}\r\n".encode("utf-8"))
         payload.write(
-            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode("utf-8")
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode(
+                "utf-8"
+            )
         )
         payload.write(f"Content-Type: {content_type.strip()}\r\n\r\n".encode("utf-8"))
         payload.write(content)
@@ -106,9 +119,13 @@ class AtlassianOAuthHttpClient:
             },
             method="POST",
         )
-        return self._read_json_response(request=request, error_prefix="Jira attachment upload failed")
+        return self._read_json_response(
+            request=request, error_prefix="Jira attachment upload failed"
+        )
 
-    def _read_json_response(self, *, request: Request, error_prefix: str) -> dict[str, Any] | list[Any]:
+    def _read_json_response(
+        self, *, request: Request, error_prefix: str
+    ) -> dict[str, Any] | list[Any]:
         try:
             with self._opener(request, timeout=30) as response:
                 response_body = response.read().decode("utf-8")

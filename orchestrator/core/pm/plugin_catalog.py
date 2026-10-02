@@ -70,4 +70,3 @@ def tool_catalog_payload() -> list[dict[str, Any]]:
         }
         for item in list_pm_tools()
     ]
-

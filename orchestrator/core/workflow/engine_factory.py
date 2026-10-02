@@ -6,6 +6,7 @@ from orchestrator.core.config import Settings
 from orchestrator.core.workflow.legacy_engine import LegacyWorkflowEngine
 from orchestrator.core.workflow.engine import WorkflowEngine
 from orchestrator.storage.models import WorkflowExecution
+from orchestrator.storage.tenant_rls import RLSSession
 
 
 def resolve_workflow_backend(*, workflow: WorkflowExecution) -> str:
@@ -40,8 +41,10 @@ def build_workflow_engine(
     )
 
 
-def create_session_factory_for_engine(*, session: Session, settings: Settings) -> sessionmaker[Session]:
+def create_session_factory_for_engine(
+    *, session: Session, settings: Settings
+) -> sessionmaker[Session]:
     bind = session.get_bind()
     if bind is None:
         raise RuntimeError("Workflow engine requires an active database bind")
-    return sessionmaker(bind=bind, expire_on_commit=False)
+    return sessionmaker(bind=bind, class_=RLSSession, expire_on_commit=False)

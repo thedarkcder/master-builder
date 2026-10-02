@@ -40,7 +40,9 @@ from orchestrator.api.discord.interactions.auth import (
     _parse_install_request_decision_custom_id,
     _parse_ask_reply_modal_custom_id,
 )
-from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
+from orchestrator.api.discord.interactions.dispatcher import (
+    DiscordInteractionDispatchDeps,
+)
 from orchestrator.api.discord.interactions.followup import (
     _resolve_followup_context_match as _interaction_resolve_followup_context_match,
     _resolve_followup_context as _interaction_resolve_followup_context,
@@ -68,7 +70,9 @@ from orchestrator.api.discord.shared.followup_format import (
 from orchestrator.api.discord.shared.state import (
     live_voice_linked_channel_ids_from_discord_config,
 )
-from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.discord.channel_tenant_index import (
+    resolve_tenant_for_discord_channel,
+)
 from orchestrator.core.communications import (
     DiscordChannelMessageWithAttachmentAction,
     IngressResult,
@@ -101,11 +105,22 @@ from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.voice import VoiceTranscriptionError, download_audio_bytes, transcribe_audio_bytes
+from orchestrator.core.voice import (
+    VoiceTranscriptionError,
+    download_audio_bytes,
+    transcribe_audio_bytes,
+)
 from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
-from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
+from orchestrator.api.discord.shared.state_repository import (
+    resolve_project_for_discord_channel,
+)
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant, TenantMembership, TenantUserDiscordIdentity
+from orchestrator.storage.models import (
+    Project,
+    Tenant,
+    TenantMembership,
+    TenantUserDiscordIdentity,
+)
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 try:
@@ -149,7 +164,16 @@ _ROOM_SINGLE_KEYS = (
     "pm_thread_channel_id",
 )
 _AUDIO_CONTENT_TYPE_PREFIX = "audio/"
-_AUDIO_FILENAME_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".mp4")
+_AUDIO_FILENAME_EXTENSIONS = (
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".webm",
+    ".flac",
+    ".mp4",
+)
 _VOICE_MESSAGE_FLAG = 1 << 13
 
 
@@ -193,15 +217,21 @@ def _pm_room_channel_ids_from_discord_config(discord_config: dict | None) -> set
 
 
 def _project_room_channel_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     channel_ids: set[str] = set()
     for project in projects:
-        channel_ids.update(_room_channel_ids_from_discord_config(project.discord_config or {}))
+        channel_ids.update(
+            _room_channel_ids_from_discord_config(project.discord_config or {})
+        )
     return channel_ids
 
 
@@ -218,15 +248,21 @@ def _is_audio_attachment(attachment: dict[str, str]) -> bool:
 
 
 def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  # noqa: ANN001
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     thread_ids: set[str] = set()
     for project in projects:
-        raw_seed_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        raw_seed_thread_ids = (project.discord_config or {}).get(
+            "seed_followup_thread_channel_ids"
+        )
         if not isinstance(raw_seed_thread_ids, list):
             continue
         for value in raw_seed_thread_ids:
@@ -236,19 +272,27 @@ def _project_seed_followup_thread_ids(*, session, tenant_id: str) -> set[str]:  
     return thread_ids
 
 
-def _project_seed_followup_thread_project_keys(*, session, tenant_id: str) -> dict[str, str]:  # noqa: ANN001
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+def _project_seed_followup_thread_project_keys(
+    *, session, tenant_id: str
+) -> dict[str, str]:  # noqa: ANN001
+    projects = (
+        session.execute(
+            select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     thread_project_keys: dict[str, str] = {}
     for project in projects:
         project_key = str(project.jira_project_key or "").strip().upper()
         if not project_key:
             continue
-        raw_seed_thread_ids = (project.discord_config or {}).get("seed_followup_thread_channel_ids")
+        raw_seed_thread_ids = (project.discord_config or {}).get(
+            "seed_followup_thread_channel_ids"
+        )
         if not isinstance(raw_seed_thread_ids, list):
             continue
         for value in raw_seed_thread_ids:
@@ -258,13 +302,18 @@ def _project_seed_followup_thread_project_keys(*, session, tenant_id: str) -> di
     return thread_project_keys
 
 
-def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str) -> str | None:  # noqa: ANN001
+def _decision_gate_issue_for_thread(
+    *, session, tenant_id: str, channel_id: str
+) -> str | None:  # noqa: ANN001
     context = resolve_followup_context(
         session=session,
         tenant_id=tenant_id,
         channel_id=channel_id,
     )
-    if context is None or str(getattr(context, "context_type", "") or "").strip() != "decision_gate":
+    if (
+        context is None
+        or str(getattr(context, "context_type", "") or "").strip() != "decision_gate"
+    ):
         return None
     issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
     if not issue_key or _ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
@@ -292,7 +341,9 @@ class DiscordGatewayListener:
         if self._thread and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run_thread, name="discord-gateway-listener", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run_thread, name="discord-gateway-listener", daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -306,11 +357,15 @@ class DiscordGatewayListener:
             asyncio.run(run_loop)
         except Exception as exc:  # pragma: no cover - defensive
             run_loop.close()
-            logger.exception("discord_gateway_listener_stopped_unexpectedly error=%s", exc)
+            logger.exception(
+                "discord_gateway_listener_stopped_unexpectedly error=%s", exc
+            )
 
     async def _run_loop(self) -> None:
         if websockets is None:
-            logger.warning("discord_gateway_listener_disabled reason=missing_websockets_dependency")
+            logger.warning(
+                "discord_gateway_listener_disabled reason=missing_websockets_dependency"
+            )
             return
         token_ref = PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
         if not token_ref:
@@ -320,13 +375,18 @@ class DiscordGatewayListener:
         while not self._stop_event.is_set():
             bot_token = self._resolve_bot_token(token_ref=token_ref)
             if not bot_token:
-                logger.info("discord_gateway_listener_waiting_for_bot_token secret_ref=%s", token_ref)
+                logger.info(
+                    "discord_gateway_listener_waiting_for_bot_token secret_ref=%s",
+                    token_ref,
+                )
                 await asyncio.sleep(5)
                 continue
             try:
                 await self._run_single_connection(bot_token=bot_token)
             except Exception as exc:
-                logger.exception("discord_gateway_listener_connection_failed error=%s", exc)
+                logger.exception(
+                    "discord_gateway_listener_connection_failed error=%s", exc
+                )
             if not self._stop_event.is_set():
                 await asyncio.sleep(3)
 
@@ -341,10 +401,16 @@ class DiscordGatewayListener:
 
     async def _run_single_connection(self, *, bot_token: str) -> None:
         gateway_url = self._resume_gateway_url or DISCORD_GATEWAY_URL
-        async with websockets.connect(gateway_url, max_size=4 * 1024 * 1024) as websocket:
+        async with websockets.connect(
+            gateway_url, max_size=4 * 1024 * 1024
+        ) as websocket:
             hello_payload = json.loads(await websocket.recv())
-            heartbeat_interval_ms = int(((hello_payload.get("d") or {}).get("heartbeat_interval") or 45000))
-            heartbeat_task = asyncio.create_task(self._heartbeat_loop(websocket, heartbeat_interval_ms / 1000.0))
+            heartbeat_interval_ms = int(
+                ((hello_payload.get("d") or {}).get("heartbeat_interval") or 45000)
+            )
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(websocket, heartbeat_interval_ms / 1000.0)
+            )
             try:
                 if self._session_id and self._sequence is not None:
                     await websocket.send(
@@ -366,7 +432,10 @@ class DiscordGatewayListener:
                                 "op": 2,
                                 "d": {
                                     "token": bot_token,
-                                    "intents": INTENT_GUILDS | INTENT_GUILD_MEMBERS | INTENT_GUILD_MESSAGES | INTENT_MESSAGE_CONTENT,
+                                    "intents": INTENT_GUILDS
+                                    | INTENT_GUILD_MEMBERS
+                                    | INTENT_GUILD_MESSAGES
+                                    | INTENT_MESSAGE_CONTENT,
                                     "properties": {
                                         "os": "linux",
                                         "browser": "master-builder",
@@ -386,7 +455,9 @@ class DiscordGatewayListener:
 
                     op = payload.get("op")
                     event_type = str(payload.get("t") or "")
-                    data = payload.get("d") if isinstance(payload.get("d"), dict) else {}
+                    data = (
+                        payload.get("d") if isinstance(payload.get("d"), dict) else {}
+                    )
 
                     if op == 7:
                         logger.info("discord_gateway_reconnect_requested")
@@ -403,12 +474,18 @@ class DiscordGatewayListener:
                         continue
 
                     if event_type == "READY":
-                        self._session_id = str(data.get("session_id") or "").strip() or None
+                        self._session_id = (
+                            str(data.get("session_id") or "").strip() or None
+                        )
                         resume_url = str(data.get("resume_gateway_url") or "").strip()
                         self._resume_gateway_url = (
-                            f"{resume_url}?v=10&encoding=json" if resume_url else DISCORD_GATEWAY_URL
+                            f"{resume_url}?v=10&encoding=json"
+                            if resume_url
+                            else DISCORD_GATEWAY_URL
                         )
-                        logger.info("discord_gateway_ready session_id=%s", self._session_id)
+                        logger.info(
+                            "discord_gateway_ready session_id=%s", self._session_id
+                        )
                         continue
 
                     if event_type == "INTERACTION_CREATE":
@@ -416,11 +493,15 @@ class DiscordGatewayListener:
                         continue
 
                     if event_type == "MESSAGE_CREATE":
-                        await asyncio.to_thread(self._handle_message_create, data, bot_token)
+                        await asyncio.to_thread(
+                            self._handle_message_create, data, bot_token
+                        )
                         continue
 
                     if event_type == "GUILD_MEMBER_ADD":
-                        await asyncio.to_thread(self._handle_guild_member_add, data, bot_token)
+                        await asyncio.to_thread(
+                            self._handle_guild_member_add, data, bot_token
+                        )
             finally:
                 heartbeat_task.cancel()
                 try:
@@ -428,7 +509,9 @@ class DiscordGatewayListener:
                 except asyncio.CancelledError:
                     pass
                 except Exception as exc:
-                    logger.exception("discord_gateway_heartbeat_shutdown_failed error=%s", exc)
+                    logger.exception(
+                        "discord_gateway_heartbeat_shutdown_failed error=%s", exc
+                    )
 
     async def _heartbeat_loop(self, websocket: Any, interval_seconds: float) -> None:
         wait_seconds = max(1.0, interval_seconds)
@@ -511,9 +594,11 @@ class DiscordGatewayListener:
             project_room_channel_ids=_project_room_channel_ids,
             room_channel_ids_from_discord_config=_room_channel_ids_from_discord_config,
             is_audio_attachment=_is_audio_attachment,
-            transcribe_audio_attachment=lambda **kwargs: self._transcribe_room_audio_attachment(
-                bot_token=bot_token,
-                **kwargs,
+            transcribe_audio_attachment=lambda **kwargs: (
+                self._transcribe_room_audio_attachment(
+                    bot_token=bot_token,
+                    **kwargs,
+                )
             ),
             load_pending_human_input_request=pending_human_input_for_request_id,
             answer_human_input_request=answer_human_input_request,
@@ -548,7 +633,9 @@ class DiscordGatewayListener:
         execute_side_effect_ingress_result(
             result=result,
             envelope=envelope,
-            transport_action_executors=self._transport_action_executors(bot_token=bot_token),
+            transport_action_executors=self._transport_action_executors(
+                bot_token=bot_token
+            ),
             action_error_handler=lambda action, exc: self._handle_ingress_action_error(
                 action=action,
                 exc=exc,
@@ -581,8 +668,14 @@ class DiscordGatewayListener:
             return True
         if isinstance(exc, DiscordApiError):
             channel_id = getattr(action, "channel_id", None)
-            logger.exception("discord_gateway_post_failed channel_id=%s error=%s", channel_id, exc)
-            if isinstance(action, DiscordChannelMessageWithAttachmentAction) and action.failure_user_id and bot_token:
+            logger.exception(
+                "discord_gateway_post_failed channel_id=%s error=%s", channel_id, exc
+            )
+            if (
+                isinstance(action, DiscordChannelMessageWithAttachmentAction)
+                and action.failure_user_id
+                and bot_token
+            ):
                 try:
                     DiscordApiClient(bot_token=bot_token).post_message(
                         channel_id=action.channel_id,
@@ -665,7 +758,9 @@ class DiscordGatewayListener:
 
     def _handle_guild_member_add(self, payload: dict, bot_token: str) -> None:
         guild_id = str(payload.get("guild_id") or "").strip()
-        user_payload = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        user_payload = (
+            payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        )
         discord_user_id = str(user_payload.get("id") or "").strip()
         if not guild_id or not discord_user_id:
             return
@@ -674,8 +769,15 @@ class DiscordGatewayListener:
             tenant = next(
                 (
                     candidate
-                    for candidate in session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
-                    if str((candidate.discord_config or {}).get("guild_id") or "").strip() == guild_id
+                    for candidate in session.execute(
+                        select(Tenant).where(Tenant.is_enabled.is_(True))
+                    )
+                    .scalars()
+                    .all()
+                    if str(
+                        (candidate.discord_config or {}).get("guild_id") or ""
+                    ).strip()
+                    == guild_id
                 ),
                 None,
             )
@@ -683,7 +785,9 @@ class DiscordGatewayListener:
                 return
 
             identity = session.execute(
-                select(TenantUserDiscordIdentity).where(TenantUserDiscordIdentity.discord_user_id == discord_user_id)
+                select(TenantUserDiscordIdentity).where(
+                    TenantUserDiscordIdentity.discord_user_id == discord_user_id
+                )
             ).scalar_one_or_none()
             if identity is None:
                 return
@@ -701,7 +805,9 @@ class DiscordGatewayListener:
             discord_state["linked"] = True
             discord_state["guild_joined"] = True
             discord_state["guild_joined_at"] = datetime.now(UTC).isoformat()
-            current_status = str(discord_state.get("welcome_status") or "").strip().lower()
+            current_status = (
+                str(discord_state.get("welcome_status") or "").strip().lower()
+            )
             if current_status == "sent":
                 membership.discord_state = discord_state
                 membership.updated_at = datetime.now(UTC)
@@ -756,7 +862,11 @@ class DiscordGatewayListener:
         project_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         if self._transcribe_audio_attachment is None:
-            provider = str(getattr(self._settings, "voice_stt_provider", "disabled") or "").strip().lower()
+            provider = (
+                str(getattr(self._settings, "voice_stt_provider", "disabled") or "")
+                .strip()
+                .lower()
+            )
             if provider in {"", "disabled"}:
                 return (
                     None,
@@ -778,14 +888,24 @@ class DiscordGatewayListener:
                     transcript = transcribe_audio_bytes(
                         settings=self._settings,
                         audio_bytes=audio_bytes,
-                        filename=str(attachment.get("filename") or "").strip() or "voice-note.ogg",
-                        content_type=str(attachment.get("content_type") or "").strip() or downloaded_content_type,
+                        filename=str(attachment.get("filename") or "").strip()
+                        or "voice-note.ogg",
+                        content_type=str(attachment.get("content_type") or "").strip()
+                        or downloaded_content_type,
                     )
             except VoiceTranscriptionError as exc:
-                logger.exception("discord_gateway_room_audio_transcription_failed error=%s", exc)
-                return None, "I couldn't transcribe that audio attachment. Please retry with text."
+                logger.exception(
+                    "discord_gateway_room_audio_transcription_failed error=%s", exc
+                )
+                return (
+                    None,
+                    "I couldn't transcribe that audio attachment. Please retry with text.",
+                )
             if not transcript:
-                return None, "I couldn't transcribe that audio attachment. Please retry with text."
+                return (
+                    None,
+                    "I couldn't transcribe that audio attachment. Please retry with text.",
+                )
             return transcript, None
         try:
             with scoped_log_context(
@@ -793,16 +913,30 @@ class DiscordGatewayListener:
                 tenant_id=tenant_id,
                 project_id=project_id,
             ):
-                transcript = str(self._transcribe_audio_attachment(attachment) or "").strip()
+                transcript = str(
+                    self._transcribe_audio_attachment(attachment) or ""
+                ).strip()
         except Exception as exc:
-            logger.exception("discord_gateway_room_audio_transcription_failed error=%s", exc)
-            return None, "I couldn't transcribe that audio attachment. Please retry with text."
+            logger.exception(
+                "discord_gateway_room_audio_transcription_failed error=%s", exc
+            )
+            return (
+                None,
+                "I couldn't transcribe that audio attachment. Please retry with text.",
+            )
         if not transcript:
-            return None, "I couldn't transcribe that audio attachment. Please retry with text."
+            return (
+                None,
+                "I couldn't transcribe that audio attachment. Please retry with text.",
+            )
         return transcript, None
 
     def _room_voice_reply_enabled(self) -> bool:
-        provider = str(getattr(self._settings, "voice_tts_provider", "disabled") or "").strip().lower()
+        provider = (
+            str(getattr(self._settings, "voice_tts_provider", "disabled") or "")
+            .strip()
+            .lower()
+        )
         if provider in {"", "disabled"}:
             return False
         return True
@@ -848,7 +982,11 @@ class DiscordGatewayListener:
                     room_config=room_config,
                 )
         except VoiceReplyError as exc:
-            logger.warning("discord_gateway_room_voice_reply_failed channel_id=%s reason=%s", channel_id, exc)
+            logger.warning(
+                "discord_gateway_room_voice_reply_failed channel_id=%s reason=%s",
+                channel_id,
+                exc,
+            )
             return None, f"Voice reply failed for `{persona_label}`: {exc}"
 
         attachment_content = str(content_override or "").strip()
@@ -911,11 +1049,15 @@ class DiscordGatewayListener:
                     request_id=correlation_id or str(uuid4()),
                     tenant_id_hint=tenant_id,
                 ),
-                transport_action_executors=self._transport_action_executors(bot_token=bot_token),
-                action_error_handler=lambda failed_action, exc: self._handle_ingress_action_error(
-                    action=failed_action,
-                    exc=exc,
-                    bot_token=bot_token,
+                transport_action_executors=self._transport_action_executors(
+                    bot_token=bot_token
+                ),
+                action_error_handler=lambda failed_action, exc: (
+                    self._handle_ingress_action_error(
+                        action=failed_action,
+                        exc=exc,
+                        bot_token=bot_token,
+                    )
                 ),
             )
         except (DiscordApiError, ValueError) as exc:
@@ -929,16 +1071,21 @@ class DiscordGatewayListener:
         return None
 
     def _find_tenant_for_channel(self, *, session, channel_id: str) -> Tenant | None:  # noqa: ANN001
-        tenant = resolve_tenant_for_discord_channel(session=session, channel_id=channel_id)
+        tenant = resolve_tenant_for_discord_channel(
+            session=session, channel_id=channel_id
+        )
         if tenant is not None:
             return tenant
-        projects = session.execute(
-            select(Project).where(Project.is_archived.is_(False))
-        ).scalars().all()
+        projects = (
+            session.execute(select(Project).where(Project.is_archived.is_(False)))
+            .scalars()
+            .all()
+        )
         matched_tenant_ids = {
             str(project.tenant_id)
             for project in projects
-            if channel_id in _room_channel_ids_from_discord_config(project.discord_config or {})
+            if channel_id
+            in _room_channel_ids_from_discord_config(project.discord_config or {})
         }
         if len(matched_tenant_ids) != 1:
             return None

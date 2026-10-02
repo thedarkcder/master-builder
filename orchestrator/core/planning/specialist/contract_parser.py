@@ -40,7 +40,9 @@ class StageContractParser:
                 role_label=stage.role_label,
                 payload=payload,
             )
-        raise CodexRuntimeError(f"Unsupported specialist planning persona '{stage.persona_id}'")
+        raise CodexRuntimeError(
+            f"Unsupported specialist planning persona '{stage.persona_id}'"
+        )
 
 
 def planning_output_key(*, stage: SpecialistPlanningStageResult) -> str:

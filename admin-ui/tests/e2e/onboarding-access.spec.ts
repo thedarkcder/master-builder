@@ -144,7 +144,7 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
     memberships: [membership],
   });
   const tenant = makeTenant({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     discord: {
       guild_id: "guild-123",
       installed_at: "2026-03-27T12:00:00Z",
@@ -177,7 +177,7 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
     },
     {
       method: "PUT",
-      pathname: "/api/bff/api/app/tenants/example/me/settings",
+      pathname: "/api/bff/api/app/tenants/example-workspace/me/settings",
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as { mode_override: "technical" | "non_technical" | null };
         principal = makeTenantUserPrincipal({
@@ -195,17 +195,17 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
     },
     {
       method: "POST",
-      pathname: "/api/bff/api/admin/tenants/example/discord/onboarding-invite",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/discord/onboarding-invite",
       handler: (route) =>
         fulfillJson(route, {
-          invite_url: "https://discord.gg/example",
+          invite_url: "https://discord.gg/example-workspace",
           expires_at: "2026-03-29T00:00:00Z",
           max_uses: 1,
         }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
   ]);
@@ -232,7 +232,7 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
   const popupPromise = page.waitForEvent("popup");
   await page.getByRole("button", { name: "Open Discord" }).click();
   const popup = await popupPromise;
-  await expect(popup).toHaveURL(/discord(\.gg|\.com\/invite)\/example/);
+  await expect(popup).toHaveURL(/discord(\.gg|\.com\/invite)\/example-workspace/);
   await popup.close();
   await expect(page.getByRole("button", { name: "Continue to finish" })).toBeVisible();
   await page.getByRole("button", { name: "Continue to finish" }).click();
@@ -241,7 +241,7 @@ test("accepts an invite and lands in the member onboarding flow", async ({ page 
 
 test("redirects non-technical users away from technical analytics surfaces", async ({ page }) => {
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "business_member",
     effective_mode: "non_technical",
   });
@@ -250,7 +250,7 @@ test("redirects non-technical users away from technical analytics surfaces", asy
     memberships: [membership],
   });
   const tenant = makeTenant({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     experience: { default_mode: "non_technical" },
   });
 
@@ -263,12 +263,12 @@ test("redirects non-technical users away from technical analytics surfaces", asy
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
@@ -278,9 +278,9 @@ test("redirects non-technical users away from technical analytics surfaces", asy
     },
   ]);
 
-  await page.goto("/example/analytics/token-overview");
+  await page.goto("/example-workspace/analytics/token-overview");
 
-  await expect(page).toHaveURL(/\/example\/dashboard$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/example-workspace\/dashboard$/, { timeout: 15000 });
   await expect(page.getByRole("link", { name: "Token Overview" })).toHaveCount(0);
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
   await expect(page.getByRole("link", { name: "Secrets" })).toHaveCount(0);
@@ -291,19 +291,19 @@ test("workspace home summarizes projects and project overview shows parent Jira 
     email: "product@example.com",
     full_name: "Product Example",
   });
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
   const project = makeProject({
-    tenant_id: "example",
-    project_id: "example-default",
-    name: "Route 25 Default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
+    name: "Example Workspace Default",
     jira_project_key: "MAB",
     github_repository: "thedarkcder/master-builder",
   });
   const readyParent = makeWorkflow({
     execution_id: "wfexec-mab-243",
     workflow_id: "parent_planning:MAB-243",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-243",
     display_name: "Identity redesign",
@@ -351,8 +351,8 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   const idleReadyParent = makeWorkflow({
     execution_id: "wfexec-mab-251",
     workflow_id: "parent_planning:MAB-251",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-251",
     display_name: "Ready but not allocated",
@@ -368,8 +368,8 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   const blockedParent = makeWorkflow({
     execution_id: "wfexec-mab-250",
     workflow_id: "parent_planning:MAB-250",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-250",
     display_name: "Workspace billing plan",
@@ -406,25 +406,25 @@ test("workspace home summarizes projects and project overview shows parent Jira 
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "GET",
       pathname: "/api/bff/api/admin/runs",
       handler: (route, url) => {
-        expect(url.searchParams.get("tenant_id")).toBe("example");
-        expect(url.searchParams.get("project_id")).toBe("example-default");
+        expect(url.searchParams.get("tenant_id")).toBe("example-workspace");
+        expect(url.searchParams.get("project_id")).toBe("example-workspace-default");
         return fulfillJson(route, []);
       },
     },
@@ -432,26 +432,26 @@ test("workspace home summarizes projects and project overview shows parent Jira 
       method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows(?:\/board)?$/,
       handler: (route, url) => {
-        expect(url.searchParams.get("tenant_id")).toBe("example");
+        expect(url.searchParams.get("tenant_id")).toBe("example-workspace");
         expect(url.searchParams.get("status")).toBeNull();
         if (url.searchParams.has("project_id")) {
-          expect(url.searchParams.get("project_id")).toBe("example-default");
+          expect(url.searchParams.get("project_id")).toBe("example-workspace-default");
         }
         return fulfillJson(route, boardWorkflows);
       },
     },
   ]);
 
-  await page.goto("/example/dashboard");
+  await page.goto("/example-workspace/dashboard");
 
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
-  await expect(page.getByRole("link", { name: "Route 25 Default" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Example Workspace Default" }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Work conversion" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Project operating state" })).toBeVisible();
   const projectCard = page
     .getByRole("main")
-    .locator('a[href="/example/projects/example-default"]')
-    .filter({ hasText: "Route 25 Default" });
+    .locator('a[href="/example-workspace/projects/example-workspace-default"]')
+    .filter({ hasText: "Example Workspace Default" });
   await expect(projectCard).toBeVisible();
   await expect(page.getByText("Are we leaving work on the table?")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Ready work is idle" })).toBeVisible();
@@ -463,13 +463,13 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByRole("heading", { name: "Ready to start" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Needs input" })).toHaveCount(0);
 
-  await expect(projectCard).toHaveAttribute("href", "/example/projects/example-default");
+  await expect(projectCard).toHaveAttribute("href", "/example-workspace/projects/example-workspace-default");
   await page.setViewportSize({ width: 1700, height: 900 });
-  await page.goto("/example/projects/example-default");
-  await expect(page).toHaveURL(/\/example\/projects\/example-default$/);
+  await page.goto("/example-workspace/projects/example-workspace-default");
+  await expect(page).toHaveURL(/\/example-workspace\/projects\/example-workspace-default$/);
   await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute(
     "href",
-    "/example/projects/example-default/knowledge",
+    "/example-workspace/projects/example-workspace-default/knowledge",
   );
   await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Needs input" })).toBeVisible();
@@ -502,11 +502,11 @@ test("project overview moves queued parent work from awaiting planning into acti
     email: "product-planning@example.com",
     full_name: "Product Planning",
   });
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
   const project = makeProject({
-    tenant_id: "example",
-    project_id: "example-default",
-    name: "Route 25 Default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
+    name: "Example Workspace Default",
     jira_project_key: "MAB",
     github_repository: "thedarkcder/master-builder",
   });
@@ -519,8 +519,8 @@ test("project overview moves queued parent work from awaiting planning into acti
     makeWorkflow({
       execution_id: "wfexec-mab-252",
       workflow_id: "parent_planning:MAB-252",
-      tenant_id: "example",
-      project_id: "example-default",
+      tenant_id: "example-workspace",
+      project_id: "example-workspace-default",
       source_system: "jira",
       source_ref: "MAB-252",
       display_name: "Queued billing redesign",
@@ -532,8 +532,8 @@ test("project overview moves queued parent work from awaiting planning into acti
     makeWorkflow({
       execution_id: "wfexec-mab-253",
       workflow_id: "parent_planning:MAB-253",
-      tenant_id: "example",
-      project_id: "example-default",
+      tenant_id: "example-workspace",
+      project_id: "example-workspace-default",
       source_system: "jira",
       source_ref: "MAB-253",
       display_name: "Queued onboarding redesign",
@@ -546,8 +546,8 @@ test("project overview moves queued parent work from awaiting planning into acti
   const waitingParent = makeWorkflow({
     execution_id: "wfexec-mab-254",
     workflow_id: "parent_planning:MAB-254",
-    tenant_id: "example",
-    project_id: "example-default",
+    tenant_id: "example-workspace",
+    project_id: "example-workspace-default",
     source_system: "jira",
     source_ref: "MAB-254",
     display_name: "Needs product answer",
@@ -581,17 +581,17 @@ test("project overview moves queued parent work from awaiting planning into acti
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
@@ -603,8 +603,8 @@ test("project overview moves queued parent work from awaiting planning into acti
       method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows(?:\/board)?$/,
       handler: (route, url) => {
-        expect(url.searchParams.get("tenant_id")).toBe("example");
-        expect(url.searchParams.get("project_id")).toBe("example-default");
+        expect(url.searchParams.get("tenant_id")).toBe("example-workspace");
+        expect(url.searchParams.get("project_id")).toBe("example-workspace-default");
         return fulfillJson(route, workflows);
       },
     },
@@ -644,7 +644,7 @@ test("project overview moves queued parent work from awaiting planning into acti
     },
   ]);
 
-  await page.goto("/example/projects/example-default");
+  await page.goto("/example-workspace/projects/example-workspace-default");
 
   const awaitingPlanningLane = page.getByRole("region", { name: "Awaiting planning" });
   const engineeringLane = page.getByRole("region", { name: "Engineering active" });
@@ -670,17 +670,17 @@ test("workspace home shows configured projects even when no active work exists",
     email: "product-empty@example.com",
     full_name: "Product Empty",
   });
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
   const projects = [
     makeProject({
-      tenant_id: "example",
-      project_id: "example-default",
-      name: "Route 25 Default",
+      tenant_id: "example-workspace",
+      project_id: "example-workspace-default",
+      name: "Example Workspace Default",
     }),
     makeProject({
-      tenant_id: "example",
-      project_id: "example-example",
-      name: "example",
+      tenant_id: "example-workspace",
+      project_id: "example-workspace-exampleapp",
+      name: "ExampleApp",
     }),
   ];
 
@@ -693,32 +693,32 @@ test("workspace home shows configured projects even when no active work exists",
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, projects),
     },
     {
       method: "GET",
       pathname: /^\/api\/bff\/api\/admin\/workflows(?:\/board)?$/,
       handler: (route, url) => {
-        expect(url.searchParams.get("tenant_id")).toBe("example");
+        expect(url.searchParams.get("tenant_id")).toBe("example-workspace");
         return fulfillJson(route, []);
       },
     },
   ]);
 
-  await page.goto("/example/dashboard");
+  await page.goto("/example-workspace/dashboard");
 
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
   await expect(page.getByRole("heading", { name: "Project operating state" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Route 25 Default" }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "example" }).first()).toBeVisible();
-  await expect(page.locator('main a[href="/example/projects/example-default"]')).toContainText("Route 25 Default");
-  await expect(page.locator('main a[href="/example/projects/example-example"]')).toContainText("example");
+  await expect(page.getByRole("link", { name: "Example Workspace Default" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "ExampleApp" }).first()).toBeVisible();
+  await expect(page.locator('main a[href="/example-workspace/projects/example-workspace-default"]')).toContainText("Example Workspace Default");
+  await expect(page.locator('main a[href="/example-workspace/projects/example-workspace-exampleapp"]')).toContainText("ExampleApp");
   await expect(page.getByText("No active project work is currently tracked.")).toHaveCount(0);
 });
 
@@ -876,7 +876,7 @@ test("lets a platform admin create a workspace through the setup wizard and bloc
 test("formats Jira webhook timestamps on the tenant Jira settings page", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
   const tenant = makeTenant({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     jira: { ...makeTenant().jira, connection_id: "jira-conn-123", project_keys: ["BETA"] },
   });
   const rawTimestamp = "2026-04-17T09:55:34.475760+00:00";
@@ -901,27 +901,27 @@ test("formats Jira webhook timestamps on the tenant Jira settings page", async (
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/notifications",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/notifications",
       handler: (route) => fulfillJson(route, { notifications: [] }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/atlassian/jira/webhooks/diagnostics",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/atlassian/jira/webhooks/diagnostics",
       handler: (route) =>
         fulfillJson(route, {
-          tenant_id: "example",
+          tenant_id: "example-workspace",
           connected: true,
-          webhook_url: "https://api.example.test/jira/webhook/example",
+          webhook_url: "https://api.example.test/jira/webhook/example-workspace",
           managed_webhook_ids: [1001],
           last_provisioned_at: "2026-04-17T09:50:00Z",
           last_received_at: rawTimestamp,
@@ -934,7 +934,7 @@ test("formats Jira webhook timestamps on the tenant Jira settings page", async (
     },
   ]);
 
-  await page.goto("/example/settings/atlassian");
+  await page.goto("/example-workspace/settings/atlassian");
 
   const expectedTimestamp = await page.evaluate((timestamp) => {
     return new Intl.DateTimeFormat(undefined, {
@@ -954,7 +954,7 @@ test("formats Jira webhook timestamps on the tenant Jira settings page", async (
 
 test("opens the tenant workspace from the selector for tenant users", async ({ page }) => {
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "business_member",
     onboarding_completed_at: "2026-03-27T16:30:00Z",
     effective_mode: "non_technical",
@@ -964,8 +964,8 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
     memberships: [membership],
   });
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
     experience: { default_mode: "non_technical" },
   });
 
@@ -983,12 +983,12 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
@@ -1000,15 +1000,15 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
 
   await page.goto("/tenants/select");
   await Promise.all([
-    page.waitForURL(/\/example\/dashboard$/, { timeout: 15000, waitUntil: "domcontentloaded" }),
-    page.getByRole("link", { name: /Route 25/ }).click(),
+    page.waitForURL(/\/example-workspace\/dashboard$/, { timeout: 15000, waitUntil: "domcontentloaded" }),
+    page.getByRole("link", { name: /Example Workspace/ }).click(),
   ]);
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
 });
 
 test("lets standard tenant users open Projects without showing project-management actions", async ({ page }) => {
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "business_member",
     effective_mode: "non_technical",
     permission_keys: [],
@@ -1020,8 +1020,8 @@ test("lets standard tenant users open Projects without showing project-managemen
     memberships: [membership],
   });
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
     experience: { default_mode: "non_technical" },
   });
 
@@ -1034,17 +1034,17 @@ test("lets standard tenant users open Projects without showing project-managemen
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) =>
         fulfillJson(route, [
           {
             project_id: "route-web",
-            tenant_id: "example",
+            tenant_id: "example-workspace",
             name: "Route Web",
             github_repository: "https://github.com/example/route-web",
             jira_project_key: "WEB",
@@ -1079,11 +1079,11 @@ test("lets standard tenant users open Projects without showing project-managemen
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web",
       handler: (route) =>
         fulfillJson(route, {
           project_id: "route-web",
-          tenant_id: "example",
+          tenant_id: "example-workspace",
           name: "Route Web",
           github_repository: "https://github.com/example/route-web",
           jira_project_key: "WEB",
@@ -1117,7 +1117,7 @@ test("lets standard tenant users open Projects without showing project-managemen
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/knowledge/stats",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web/knowledge/stats",
       handler: (route) =>
         fulfillJson(route, {
           total_assets: 0,
@@ -1135,7 +1135,7 @@ test("lets standard tenant users open Projects without showing project-managemen
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/knowledge/assets",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web/knowledge/assets",
       handler: (route) => fulfillJson(route, { items: [], total: 0, limit: 25, offset: 0 }),
     },
     {
@@ -1152,19 +1152,19 @@ test("lets standard tenant users open Projects without showing project-managemen
     },
   ]);
 
-  await page.goto("/example/dashboard");
+  await page.goto("/example-workspace/dashboard");
 
-  await expect(page.locator('a[href="/example/projects/route-web/runs"]')).toHaveCount(0);
+  await expect(page.locator('a[href="/example-workspace/projects/route-web/runs"]')).toHaveCount(0);
   await expect(page.getByRole("link", { name: "All projects" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Add project" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Add project" })).toHaveCount(0);
 
-  await page.goto("/example/projects/route-web");
-  await expect(page).toHaveURL(/\/example\/projects\/route-web$/);
+  await page.goto("/example-workspace/projects/route-web");
+  await expect(page).toHaveURL(/\/example-workspace\/projects\/route-web$/);
   await expect(page.getByRole("heading", { name: "Route Web" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute(
     "href",
-    "/example/projects/route-web/knowledge",
+    "/example-workspace/projects/route-web/knowledge",
   );
   await expect(page.getByRole("tab", { name: "Runs" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Open settings" })).toHaveCount(0);
@@ -1172,26 +1172,26 @@ test("lets standard tenant users open Projects without showing project-managemen
   await expect(page.getByText("Failed to load project")).toHaveCount(0);
   await expect(page.getByText("Runs are unavailable: 401: Admin authentication required")).toHaveCount(0);
 
-  await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/example/projects/route-web/knowledge");
+  await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/example-workspace/projects/route-web/knowledge");
   await expect(page.getByRole("button", { name: "Add knowledge" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Sources" })).toHaveCount(0);
 
   try {
-    await page.goto("/example/projects/route-web/runs");
+    await page.goto("/example-workspace/projects/route-web/runs");
   } catch (error) {
     if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED")) {
       throw error;
     }
   }
-  await expect(page).toHaveURL(/\/example\/dashboard$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/example-workspace\/dashboard$/, { timeout: 15000 });
   await expect(page.getByRole("tab", { name: "Runs" })).toHaveCount(0);
 });
 
 test("lets platform super admins see development navigation and direct settings tabs", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
 
   await seedAdminSession(page);
@@ -1203,19 +1203,19 @@ test("lets platform super admins see development navigation and direct settings 
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
   ]);
 
-  await page.goto("/example/settings");
+  await page.goto("/example-workspace/settings");
 
-  await expect(page).toHaveURL(/\/example\/settings\/config$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/example-workspace\/settings\/config$/, { timeout: 15000 });
   await expect(page.getByRole("link", { name: "Integrations" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Configuration" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("navigation", { name: "Settings tabs" }).getByRole("link")).toHaveText([
@@ -1240,7 +1240,7 @@ test("lets platform super admins see development navigation and direct settings 
 test("lets tenant admins manage team settings from dedicated Team tabs", async ({ page }) => {
   test.setTimeout(75_000);
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "tenant_admin",
     onboarding_kind: "tenant_admin_setup",
     onboarding_completed_at: "2026-03-27T16:30:00Z",
@@ -1258,7 +1258,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
   };
   const tenantState = {
     tenant: makeTenant({
-      tenant_id: "example",
+      tenant_id: "example-workspace",
       experience: { default_mode: "technical" },
       discord: {
         guild_id: "guild-123",
@@ -1295,17 +1295,17 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenantState.tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/atlassian/jira/webhooks/diagnostics",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/atlassian/jira/webhooks/diagnostics",
       handler: (route) =>
         fulfillJson(route, {
           webhook_url: "https://example.test/jira/webhook",
@@ -1319,27 +1319,27 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/members",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/members",
       handler: (route) => fulfillJson(route, tenantState.members),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/teams",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/teams",
       handler: (route) => fulfillJson(route, tenantState.teams),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/invites",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/invites",
       handler: (route) => fulfillJson(route, { items: tenantState.invites }),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/discord/identity",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/discord/identity",
       handler: (route) => fulfillJson(route, makeDiscordIdentity({ linked: true, discord_username: "admin-discord" })),
     },
     {
       method: "PUT",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as { experience?: { default_mode?: string } };
         tenantState.tenant = makeTenant({
@@ -1351,7 +1351,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
     },
     {
       method: "POST",
-      pathname: "/api/bff/api/admin/tenants/example/teams",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/teams",
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as { name: string; description?: string | null; permission_keys: string[] };
         const created = makeTeam({
@@ -1366,7 +1366,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
     },
     {
       method: "POST",
-      pathname: "/api/bff/api/admin/tenants/example/invites",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/invites",
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as { email: string; full_name?: string | null; role: string; team_ids: string[]; mode_override: string | null };
         const created = makeInvite({
@@ -1383,7 +1383,7 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
     },
   ]);
 
-  await page.goto("/example/team/members", { waitUntil: "domcontentloaded" });
+  await page.goto("/example-workspace/team/members", { waitUntil: "domcontentloaded" });
 
   await expect(page.getByRole("navigation", { name: "Team tabs" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Members" })).toBeVisible();
@@ -1422,10 +1422,10 @@ test("lets tenant admins manage team settings from dedicated Team tabs", async (
 
 test("redirects platform super admins to the tenant selector after archiving a project", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
   let project = makeProject({
     project_id: "route-web",
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     name: "Route Web",
     github_repository: "https://github.com/example/route-web",
     jira_project_key: "WEB",
@@ -1441,17 +1441,17 @@ test("redirects platform super admins to the tenant selector after archiving a p
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, project.is_archived ? [] : [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web",
       handler: (route) => fulfillJson(route, project),
     },
     {
@@ -1461,7 +1461,7 @@ test("redirects platform super admins to the tenant selector after archiving a p
     },
     {
       method: "PATCH",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/archive",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web/archive",
       handler: async (route) => {
         project = makeProject({
           ...project,
@@ -1472,7 +1472,7 @@ test("redirects platform super admins to the tenant selector after archiving a p
     },
   ]);
 
-  await page.goto("/example/projects/route-web/danger");
+  await page.goto("/example-workspace/projects/route-web/danger");
   await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
   await page.getByRole("button", { name: "Archive project…" }).click();
   await page.getByPlaceholder("Route Web").fill("Route Web");
@@ -1480,17 +1480,17 @@ test("redirects platform super admins to the tenant selector after archiving a p
 
   await expect(page).toHaveURL(/\/tenants\/select$/, { timeout: 15000 });
 
-  await page.goto("/example/dashboard");
+  await page.goto("/example-workspace/dashboard");
   await expect(page.getByRole("link", { name: "All projects" })).toHaveCount(0);
-  await expect(page.locator('a[href="/example/projects/route-web/runs"]').last()).toHaveCount(0);
-  await expect(page.locator('a[href="/example/projects/route-web"]').last()).toHaveCount(0);
+  await expect(page.locator('a[href="/example-workspace/projects/route-web/runs"]').last()).toHaveCount(0);
+  await expect(page.locator('a[href="/example-workspace/projects/route-web"]').last()).toHaveCount(0);
 });
 
 test("lets project managers configure the staging merge check in project settings", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
     github: {
       webhook_secret_ref: null,
       installation_id: "12345",
@@ -1498,7 +1498,7 @@ test("lets project managers configure the staging merge check in project setting
   });
   let project = makeProject({
     project_id: "route-web",
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     name: "Route Web",
     github_repository: "https://github.com/example/route-web",
     jira_project_key: "WEB",
@@ -1522,22 +1522,22 @@ test("lets project managers configure the staging merge check in project setting
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/github/repositories",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/github/repositories",
       handler: (route) =>
         fulfillJson(route, [
           {
@@ -1550,12 +1550,12 @@ test("lets project managers configure the staging merge check in project setting
     },
     {
       method: "GET",
-      pathname: /^\/api\/bff\/api\/admin\/tenants\/example\/jira-projects(?:\?.*)?$/,
+      pathname: /^\/api\/bff\/api\/admin\/tenants\/example-workspace\/jira-projects(?:\?.*)?$/,
       handler: (route) => fulfillJson(route, [{ key: "WEB", name: "Route Web" }]),
     },
     {
       method: "PATCH",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/policy",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web/policy",
       handler: async (route) => {
         const payload = route.request().postDataJSON() as { policy_overrides: Record<string, unknown> };
         savedPolicyPayload = payload.policy_overrides;
@@ -1568,7 +1568,7 @@ test("lets project managers configure the staging merge check in project setting
     },
   ]);
 
-  await page.goto("/example/projects/route-web/settings");
+  await page.goto("/example-workspace/projects/route-web/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "Automation" }).click();
   await expect(page.getByText("Staging merge check")).toBeVisible();
@@ -1726,7 +1726,7 @@ test("pages the workspace selector when there are many active workspaces", async
 
 test("redirects tenant admins to workspace setup after archiving a project", async ({ page }) => {
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "tenant_admin",
     permission_keys: ["workspace.manage", "projects.manage", "technical.access"],
     onboarding_kind: "tenant_admin_setup",
@@ -1737,10 +1737,10 @@ test("redirects tenant admins to workspace setup after archiving a project", asy
     full_name: "Owner Example",
     memberships: [membership],
   });
-  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  const tenant = makeTenant({ tenant_id: "example-workspace", name: "Example Workspace" });
   let project = makeProject({
     project_id: "route-web",
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     name: "Route Web",
     github_repository: "https://github.com/example/route-web",
     jira_project_key: "WEB",
@@ -1756,22 +1756,22 @@ test("redirects tenant admins to workspace setup after archiving a project", asy
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, project.is_archived ? [] : [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "PATCH",
-      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/archive",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/route-web/archive",
       handler: async (route) => {
         project = makeProject({
           ...project,
@@ -1782,18 +1782,18 @@ test("redirects tenant admins to workspace setup after archiving a project", asy
     },
   ]);
 
-  await page.goto("/example/projects/route-web/danger");
+  await page.goto("/example-workspace/projects/route-web/danger");
   await expect(page.getByRole("heading", { name: "Danger zone" })).toBeVisible();
   await page.getByRole("button", { name: "Archive project…" }).click();
   await page.getByPlaceholder("Route Web").fill("Route Web");
   await page.getByRole("button", { name: "Archive project", exact: true }).click();
 
-  await expect(page).toHaveURL(/\/tenants\/new\/basics\?tenant_id=example$/, { timeout: 15000 });
+  await expect(page).toHaveURL(/\/tenants\/new\/basics\?tenant_id=example-workspace$/, { timeout: 15000 });
 });
 
 test("hides team navigation for invited users without team-management access", async ({ page }) => {
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "business_member",
     effective_mode: "non_technical",
     permission_keys: [],
@@ -1805,7 +1805,7 @@ test("hides team navigation for invited users without team-management access", a
     memberships: [membership],
   });
   const tenant = makeTenant({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     experience: { default_mode: "non_technical" },
   });
 
@@ -1818,12 +1818,12 @@ test("hides team navigation for invited users without team-management access", a
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, []),
     },
     {
@@ -1833,7 +1833,7 @@ test("hides team navigation for invited users without team-management access", a
     },
   ]);
 
-  await page.goto("/example/dashboard");
+  await page.goto("/example-workspace/dashboard");
 
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
   await expect(page.getByRole("link", { name: "Team" })).toHaveCount(0);
@@ -1841,7 +1841,7 @@ test("hides team navigation for invited users without team-management access", a
 });
 
 test("hides Discord link actions when platform Discord OAuth is unavailable", async ({ page }) => {
-  const tenantId = "example";
+  const tenantId = "example-workspace";
   const membership = makeMembership({
     tenant_id: tenantId,
     role: "business_member",
@@ -1901,7 +1901,7 @@ test("hides Discord link actions when platform Discord OAuth is unavailable", as
 });
 
 test("lets a tenant user manage profile details, experience, and password from Profile", async ({ page }) => {
-  const tenantId = "route 25";
+  const tenantId = "example workspace";
   const encodedTenantId = encodeURIComponent(tenantId);
   const membership = makeMembership({
     tenant_id: tenantId,
@@ -2011,7 +2011,7 @@ test("lets a tenant user manage profile details, experience, and password from P
 
 test("resumes the wizard on the Discord step after a successful install callback", async ({ page }) => {
   const membership = makeMembership({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     role: "tenant_admin",
     onboarding_kind: "tenant_admin_setup",
     onboarding_completed_at: null,
@@ -2021,7 +2021,7 @@ test("resumes the wizard on the Discord step after a successful install callback
     memberships: [membership],
   });
   const tenant = makeTenant({
-    tenant_id: "example",
+    tenant_id: "example-workspace",
     github: { installation_id: "github-install", webhook_secret_ref: null },
     jira: { ...makeTenant().jira, connection_id: "jira-connection", project_keys: ["GP"] },
     repos: { github_repository: "thedarkcder/master-builder" },
@@ -2044,13 +2044,13 @@ test("resumes the wizard on the Discord step after a successful install callback
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
-    tenantSectionPatchMock("example", () => tenant, () => {}),
+    tenantSectionPatchMock("example-workspace", () => tenant, () => {}),
   ]);
 
-  await page.goto("/tenants/new/discord?tenant_id=example&discord_install=success");
+  await page.goto("/tenants/new/discord?tenant_id=example-workspace&discord_install=success");
 
   await expect(page.getByRole("heading", { name: "Install Discord" })).toBeVisible();
   await expect(page.getByText("Workspace ready for Discord install")).toBeVisible();

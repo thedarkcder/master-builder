@@ -17,20 +17,31 @@ from orchestrator.core.projects.architecture_document_service import (
     architecture_required_for_issue,
 )
 from orchestrator.core.observability.audit import record_audit_event
-from orchestrator.core.issue_fanout.formatting import build_issue_url_list, format_issue_markdown_list
-from orchestrator.core.integrations.atlassian.links import architecture_document_remote_link_spec
+from orchestrator.core.issue_fanout.formatting import (
+    build_issue_url_list,
+    format_issue_markdown_list,
+)
+from orchestrator.core.integrations.atlassian.links import (
+    architecture_document_remote_link_spec,
+)
 from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
 from orchestrator.core.workflow.operation_logging import emit_workflow_operation_log
 from orchestrator.storage.models import Project, Tenant, WorkflowOperation
-from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput, JiraIssuePreview, AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth import (
+    JiraIssueCreateInput,
+    JiraIssuePreview,
+    AtlassianOAuthError,
+)
 
 SEED_FOLLOWUP_CONTEXT_MAX_AGE = timedelta(hours=24)
 _PM_PARENT_LABEL = "pm-parent"
 
 
 def _parent_label(parent_issue_key: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", str(parent_issue_key or "").strip().lower()).strip("-")
+    normalized = re.sub(
+        r"[^a-z0-9]+", "-", str(parent_issue_key or "").strip().lower()
+    ).strip("-")
     return f"parent-{normalized[:64]}" if normalized else "parent"
 
 
@@ -42,10 +53,15 @@ def _project_for_seed_or_404(
 ) -> Project:
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding requires a scoped project")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Issue seeding requires a scoped project",
+        )
     project = session.get(Project, normalized_project_id)
     if project is None or project.tenant_id != tenant.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     return project
 
 
@@ -60,7 +76,9 @@ def _architecture_gate_for_parent_issue(
     actor: str | None,
     settings_factory,
 ) -> tuple[ArchitectureDocumentGate, ArchitectureDocumentLink | None]:
-    project = _project_for_seed_or_404(session=session, tenant=tenant, project_id=project_id)
+    project = _project_for_seed_or_404(
+        session=session, tenant=tenant, project_id=project_id
+    )
     service = ArchitectureDocumentService(settings_factory=settings_factory)
     gate = service.resolve_gate(
         session=session,
@@ -119,9 +137,13 @@ def _resolved_oauth_value(value: object, attr_name: str) -> object:
     return resolved
 
 
-def _resolve_seed_oauth_context(*, session, tenant: Tenant, settings, tenant_atlassian_oauth_context_fn):  # noqa: ANN001
+def _resolve_seed_oauth_context(
+    *, session, tenant: Tenant, settings, tenant_atlassian_oauth_context_fn
+):  # noqa: ANN001
     try:
-        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context_fn(
+            session=session, tenant=tenant, settings=settings
+        )
     except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -165,12 +187,18 @@ def validate_seed_followup_context(
             updated_at = datetime.fromisoformat(updated_at_raw)
             if updated_at.tzinfo is None:
                 updated_at = updated_at.replace(tzinfo=timezone.utc)
-            if (datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)) > SEED_FOLLOWUP_CONTEXT_MAX_AGE:
+            if (
+                datetime.now(timezone.utc) - updated_at.astimezone(timezone.utc)
+            ) > SEED_FOLLOWUP_CONTEXT_MAX_AGE:
                 return False, "stale follow-up context"
         except ValueError:
             return False, "invalid follow-up context timestamp"
 
-    issue_keys = [str(value).strip().upper() for value in context.get("issue_keys", []) if str(value).strip()]
+    issue_keys = [
+        str(value).strip().upper()
+        for value in context.get("issue_keys", [])
+        if str(value).strip()
+    ]
     if not issue_keys:
         return True, None
     try:
@@ -181,7 +209,9 @@ def validate_seed_followup_context(
             settings=settings,
             tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
         )
-        escaped_keys = ", ".join(f'"{value.replace(chr(34), "").strip()}"' for value in issue_keys)
+        escaped_keys = ", ".join(
+            f'"{value.replace(chr(34), "").strip()}"' for value in issue_keys
+        )
         existing = oauth["client"].search_issues_by_jql(
             access_token=oauth["access_token"],
             cloud_id=oauth["cloud_id"],
@@ -190,13 +220,17 @@ def validate_seed_followup_context(
         )
     except (HTTPException, ValueError, AtlassianOAuthError):
         return True, None
-    existing_keys = {str(issue.key).strip().upper() for issue in existing if str(issue.key).strip()}
+    existing_keys = {
+        str(issue.key).strip().upper() for issue in existing if str(issue.key).strip()
+    }
     if not existing_keys:
         return False, "referenced Jira issues no longer exist"
     return True, None
 
 
-def _project_issue_catalog(*, oauth: dict[str, Any], project_key: str) -> list[JiraIssuePreview]:
+def _project_issue_catalog(
+    *, oauth: dict[str, Any], project_key: str
+) -> list[JiraIssuePreview]:
     return oauth["client"].search_issues_by_jql(
         access_token=oauth["access_token"],
         cloud_id=oauth["cloud_id"],
@@ -205,7 +239,9 @@ def _project_issue_catalog(*, oauth: dict[str, Any], project_key: str) -> list[J
     )
 
 
-def _child_issue_catalog(*, oauth: dict[str, Any], project_key: str, parent_issue_key: str) -> list[JiraIssuePreview]:
+def _child_issue_catalog(
+    *, oauth: dict[str, Any], project_key: str, parent_issue_key: str
+) -> list[JiraIssuePreview]:
     parent_label = _parent_label(parent_issue_key)
     queries = [
         f'project = "{project_key}" AND parent = "{parent_issue_key}" ORDER BY updated DESC',
@@ -238,11 +274,15 @@ def list_child_issue_previews_for_parent(
     )
 
 
-def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -> list[str]:
+def _project_available_issue_types(
+    *, oauth: dict[str, Any], project_key: str
+) -> list[str]:
     client = oauth.get("client")
     list_issue_types = getattr(client, "list_project_issue_types_for_create", None)
     if not callable(list_issue_types):
-        raise AtlassianOAuthError("Atlassian client does not support Jira issue type discovery")
+        raise AtlassianOAuthError(
+            "Atlassian client does not support Jira issue type discovery"
+        )
     payload = list_issue_types(
         access_token=oauth["access_token"],
         cloud_id=oauth["cloud_id"],
@@ -250,11 +290,15 @@ def _project_available_issue_types(*, oauth: dict[str, Any], project_key: str) -
     )
     issue_types = [str(value).strip() for value in payload if str(value).strip()]
     if not issue_types:
-        raise AtlassianOAuthError(f"Jira issue type discovery returned no issue types for project {project_key}")
+        raise AtlassianOAuthError(
+            f"Jira issue type discovery returned no issue types for project {project_key}"
+        )
     return issue_types
 
 
-def _project_issue_types_by_key(*, oauth: dict[str, Any], project_keys: list[str]) -> dict[str, list[str]]:
+def _project_issue_types_by_key(
+    *, oauth: dict[str, Any], project_keys: list[str]
+) -> dict[str, list[str]]:
     issue_types_by_key: dict[str, list[str]] = {}
     for project_key in project_keys:
         normalized_project_key = str(project_key).strip().upper()
@@ -265,25 +309,38 @@ def _project_issue_types_by_key(*, oauth: dict[str, Any], project_keys: list[str
             project_key=normalized_project_key,
         )
     if not issue_types_by_key:
-        raise AtlassianOAuthError("Jira issue type discovery returned no project issue type catalogs")
+        raise AtlassianOAuthError(
+            "Jira issue type discovery returned no project issue type catalogs"
+        )
     return issue_types_by_key
 
 
-def _require_available_issue_type(*, issue_type: str, available_issue_types: list[str], summary: str) -> str:
+def _require_available_issue_type(
+    *, issue_type: str, available_issue_types: list[str], summary: str
+) -> str:
     normalized_issue_type = str(issue_type or "").strip()
     if not normalized_issue_type:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Issue '{summary}' is missing Jira issue_type",
         )
-    by_exact = {str(value).strip(): str(value).strip() for value in available_issue_types if str(value).strip()}
+    by_exact = {
+        str(value).strip(): str(value).strip()
+        for value in available_issue_types
+        if str(value).strip()
+    }
     if normalized_issue_type in by_exact:
         return by_exact[normalized_issue_type]
-    normalized_alias = normalized_issue_type.replace("-", "").replace(" ", "").casefold()
+    normalized_alias = (
+        normalized_issue_type.replace("-", "").replace(" ", "").casefold()
+    )
     if normalized_alias == "subtask":
         for available_issue_type in available_issue_types:
             available_value = str(available_issue_type).strip()
-            if available_value.replace("-", "").replace(" ", "").casefold() == "subtask":
+            if (
+                available_value.replace("-", "").replace(" ", "").casefold()
+                == "subtask"
+            ):
                 return available_value
     available = ", ".join(available_issue_types)
     raise HTTPException(
@@ -302,7 +359,11 @@ def _matching_subtask_issue_type(*, available_issue_types: list[str]) -> str | N
 
 def _matching_epic_child_issue_type(*, available_issue_types: list[str]) -> str | None:
     by_name = {
-        str(available_issue_type).strip().replace("-", "").replace(" ", "").casefold(): str(available_issue_type).strip()
+        str(available_issue_type)
+        .strip()
+        .replace("-", "")
+        .replace(" ", "")
+        .casefold(): str(available_issue_type).strip()
         for available_issue_type in available_issue_types
         if str(available_issue_type).strip()
     }
@@ -326,7 +387,9 @@ def _engineering_child_issue_type_for_parent(
             detail=f"Cannot determine Jira parent issue type for {parent_issue_key}",
         )
     if normalized_parent_type.casefold() == "epic":
-        epic_child_issue_type = _matching_epic_child_issue_type(available_issue_types=available_issue_types)
+        epic_child_issue_type = _matching_epic_child_issue_type(
+            available_issue_types=available_issue_types
+        )
         if epic_child_issue_type is None:
             available = ", ".join(available_issue_types)
             raise HTTPException(
@@ -345,7 +408,9 @@ def _engineering_child_issue_type_for_parent(
                 "engineering child fanout supports Epic -> story-level children and Story -> Sub-task only"
             ),
         )
-    subtask_issue_type = _matching_subtask_issue_type(available_issue_types=available_issue_types)
+    subtask_issue_type = _matching_subtask_issue_type(
+        available_issue_types=available_issue_types
+    )
     if subtask_issue_type is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -404,18 +469,31 @@ def _record_seed_operation_event(
 ) -> None:
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_workflow_id = str(workflow_id or "").strip() or None
-    normalized_operation_id = attempt_ref.require_operation_id() if attempt_ref is not None else None
+    normalized_operation_id = (
+        attempt_ref.require_operation_id() if attempt_ref is not None else None
+    )
     explicit_operation_id = str(operation_id or "").strip() or None
-    if explicit_operation_id is not None and explicit_operation_id != normalized_operation_id:
-        raise ValueError("Jira seed operation event operation_id does not match attempt_ref")
-    if not normalized_tenant_id or not normalized_workflow_id or not normalized_operation_id:
+    if (
+        explicit_operation_id is not None
+        and explicit_operation_id != normalized_operation_id
+    ):
+        raise ValueError(
+            "Jira seed operation event operation_id does not match attempt_ref"
+        )
+    if (
+        not normalized_tenant_id
+        or not normalized_workflow_id
+        or not normalized_operation_id
+    ):
         return
     if attempt_ref is None:
         raise ValueError("Jira seed operation events require attempt_ref")
     normalized_attempt_id = attempt_ref.require_attempt_id()
     operation = session.get(WorkflowOperation, normalized_operation_id)
     if operation is None:
-        raise ValueError(f"Jira seed operation event references missing operation {normalized_operation_id}")
+        raise ValueError(
+            f"Jira seed operation event references missing operation {normalized_operation_id}"
+        )
     event_payload = {"attempt": attempt_ref.number, **dict(payload or {})}
     record_audit_event(
         session,
@@ -607,7 +685,10 @@ def seed_issues_with_runtime(
     if attempt_ref is not None:
         ref_operation_id = attempt_ref.require_operation_id()
         explicit_operation_id = str(operation_id or "").strip() or None
-        if explicit_operation_id is not None and explicit_operation_id != ref_operation_id:
+        if (
+            explicit_operation_id is not None
+            and explicit_operation_id != ref_operation_id
+        ):
             raise ValueError("Issue seeding operation_id does not match attempt_ref")
         operation_id = ref_operation_id
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
@@ -618,9 +699,14 @@ def seed_issues_with_runtime(
     ]
     if normalized_scoped_project_keys:
         allowed = set(normalized_scoped_project_keys)
-        project_keys = [value for value in project_keys if str(value).strip().upper() in allowed]
+        project_keys = [
+            value for value in project_keys if str(value).strip().upper() in allowed
+        ]
     if not project_keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant has no Jira project keys",
+        )
 
     settings = get_settings_fn()
     oauth = _resolve_seed_oauth_context(
@@ -631,7 +717,9 @@ def seed_issues_with_runtime(
     )
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     try:
-        project_issue_types_by_key = _project_issue_types_by_key(oauth=oauth, project_keys=project_keys)
+        project_issue_types_by_key = _project_issue_types_by_key(
+            oauth=oauth, project_keys=project_keys
+        )
     except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -666,7 +754,10 @@ def seed_issues_with_runtime(
 
     project_key = plan_payload.project_key
     if not project_key:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Issue seeding runtime did not return project_key")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Issue seeding runtime did not return project_key",
+        )
     if project_key not in project_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -679,7 +770,11 @@ def seed_issues_with_runtime(
             detail=f"Issue seeding runtime selected project key '{project_key}' without discovered Jira issue types",
         )
 
-    normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
+    normalized_force_issue_keys = [
+        str(value).strip().upper()
+        for value in (force_issue_keys or [])
+        if str(value).strip()
+    ]
     draft_set = parse_engineering_seed_drafts(
         plan_payload=plan_payload.to_payload(),
         force_issue_keys=normalized_force_issue_keys,
@@ -694,7 +789,9 @@ def seed_issues_with_runtime(
     specialist_summary = list(effective_planning_package.specialist_summary)
     technical_decisions = list(effective_planning_package.technical_decisions)
     planning_blocked = effective_planning_package.blocked
-    planning_state_for_description = effective_planning_package.planning_state_for_description
+    planning_state_for_description = (
+        effective_planning_package.planning_state_for_description
+    )
     parent_issue = draft_set.parent_issue
     engineering_children = draft_set.engineering_children
     architecture_gate: ArchitectureDocumentGate | None = None
@@ -703,14 +800,20 @@ def seed_issues_with_runtime(
     architecture_blocked = False
     architecture_labels = list(parent_issue.labels)
 
-    parent_issue = parent_issue.with_issue_type(parent_issue.normalized_issue_type(
-        engineering_children=engineering_children,
-        available_issue_types=available_issue_types,
-    ))
+    parent_issue = parent_issue.with_issue_type(
+        parent_issue.normalized_issue_type(
+            engineering_children=engineering_children,
+            available_issue_types=available_issue_types,
+        )
+    )
     try:
-        all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)
+        all_project_issues = _project_issue_catalog(
+            oauth=oauth, project_key=project_key
+        )
         matched_issue_keys: set[str] = set()
-        parent_sync_status = "planning_blocked" if planning_blocked else "children_syncing"
+        parent_sync_status = (
+            "planning_blocked" if planning_blocked else "children_syncing"
+        )
         parent_issue_input = parent_issue.to_jira_input(
             sync_status=parent_sync_status,
             pm_status=effective_pm_status or None,
@@ -736,15 +839,15 @@ def seed_issues_with_runtime(
             },
         )
         parent_issue_key, parent_created, parent_updated = _upsert_parent_issue(
-                oauth=oauth,
-                project_key=project_key,
-                issue_input=parent_issue_input,
-                requested_issue_key=parent_issue.requested_issue_key,
-                allow_create=allow_create,
-                existing_issues=all_project_issues,
-                matched_issue_keys=matched_issue_keys,
-                select_seed_match_fn=select_seed_match_fn,
-            )
+            oauth=oauth,
+            project_key=project_key,
+            issue_input=parent_issue_input,
+            requested_issue_key=parent_issue.requested_issue_key,
+            allow_create=allow_create,
+            existing_issues=all_project_issues,
+            matched_issue_keys=matched_issue_keys,
+            select_seed_match_fn=select_seed_match_fn,
+        )
         _record_seed_operation_event(
             session=session,
             tenant_id=tenant.tenant_id,
@@ -781,7 +884,8 @@ def seed_issues_with_runtime(
             if architecture_gate.required and architecture_link is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=architecture_gate.block_reason or f"Architecture document link is required for {parent_issue_key}",
+                    detail=architecture_gate.block_reason
+                    or f"Architecture document link is required for {parent_issue_key}",
                 )
             architecture_required = architecture_gate.required
             architecture_blocked = architecture_required and not architecture_gate.ready
@@ -849,15 +953,12 @@ def seed_issues_with_runtime(
                 f"Created {len(created_issue_keys)}: "
                 f"{format_issue_markdown_list(issue_keys=created_issue_keys, browse_base_url=browse_base_url)}."
             )
-            message = (
-                f"{message}\n\n"
-                + (
-                    "Architecture is required for this epic, and the linked architecture document is not ready. "
-                    "Mark the architecture document ready before refreshing this parent issue to create the child tickets."
-                    if architecture_blocked
-                    else "Specialist planning is not complete yet, so engineering child tickets were not created. "
-                    "Once the planning package is complete, refresh this parent issue to create the child tickets."
-                )
+            message = f"{message}\n\n" + (
+                "Architecture is required for this epic, and the linked architecture document is not ready. "
+                "Mark the architecture document ready before refreshing this parent issue to create the child tickets."
+                if architecture_blocked
+                else "Specialist planning is not complete yet, so engineering child tickets were not created. "
+                "Once the planning package is complete, refresh this parent issue to create the child tickets."
             )
             return (
                 message,
@@ -872,8 +973,12 @@ def seed_issues_with_runtime(
                     "planning_state": planning_state_for_description,
                     "planning_summary": specialist_summary,
                     "architecture_document_required": architecture_blocked,
-                    "architecture_document_title": architecture_link.title if architecture_link else None,
-                    "architecture_document_url": architecture_link.url if architecture_link else None,
+                    "architecture_document_title": architecture_link.title
+                    if architecture_link
+                    else None,
+                    "architecture_document_url": architecture_link.url
+                    if architecture_link
+                    else None,
                     "children_sync_status": "planning_blocked",
                     "stale_child_keys": [],
                     "updated_parent": parent_issue_key if parent_updated else None,
@@ -915,7 +1020,9 @@ def seed_issues_with_runtime(
         created_child_keys: list[str] = []
         updated_child_keys: list[str] = []
         stale_child_keys: list[str] = []
-        final_sync_status = "sync_blocked" if clarification_questions else "children_current"
+        final_sync_status = (
+            "sync_blocked" if clarification_questions else "children_current"
+        )
         for child_issue in engineering_children:
             requested_child_issue_type = child_issue.issue_type
             child_issue = child_issue.with_issue_type(resolved_child_issue_type)
@@ -1085,7 +1192,10 @@ def seed_issues_with_runtime(
         f"{format_issue_markdown_list(issue_keys=created_issue_keys, browse_base_url=browse_base_url)}."
     )
     if clarification_questions:
-        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
+        prompt = "\n".join(
+            f"{idx}. {question}"
+            for idx, question in enumerate(clarification_questions, start=1)
+        )
         message = (
             f"{message}\n\nI still need more detail to finish issue quality. "
             "Reply in the follow-up thread and I will update the parent feature and affected engineering tickets.\n"
@@ -1104,10 +1214,16 @@ def seed_issues_with_runtime(
             "planning_state": planning_state_for_description,
             "planning_summary": specialist_summary,
             "architecture_document_required": architecture_blocked,
-            "architecture_document_title": architecture_link.title if architecture_link else None,
-            "architecture_document_url": architecture_link.url if architecture_link else None,
+            "architecture_document_title": architecture_link.title
+            if architecture_link
+            else None,
+            "architecture_document_url": architecture_link.url
+            if architecture_link
+            else None,
             "children_sync_status": final_sync_status,
-            "stale_child_keys": stale_child_keys if final_sync_status != "children_current" else [],
+            "stale_child_keys": stale_child_keys
+            if final_sync_status != "children_current"
+            else [],
             "updated_parent": parent_issue_key if parent_updated else None,
             "created_parent": parent_issue_key if parent_created else None,
             "updated_children": updated_child_keys,
@@ -1157,9 +1273,14 @@ def seed_parent_issues_with_runtime(
     ]
     if normalized_scoped_project_keys:
         allowed = set(normalized_scoped_project_keys)
-        project_keys = [value for value in project_keys if str(value).strip().upper() in allowed]
+        project_keys = [
+            value for value in project_keys if str(value).strip().upper() in allowed
+        ]
     if not project_keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant has no Jira project keys",
+        )
 
     settings = get_settings_fn()
     _assert_stage_spi_allows_parent_seed(
@@ -1177,7 +1298,9 @@ def seed_parent_issues_with_runtime(
     )
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
     try:
-        project_issue_types_by_key = _project_issue_types_by_key(oauth=oauth, project_keys=project_keys)
+        project_issue_types_by_key = _project_issue_types_by_key(
+            oauth=oauth, project_keys=project_keys
+        )
     except (ValueError, TypeError, AttributeError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -1207,7 +1330,10 @@ def seed_parent_issues_with_runtime(
 
     project_key = plan_payload.project_key
     if not project_key:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="PM parent seeding runtime did not return project_key")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="PM parent seeding runtime did not return project_key",
+        )
     if project_key not in project_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1220,7 +1346,11 @@ def seed_parent_issues_with_runtime(
             detail=f"PM parent seeding runtime selected project key '{project_key}' without discovered Jira issue types",
         )
 
-    normalized_force_issue_keys = [str(value).strip().upper() for value in (force_issue_keys or []) if str(value).strip()]
+    normalized_force_issue_keys = [
+        str(value).strip().upper()
+        for value in (force_issue_keys or [])
+        if str(value).strip()
+    ]
     draft_set = parse_parent_seed_drafts(
         plan_payload=plan_payload.to_payload(),
         force_issue_keys=normalized_force_issue_keys,
@@ -1232,15 +1362,19 @@ def seed_parent_issues_with_runtime(
     parent_issues = draft_set.parent_issues
 
     try:
-        all_project_issues = _project_issue_catalog(oauth=oauth, project_key=project_key)
+        all_project_issues = _project_issue_catalog(
+            oauth=oauth, project_key=project_key
+        )
         matched_issue_keys: set[str] = set()
         created_parent_issue_keys: list[str] = []
         updated_parent_issue_keys: list[str] = []
         for parent_issue in parent_issues:
-            parent_issue = parent_issue.with_issue_type(parent_issue.normalized_issue_type(
-                engineering_children=[],
-                available_issue_types=available_issue_types,
-            ))
+            parent_issue = parent_issue.with_issue_type(
+                parent_issue.normalized_issue_type(
+                    engineering_children=[],
+                    available_issue_types=available_issue_types,
+                )
+            )
             parent_input = parent_issue.to_jira_input(
                 sync_status="children_stale",
                 pm_status=effective_pm_status or None,
@@ -1263,20 +1397,23 @@ def seed_parent_issues_with_runtime(
             architecture_gate = None
             architecture_link = None
             if architecture_required_for_issue(issue_labels=parent_issue.labels):
-                architecture_gate, architecture_link = _architecture_gate_for_parent_issue(
-                    session=session,
-                    tenant=tenant,
-                    project_id=scoped_project_id,
-                    parent_issue_key=parent_key,
-                    issue_summary=parent_issue.summary,
-                    issue_labels=parent_issue.labels,
-                    actor="system",
-                    settings_factory=get_settings_fn,
+                architecture_gate, architecture_link = (
+                    _architecture_gate_for_parent_issue(
+                        session=session,
+                        tenant=tenant,
+                        project_id=scoped_project_id,
+                        parent_issue_key=parent_key,
+                        issue_summary=parent_issue.summary,
+                        issue_labels=parent_issue.labels,
+                        actor="system",
+                        settings_factory=get_settings_fn,
+                    )
                 )
                 if architecture_gate.required and architecture_link is None:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail=architecture_gate.block_reason or f"Architecture document link is required for {parent_key}",
+                        detail=architecture_gate.block_reason
+                        or f"Architecture document link is required for {parent_key}",
                     )
             _upsert_architecture_document_remote_link(
                 oauth=oauth,
@@ -1286,7 +1423,9 @@ def seed_parent_issues_with_runtime(
             final_parent_input = parent_issue.to_jira_input(
                 sync_status=(
                     "planning_blocked"
-                    if architecture_gate is not None and architecture_gate.required and not architecture_gate.ready
+                    if architecture_gate is not None
+                    and architecture_gate.required
+                    and not architecture_gate.ready
                     else "children_stale"
                 ),
                 pm_status=effective_pm_status or None,
@@ -1323,7 +1462,10 @@ def seed_parent_issues_with_runtime(
         f"{format_issue_markdown_list(issue_keys=created_parent_issue_keys, browse_base_url=browse_base_url)}."
     )
     if clarification_questions:
-        prompt = "\n".join(f"{idx}. {question}" for idx, question in enumerate(clarification_questions, start=1))
+        prompt = "\n".join(
+            f"{idx}. {question}"
+            for idx, question in enumerate(clarification_questions, start=1)
+        )
         message = (
             f"{message}\n\nI still need more PM detail to finish these parent issues. "
             "Reply in the follow-up thread and I will update the parent briefs.\n"

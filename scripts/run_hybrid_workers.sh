@@ -33,7 +33,7 @@ export MASTER_BUILDER_API_PORT="${MASTER_BUILDER_API_PORT:-60001}"
 export MASTER_BUILDER_POSTGRES_PORT="${MASTER_BUILDER_POSTGRES_PORT:-60003}"
 export MASTER_BUILDER_CLICKHOUSE_HTTP_PORT="${MASTER_BUILDER_CLICKHOUSE_HTTP_PORT:-60006}"
 export MASTER_BUILDER_OTEL_HTTP_PORT="${MASTER_BUILDER_OTEL_HTTP_PORT:-60010}"
-export MASTER_BUILDER_MINIO_API_PORT="${MASTER_BUILDER_MINIO_API_PORT:-60015}"
+export MASTER_BUILDER_S3_PORT="${MASTER_BUILDER_S3_PORT:-60015}"
 LOCAL_COOLIFY_ENABLED="${LOCAL_COOLIFY_ENABLED:-auto}"
 LOCAL_COOLIFY_DIR="${LOCAL_COOLIFY_DIR:-${HOME}/.master-builder-coolify/source}"
 LOCAL_COOLIFY_PROXY_DIR="${LOCAL_COOLIFY_PROXY_DIR:-${LOCAL_COOLIFY_DIR%/source}/proxy}"
@@ -43,7 +43,7 @@ LOCAL_COOLIFY_COMPOSE_PROJECT_NAME="${LOCAL_COOLIFY_COMPOSE_PROJECT_NAME:-master
 LOCAL_PREVIEW_PROXY_PORT="${LOCAL_PREVIEW_PROXY_PORT:-8088}"
 LOCAL_PUBLIC_API_BASE_URL="http://localhost:${MASTER_BUILDER_API_PORT}"
 LOCAL_ADMIN_UI_BASE_URL="http://localhost:${ADMIN_UI_PORT}"
-LOCAL_DATABASE_URL="postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:${MASTER_BUILDER_POSTGRES_PORT}/orchestrator"
+LOCAL_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:?Run scripts/init_local_env.py or configure ORCHESTRATOR_DATABASE_URL}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(basename "$ROOT_DIR")}"
 DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
 DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
@@ -53,7 +53,7 @@ HYBRID_ENABLE_VOICE="${HYBRID_ENABLE_VOICE:-false}"
 PLAYWRIGHT_NPM_VERSION="${PLAYWRIGHT_NPM_VERSION:-latest}"
 DOCKER_BUILD_FINGERPRINT_FILE="${HYBRID_CACHE_DIR}/docker-build.sha256"
 LOCAL_PYTHON_INSTALL_FINGERPRINT_FILE="${HYBRID_CACHE_DIR}/local-python-install.sha256"
-DOCKER_DATABASE_URL="${MASTER_BUILDER_DOCKER_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}"
+DOCKER_DATABASE_URL="${ORCHESTRATOR_CONTAINER_DATABASE_URL:?Set ORCHESTRATOR_CONTAINER_DATABASE_URL}"
 
 docker_compose() {
   ORCHESTRATOR_DATABASE_URL="$DOCKER_DATABASE_URL" POSTGRES_URL="$DOCKER_DATABASE_URL" docker compose "$@"
@@ -266,7 +266,8 @@ bootstrap_local_coolify_if_configured() {
 DOCKER_BASE_SERVICES=(
   postgres
   mailpit
-  minio
+  seaweedfs
+  seaweedfs-s3
   clickhouse
   temporal
   tempo
@@ -335,6 +336,7 @@ DOCKER_READY_SERVICES=(
 )
 
 DOCKER_BUILD_SERVICES=(
+  seaweedfs-init
   migrate
   "${DOCKER_APP_SERVICES[@]}"
   deployment-host-bootstrap
@@ -390,10 +392,11 @@ fingerprint_paths() {
 docker_build_fingerprint() {
   local fingerprint_input
   fingerprint_input="$(
-    printf 'CODEX_NPM_VERSION=%s\n' "${CODEX_NPM_VERSION:-latest}"
+    printf 'CODEX_NPM_VERSION=%s\n' "${CODEX_NPM_VERSION:-0.160.0}"
     fingerprint_paths \
       docker-compose.yml \
       orchestrator/Dockerfile \
+      ops/seaweedfs \
       .dockerignore \
       pyproject.toml \
       README.md \
@@ -417,14 +420,15 @@ docker_build_required() {
       local current_fingerprint
       current_fingerprint="$(docker_build_fingerprint)"
       if [[ ! -f "$DOCKER_BUILD_FINGERPRINT_FILE" ]]; then
-        if docker_build_images_available; then
-          echo "Docker build fingerprint missing but Compose images exist; seeding fingerprint without rebuilding."
-          printf '%s\n' "$current_fingerprint" > "$DOCKER_BUILD_FINGERPRINT_FILE"
-          return 1
-        fi
         return 0
       fi
-      [[ "$(cat "$DOCKER_BUILD_FINGERPRINT_FILE")" != "$current_fingerprint" ]]
+      if [[ "$(cat "$DOCKER_BUILD_FINGERPRINT_FILE")" != "$current_fingerprint" ]]; then
+        return 0
+      fi
+      if docker_build_images_available; then
+        return 1
+      fi
+      return 0
       ;;
     *)
       echo "HYBRID_DOCKER_BUILD_MODE must be one of: auto, always, never." >&2
@@ -441,7 +445,11 @@ docker_build_images_available() {
   local service_name
   local image_name
   for service_name in "${DOCKER_BUILD_SERVICES[@]}"; do
-    image_name="${COMPOSE_PROJECT_NAME}-${service_name}:latest"
+    image_name="$(docker_compose config --images "$service_name")" || return 1
+    if [[ -z "$image_name" || "$image_name" == *$'\n'* ]]; then
+      echo "Compose must resolve one image for $service_name." >&2
+      return 1
+    fi
     if ! docker image inspect "$image_name" >/dev/null 2>&1; then
       return 1
     fi
@@ -670,7 +678,7 @@ run_compose_up() {
   wait_for_docker_services_ready "$DOCKER_WAIT_TIMEOUT_SECONDS" "$DOCKER_WAIT_INTERVAL_SECONDS" "${DOCKER_BASE_SERVICES[@]}"
 
   echo "Initializing QA demo artifact bucket..."
-  if ! docker_compose run --rm --no-deps minio-init; then
+  if ! docker_compose run --rm --no-deps seaweedfs-init; then
     rm -f "$output_file"
     return 1
   fi
@@ -853,12 +861,8 @@ if [[ ! -d "${VENV_DIR}" ]]; then
   python3 -m venv "${VENV_DIR}"
 fi
 
-if [[ -z "${ORCHESTRATOR_DATABASE_URL:-}" || "${ORCHESTRATOR_DATABASE_URL}" == *"localhost:4402"* || "${ORCHESTRATOR_DATABASE_URL}" == *"127.0.0.1:4402"* ]]; then
-  export ORCHESTRATOR_DATABASE_URL="$LOCAL_DATABASE_URL"
-fi
-if [[ -z "${POSTGRES_URL:-}" || "${POSTGRES_URL}" == *"localhost:4402"* || "${POSTGRES_URL}" == *"127.0.0.1:4402"* ]]; then
-  export POSTGRES_URL="$ORCHESTRATOR_DATABASE_URL"
-fi
+export ORCHESTRATOR_DATABASE_URL="$LOCAL_DATABASE_URL"
+export POSTGRES_URL="$ORCHESTRATOR_DATABASE_URL"
 if [[ -z "${ORCHESTRATOR_PUBLIC_API_BASE_URL:-}" || "${ORCHESTRATOR_PUBLIC_API_BASE_URL}" == "http://localhost:4000" ]]; then
   export ORCHESTRATOR_PUBLIC_API_BASE_URL="$LOCAL_PUBLIC_API_BASE_URL"
 fi
@@ -866,7 +870,7 @@ if [[ -z "${ORCHESTRATOR_ADMIN_UI_BASE_URL:-}" || "${ORCHESTRATOR_ADMIN_UI_BASE_
   export ORCHESTRATOR_ADMIN_UI_BASE_URL="$LOCAL_ADMIN_UI_BASE_URL"
 fi
 if [[ -z "${ORCHESTRATOR_CORS_ORIGINS:-}" || "${ORCHESTRATOR_CORS_ORIGINS}" == *"localhost:4100"* || "${ORCHESTRATOR_CORS_ORIGINS}" == *"127.0.0.1:4100"* ]]; then
-  export ORCHESTRATOR_CORS_ORIGINS="http://localhost:${ADMIN_UI_PORT},http://127.0.0.1:${ADMIN_UI_PORT},https://master-builder.vercel.app"
+  : "${ORCHESTRATOR_CORS_ORIGINS:?Set ORCHESTRATOR_CORS_ORIGINS to your UI origins}"
 fi
 if [[ -z "${NEXT_PUBLIC_API_BASE_URL:-}" || "${NEXT_PUBLIC_API_BASE_URL}" == "http://localhost:4000" ]]; then
   export NEXT_PUBLIC_API_BASE_URL="$LOCAL_PUBLIC_API_BASE_URL"
@@ -879,11 +883,11 @@ export ORCHESTRATOR_OTEL_ENABLED="${ORCHESTRATOR_OTEL_ENABLED:-true}"
 export ORCHESTRATOR_OTEL_SERVICE_NAMESPACE="${ORCHESTRATOR_OTEL_SERVICE_NAMESPACE:-master-builder}"
 export ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT="${ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://127.0.0.1:${MASTER_BUILDER_OTEL_HTTP_PORT}}"
 export ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO="${ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO:-1.0}"
-export ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT="${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT:-127.0.0.1:${MASTER_BUILDER_MINIO_API_PORT}}"
-export ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY="${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:-masterbuilder}"
-export ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY="${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:-masterbuildersecret}"
+export ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT="${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT:?Configure QA storage endpoint}"
+export ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY="${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:?Set scoped QA storage access key}"
+export ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY="${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:?Set ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY}"
 export ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET="${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}"
-export ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL="${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:${MASTER_BUILDER_MINIO_API_PORT}/qa-demos}"
+export ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL="${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:?Configure authenticated QA delivery base URL}"
 export ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE="${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-false}"
 export ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS="${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"
 export ORCHESTRATOR_QA_DEMO_RELEASE_HEALTH_TIMEOUT_SECONDS="${ORCHESTRATOR_QA_DEMO_RELEASE_HEALTH_TIMEOUT_SECONDS:-10}"
@@ -896,7 +900,7 @@ ensure_local_playwright_recorder_dependency
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
 export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
 export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"
-export REMOVED_PRIVATE_CREDENTIAL"${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR:-${WORKER_CHECKOUT_DIR}}"
+export ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR="${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR:-${WORKER_CHECKOUT_DIR}}"
 
 if local_python_install_required; then
   echo "Installing/updating Python dependencies in ${VENV_DIR}..."

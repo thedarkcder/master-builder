@@ -18,7 +18,10 @@ from orchestrator.core.project_app_planner import (
 )
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
 
@@ -58,11 +61,15 @@ def create_project_app_artifact_pr(
 ) -> ProjectAppArtifactPRResult | None:
     repo_dir = Path(str(checkout_path or "").strip()).resolve()
     if not repo_dir.exists() or not repo_dir.is_dir():
-        raise RuntimeError(f"Project app checkout path does not exist or is not a directory: {repo_dir}")
+        raise RuntimeError(
+            f"Project app checkout path does not exist or is not a directory: {repo_dir}"
+        )
 
     github_repository = str(project.github_repository or "").strip()
     if not github_repository:
-        raise RuntimeError("Project GitHub repository is required before generating artifact PRs")
+        raise RuntimeError(
+            "Project GitHub repository is required before generating artifact PRs"
+        )
     repo_full_name = _repo_full_name(github_repository)
 
     github_config = tenant.github_config or {}
@@ -104,7 +111,9 @@ def create_project_app_artifact_pr(
             generated_files=tuple(spec.path for spec in generated_specs),
         )
 
-    missing_specs = tuple(spec for spec in generated_specs if not (repo_dir / spec.path).exists())
+    missing_specs = tuple(
+        spec for spec in generated_specs if not (repo_dir / spec.path).exists()
+    )
     if not missing_specs:
         return None
 
@@ -114,12 +123,16 @@ def create_project_app_artifact_pr(
     generated_files = _write_generated_files(repo_dir=repo_dir, specs=missing_specs)
 
     _run_git(repo_dir, ["add", "-A"])
-    staged_files = _run_git(repo_dir, ["diff", "--cached", "--name-only"]).strip().splitlines()
+    staged_files = (
+        _run_git(repo_dir, ["diff", "--cached", "--name-only"]).strip().splitlines()
+    )
     if not any(item.strip() for item in staged_files):
         return None
 
     _ensure_local_commit_identity(repo_dir)
-    commit_message = f"{project.project_id}: generate deploy artifacts ({analysis_run_id})"
+    commit_message = (
+        f"{project.project_id}: generate deploy artifacts ({analysis_run_id})"
+    )
     _run_git(repo_dir, ["commit", "-m", commit_message])
     _run_git(repo_dir, ["push", "-u", "origin", f"HEAD:{branch_name}"], token=token)
 
@@ -152,7 +165,9 @@ def create_project_app_artifact_pr(
     )
 
 
-def _build_generated_file_specs(apps: Iterable[ProjectAppNormalizedCandidate]) -> tuple[_GeneratedFileSpec, ...]:
+def _build_generated_file_specs(
+    apps: Iterable[ProjectAppNormalizedCandidate],
+) -> tuple[_GeneratedFileSpec, ...]:
     specs: list[_GeneratedFileSpec] = []
     for app in apps:
         if not app.needs_generated_files:
@@ -175,7 +190,9 @@ def _build_generated_file_specs(apps: Iterable[ProjectAppNormalizedCandidate]) -
     return tuple(specs)
 
 
-def _write_generated_files(*, repo_dir: Path, specs: Iterable[_GeneratedFileSpec]) -> tuple[str, ...]:
+def _write_generated_files(
+    *, repo_dir: Path, specs: Iterable[_GeneratedFileSpec]
+) -> tuple[str, ...]:
     generated: list[str] = []
     for spec in specs:
         file_path = repo_dir / spec.path
@@ -227,7 +244,19 @@ def _effective_start_command(app: ProjectAppNormalizedCandidate) -> str:
     if app.start_command:
         return app.start_command
     runtime = _normalized_runtime(app)
-    if runtime in {"node", "javascript", "typescript", "nextjs", "remix", "nuxt", "nestjs", "express", "astro", "sveltekit", "vite"}:
+    if runtime in {
+        "node",
+        "javascript",
+        "typescript",
+        "nextjs",
+        "remix",
+        "nuxt",
+        "nestjs",
+        "express",
+        "astro",
+        "sveltekit",
+        "vite",
+    }:
         return "npm run start"
     if runtime == "python":
         return "python app.py"
@@ -243,7 +272,19 @@ def _effective_start_command(app: ProjectAppNormalizedCandidate) -> str:
 
 def _base_image_for_app(app: ProjectAppNormalizedCandidate) -> str:
     runtime = _normalized_runtime(app)
-    if runtime in {"node", "javascript", "typescript", "nextjs", "remix", "nuxt", "nestjs", "express", "astro", "sveltekit", "vite"}:
+    if runtime in {
+        "node",
+        "javascript",
+        "typescript",
+        "nextjs",
+        "remix",
+        "nuxt",
+        "nestjs",
+        "express",
+        "astro",
+        "sveltekit",
+        "vite",
+    }:
         return "node:20-slim"
     if runtime == "python":
         return "python:3.12-slim"
@@ -258,7 +299,19 @@ def _base_image_for_app(app: ProjectAppNormalizedCandidate) -> str:
 
 def _default_port_for_app(app: ProjectAppNormalizedCandidate) -> int | None:
     runtime = _normalized_runtime(app)
-    if runtime in {"node", "javascript", "typescript", "nextjs", "remix", "nuxt", "nestjs", "express", "astro", "sveltekit", "vite"}:
+    if runtime in {
+        "node",
+        "javascript",
+        "typescript",
+        "nextjs",
+        "remix",
+        "nuxt",
+        "nestjs",
+        "express",
+        "astro",
+        "sveltekit",
+        "vite",
+    }:
         return 3000
     if runtime == "python":
         return 8000
@@ -301,7 +354,9 @@ def _repo_relative_path(source_path: str, filename: str) -> str:
 
 
 def _artifact_branch_name(*, analysis_run_id: str) -> str:
-    normalized = re.sub(r"[^a-z0-9._-]+", "-", str(analysis_run_id or "").strip().lower()).strip("-")
+    normalized = re.sub(
+        r"[^a-z0-9._-]+", "-", str(analysis_run_id or "").strip().lower()
+    ).strip("-")
     return f"project-app-artifacts/{normalized or 'analysis'}"
 
 
@@ -317,7 +372,9 @@ def _repo_full_name(github_repository: str) -> str:
 
 
 def _git_auth_env(token: str) -> dict[str, str]:
-    credential = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+    credential = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode(
+        "ascii"
+    )
     return {
         **os.environ,
         "GIT_CONFIG_COUNT": "1",
@@ -337,7 +394,11 @@ def _run_git(repo_dir: Path, args: list[str], *, token: str | None = None) -> st
         env=env,
     )
     if process.returncode != 0:
-        raise RuntimeError(process.stderr.strip() or process.stdout.strip() or f"git {' '.join(args)} failed")
+        raise RuntimeError(
+            process.stderr.strip()
+            or process.stdout.strip()
+            or f"git {' '.join(args)} failed"
+        )
     return process.stdout
 
 
@@ -356,25 +417,34 @@ def _resolve_remote_default_branch(repo_dir: Path, *, token: str) -> str:
             return branch_name
 
     try:
-        ls_remote_output = _run_git(repo_dir, ["ls-remote", "--symref", "origin", "HEAD"], token=token)
+        ls_remote_output = _run_git(
+            repo_dir, ["ls-remote", "--symref", "origin", "HEAD"], token=token
+        )
     except RuntimeError:
         ls_remote_output = ""
     for line in ls_remote_output.splitlines():
         if not line.startswith("ref: refs/heads/") or "\tHEAD" not in line:
             continue
-        branch_name = line.removeprefix("ref: refs/heads/").split("\t", maxsplit=1)[0].strip()
+        branch_name = (
+            line.removeprefix("ref: refs/heads/").split("\t", maxsplit=1)[0].strip()
+        )
         if branch_name:
             return branch_name
 
     return "main"
 
 
-def _sync_local_base_branch_to_origin(repo_dir: Path, *, base_branch: str, token: str) -> None:
+def _sync_local_base_branch_to_origin(
+    repo_dir: Path, *, base_branch: str, token: str
+) -> None:
     normalized_base_branch = str(base_branch).strip()
     if not normalized_base_branch:
         raise RuntimeError("Base branch is required to generate project app artifacts")
     _run_git(repo_dir, ["fetch", "origin", normalized_base_branch], token=token)
-    _run_git(repo_dir, ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"])
+    _run_git(
+        repo_dir,
+        ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"],
+    )
 
 
 def _ensure_local_commit_identity(repo_dir: Path) -> None:
@@ -383,7 +453,10 @@ def _ensure_local_commit_identity(repo_dir: Path) -> None:
     if not user_name:
         _run_git(repo_dir, ["config", "user.name", "Master Builder Bot"])
     if not user_email:
-        _run_git(repo_dir, ["config", "user.email", "master-builder-bot@users.noreply.github.com"])
+        _run_git(
+            repo_dir,
+            ["config", "user.email", "master-builder-bot@users.noreply.github.com"],
+        )
 
 
 def _read_git_config(repo_dir: Path, *, key: str) -> str | None:

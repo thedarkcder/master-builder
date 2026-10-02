@@ -84,7 +84,9 @@ class PlatformSecretService:
 
     def resolve_secret_metadata(self, *, session: Session, secret_ref: str):
         platform_secret_ref = _platform_secret_ref(secret_ref)
-        return _resolve_secret_ref_metadata(session, secret_ref=platform_secret_ref, scope="platform")
+        return _resolve_secret_ref_metadata(
+            session, secret_ref=platform_secret_ref, scope="platform"
+        )
 
 
 platform_secret_service = PlatformSecretService()

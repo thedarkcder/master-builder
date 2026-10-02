@@ -4,7 +4,9 @@ from typing import Any, Callable, Protocol
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision import clarification_service as decision_clarification_service
+from orchestrator.core.decision import (
+    clarification_service as decision_clarification_service,
+)
 from orchestrator.core.decision.engine import DecisionEngineResult, DecisionEventInput
 from orchestrator.core.decision.reply_service import DecisionReplyCaptureResult
 from orchestrator.core.runtime.payload_models import InteractionResponse
@@ -24,8 +26,7 @@ class DecisionClarificationPort(Protocol):
         evaluate_pre_run_check_fn: Callable[..., object],
         oauth_context: Any | None = None,
         publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
-    ) -> DecisionEngineResult:
-        ...
+    ) -> DecisionEngineResult: ...
 
     def capture_decision_reply_and_recheck(
         self,
@@ -40,14 +41,15 @@ class DecisionClarificationPort(Protocol):
         source_ref: str | None,
         actor_ref: str | None,
         metadata: dict[str, Any],
-        decision_event_factory: Callable[[DecisionReplyCaptureResult], DecisionEventInput],
+        decision_event_factory: Callable[
+            [DecisionReplyCaptureResult], DecisionEventInput
+        ],
         tenant_atlassian_oauth_context_fn: Callable[..., Any],
         evaluate_pre_run_check_fn: Callable[..., object],
         oauth_context: Any | None = None,
         publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
         interpreted_reply: InteractionResponse | None = None,
-    ) -> decision_clarification_service.DecisionReplyRecheckResult:
-        ...
+    ) -> decision_clarification_service.DecisionReplyRecheckResult: ...
 
 
 class RuntimeDecisionClarificationPort:
@@ -89,7 +91,9 @@ class RuntimeDecisionClarificationPort:
         source_ref: str | None,
         actor_ref: str | None,
         metadata: dict[str, Any],
-        decision_event_factory: Callable[[DecisionReplyCaptureResult], DecisionEventInput],
+        decision_event_factory: Callable[
+            [DecisionReplyCaptureResult], DecisionEventInput
+        ],
         tenant_atlassian_oauth_context_fn: Callable[..., Any],
         evaluate_pre_run_check_fn: Callable[..., object],
         oauth_context: Any | None = None,

@@ -31,8 +31,15 @@ def upgrade() -> None:
         sa.Column("checksum", sa.String(length=64), nullable=True),
         sa.Column("text_content", sa.Text(), nullable=True),
         sa.Column("binary_content", sa.LargeBinary(), nullable=True),
-        sa.Column("chunk_count", sa.Integer(), nullable=False, server_default=sa.text("0")),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'ready'")),
+        sa.Column(
+            "chunk_count", sa.Integer(), nullable=False, server_default=sa.text("0")
+        ),
+        sa.Column(
+            "status",
+            sa.String(length=32),
+            nullable=False,
+            server_default=sa.text("'ready'"),
+        ),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
         sa.Column(
             "created_at",
@@ -46,17 +53,47 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("asset_id"),
     )
-    op.create_index("ix_knowledge_assets_tenant_id", "knowledge_assets", ["tenant_id"], unique=False)
-    op.create_index("ix_knowledge_assets_project_id", "knowledge_assets", ["project_id"], unique=False)
-    op.create_index("ix_knowledge_assets_source_type", "knowledge_assets", ["source_type"], unique=False)
-    op.create_index("ix_knowledge_assets_source_timestamp", "knowledge_assets", ["source_timestamp"], unique=False)
-    op.create_index("ix_knowledge_assets_checksum", "knowledge_assets", ["checksum"], unique=False)
-    op.create_index("ix_knowledge_assets_status", "knowledge_assets", ["status"], unique=False)
-    op.create_index("ix_knowledge_assets_updated_at", "knowledge_assets", ["updated_at"], unique=False)
+    op.create_index(
+        "ix_knowledge_assets_tenant_id", "knowledge_assets", ["tenant_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_assets_project_id",
+        "knowledge_assets",
+        ["project_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_knowledge_assets_source_type",
+        "knowledge_assets",
+        ["source_type"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_knowledge_assets_source_timestamp",
+        "knowledge_assets",
+        ["source_timestamp"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_knowledge_assets_checksum", "knowledge_assets", ["checksum"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_assets_status", "knowledge_assets", ["status"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_assets_updated_at",
+        "knowledge_assets",
+        ["updated_at"],
+        unique=False,
+    )
 
     op.create_table(
         "knowledge_chunks",
@@ -66,7 +103,9 @@ def upgrade() -> None:
         sa.Column("project_id", sa.String(length=128), nullable=False),
         sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
-        sa.Column("token_count", sa.Integer(), nullable=False, server_default=sa.text("0")),
+        sa.Column(
+            "token_count", sa.Integer(), nullable=False, server_default=sa.text("0")
+        ),
         sa.Column("embedding", sa.JSON(), nullable=True),
         sa.Column("source_timestamp", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
@@ -81,16 +120,38 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.ForeignKeyConstraint(["asset_id"], ["knowledge_assets.asset_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["asset_id"], ["knowledge_assets.asset_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("chunk_id"),
-        sa.UniqueConstraint("asset_id", "chunk_index", name="uq_knowledge_chunks_asset_chunk_index"),
+        sa.UniqueConstraint(
+            "asset_id", "chunk_index", name="uq_knowledge_chunks_asset_chunk_index"
+        ),
     )
-    op.create_index("ix_knowledge_chunks_asset_id", "knowledge_chunks", ["asset_id"], unique=False)
-    op.create_index("ix_knowledge_chunks_tenant_id", "knowledge_chunks", ["tenant_id"], unique=False)
-    op.create_index("ix_knowledge_chunks_project_id", "knowledge_chunks", ["project_id"], unique=False)
-    op.create_index("ix_knowledge_chunks_source_timestamp", "knowledge_chunks", ["source_timestamp"], unique=False)
+    op.create_index(
+        "ix_knowledge_chunks_asset_id", "knowledge_chunks", ["asset_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_chunks_tenant_id", "knowledge_chunks", ["tenant_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_chunks_project_id",
+        "knowledge_chunks",
+        ["project_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_knowledge_chunks_source_timestamp",
+        "knowledge_chunks",
+        ["source_timestamp"],
+        unique=False,
+    )
 
     op.create_table(
         "knowledge_facts",
@@ -101,8 +162,12 @@ def upgrade() -> None:
         sa.Column("project_id", sa.String(length=128), nullable=False),
         sa.Column("slot_name", sa.String(length=64), nullable=False),
         sa.Column("slot_value", sa.Text(), nullable=False),
-        sa.Column("confidence", sa.Float(), nullable=False, server_default=sa.text("1.0")),
-        sa.Column("is_inferred", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "confidence", sa.Float(), nullable=False, server_default=sa.text("1.0")
+        ),
+        sa.Column(
+            "is_inferred", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
         sa.Column("source_timestamp", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at",
@@ -116,18 +181,41 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
-        sa.ForeignKeyConstraint(["asset_id"], ["knowledge_assets.asset_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["chunk_id"], ["knowledge_chunks.chunk_id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["asset_id"], ["knowledge_assets.asset_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["chunk_id"], ["knowledge_chunks.chunk_id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("fact_id"),
     )
-    op.create_index("ix_knowledge_facts_asset_id", "knowledge_facts", ["asset_id"], unique=False)
-    op.create_index("ix_knowledge_facts_chunk_id", "knowledge_facts", ["chunk_id"], unique=False)
-    op.create_index("ix_knowledge_facts_tenant_id", "knowledge_facts", ["tenant_id"], unique=False)
-    op.create_index("ix_knowledge_facts_project_id", "knowledge_facts", ["project_id"], unique=False)
-    op.create_index("ix_knowledge_facts_slot_name", "knowledge_facts", ["slot_name"], unique=False)
-    op.create_index("ix_knowledge_facts_source_timestamp", "knowledge_facts", ["source_timestamp"], unique=False)
+    op.create_index(
+        "ix_knowledge_facts_asset_id", "knowledge_facts", ["asset_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_facts_chunk_id", "knowledge_facts", ["chunk_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_facts_tenant_id", "knowledge_facts", ["tenant_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_facts_project_id", "knowledge_facts", ["project_id"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_facts_slot_name", "knowledge_facts", ["slot_name"], unique=False
+    )
+    op.create_index(
+        "ix_knowledge_facts_source_timestamp",
+        "knowledge_facts",
+        ["source_timestamp"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:

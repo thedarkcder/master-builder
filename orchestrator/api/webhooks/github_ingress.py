@@ -6,9 +6,17 @@ from uuid import uuid4
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from orchestrator.api.transport_runtime import http_json_response_action, json_response_to_action, execute_http_ingress_result
-from orchestrator.api.webhooks.github_webhook_context import resolve_github_webhook_context
-from orchestrator.api.webhooks.github_payload_contracts import extract_push_deployment_source
+from orchestrator.api.transport_runtime import (
+    http_json_response_action,
+    json_response_to_action,
+    execute_http_ingress_result,
+)
+from orchestrator.api.webhooks.github_webhook_context import (
+    resolve_github_webhook_context,
+)
+from orchestrator.api.webhooks.github_payload_contracts import (
+    extract_push_deployment_source,
+)
 from orchestrator.core.communications import IngressResult
 from orchestrator.core.communications import TransportEnvelope
 from orchestrator.core.webhooks.job_queue import (
@@ -29,10 +37,13 @@ async def ingest_github_webhook_event(
     settings,  # noqa: ANN001
     request_id: str | None = None,
 ):
-    normalized_request_id = request_id or request.headers.get("X-Request-Id") or str(uuid4())
+    normalized_request_id = (
+        request_id or request.headers.get("X-Request-Id") or str(uuid4())
+    )
     envelope = TransportEnvelope(
         transport="github_webhook",
-        event_type=str(request.headers.get("X-GitHub-Event") or "").strip() or "unknown",
+        event_type=str(request.headers.get("X-GitHub-Event") or "").strip()
+        or "unknown",
         request_id=normalized_request_id,
         delivery_id=str(request.headers.get("X-GitHub-Delivery") or "").strip() or None,
     )
@@ -51,7 +62,9 @@ async def ingest_github_webhook_event(
     if resolved_context.github_event == "push":
         push_source = extract_push_deployment_source(resolved_context.payload)
         if push_source is None:
-            raise RuntimeError("GitHub push deployment context was accepted without a push source")
+            raise RuntimeError(
+                "GitHub push deployment context was accepted without a push source"
+            )
         enqueue_result = enqueue_webhook_job(
             session,
             request=WebhookJobEnqueueRequest(

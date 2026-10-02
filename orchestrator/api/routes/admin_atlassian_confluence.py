@@ -8,18 +8,31 @@ from orchestrator.api.admin.confluence_route_service import (
     list_confluence_pages_for_tenant as list_confluence_pages_for_tenant_impl,
     list_confluence_spaces_for_tenant as list_confluence_spaces_for_tenant_impl,
 )
-from orchestrator.api.atlassian_oauth.connection_service import resolve_tenant_atlassian_connection
+from orchestrator.api.atlassian_oauth.connection_service import (
+    resolve_tenant_atlassian_connection,
+)
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import ConfluencePageRead, ConfluenceSpaceCatalogRead
 from orchestrator.core.config import get_settings
-from orchestrator.core.security import AuthenticatedPrincipal, require_admin, require_any_tenant_permission, require_authenticated_principal
-from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_admin,
+    require_any_tenant_permission,
+    require_authenticated_principal,
+)
+from orchestrator.core.platform.access import (
+    PERMISSION_PROJECTS_MANAGE,
+    PERMISSION_WORKSPACE_MANAGE,
+)
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin", "atlassian-confluence"])
 
 
-@router.get("/tenants/{tenant_id}/atlassian/confluence/spaces", response_model=ConfluenceSpaceCatalogRead)
+@router.get(
+    "/tenants/{tenant_id}/atlassian/confluence/spaces",
+    response_model=ConfluenceSpaceCatalogRead,
+)
 def list_confluence_spaces_for_tenant(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
@@ -44,7 +57,10 @@ def list_confluence_spaces_for_tenant(
     )
 
 
-@router.get("/tenants/{tenant_id}/atlassian/confluence/spaces/{space_key}/pages", response_model=list[ConfluencePageRead])
+@router.get(
+    "/tenants/{tenant_id}/atlassian/confluence/spaces/{space_key}/pages",
+    response_model=list[ConfluencePageRead],
+)
 def list_confluence_pages_for_tenant(
     tenant_id: str,
     space_key: str,

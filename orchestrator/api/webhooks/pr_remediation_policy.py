@@ -10,6 +10,7 @@ from orchestrator.api.webhooks.pr_remediation_issue_service import (
 from orchestrator.tools.github_app import GitHubAppClient
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
+
 @dataclass(frozen=True)
 class ManualPrFixRequest:
     instruction_text: str
@@ -21,28 +22,42 @@ def parse_manual_pr_fix_request(*, payload: dict) -> ManualPrFixRequest | None:
     body = str(comment.get("body") or "") if isinstance(comment, dict) else ""
     if not body.strip():
         return None
-    first_non_empty_line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    first_non_empty_line = next(
+        (line.strip() for line in body.splitlines() if line.strip()), ""
+    )
     if not first_non_empty_line:
         return None
     normalized_line = first_non_empty_line.lower()
     prefix = next(
-        (candidate for candidate in ("@mb", "/mb") if normalized_line.startswith(candidate)),
+        (
+            candidate
+            for candidate in ("@mb", "/mb")
+            if normalized_line.startswith(candidate)
+        ),
         None,
     )
     if prefix is None:
         return None
-    instruction_lines = [first_non_empty_line[len(prefix):].strip()]
-    instruction_lines.extend(line.strip() for line in body.splitlines()[1:] if line.strip())
+    instruction_lines = [first_non_empty_line[len(prefix) :].strip()]
+    instruction_lines.extend(
+        line.strip() for line in body.splitlines()[1:] if line.strip()
+    )
     instruction_text = "\n".join(line for line in instruction_lines if line).strip()
     if not instruction_text:
-        return ManualPrFixRequest(instruction_text="", parse_error="manual_fix_missing_instruction")
+        return ManualPrFixRequest(
+            instruction_text="", parse_error="manual_fix_missing_instruction"
+        )
     return ManualPrFixRequest(instruction_text=instruction_text, parse_error=None)
 
 
 def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
     if event == "pull_request_review" and action == "submitted":
         review = payload.get("review")
-        state = str(review.get("state") or "").strip().lower() if isinstance(review, dict) else ""
+        state = (
+            str(review.get("state") or "").strip().lower()
+            if isinstance(review, dict)
+            else ""
+        )
         return state == "changes_requested"
     if event == "pull_request_review_comment" and action in {"created", "edited"}:
         return parse_manual_pr_fix_request(payload=payload) is not None
@@ -50,14 +65,21 @@ def is_remediation_trigger(*, event: str, action: str, payload: dict) -> bool:
         return parse_manual_pr_fix_request(payload=payload) is not None
     if event == "check_run" and action in {"created", "completed", "rerequested"}:
         check_run = payload.get("check_run")
-        conclusion = str(check_run.get("conclusion") or "").strip().lower() if isinstance(check_run, dict) else ""
+        conclusion = (
+            str(check_run.get("conclusion") or "").strip().lower()
+            if isinstance(check_run, dict)
+            else ""
+        )
         return conclusion not in {"", "success", "neutral", "skipped"}
     if event == "check_suite" and action in {"completed", "requested", "rerequested"}:
         check_suite = payload.get("check_suite")
-        conclusion = str(check_suite.get("conclusion") or "").strip().lower() if isinstance(check_suite, dict) else ""
+        conclusion = (
+            str(check_suite.get("conclusion") or "").strip().lower()
+            if isinstance(check_suite, dict)
+            else ""
+        )
         return conclusion not in {"", "success", "neutral", "skipped"}
     return False
-
 
 
 def coerce_positive_int(value: object | None) -> int | None:
@@ -66,7 +88,6 @@ def coerce_positive_int(value: object | None) -> int | None:
     except (TypeError, ValueError):
         return None
     return max(1, parsed)
-
 
 
 def resolve_pr_remediation_issue_key(

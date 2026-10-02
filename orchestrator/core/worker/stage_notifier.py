@@ -47,11 +47,19 @@ class RunStageNotifier:
                     try:
                         normalized = WorkerStageUpdate(
                             stage=WorkerStageEvent(stage_raw),
-                            tenant_id=str(getattr(self._run, "tenant_id", "") or "").strip(),
-                            issue_key=str(getattr(self._run, "issue_key", "") or "").strip(),
+                            tenant_id=str(
+                                getattr(self._run, "tenant_id", "") or ""
+                            ).strip(),
+                            issue_key=str(
+                                getattr(self._run, "issue_key", "") or ""
+                            ).strip(),
                             run_id=str(getattr(self._run, "run_id", "") or "").strip(),
-                            jira_message=str(stage_update.get("jira_message") or "").strip(),
-                            discord_message=str(stage_update.get("discord_message") or "").strip(),
+                            jira_message=str(
+                                stage_update.get("jira_message") or ""
+                            ).strip(),
+                            discord_message=str(
+                                stage_update.get("discord_message") or ""
+                            ).strip(),
                         )
                     except ValueError:
                         normalized = None

@@ -29,7 +29,9 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -54,19 +56,35 @@ def _normalize_branch(value: Any) -> str | None:
 
 def _branch_scoped_policy(current: dict[str, Any]) -> dict[str, Any]:
     branch = _normalize_branch(current.get("production_branch"))
-    current_branch_settings = current.get("branch_settings") if isinstance(current.get("branch_settings"), dict) else {}
+    current_branch_settings = (
+        current.get("branch_settings")
+        if isinstance(current.get("branch_settings"), dict)
+        else {}
+    )
     branch_settings: dict[str, Any] = {}
     for raw_branch, raw_settings in current_branch_settings.items():
         normalized_branch = _normalize_branch(raw_branch)
         if normalized_branch is None or not isinstance(raw_settings, dict):
             continue
         branch_settings[normalized_branch] = {
-            "environment": raw_settings.get("environment") if isinstance(raw_settings.get("environment"), dict) else {},
-            "secret_refs": raw_settings.get("secret_refs") if isinstance(raw_settings.get("secret_refs"), dict) else {},
+            "environment": raw_settings.get("environment")
+            if isinstance(raw_settings.get("environment"), dict)
+            else {},
+            "secret_refs": raw_settings.get("secret_refs")
+            if isinstance(raw_settings.get("secret_refs"), dict)
+            else {},
         }
 
-    legacy_environment = current.get("environment") if isinstance(current.get("environment"), dict) else {}
-    legacy_secret_refs = current.get("secret_refs") if isinstance(current.get("secret_refs"), dict) else {}
+    legacy_environment = (
+        current.get("environment")
+        if isinstance(current.get("environment"), dict)
+        else {}
+    )
+    legacy_secret_refs = (
+        current.get("secret_refs")
+        if isinstance(current.get("secret_refs"), dict)
+        else {}
+    )
     if branch is not None and (legacy_environment or legacy_secret_refs):
         existing = branch_settings.get(branch, {"environment": {}, "secret_refs": {}})
         branch_settings[branch] = {
@@ -79,16 +97,25 @@ def _branch_scoped_policy(current: dict[str, Any]) -> dict[str, Any]:
         **({"production_branch": branch} if branch is not None else {}),
         "preview_prs_enabled": False,
         "provider": "internal_coolify",
-        **({"deployment_host_id": str(current["deployment_host_id"]).strip()} if str(current.get("deployment_host_id") or "").strip() else {}),
-        "generated_domain_policy": current.get("generated_domain_policy") or "production",
+        **(
+            {"deployment_host_id": str(current["deployment_host_id"]).strip()}
+            if str(current.get("deployment_host_id") or "").strip()
+            else {}
+        ),
+        "generated_domain_policy": current.get("generated_domain_policy")
+        or "production",
         "branch_settings": branch_settings,
-        "resources": current.get("resources") if isinstance(current.get("resources"), list) else [],
+        "resources": current.get("resources")
+        if isinstance(current.get("resources"), list)
+        else [],
     }
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    if not (_table_exists("projects") and _column_exists("projects", "deployment_config")):
+    if not (
+        _table_exists("projects") and _column_exists("projects", "deployment_config")
+    ):
         return
 
     projects_table = sa.table(
@@ -96,12 +123,20 @@ def upgrade() -> None:
         sa.column("project_id", sa.String()),
         sa.column("deployment_config", sa.JSON()),
     )
-    rows = bind.execute(sa.text("SELECT project_id, deployment_config FROM projects")).mappings().all()
+    rows = (
+        bind.execute(sa.text("SELECT project_id, deployment_config FROM projects"))
+        .mappings()
+        .all()
+    )
     for row in rows:
         bind.execute(
             projects_table.update()
             .where(projects_table.c.project_id == row["project_id"])
-            .values(deployment_config=_branch_scoped_policy(_coerce_dict(row["deployment_config"])))
+            .values(
+                deployment_config=_branch_scoped_policy(
+                    _coerce_dict(row["deployment_config"])
+                )
+            )
         )
 
 

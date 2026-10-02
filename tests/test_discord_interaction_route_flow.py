@@ -16,7 +16,9 @@ pytestmark = pytest.mark.contract
 
 
 class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
-    def test_discord_component_interactions_are_queued_after_immediate_ack(self) -> None:
+    def test_discord_component_interactions_are_queued_after_immediate_ack(
+        self,
+    ) -> None:
         payload = {
             "type": 3,
             "application_id": "discord-app-1",
@@ -27,11 +29,20 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         }
 
         with (
-            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key",
+                return_value=b"\x01" * 32,
+            ),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"
+            ),
             patch(
                 "orchestrator.api.routes.webhook_discord_interactions._resolve_interaction_subject_scope",
-                return_value=("tenant-webhook", None, "discord_channel:tenant-webhook:discord-channel-1"),
+                return_value=(
+                    "tenant-webhook",
+                    None,
+                    "discord_channel:tenant-webhook:discord-channel-1",
+                ),
             ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
@@ -41,14 +52,22 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["data"]["flags"], 64)
         with self.session_factory() as session:
-            jobs = session.execute(
-                select(WebhookJob).where(WebhookJob.transport == "discord_interaction")
-            ).scalars().all()
+            jobs = (
+                session.execute(
+                    select(WebhookJob).where(
+                        WebhookJob.transport == "discord_interaction"
+                    )
+                )
+                .scalars()
+                .all()
+            )
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].tenant_id, "tenant-webhook")
         self.assertIsNone(jobs[0].dedupe_key)
 
-    def test_discord_issue_autocomplete_passes_channel_id_for_project_scoping(self) -> None:
+    def test_discord_issue_autocomplete_passes_channel_id_for_project_scoping(
+        self,
+    ) -> None:
         payload = {
             "type": 4,
             "channel_id": "discord-channel-1",
@@ -62,16 +81,29 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
 
         with (
-            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.discord.interactions.application._find_tenant_for_discord_channel", return_value=fake_tenant),
-            patch("orchestrator.api.discord.interactions.application._discord_issue_autocomplete_choices", return_value=[]) as choices_mock,
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key",
+                return_value=b"\x01" * 32,
+            ),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.application._find_tenant_for_discord_channel",
+                return_value=fake_tenant,
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.application._discord_issue_autocomplete_choices",
+                return_value=[],
+            ) as choices_mock,
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
         self.assertEqual(response.status_code, 200)
         choices_mock.assert_called_once()
-        self.assertEqual(choices_mock.call_args.kwargs["channel_id"], "discord-channel-1")
+        self.assertEqual(
+            choices_mock.call_args.kwargs["channel_id"], "discord-channel-1"
+        )
 
     def test_discord_issue_autocomplete_filters_results_locally(self) -> None:
         fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
@@ -82,8 +114,14 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         ]
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.interactions.parser._project_filter_jql", return_value='project = "TP"'),
-            patch("orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant", return_value=fake_issues),
+            patch(
+                "orchestrator.api.discord.interactions.parser._project_filter_jql",
+                return_value='project = "TP"',
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.parser._search_jira_issues_for_tenant",
+                return_value=fake_issues,
+            ),
         ):
             choices = _discord_issue_autocomplete_choices(
                 session=session,
@@ -94,7 +132,9 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(len(choices), 1)
         self.assertEqual(choices[0]["value"], "TP-11")
 
-    def test_parse_discord_bug_interaction_includes_params_and_attachments(self) -> None:
+    def test_parse_discord_bug_interaction_includes_params_and_attachments(
+        self,
+    ) -> None:
         payload = {
             "type": 2,
             "channel_id": "discord-channel-1",
@@ -120,7 +160,9 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
             },
         }
 
-        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
+        user_id, channel_id, command_text, command_params, attachments = (
+            _parse_discord_interaction_command(payload)
+        )
         self.assertEqual(user_id, "discord-user-1")
         self.assertEqual(channel_id, "discord-channel-1")
         self.assertEqual(command_text, "!bug Login fails")
@@ -142,7 +184,9 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
             },
         }
 
-        user_id, channel_id, command_text, command_params, attachments = _parse_discord_interaction_command(payload)
+        user_id, channel_id, command_text, command_params, attachments = (
+            _parse_discord_interaction_command(payload)
+        )
         self.assertEqual(user_id, "discord-user-1")
         self.assertEqual(channel_id, "discord-channel-1")
         self.assertEqual(command_text, "!gap TP-44")
@@ -162,9 +206,17 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         fake_tenant = SimpleNamespace(tenant_id="tenant-webhook")
 
         with (
-            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
-            patch("orchestrator.api.discord.interactions.application._find_tenant_for_discord_channel", return_value=fake_tenant),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key",
+                return_value=b"\x01" * 32,
+            ),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"
+            ),
+            patch(
+                "orchestrator.api.discord.interactions.application._find_tenant_for_discord_channel",
+                return_value=fake_tenant,
+            ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -172,7 +224,9 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         body = response.json()
         self.assertEqual(body["type"], 9)
         self.assertEqual(body["data"]["custom_id"], "ask.reply.123456789012345678")
-        self.assertEqual(body["data"]["components"][0]["components"][0]["custom_id"], "question")
+        self.assertEqual(
+            body["data"]["components"][0]["components"][0]["custom_id"], "question"
+        )
 
     def test_discord_reply_message_command_returns_modal(self) -> None:
         payload = {
@@ -197,11 +251,20 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         }
 
         with (
-            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key",
+                return_value=b"\x01" * 32,
+            ),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"
+            ),
             patch(
                 "orchestrator.api.routes.webhook_discord_interactions._resolve_interaction_subject_scope",
-                return_value=("tenant-webhook", None, "discord_channel:tenant-webhook:discord-channel-1"),
+                return_value=(
+                    "tenant-webhook",
+                    None,
+                    "discord_channel:tenant-webhook:discord-channel-1",
+                ),
             ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
@@ -210,7 +273,9 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         body = response.json()
         self.assertEqual(body["type"], 9)
         self.assertEqual(body["data"]["custom_id"], "ask.reply.123456789012345678")
-        self.assertEqual(body["data"]["components"][0]["components"][0]["custom_id"], "question")
+        self.assertEqual(
+            body["data"]["components"][0]["components"][0]["custom_id"], "question"
+        )
 
     def test_discord_reply_modal_submit_is_queued_after_immediate_ack(self) -> None:
         payload = {
@@ -237,11 +302,20 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         }
 
         with (
-            patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
-            patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key",
+                return_value=b"\x01" * 32,
+            ),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"
+            ),
             patch(
                 "orchestrator.api.routes.webhook_discord_interactions._resolve_interaction_subject_scope",
-                return_value=("tenant-webhook", None, "discord_channel:tenant-webhook:discord-channel-1"),
+                return_value=(
+                    "tenant-webhook",
+                    None,
+                    "discord_channel:tenant-webhook:discord-channel-1",
+                ),
             ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
@@ -251,9 +325,15 @@ class DiscordInteractionRouteFlowTests(JiraWebhookTestsHarness):
         self.assertEqual(body["type"], 5)
         self.assertEqual(body["data"]["flags"], 64)
         with self.session_factory() as session:
-            jobs = session.execute(
-                select(WebhookJob).where(WebhookJob.transport == "discord_interaction")
-            ).scalars().all()
+            jobs = (
+                session.execute(
+                    select(WebhookJob).where(
+                        WebhookJob.transport == "discord_interaction"
+                    )
+                )
+                .scalars()
+                .all()
+            )
         self.assertEqual(len(jobs), 1)
         self.assertEqual(jobs[0].tenant_id, "tenant-webhook")
         self.assertIsNone(jobs[0].dedupe_key)

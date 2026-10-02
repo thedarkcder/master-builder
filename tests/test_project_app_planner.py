@@ -13,7 +13,10 @@ import yaml
 
 from orchestrator.core.node_release_contracts import LEGACY_EXPO_CLI_INSTALL_COMMAND
 from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
-from orchestrator.core.deployment_setup.planner import DeploymentPlannerResponse, run_project_deployment_planning
+from orchestrator.core.deployment_setup.planner import (
+    DeploymentPlannerResponse,
+    run_project_deployment_planning,
+)
 from orchestrator.core.project_app_planner import (
     ensure_project_app,
     ProjectAppNormalizedCandidate,
@@ -24,7 +27,12 @@ from orchestrator.core.project_app_planner import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisRun, Tenant
+from orchestrator.storage.models import (
+    Project,
+    ProjectApp,
+    ProjectAppAnalysisRun,
+    Tenant,
+)
 
 
 def _write(path: Path, content: str) -> None:
@@ -51,7 +59,9 @@ def _dockerfile_pre_scan_candidate(source_path: str) -> ProjectAppPreScanCandida
     )
 
 
-def test_scan_repo_for_project_apps_detects_dockerfile_and_framework_candidates() -> None:
+def test_scan_repo_for_project_apps_detects_dockerfile_and_framework_candidates() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -74,11 +84,17 @@ CMD ["python", "app.py"]
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="manual_analyze")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="manual_analyze"
+        )
 
     assert {candidate.source_path for candidate in candidates} == {".", "frontend"}
-    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
-    frontend_candidate = next(candidate for candidate in candidates if candidate.source_path == "frontend")
+    root_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "."
+    )
+    frontend_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "frontend"
+    )
     assert root_candidate.build_strategy == "dockerfile"
     assert root_candidate.exposed_port == 8000
     assert root_candidate.needs_generated_files is False
@@ -121,12 +137,24 @@ plugins {
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="deployment_setup"
+        )
 
-    assert {candidate.source_path for candidate in candidates} == {"android", "android/app", "ios"}
-    ios_candidate = next(candidate for candidate in candidates if candidate.source_path == "ios")
-    android_root_candidate = next(candidate for candidate in candidates if candidate.source_path == "android")
-    android_app_candidate = next(candidate for candidate in candidates if candidate.source_path == "android/app")
+    assert {candidate.source_path for candidate in candidates} == {
+        "android",
+        "android/app",
+        "ios",
+    }
+    ios_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "ios"
+    )
+    android_root_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "android"
+    )
+    android_app_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "android/app"
+    )
     assert ios_candidate.detected_runtime == "ios"
     assert ios_candidate.detected_language == "swift"
     assert ios_candidate.deployment_config["source_strategy"] == "nixpacks"
@@ -166,8 +194,13 @@ def test_scan_repo_for_project_apps_detects_react_native_web_browser_target() ->
 }
 """,
         )
-        _write(root / "ios" / "Consumer.xcodeproj" / "project.pbxproj", "// !$*UTF8*$!\n")
-        _write(root / "android" / "settings.gradle", 'rootProject.name = "Consumer"\ninclude ":app"\n')
+        _write(
+            root / "ios" / "Consumer.xcodeproj" / "project.pbxproj", "// !$*UTF8*$!\n"
+        )
+        _write(
+            root / "android" / "settings.gradle",
+            'rootProject.name = "Consumer"\ninclude ":app"\n',
+        )
         _write(
             root / "android" / "app" / "build.gradle",
             """\
@@ -177,9 +210,13 @@ plugins {
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="deployment_setup"
+        )
 
-    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
+    root_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "."
+    )
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.exposed_port == 19006
     assert root_candidate.start_command == (
@@ -187,14 +224,30 @@ plugins {
     )
     assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
     assert "capture_target" not in root_candidate.deployment_config
-    assert root_candidate.deployment_config["install_command"] == LEGACY_EXPO_CLI_INSTALL_COMMAND
-    assert root_candidate.deployment_config["environment"]["NODE_OPTIONS"] == "--openssl-legacy-provider"
-    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_FETCH_RETRIES"] == "5"
-    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"] == "120000"
-    assert {"android/app", "ios"}.issubset({candidate.source_path for candidate in candidates})
+    assert (
+        root_candidate.deployment_config["install_command"]
+        == LEGACY_EXPO_CLI_INSTALL_COMMAND
+    )
+    assert (
+        root_candidate.deployment_config["environment"]["NODE_OPTIONS"]
+        == "--openssl-legacy-provider"
+    )
+    assert (
+        root_candidate.deployment_config["environment"]["NPM_CONFIG_FETCH_RETRIES"]
+        == "5"
+    )
+    assert (
+        root_candidate.deployment_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"]
+        == "120000"
+    )
+    assert {"android/app", "ios"}.issubset(
+        {candidate.source_path for candidate in candidates}
+    )
 
 
-def test_scan_repo_for_project_apps_sets_npm_install_for_react_native_web_with_stale_taobao_yarn_lock() -> None:
+def test_scan_repo_for_project_apps_sets_npm_install_for_react_native_web_with_stale_taobao_yarn_lock() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -223,21 +276,39 @@ def test_scan_repo_for_project_apps_sets_npm_install_for_react_native_web_with_s
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="deployment_setup"
+        )
 
-    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
+    root_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "."
+    )
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.start_command == (
         "NODE_OPTIONS=--openssl-legacy-provider npx expo-cli start --web --non-interactive --host lan"
     )
     assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
-    assert root_candidate.deployment_config["install_command"] == LEGACY_EXPO_CLI_INSTALL_COMMAND
-    assert root_candidate.deployment_config["environment"]["NODE_OPTIONS"] == "--openssl-legacy-provider"
-    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_FETCH_RETRIES"] == "5"
-    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"] == "120000"
+    assert (
+        root_candidate.deployment_config["install_command"]
+        == LEGACY_EXPO_CLI_INSTALL_COMMAND
+    )
+    assert (
+        root_candidate.deployment_config["environment"]["NODE_OPTIONS"]
+        == "--openssl-legacy-provider"
+    )
+    assert (
+        root_candidate.deployment_config["environment"]["NPM_CONFIG_FETCH_RETRIES"]
+        == "5"
+    )
+    assert (
+        root_candidate.deployment_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"]
+        == "120000"
+    )
 
 
-def test_scan_repo_for_project_apps_keeps_modern_expo_web_script_without_legacy_cli() -> None:
+def test_scan_repo_for_project_apps_keeps_modern_expo_web_script_without_legacy_cli() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -257,9 +328,13 @@ def test_scan_repo_for_project_apps_keeps_modern_expo_web_script_without_legacy_
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="deployment_setup"
+        )
 
-    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
+    root_candidate = next(
+        candidate for candidate in candidates if candidate.source_path == "."
+    )
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.start_command == "npm run web"
     assert "install_command" not in root_candidate.deployment_config
@@ -279,7 +354,7 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_DB: bsktpay
+      POSTGRES_DB: example-tenant
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
@@ -320,7 +395,9 @@ volumes:
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="manual_analyze")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="manual_analyze"
+        )
 
     candidate = candidates[0]
     assert candidate.source_path == "."
@@ -336,7 +413,9 @@ volumes:
             "config": {
                 "source": "docker_compose",
                 "image": "example/web:latest",
-                "ports": [{"host_port": 3000, "container_port": 3000, "protocol": "tcp"}],
+                "ports": [
+                    {"host_port": 3000, "container_port": 3000, "protocol": "tcp"}
+                ],
             },
         },
     )
@@ -350,7 +429,9 @@ volumes:
                 "source": "docker_compose",
                 "image": "apache/activemq-classic:6.1.7",
                 "service_type": "activemq",
-                "ports": [{"host_port": 61616, "container_port": 61616, "protocol": "tcp"}],
+                "ports": [
+                    {"host_port": 61616, "container_port": 61616, "protocol": "tcp"}
+                ],
             },
         },
         {
@@ -384,7 +465,9 @@ volumes:
                 "source": "docker_compose",
                 "image": "axllent/mailpit:v1.28.2",
                 "service_type": "mailpit",
-                "ports": [{"host_port": 1025, "container_port": 1025, "protocol": "tcp"}],
+                "ports": [
+                    {"host_port": 1025, "container_port": 1025, "protocol": "tcp"}
+                ],
             },
         },
         {
@@ -431,12 +514,20 @@ volumes:
         },
     )
     assert candidate.deployment_config["source_strategy"] == "docker_compose"
-    assert candidate.deployment_config["services"] == [dict(service) for service in candidate.services_json]
-    assert candidate.deployment_config["resources"] == [dict(resource) for resource in candidate.resources_json]
-    assert candidate.deployment_config["volumes"] == [dict(volume) for volume in candidate.volumes_json]
+    assert candidate.deployment_config["services"] == [
+        dict(service) for service in candidate.services_json
+    ]
+    assert candidate.deployment_config["resources"] == [
+        dict(resource) for resource in candidate.resources_json
+    ]
+    assert candidate.deployment_config["volumes"] == [
+        dict(volume) for volume in candidate.volumes_json
+    ]
 
 
-def test_scan_repo_for_project_apps_detects_maven_services_without_treating_java_packages_as_apps() -> None:
+def test_scan_repo_for_project_apps_detects_maven_services_without_treating_java_packages_as_apps() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -452,9 +543,22 @@ def test_scan_repo_for_project_apps_detects_maven_services_without_treating_java
 </project>
 """,
         )
-        _write(root / "api" / "identity" / "src" / "main" / "java" / "com" / "example" / "User.java", "class User {}")
+        _write(
+            root
+            / "api"
+            / "identity"
+            / "src"
+            / "main"
+            / "java"
+            / "com"
+            / "example"
+            / "User.java",
+            "class User {}",
+        )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="manual_analyze")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="manual_analyze"
+        )
 
     assert [candidate.source_path for candidate in candidates] == ["api/identity"]
     assert candidates[0].detected_runtime == "spring_boot"
@@ -462,7 +566,9 @@ def test_scan_repo_for_project_apps_detects_maven_services_without_treating_java
     assert candidates[0].exposed_port == 8080
 
 
-def test_scan_repo_for_project_apps_ignores_non_deployable_metadata_directories() -> None:
+def test_scan_repo_for_project_apps_ignores_non_deployable_metadata_directories() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -478,7 +584,9 @@ def test_scan_repo_for_project_apps_ignores_non_deployable_metadata_directories(
 """,
         )
 
-        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="manual_analyze")
+        candidates = scan_repo_for_project_apps(
+            checkout_path=str(root), analysis_source="manual_analyze"
+        )
 
     assert len(candidates) == 1
     assert candidates[0].source_path == "."
@@ -486,7 +594,9 @@ def test_scan_repo_for_project_apps_ignores_non_deployable_metadata_directories(
     assert candidates[0].needs_generated_files is True
 
 
-def test_normalize_project_app_planner_output_merges_runtime_payload_and_assigns_unique_slugs() -> None:
+def test_normalize_project_app_planner_output_merges_runtime_payload_and_assigns_unique_slugs() -> (
+    None
+):
     pre_scan_candidates = (
         SimpleNamespace(
             name="api-service",
@@ -574,7 +684,9 @@ def test_normalize_project_app_planner_output_merges_runtime_payload_and_assigns
     assert frontend_candidate.needs_generated_files is True
 
 
-def test_normalize_project_app_planner_output_preserves_prescan_compose_resources() -> None:
+def test_normalize_project_app_planner_output_preserves_prescan_compose_resources() -> (
+    None
+):
     pre_scan_candidates = (
         SimpleNamespace(
             name="compose-app",
@@ -595,7 +707,10 @@ def test_normalize_project_app_planner_output_preserves_prescan_compose_resource
                         "key": "postgres",
                         "kind": "postgres",
                         "name": "postgres",
-                        "config": {"compose_service": "postgres", "source": "docker_compose"},
+                        "config": {
+                            "compose_service": "postgres",
+                            "source": "docker_compose",
+                        },
                     }
                 ],
                 "backup_policies": [],
@@ -607,7 +722,10 @@ def test_normalize_project_app_planner_output_preserves_prescan_compose_resource
                     "key": "postgres",
                     "kind": "postgres",
                     "name": "postgres",
-                    "config": {"compose_service": "postgres", "source": "docker_compose"},
+                    "config": {
+                        "compose_service": "postgres",
+                        "source": "docker_compose",
+                    },
                 },
             ),
             env_json={},
@@ -636,7 +754,10 @@ def test_normalize_project_app_planner_output_preserves_prescan_compose_resource
     )
 
     assert normalized[0].resources_json == pre_scan_candidates[0].resources_json
-    assert normalized[0].deployment_config["resources"] == pre_scan_candidates[0].deployment_config["resources"]
+    assert (
+        normalized[0].deployment_config["resources"]
+        == pre_scan_candidates[0].deployment_config["resources"]
+    )
 
 
 def test_run_project_app_analysis_returns_normalized_apps_and_metadata() -> None:
@@ -670,7 +791,11 @@ def test_run_project_app_analysis_returns_normalized_apps_and_metadata() -> None
         ):
             result = run_project_app_analysis(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
-                project=SimpleNamespace(project_id="project-1", name="Project 1", github_repository="https://github.com/example/repo"),
+                project=SimpleNamespace(
+                    project_id="project-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                ),
                 checkout_path=str(root),
                 analysis_source="manual_analyze",
                 planner_version="planner-v1",
@@ -753,13 +878,30 @@ services:
     assert api_app.status == "ready"
 
 
-def test_run_project_deployment_planning_builds_one_repo_level_deployment_from_agent_plan() -> None:
+def test_run_project_deployment_planning_builds_one_repo_level_deployment_from_agent_plan() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         for module in ("identity-api", "payment-api", "search-api"):
-            _write(root / "api" / module / "pom.xml", "<project><artifactId>spring-boot-starter-web</artifactId></project>")
-            _write(root / "api" / module / "src" / "main" / "resources" / "application.properties", "spring.application.name=%s\n" % module)
-        _write(root / "api" / "shared-library" / "pom.xml", "<project><artifactId>spring-boot-starter-web</artifactId></project>")
+            _write(
+                root / "api" / module / "pom.xml",
+                "<project><artifactId>spring-boot-starter-web</artifactId></project>",
+            )
+            _write(
+                root
+                / "api"
+                / module
+                / "src"
+                / "main"
+                / "resources"
+                / "application.properties",
+                "spring.application.name=%s\n" % module,
+            )
+        _write(
+            root / "api" / "shared-library" / "pom.xml",
+            "<project><artifactId>spring-boot-starter-web</artifactId></project>",
+        )
         for module in ("admin-ui", "customer-ui"):
             _write(
                 root / "web" / module / "package.json",
@@ -768,10 +910,13 @@ def test_run_project_deployment_planning_builds_one_repo_level_deployment_from_a
 """
                 % module,
             )
-        _write(root / "web" / "legacy-ui" / "package.json", '{"name":"legacy-ui","scripts":{"start":"vite --host 0.0.0.0"}}')
+        _write(
+            root / "web" / "legacy-ui" / "package.json",
+            '{"name":"legacy-ui","scripts":{"start":"vite --host 0.0.0.0"}}',
+        )
         _write(
             root / "machine-learning" / "analytics" / "Dockerfile",
-            "FROM europe-west2-docker.pkg.dev/example/private/runtime\nCMD [\"python\", \"app.py\"]\n",
+            'FROM europe-west2-docker.pkg.dev/example/private/runtime\nCMD ["python", "app.py"]\n',
         )
         _write(
             root / ".master-builder" / "deployments" / "docker-compose.yml",
@@ -866,7 +1011,11 @@ services:
                         "key": "postgres",
                         "kind": "postgres",
                         "name": "postgres",
-                        "config": {"compose_service": "postgres", "service_type": "postgres", "source": "deployment_planner"},
+                        "config": {
+                            "compose_service": "postgres",
+                            "service_type": "postgres",
+                            "source": "deployment_planner",
+                        },
                     },
                     {
                         "key": "elasticsearch",
@@ -882,7 +1031,11 @@ services:
                         "key": "activemq",
                         "kind": "activemq",
                         "name": "activemq",
-                        "config": {"compose_service": "activemq", "service_type": "activemq", "source": "deployment_planner"},
+                        "config": {
+                            "compose_service": "activemq",
+                            "service_type": "activemq",
+                            "source": "deployment_planner",
+                        },
                     },
                 ],
                 "volumes": [
@@ -943,15 +1096,21 @@ volumes:
         }
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload) as invoke,
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ) as invoke,
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -982,8 +1141,13 @@ volumes:
     assert result.app.slug == "production"
     assert result.app.build_strategy == "docker_compose"
     assert "RUN npx vite build" in result.app.deployment_config["generated_compose_raw"]
-    assert "RUN npm ci && npm run build" not in result.app.deployment_config["generated_compose_raw"]
-    assert "docker.elastic.co" not in result.app.deployment_config["generated_compose_raw"]
+    assert (
+        "RUN npm ci && npm run build"
+        not in result.app.deployment_config["generated_compose_raw"]
+    )
+    assert (
+        "docker.elastic.co" not in result.app.deployment_config["generated_compose_raw"]
+    )
     resources = result.app.deployment_config["resources"]
     assert {resource["key"] for resource in resources} == {
         "postgres",
@@ -999,16 +1163,24 @@ volumes:
         "customer-ui",
     }
     assert all(service["public"] is True for service in services)
-    assert result.app.deployment_config["volumes"] == planner_payload["deployment"]["volumes"]
+    assert (
+        result.app.deployment_config["volumes"]
+        == planner_payload["deployment"]["volumes"]
+    )
 
 
-def test_run_project_deployment_planning_rejects_runtime_invented_deployable_service_path() -> None:
+def test_run_project_deployment_planning_rejects_runtime_invented_deployable_service_path() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
-        _write(root / "web" / "app" / "package.json", '{"name":"app","dependencies":{"vite":"^5.0.0"}}')
+        _write(
+            root / "web" / "app" / "package.json",
+            '{"name":"app","dependencies":{"vite":"^5.0.0"}}',
+        )
         _write(
             root / "machine-learning" / "analytics" / "Dockerfile",
-            "FROM europe-west2-docker.pkg.dev/example/private/runtime\nCMD [\"python\", \"app.py\"]\n",
+            'FROM europe-west2-docker.pkg.dev/example/private/runtime\nCMD ["python", "app.py"]\n',
         )
         planner_payload = {
             "deployment": {
@@ -1024,13 +1196,13 @@ def test_run_project_deployment_planning_rejects_runtime_invented_deployable_ser
                         "container_port": 4173,
                         "depends_on": [],
                     },
-                        {
-                            "key": "analytics-api",
-                            "name": "Analytics API",
-                            "kind": "api",
-                            "source_path": "machine-learning/invented",
-                            "build_strategy": "dockerfile",
-                            "compose_service": "analytics-api",
+                    {
+                        "key": "analytics-api",
+                        "name": "Analytics API",
+                        "kind": "api",
+                        "source_path": "machine-learning/invented",
+                        "build_strategy": "dockerfile",
+                        "compose_service": "analytics-api",
                         "container_port": 8080,
                         "depends_on": [],
                     },
@@ -1065,16 +1237,24 @@ services:
         }
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
-            with pytest.raises(ValueError, match="undeclared deployment service source_path"):
+            with pytest.raises(
+                ValueError, match="undeclared deployment service source_path"
+            ):
                 run_project_deployment_planning(
                     tenant=SimpleNamespace(tenant_id="tenant-1"),
                     project=SimpleNamespace(
                         project_id="project-1",
-                        name="Bsktpay",
-                        github_repository="https://github.com/example/bsktpay",
+                        name="Example Tenant",
+                        github_repository="https://github.com/example/example-tenant",
                     ),
                     checkout_path=str(root),
                     branch="main",
@@ -1085,7 +1265,9 @@ services:
                 )
 
 
-def test_run_project_deployment_planning_aligns_compose_volume_names_with_contract() -> None:
+def test_run_project_deployment_planning_aligns_compose_volume_names_with_contract() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -1147,15 +1329,21 @@ volumes:
         }
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -1168,14 +1356,24 @@ volumes:
     volumes = result.app.deployment_config["volumes"]
     assert [volume["key"] for volume in volumes] == ["elasticsearch-data"]
     assert volumes[0]["config"]["compose_volume"] == "elasticsearch-data"
-    compose_payload = yaml.safe_load(result.app.deployment_config["generated_compose_raw"])
+    compose_payload = yaml.safe_load(
+        result.app.deployment_config["generated_compose_raw"]
+    )
     assert "db" not in compose_payload["volumes"]
     assert "elasticsearch-data" in compose_payload["volumes"]
     assert compose_payload["services"]["elasticsearch"]["volumes"] == [
         "elasticsearch-data:/home/elasticsearch/data"
     ]
-    assert compose_payload["services"]["elasticsearch"]["image"] == "bitnamilegacy/elasticsearch:8"
-    assert compose_payload["services"]["elasticsearch"]["environment"]["ELASTICSEARCH_ENABLE_SECURITY"] == "false"
+    assert (
+        compose_payload["services"]["elasticsearch"]["image"]
+        == "bitnamilegacy/elasticsearch:8"
+    )
+    assert (
+        compose_payload["services"]["elasticsearch"]["environment"][
+            "ELASTICSEARCH_ENABLE_SECURITY"
+        ]
+        == "false"
+    )
     assert compose_payload["services"]["elasticsearch"]["healthcheck"]["test"] == [
         "CMD-SHELL",
         "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1",
@@ -1294,7 +1492,9 @@ services:
         }
     }
 
-    with pytest.raises(Exception, match="compose_raw contains undeclared service\\(s\\): dejavu"):
+    with pytest.raises(
+        Exception, match="compose_raw contains undeclared service\\(s\\): dejavu"
+    ):
         DeploymentPlannerResponse.model_validate(payload)
 
 
@@ -1380,16 +1580,20 @@ def test_deployment_plan_accepts_json_escaped_compose_newlines() -> None:
 
     parsed = DeploymentPlannerResponse.model_validate(payload)
 
-    assert parsed.deployment.compose_raw == "services:\n  app-web:\n    build: ./web/app"
+    assert (
+        parsed.deployment.compose_raw == "services:\n  app-web:\n    build: ./web/app"
+    )
 
 
-def test_run_project_deployment_planning_rejects_private_registry_base_image_dockerfile() -> None:
+def test_run_project_deployment_planning_rejects_private_registry_base_image_dockerfile() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
             root / "analytics" / "Dockerfile",
             """\
-FROM europe-west2-docker.pkg.dev/bsktpay/bsktpay/analytics-image-deployment
+FROM europe-west2-docker.pkg.dev/example-tenant/example-tenant/analytics-image-deployment
 CMD ["python", "main.py"]
 """,
         )
@@ -1418,16 +1622,22 @@ services:
             }
         }
         with (
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload) as invoke,
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ) as invoke,
         ):
             with pytest.raises(Exception, match="unsupported/private registry"):
                 run_project_deployment_planning(
                     tenant=SimpleNamespace(tenant_id="tenant-1"),
                     project=SimpleNamespace(
                         project_id="project-1",
-                        name="Bsktpay",
-                        github_repository="https://github.com/example/bsktpay",
+                        name="Example Tenant",
+                        github_repository="https://github.com/example/example-tenant",
                     ),
                     checkout_path=str(root),
                     branch="main",
@@ -1438,15 +1648,27 @@ services:
                 )
         prompt_payload = json.loads(invoke.call_args.kwargs["user_prompt"])
         evidence = prompt_payload["deterministic_repo_evidence"]
-        analytics_candidate = next(candidate for candidate in evidence if candidate["source_path"] == "analytics")
+        analytics_candidate = next(
+            candidate
+            for candidate in evidence
+            if candidate["source_path"] == "analytics"
+        )
         assert analytics_candidate["uses_private_base_image"] is True
 
 
-def test_run_project_deployment_planning_accepts_public_docker_hub_tagged_base_image() -> None:
+def test_run_project_deployment_planning_accepts_public_docker_hub_tagged_base_image() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
-        _write(root / "api" / "pom.xml", "<project><artifactId>spring-boot-starter-web</artifactId></project>")
-        _write(root / "web" / "package.json", '{"name":"web","dependencies":{"vite":"^5.0.0"}}')
+        _write(
+            root / "api" / "pom.xml",
+            "<project><artifactId>spring-boot-starter-web</artifactId></project>",
+        )
+        _write(
+            root / "web" / "package.json",
+            '{"name":"web","dependencies":{"vite":"^5.0.0"}}',
+        )
         planner_payload = {
             "deployment": {
                 "name": "production",
@@ -1468,7 +1690,7 @@ def test_run_project_deployment_planning_accepts_public_docker_hub_tagged_base_i
                         "build_strategy": "npm",
                         "compose_service": "web-app",
                         "container_port": 4173,
-                    }
+                    },
                 ],
                 "routes": [
                     {"service_key": "customer-api", "visibility": "public"},
@@ -1527,7 +1749,7 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_DB: bsktpay
+      POSTGRES_DB: example-tenant
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
   activemq:
@@ -1565,16 +1787,25 @@ services:
         )
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -1647,16 +1878,25 @@ services:
         )
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -1675,12 +1915,23 @@ services:
     assert 'CMD ["serve", "-s", "dist", "-l", "4173"]' in compose_raw
 
 
-def test_run_project_deployment_planning_disables_nested_maven_docker_plugin() -> None:
+def test_run_project_deployment_planning_builds_maven_with_explicit_configuration() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
-        _write(root / "api" / "pom.xml", "<project><artifactId>customer-api</artifactId></project>")
-        _write(root / "api" / "src" / "main" / "resources" / "application.properties", "spring.application.name=customer\n")
-        _write(root / "web" / "package.json", '{"name":"web","dependencies":{"vite":"^5.0.0"}}')
+        _write(
+            root / "api" / "pom.xml",
+            "<project><artifactId>customer-api</artifactId></project>",
+        )
+        _write(
+            root / "api" / "src" / "main" / "resources" / "application.properties",
+            "spring.application.name=customer\n",
+        )
+        _write(
+            root / "web" / "package.json",
+            '{"name":"web","dependencies":{"vite":"^5.0.0"}}',
+        )
         planner_payload = {
             "deployment": {
                 "name": "production",
@@ -1743,6 +1994,12 @@ def test_run_project_deployment_planning_disables_nested_maven_docker_plugin() -
                 "compose_raw": """\
 services:
   customer-api:
+    environment:
+      APP_DATABASE_URL: "${APP_DATABASE_URL:?required}"
+      SPRING_PROFILES_ACTIVE: custom
+    depends_on:
+      postgres:
+        condition: service_started
     build:
       context: ./api
       dockerfile_inline: |
@@ -1754,7 +2011,7 @@ services:
         RUN apk add --no-cache curl
         COPY --from=build /workspace/org.example.customer/target/*.jar /app/app.jar
         EXPOSE 8080 8081
-        ENTRYPOINT java -jar /app/app.jar --spring.profiles.active=aws-prod
+        ENTRYPOINT java -jar /app/app.jar
     expose:
       - "8080"
       - "8081"
@@ -1765,7 +2022,7 @@ services:
   postgres:
     image: postgres:16
     environment:
-      - POSTGRES_DB=bsktpay
+      - POSTGRES_DB=example-tenant
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
   web-app:
@@ -1821,16 +2078,25 @@ services:
         )
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -1842,83 +2108,47 @@ services:
 
     compose_raw = result.app.deployment_config["generated_compose_raw"]
     compose_payload = yaml.safe_load(compose_raw)
-    dockerfile_inline = compose_payload["services"]["customer-api"]["build"]["dockerfile_inline"]
+    dockerfile_inline = compose_payload["services"]["customer-api"]["build"][
+        "dockerfile_inline"
+    ]
     assert compose_payload["services"]["customer-api"]["build"]["context"] == "./api"
-    assert "RUN mvn -pl . -am -DskipTests -DskipDocker=true -Dmaven.test.skip=true package" in dockerfile_inline
+    assert (
+        "RUN mvn -pl . -am -DskipTests -DskipDocker=true -Dmaven.test.skip=true package"
+        in dockerfile_inline
+    )
     assert "FROM eclipse-temurin:17-jre\n" in dockerfile_inline
     assert "eclipse-temurin:17-jre-alpine" not in dockerfile_inline
     assert "RUN apk add --no-cache curl" not in dockerfile_inline
-    assert "apt-get install -y --no-install-recommends curl" in dockerfile_inline
-    assert (
-        "RUN find /workspace/target -maxdepth 1 -type f -name '*.jar' "
-        "! -name 'original-*.jar' -exec cp {} /tmp/app.jar \\; -quit"
-    ) in dockerfile_inline
-    assert "/tmp/master-builder-config" in dockerfile_inline
-    assert "spring[.]config[.]import" in dockerfile_inline
-    assert "COPY --from=build /tmp/master-builder-config /app/master-builder-config" in dockerfile_inline
-    assert "RUN cat > /app/master-builder-logback.xml <<'XML'" in dockerfile_inline
+    assert "exactly one runtime JAR" in dockerfile_inline
     assert "COPY --from=build /tmp/app.jar /app/app.jar" in dockerfile_inline
-    assert "--spring.profiles.active=aws-prod" not in dockerfile_inline
+    assert "master-builder-config" not in dockerfile_inline
+    assert "master-builder-logback" not in dockerfile_inline
+    assert "spring[.]config[.]import" not in dockerfile_inline
     environment = compose_payload["services"]["customer-api"]["environment"]
-    assert compose_payload["services"]["customer-api"]["networks"]["default"] == {}
-    assert environment["POSTGRES_DB_URL"] == "jdbc:postgresql://mb-postgres:5432/bsktpay"
-    assert environment["SPRING_DATASOURCE_URL"] == "jdbc:postgresql://mb-postgres:5432/bsktpay"
-    assert environment["SPRING_DATASOURCE_USERNAME"] == "postgres"
-    assert environment["SPRING_DATASOURCE_PASSWORD"] == "postgres"
-    assert environment["TENANT_DATASOURCE_USERNAME"] == "postgres"
-    assert environment["TENANT_DATASOURCE_PASSWORD"] == "postgres"
-    assert environment["SPRING_PROFILES_ACTIVE"] == "aws-sandbox"
-    assert environment["SPRING_CONFIG_LOCATION"] == "file:/app/master-builder-config/"
-    assert environment["LOGGING_CONFIG"] == "file:/app/master-builder-logback.xml"
-    assert environment["SPRING_CLOUD_GCP_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_CORE_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_FIRESTORE_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_PUBSUB_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_SECRETMANAGER_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_SQL_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_STORAGE_ENABLED"] == "false"
-    assert environment["SPRING_CLOUD_GCP_TRACE_ENABLED"] == "false"
-    assert environment["BASE_ENVIRONMENT"] == "sandbox"
-    assert environment["TWILIO_ENABLE"] == "false"
-    assert environment["BASE_MAIL_LOCATION"] == "pickup"
-    assert "SPRING_FLYWAY_SCHEMAS" not in environment
-    assert "SPRING_FLYWAY_DEFAULT_SCHEMA" not in environment
-    assert "SPRING_JPA_PROPERTIES_HIBERNATE_DEFAULT_SCHEMA" not in environment
-    assert environment["SPRING_JPA_HIBERNATE_DDL_AUTO"] == "none"
-    assert environment["SPRING_FLYWAY_POSTGRESQL_TRANSACTIONAL_LOCK"] == "false"
-    assert environment["BASE_WEB_PUBLIC_IMAGE_URL"] == "http://web-app:4173"
-    assert environment["SPRING_ACTIVEMQ_BROKER_URL"] == "tcp://mb-activemq:61616?wireFormat.maxInactivityDuration=0"
-    assert environment["SPRING_KAFKA_BOOTSTRAP_SERVERS"] == "mb-kafka:9092"
-    assert environment["SPRING_ELASTICSEARCH_URIS"] == "http://mb-elasticsearch:9200"
-    assert environment["SPRING_ELASTICSEARCH_HOST"] == "mb-elasticsearch"
-    assert environment["AUTH0_AUDIENCE"] == ""
-    assert environment["AUTH0_DOMAIN"] == ""
-    assert environment["spring.mail.host"] == "mb-mailpit"
-    assert environment["spring.mail.port"] == "1025"
-    assert environment["base.email.errorTo"] == "errors@localhost"
-    assert environment["BASE_EMAIL_ERROR_TO"] == "errors@localhost"
-    assert environment["SERVER_PORT"] == "8080"
-    assert environment["MANAGEMENT_SERVER_PORT"] == "8081"
-    healthcheck_test = compose_payload["services"]["customer-api"]["healthcheck"]["test"]
-    assert healthcheck_test == ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health/ || exit 1"]
+    assert environment == {
+        "APP_DATABASE_URL": "${APP_DATABASE_URL:?required}",
+        "SPRING_PROFILES_ACTIVE": "custom",
+    }
+    assert compose_payload["services"]["customer-api"]["depends_on"] == {
+        "postgres": {"condition": "service_started"},
+    }
+    healthcheck_test = compose_payload["services"]["customer-api"]["healthcheck"][
+        "test"
+    ]
+    assert healthcheck_test == [
+        "CMD-SHELL",
+        "curl -f http://localhost:8081/actuator/health/ || exit 1",
+    ]
     postgres_service = compose_payload["services"]["postgres"]
     assert postgres_service["networks"]["default"]["aliases"] == ["mb-postgres"]
-    assert postgres_service["build"]["context"] == "."
-    postgres_dockerfile = postgres_service["build"]["dockerfile_inline"]
-    assert "FROM postgis/postgis:16-3.4" in postgres_dockerfile
-    assert "create_role_if_missing postgres" in postgres_dockerfile
-    assert "create_role_if_missing postgres_customer" in postgres_dockerfile
-    assert "create_role_if_missing postgres_tenant" in postgres_dockerfile
-    assert "GRANT CONNECT ON DATABASE \"$$POSTGRES_DB\" TO postgres" in postgres_dockerfile
-    assert "DO $$" not in postgres_dockerfile
-    assert postgres_service["healthcheck"]["test"] == [
-        "CMD-SHELL",
-        "pg_isready -h localhost -U $$POSTGRES_USER -d $$POSTGRES_DB",
-    ]
-    assert "image" not in postgres_service
+    assert postgres_service["image"] == "postgres:16"
+    assert "build" not in postgres_service
+    assert "healthcheck" not in postgres_service
 
 
-def test_run_project_deployment_planning_adds_maven_healthcheck_for_health_gated_dependencies() -> None:
+def test_run_project_deployment_planning_preserves_explicit_maven_dependencies() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(
@@ -1932,48 +2162,38 @@ def test_run_project_deployment_planning_adds_maven_healthcheck_for_health_gated
 </project>
 """,
         )
-        _write(root / "api" / "management" / "pom.xml", "<project><artifactId>management</artifactId></project>")
-        _write(root / "api" / "management" / "src" / "main" / "resources" / "application.properties", "spring.application.name=management\n")
-        _write(root / "api" / "customer" / "pom.xml", "<project><artifactId>customer</artifactId></project>")
-        _write(root / "api" / "customer" / "src" / "main" / "resources" / "application.properties", "spring.application.name=customer\n")
         _write(
-            root / "api" / "customer" / "src" / "main" / "java" / "com" / "example" / "customer" / "SpringBootApp.java",
-            """\
-package com.example.customer;
-
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-
-@SpringBootApplication(scanBasePackages = {"com.example.customer"})
-public class SpringBootApp {}
-""",
+            root / "api" / "management" / "pom.xml",
+            "<project><artifactId>management</artifactId></project>",
         )
         _write(
-            root / "api" / "customer" / "src" / "main" / "java" / "com" / "example" / "customer" / "WorkflowSessionService.java",
-            """\
-package com.example.customer;
-
-import com.example.engine.ExpressionConditionalEngine;
-
-public class WorkflowSessionService {
-    private final ExpressionConditionalEngine engine;
-    public WorkflowSessionService(ExpressionConditionalEngine engine) {
-        this.engine = engine;
-    }
-}
-""",
+            root
+            / "api"
+            / "management"
+            / "src"
+            / "main"
+            / "resources"
+            / "application.properties",
+            "spring.application.name=management\n",
         )
         _write(
-            root / "api" / "engine" / "src" / "main" / "java" / "com" / "example" / "engine" / "ExpressionConditionalEngine.java",
-            """\
-package com.example.engine;
-
-import org.springframework.stereotype.Service;
-
-@Service
-public class ExpressionConditionalEngine {}
-""",
+            root / "api" / "customer" / "pom.xml",
+            "<project><artifactId>customer</artifactId></project>",
         )
-        _write(root / "web" / "package.json", '{"name":"web","dependencies":{"vite":"^5.0.0"}}')
+        _write(
+            root
+            / "api"
+            / "customer"
+            / "src"
+            / "main"
+            / "resources"
+            / "application.properties",
+            "spring.application.name=customer\n",
+        )
+        _write(
+            root / "web" / "package.json",
+            '{"name":"web","dependencies":{"vite":"^5.0.0"}}',
+        )
         planner_payload = {
             "deployment": {
                 "name": "production",
@@ -2059,7 +2279,7 @@ services:
   postgres:
     image: postgres:16
     environment:
-      - POSTGRES_DB=bsktpay
+      - POSTGRES_DB=example-tenant
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
   web-app:
@@ -2106,16 +2326,25 @@ services:
         )
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -2125,23 +2354,22 @@ services:
                 settings=SimpleNamespace(),
             )
 
-    compose_payload = yaml.safe_load(result.app.deployment_config["generated_compose_raw"])
+    compose_payload = yaml.safe_load(
+        result.app.deployment_config["generated_compose_raw"]
+    )
     management_service = compose_payload["services"]["management-api"]
     customer_service = compose_payload["services"]["customer-api"]
-    assert management_service["healthcheck"]["test"] == [
-        "CMD-SHELL",
-        "curl -f http://localhost:8080/actuator/health/ || exit 1",
-    ]
-    assert management_service["depends_on"]["postgres"] == {"condition": "service_healthy"}
-    assert customer_service["depends_on"]["management-api"] == {"condition": "service_healthy"}
-    assert customer_service["depends_on"]["postgres"] == {"condition": "service_healthy"}
-    assert "apt-get install -y --no-install-recommends curl" in management_service["build"]["dockerfile_inline"]
-    assert management_service["build"]["dockerfile_inline"].count("apt-get install -y --no-install-recommends curl") == 1
-    assert "/app/master-builder-config" in management_service["build"]["dockerfile_inline"]
-    assert "/app/master-builder-logback.xml" in management_service["build"]["dockerfile_inline"]
-    assert "apt-get install -y --no-install-recommends curl" in customer_service["build"]["dockerfile_inline"]
-    assert "/app/master-builder-config" in customer_service["build"]["dockerfile_inline"]
-    assert customer_service["environment"]["SPRING_MAIN_SOURCES"] == "com.example.engine.ExpressionConditionalEngine"
+    assert "healthcheck" not in management_service
+    assert "environment" not in management_service
+    assert "depends_on" not in management_service
+    assert customer_service["depends_on"] == ["management-api"]
+    assert "environment" not in customer_service
+    for service in (management_service, customer_service):
+        dockerfile = service["build"]["dockerfile_inline"]
+        assert "exactly one runtime JAR" in dockerfile
+        assert "master-builder-config" not in dockerfile
+        assert "master-builder-logback" not in dockerfile
+    assert compose_payload["services"]["postgres"]["image"] == "postgres:16"
 
 
 def test_run_project_deployment_planning_preserves_python_projectroot_marker() -> None:
@@ -2187,16 +2415,25 @@ services:
         scan_candidates = (_dockerfile_pre_scan_candidate("analytics"),)
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -2206,16 +2443,28 @@ services:
                 settings=SimpleNamespace(),
             )
 
-    compose_payload = yaml.safe_load(result.app.deployment_config["generated_compose_raw"])
-    dockerfile_inline = compose_payload["services"]["analytics-api"]["build"]["dockerfile_inline"]
+    compose_payload = yaml.safe_load(
+        result.app.deployment_config["generated_compose_raw"]
+    )
+    dockerfile_inline = compose_payload["services"]["analytics-api"]["build"][
+        "dockerfile_inline"
+    ]
     assert "COPY .projectroot /app/.projectroot\nCOPY src/ /app/" in dockerfile_inline
-    assert "apt-get install -y --no-install-recommends curl tesseract-ocr" in dockerfile_inline
+    assert (
+        "apt-get install -y --no-install-recommends curl tesseract-ocr"
+        in dockerfile_inline
+    )
 
 
-def test_run_project_deployment_planning_pins_legacy_langchain_for_legacy_imports() -> None:
+def test_run_project_deployment_planning_pins_legacy_langchain_for_legacy_imports() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
-        _write(root / "analytics" / "src" / "discovery" / "charts.py", "from langchain.utilities import SQLDatabase\n")
+        _write(
+            root / "analytics" / "src" / "discovery" / "charts.py",
+            "from langchain.utilities import SQLDatabase\n",
+        )
         planner_payload = {
             "deployment": {
                 "name": "production",
@@ -2250,16 +2499,25 @@ services:
         scan_candidates = (_dockerfile_pre_scan_candidate("analytics"),)
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -2269,13 +2527,19 @@ services:
                 settings=SimpleNamespace(),
             )
 
-    compose_payload = yaml.safe_load(result.app.deployment_config["generated_compose_raw"])
-    dockerfile_inline = compose_payload["services"]["analytics-api"]["build"]["dockerfile_inline"]
+    compose_payload = yaml.safe_load(
+        result.app.deployment_config["generated_compose_raw"]
+    )
+    dockerfile_inline = compose_payload["services"]["analytics-api"]["build"][
+        "dockerfile_inline"
+    ]
     assert "langchain==0.2.17" in dockerfile_inline
     assert "langchain-community==0.2.19" in dockerfile_inline
 
 
-def test_run_project_deployment_planning_pins_sklearn_to_model_artifact_version() -> None:
+def test_run_project_deployment_planning_pins_sklearn_to_model_artifact_version() -> (
+    None
+):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         _write(root / "analytics" / "requirements.txt", "scikit-learn==1.5.0\n")
@@ -2317,16 +2581,25 @@ services:
         scan_candidates = (_dockerfile_pre_scan_candidate("analytics"),)
 
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
-            patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch(
+                "orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps",
+                return_value=scan_candidates,
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.build_codex_runtime",
+                return_value=SimpleNamespace(),
+            ),
+            patch(
+                "orchestrator.core.deployment_setup.planner.invoke_runtime_json",
+                return_value=planner_payload,
+            ),
         ):
             result = run_project_deployment_planning(
                 tenant=SimpleNamespace(tenant_id="tenant-1"),
                 project=SimpleNamespace(
                     project_id="project-1",
-                    name="Bsktpay",
-                    github_repository="https://github.com/example/bsktpay",
+                    name="Example Tenant",
+                    github_repository="https://github.com/example/example-tenant",
                 ),
                 checkout_path=str(root),
                 branch="main",
@@ -2336,8 +2609,12 @@ services:
                 settings=SimpleNamespace(),
             )
 
-    compose_payload = yaml.safe_load(result.app.deployment_config["generated_compose_raw"])
-    dockerfile_inline = compose_payload["services"]["analytics-api"]["build"]["dockerfile_inline"]
+    compose_payload = yaml.safe_load(
+        result.app.deployment_config["generated_compose_raw"]
+    )
+    dockerfile_inline = compose_payload["services"]["analytics-api"]["build"][
+        "dockerfile_inline"
+    ]
     assert (
         "RUN pip install --no-cache-dir --force-reinstall "
         "numpy==1.26.4 scipy==1.11.4 scikit-learn==1.2.2"
@@ -2375,7 +2652,9 @@ services:
 
 
 def test_normalize_project_app_planner_output_rejects_traversal_source_paths() -> None:
-    with pytest.raises(Exception, match="source_path must not traverse outside the repository"):
+    with pytest.raises(
+        Exception, match="source_path must not traverse outside the repository"
+    ):
         normalize_project_app_planner_output(
             pre_scan_candidates=(),
             runtime_payload={
@@ -2397,7 +2676,9 @@ def test_normalize_project_app_planner_output_rejects_traversal_source_paths() -
         )
 
 
-def test_normalize_project_app_planner_output_rejects_runtime_invented_source_paths() -> None:
+def test_normalize_project_app_planner_output_rejects_runtime_invented_source_paths() -> (
+    None
+):
     pre_scan_candidates = (
         SimpleNamespace(
             name="api-service",
@@ -2427,7 +2708,7 @@ def test_normalize_project_app_planner_output_rejects_runtime_invented_source_pa
                 "apps": [
                     {
                         "name": "payment",
-                        "source_path": "api/org.bsktpay.data/src/main/java/org/bsktpay/data/models/rest/payment",
+                        "source_path": "api/org.example-tenant.data/src/main/java/org/example-tenant/data/models/rest/payment",
                         "build_strategy": "nixpacks",
                         "port": None,
                         "healthcheck": None,
@@ -2558,7 +2839,12 @@ def test_analysis_persistence_does_not_downgrade_live_app_status() -> None:
                 planner_version="planner-v1",
                 now=now,
             )
-            app = session.get(ProjectApp, candidate.to_project_app_kwargs(tenant_id="tenant-1", project_id="project-1")["app_id"])
+            app = session.get(
+                ProjectApp,
+                candidate.to_project_app_kwargs(
+                    tenant_id="tenant-1", project_id="project-1"
+                )["app_id"],
+            )
 
         assert app is not None
         assert app.name == "align"
@@ -2630,7 +2916,10 @@ def test_ensure_project_app_preserves_release_owned_deployment_config_fields() -
                 start_command="npm run web",
                 env_schema_json={},
                 secret_schema_json={},
-                deployment_config={"environment_name": "production", "source_strategy": "dockerfile"},
+                deployment_config={
+                    "environment_name": "production",
+                    "source_strategy": "dockerfile",
+                },
                 status="draft",
                 created_at=now,
                 updated_at=now,

@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from urllib.request import urlopen
 
-from orchestrator.tools.atlassian_oauth_attachment_service import AtlassianOAuthAttachmentService
+from orchestrator.tools.atlassian_oauth_attachment_service import (
+    AtlassianOAuthAttachmentService,
+)
 from orchestrator.tools.atlassian_oauth_callback_flow import AtlassianOAuthCallbackFlow
-from orchestrator.tools.atlassian_oauth_confluence_service import AtlassianOAuthConfluenceService
+from orchestrator.tools.atlassian_oauth_confluence_service import (
+    AtlassianOAuthConfluenceService,
+)
 from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
-from orchestrator.tools.atlassian_oauth_issue_service import JiraOAuthIssueService, _to_adf_description
+from orchestrator.tools.atlassian_oauth_issue_service import (
+    JiraOAuthIssueService,
+    _to_adf_description,
+)
 from orchestrator.tools.atlassian_oauth_models import (
     ConfluencePage,
     ConfluenceSpace,
@@ -24,7 +31,9 @@ from orchestrator.tools.atlassian_oauth_models import (
     AtlassianOAuthTokenSet,
     JiraProject,
 )
-from orchestrator.tools.atlassian_oauth_webhook_manager import AtlassianOAuthWebhookManager
+from orchestrator.tools.atlassian_oauth_webhook_manager import (
+    AtlassianOAuthWebhookManager,
+)
 
 __all__ = [
     "AtlassianOAuthClient",
@@ -51,19 +60,27 @@ class AtlassianOAuthClient:
     """Atlassian and Jira API client operations."""
 
     def __init__(self, config: AtlassianOAuthClientConfig):
-        self._http = AtlassianOAuthHttpClient(opener=lambda request, timeout=30: urlopen(request, timeout=timeout))
+        self._http = AtlassianOAuthHttpClient(
+            opener=lambda request, timeout=30: urlopen(request, timeout=timeout)
+        )
         self._callback_flow = AtlassianOAuthCallbackFlow(
             config=config,
             post_json=lambda url, payload: self._post_json(url, payload),
-            get_json=lambda url, access_token: self._get_json(url, access_token=access_token),
+            get_json=lambda url, access_token: self._get_json(
+                url, access_token=access_token
+            ),
         )
         self._issue_service = JiraOAuthIssueService(
-            get_json=lambda *, url, access_token: self._get_json(url, access_token=access_token),
-            request_json=lambda *, method, url, access_token, payload=None: self._request_json(
-                method=method,
-                url=url,
-                access_token=access_token,
-                payload=payload,
+            get_json=lambda *, url, access_token: self._get_json(
+                url, access_token=access_token
+            ),
+            request_json=lambda *, method, url, access_token, payload=None: (
+                self._request_json(
+                    method=method,
+                    url=url,
+                    access_token=access_token,
+                    payload=payload,
+                )
             ),
         )
         self._webhook_manager = AtlassianOAuthWebhookManager(
@@ -75,22 +92,30 @@ class AtlassianOAuthClient:
             )
         )
         self._attachment_service = AtlassianOAuthAttachmentService(
-            post_multipart=lambda *, url, access_token, filename, content, content_type="application/octet-stream": self._post_multipart(
-                url=url,
-                access_token=access_token,
-                filename=filename,
-                content=content,
-                content_type=content_type,
+            post_multipart=lambda *, url, access_token, filename, content, content_type="application/octet-stream": (
+                self._post_multipart(
+                    url=url,
+                    access_token=access_token,
+                    filename=filename,
+                    content=content,
+                    content_type=content_type,
+                )
             ),
-            get_bytes=lambda *, url, access_token: self._get_bytes(url=url, access_token=access_token),
+            get_bytes=lambda *, url, access_token: self._get_bytes(
+                url=url, access_token=access_token
+            ),
         )
         self._confluence_service = AtlassianOAuthConfluenceService(
-            get_json=lambda *, url, access_token: self._get_json(url, access_token=access_token),
-            request_json=lambda *, method, url, access_token, payload=None: self._request_json(
-                method=method,
-                url=url,
-                access_token=access_token,
-                payload=payload,
+            get_json=lambda *, url, access_token: self._get_json(
+                url, access_token=access_token
+            ),
+            request_json=lambda *, method, url, access_token, payload=None: (
+                self._request_json(
+                    method=method,
+                    url=url,
+                    access_token=access_token,
+                    payload=payload,
+                )
             ),
         )
 
@@ -144,11 +169,15 @@ class AtlassianOAuthClient:
     def refresh_tokens(self, *, refresh_token: str) -> AtlassianOAuthTokenSet:
         return self._callback_flow.refresh_tokens(refresh_token=refresh_token)
 
-    def list_accessible_resources(self, *, access_token: str) -> list[AtlassianOAuthResource]:
+    def list_accessible_resources(
+        self, *, access_token: str
+    ) -> list[AtlassianOAuthResource]:
         return self._callback_flow.list_accessible_resources(access_token=access_token)
 
     def list_projects(self, *, access_token: str, cloud_id: str) -> list[JiraProject]:
-        return self._issue_service.list_projects(access_token=access_token, cloud_id=cloud_id)
+        return self._issue_service.list_projects(
+            access_token=access_token, cloud_id=cloud_id
+        )
 
     def get_confluence_space_by_key(
         self,
@@ -534,7 +563,9 @@ class AtlassianOAuthClient:
         access_token: str,
         cloud_id: str,
     ) -> list[dict]:
-        return self._webhook_manager.list_webhooks(access_token=access_token, cloud_id=cloud_id)
+        return self._webhook_manager.list_webhooks(
+            access_token=access_token, cloud_id=cloud_id
+        )
 
     def delete_webhooks(
         self,

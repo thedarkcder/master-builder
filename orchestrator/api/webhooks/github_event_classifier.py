@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.api.webhooks.github_payload_contracts import extract_pull_request_targets
+from orchestrator.api.webhooks.github_payload_contracts import (
+    extract_pull_request_targets,
+)
 from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
 from orchestrator.core.projects.policy import resolve_effective_policy
 
@@ -39,8 +41,12 @@ def resolve_github_policy_state(
     )
     allow_code_reviews = bool(effective_policy.get("allow_code_reviews", True))
     allow_auto_merge = bool(effective_policy.get("allow_auto_merge"))
-    allow_pr_remediation = allow_code_reviews and bool(effective_policy.get("allow_pr_remediation", True))
-    allow_manual_pr_fix_requests = bool(effective_policy.get("allow_manual_pr_fix_requests", True))
+    allow_pr_remediation = allow_code_reviews and bool(
+        effective_policy.get("allow_pr_remediation", True)
+    )
+    allow_manual_pr_fix_requests = bool(
+        effective_policy.get("allow_manual_pr_fix_requests", True)
+    )
     manual_fix_requested = (
         github_event in {"issue_comment", "pull_request_review_comment"}
         and parse_manual_pr_fix_request(payload=payload) is not None
@@ -81,7 +87,9 @@ def classify_github_trigger_state(
             normalized_event in {"issue_comment", "pull_request_review_comment"}
             and parse_manual_pr_fix_request(payload=payload) is not None
         ),
-        ignored_reason=_resolve_ignored_review_reason(github_event=normalized_event, payload=payload),
+        ignored_reason=_resolve_ignored_review_reason(
+            github_event=normalized_event, payload=payload
+        ),
         sender_login=_resolve_primary_sender_login(payload=payload),
     )
 
@@ -184,7 +192,9 @@ def _is_full_review_trigger(
     if github_event == "pull_request":
         return normalized_action != "closed"
     if github_event in {"check_run", "check_suite"}:
-        return normalized_action == "completed" and bool(extract_pull_request_targets(payload))
+        return normalized_action == "completed" and bool(
+            extract_pull_request_targets(payload)
+        )
     return False
 
 

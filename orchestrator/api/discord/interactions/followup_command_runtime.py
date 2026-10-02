@@ -53,7 +53,9 @@ async def run_discord_application_command_followup(
         return
 
     try:
-        user_id, channel_id, command_text, command_params, attachments = parse_discord_interaction_command_fn(payload)
+        user_id, channel_id, command_text, command_params, attachments = (
+            parse_discord_interaction_command_fn(payload)
+        )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
         logger.exception(
@@ -116,7 +118,6 @@ async def run_discord_decision_gate_reply_followup(
     )
 
 
-
 def run_discord_decision_gate_reply_followup_blocking(
     *,
     tenant_id: str | None,
@@ -142,7 +143,6 @@ def run_discord_decision_gate_reply_followup_blocking(
             "reply_text": reply_text,
         },
     )
-
 
 
 def run_discord_command_followup_blocking(
@@ -246,7 +246,6 @@ async def run_discord_ask_confirmation_followup(
         application_id=application_id,
         interaction_token=interaction_token,
     )
-
 
 
 def run_discord_ask_confirmation_followup_blocking(

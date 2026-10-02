@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from orchestrator.core.decision.clarification_service import evaluate_issue_clarification_state
+from orchestrator.core.decision.clarification_service import (
+    evaluate_issue_clarification_state,
+)
 from orchestrator.core.decision.engine import DecisionEngineResult, DecisionEventInput
 
 

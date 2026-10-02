@@ -14,7 +14,10 @@ class DiscordPersonaRoomTests(unittest.TestCase):
     def test_build_voice_room_config_merges_tenant_and_project_maps(self) -> None:
         room_config = build_voice_room_config(
             {"persona_names": {"pm": "Ava"}, "persona_voices": {"default": "alba"}},
-            {"persona_names": {"architect": "Soren"}, "persona_voices": {"architect": "javert"}},
+            {
+                "persona_names": {"architect": "Soren"},
+                "persona_voices": {"architect": "javert"},
+            },
         )
 
         self.assertEqual(room_config["persona_names"]["pm"], "Ava")
@@ -26,7 +29,10 @@ class DiscordPersonaRoomTests(unittest.TestCase):
         profile = resolve_voice_room_persona_profile(
             persona_id="architect",
             tenant_discord_config={"persona_names": {"architect": "Fallback"}},
-            project_discord_config={"persona_names": {"architect": "Soren"}, "persona_voices": {"architect": "javert"}},
+            project_discord_config={
+                "persona_names": {"architect": "Soren"},
+                "persona_voices": {"architect": "javert"},
+            },
         )
 
         self.assertEqual(profile.persona_id, "architect")

@@ -14,7 +14,14 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-DEPLOYMENT_PLANE_STATES = ("unconfigured", "provisioning", "active", "degraded", "paused", "failed")
+DEPLOYMENT_PLANE_STATES = (
+    "unconfigured",
+    "provisioning",
+    "active",
+    "degraded",
+    "paused",
+    "failed",
+)
 INFRASTRUCTURE_PROVIDERS = ("aws", "hetzner")
 
 
@@ -81,7 +88,9 @@ class AdminApiClient:
                 raw = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
-            raise ApiRequestError(f"{method} {path} failed with HTTP {exc.code}: {error_body}") from exc
+            raise ApiRequestError(
+                f"{method} {path} failed with HTTP {exc.code}: {error_body}"
+            ) from exc
         except URLError as exc:
             raise ApiRequestError(f"{method} {path} failed: {exc.reason}") from exc
 
@@ -94,7 +103,9 @@ class AdminApiClient:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ApiRequestError(f"{method} {path} returned invalid JSON: {raw[:200]}") from exc
+            raise ApiRequestError(
+                f"{method} {path} returned invalid JSON: {raw[:200]}"
+            ) from exc
 
     def get_tenant_deployment_plane(self, *, tenant_id: str) -> dict[str, Any]:
         response = self._request_json(
@@ -106,7 +117,9 @@ class AdminApiClient:
             raise ApiRequestError("Expected deployment-plane response object")
         return response
 
-    def update_tenant_deployment_plane(self, *, tenant_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def update_tenant_deployment_plane(
+        self, *, tenant_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         response = self._request_json(
             method="PUT",
             path=f"/api/admin/tenants/{quote(tenant_id, safe='')}/deployment-plane",
@@ -117,7 +130,9 @@ class AdminApiClient:
             raise ApiRequestError("Expected deployment-plane update response object")
         return response
 
-    def upsert_tenant_secret(self, *, tenant_id: str, secret_key: str, value: str) -> dict[str, Any]:
+    def upsert_tenant_secret(
+        self, *, tenant_id: str, secret_key: str, value: str
+    ) -> dict[str, Any]:
         response = self._request_json(
             method="PUT",
             path=f"/api/admin/tenants/{quote(tenant_id, safe='')}/secrets/{quote(secret_key, safe='')}",
@@ -168,7 +183,9 @@ def deployment_plane_secret_ref(*, tenant_id: str, secret_key_or_ref: str) -> st
     return tenant_secret_ref(tenant_id=tenant_id, secret_key=normalized)
 
 
-def build_webhook_url(*, public_api_base_url: str, tenant_id: str, project_id: str, token: str) -> str:
+def build_webhook_url(
+    *, public_api_base_url: str, tenant_id: str, project_id: str, token: str
+) -> str:
     base = _normalize_base_url(public_api_base_url)
     return (
         f"{base}/deployments/coolify/webhook/"
@@ -230,34 +247,82 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Wire tenant-specific internal Coolify secrets + deployment plane + webhook URLs.",
     )
-    parser.add_argument("--execute", action="store_true", help="Actually write secrets and deployment-plane configuration.")
-    parser.add_argument("--api-base-url", required=True, help="Admin API base URL, for example https://orchestrator.example.com")
-    parser.add_argument("--public-api-base-url", default="", help="Public API base URL used for webhook URLs. Defaults to --api-base-url.")
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually write secrets and deployment-plane configuration.",
+    )
+    parser.add_argument(
+        "--api-base-url",
+        required=True,
+        help="Admin API base URL, for example https://orchestrator.example.com",
+    )
+    parser.add_argument(
+        "--public-api-base-url",
+        default="",
+        help="Public API base URL used for webhook URLs. Defaults to --api-base-url.",
+    )
     parser.add_argument("--tenant-id", required=True, help="Target tenant identifier.")
-    parser.add_argument("--project-id", action="append", default=[], help="Optional project ID filter. Repeat to target multiple projects.")
+    parser.add_argument(
+        "--project-id",
+        action="append",
+        default=[],
+        help="Optional project ID filter. Repeat to target multiple projects.",
+    )
 
-    parser.add_argument("--admin-bearer-token", default="", help="Admin bearer token. If omitted, basic auth is used.")
-    parser.add_argument("--admin-username", default="", help="Admin username for basic auth when bearer token is omitted.")
-    parser.add_argument("--admin-password", default="", help="Admin password for basic auth when bearer token is omitted.")
+    parser.add_argument(
+        "--admin-bearer-token",
+        default="",
+        help="Admin bearer token. If omitted, basic auth is used.",
+    )
+    parser.add_argument(
+        "--admin-username",
+        default="",
+        help="Admin username for basic auth when bearer token is omitted.",
+    )
+    parser.add_argument(
+        "--admin-password",
+        default="",
+        help="Admin password for basic auth when bearer token is omitted.",
+    )
 
-    parser.add_argument("--infrastructure-provider", choices=INFRASTRUCTURE_PROVIDERS, default=None)
+    parser.add_argument(
+        "--infrastructure-provider", choices=INFRASTRUCTURE_PROVIDERS, default=None
+    )
     parser.add_argument("--region", default=None)
     parser.add_argument("--base-domain", default=None)
     parser.add_argument("--platform-subdomain", default=None)
-    parser.add_argument("--coolify-api-base-url", default=None, help="Coolify API base URL, for example https://coolify.example.com/api/v1")
+    parser.add_argument(
+        "--coolify-api-base-url",
+        default=None,
+        help="Coolify API base URL, for example https://coolify.example.com/api/v1",
+    )
     parser.add_argument("--coolify-project-uuid", default=None)
     parser.add_argument("--coolify-environment-name", default=None)
     parser.add_argument("--coolify-server-uuid", default=None)
     parser.add_argument("--coolify-destination-uuid", default=None)
     parser.add_argument("--coolify-github-app-uuid", default=None)
-    parser.add_argument("--deployment-state", choices=DEPLOYMENT_PLANE_STATES, default=None)
+    parser.add_argument(
+        "--deployment-state", choices=DEPLOYMENT_PLANE_STATES, default=None
+    )
 
     parser.add_argument("--coolify-api-token-env", default="COOLIFY_API_TOKEN")
     parser.add_argument("--coolify-api-token-secret-key", default="COOLIFY_API_TOKEN")
     parser.add_argument("--coolify-webhook-token-env", default="COOLIFY_WEBHOOK_TOKEN")
-    parser.add_argument("--coolify-webhook-token-secret-key", default="COOLIFY_WEBHOOK_TOKEN")
-    parser.add_argument("--generate-webhook-token", action="store_true", help="Generate a random webhook token if env var is missing.")
-    parser.add_argument("--webhook-token-bytes", type=int, default=32, help="Random bytes for generated webhook token.")
+    parser.add_argument(
+        "--coolify-webhook-token-secret-key", default="COOLIFY_WEBHOOK_TOKEN"
+    )
+    parser.add_argument(
+        "--generate-webhook-token",
+        action="store_true",
+        help="Generate a random webhook token if env var is missing.",
+    )
+    parser.add_argument(
+        "--webhook-token-bytes",
+        type=int,
+        default=32,
+        help="Random bytes for generated webhook token.",
+    )
 
     parser.add_argument(
         "--tenant-secret-env",
@@ -324,23 +389,31 @@ def _resolve_auth_header(*, args: argparse.Namespace, environ: dict[str, str]) -
 def _add_tenant_secret_value(*, target: dict[str, str], key: str, value: str) -> None:
     existing = target.get(key)
     if existing is not None and existing != value:
-        raise WireConfigError(f"Tenant secret key '{key}' was provided with conflicting values.")
+        raise WireConfigError(
+            f"Tenant secret key '{key}' was provided with conflicting values."
+        )
     target[key] = value
 
 
-def build_wire_config(*, args: argparse.Namespace, environ: dict[str, str] | None = None) -> WireConfig:
+def build_wire_config(
+    *, args: argparse.Namespace, environ: dict[str, str] | None = None
+) -> WireConfig:
     env = os.environ if environ is None else environ
     tenant_id = _normalize_required(args.tenant_id, field_name="tenant_id")
     api_base_url = _normalize_base_url(args.api_base_url)
     public_api_base_url = _normalize_base_url(args.public_api_base_url or api_base_url)
     auth_header = _resolve_auth_header(args=args, environ=env)
 
-    api_token_env = _normalize_required(args.coolify_api_token_env, field_name="coolify_api_token_env")
+    api_token_env = _normalize_required(
+        args.coolify_api_token_env, field_name="coolify_api_token_env"
+    )
     api_token_value = _load_env_value(env_name=api_token_env, environ=env)
     if api_token_value is None:
         raise WireConfigError(f"Missing required environment variable: {api_token_env}")
 
-    webhook_token_env = _normalize_required(args.coolify_webhook_token_env, field_name="coolify_webhook_token_env")
+    webhook_token_env = _normalize_required(
+        args.coolify_webhook_token_env, field_name="coolify_webhook_token_env"
+    )
     webhook_token_value = _load_env_value(env_name=webhook_token_env, environ=env)
     webhook_token_source = f"env:{webhook_token_env}"
     if webhook_token_value is None:
@@ -356,11 +429,15 @@ def build_wire_config(*, args: argparse.Namespace, environ: dict[str, str] | Non
 
     tenant_secret_values: dict[str, str] = {}
     for raw_mapping in args.tenant_secret_env:
-        secret_key, env_name = _parse_assignment(raw_mapping, flag_name="--tenant-secret-env")
+        secret_key, env_name = _parse_assignment(
+            raw_mapping, flag_name="--tenant-secret-env"
+        )
         env_value = _load_env_value(env_name=env_name, environ=env)
         if env_value is None:
             raise WireConfigError(f"Missing required environment variable: {env_name}")
-        _add_tenant_secret_value(target=tenant_secret_values, key=secret_key, value=env_value)
+        _add_tenant_secret_value(
+            target=tenant_secret_values, key=secret_key, value=env_value
+        )
 
     api_token_secret_key = _normalize_required(
         args.coolify_api_token_secret_key,
@@ -370,15 +447,27 @@ def build_wire_config(*, args: argparse.Namespace, environ: dict[str, str] | Non
         args.coolify_webhook_token_secret_key,
         field_name="coolify_webhook_token_secret_key",
     )
-    _add_tenant_secret_value(target=tenant_secret_values, key=api_token_secret_key, value=api_token_value)
-    _add_tenant_secret_value(target=tenant_secret_values, key=webhook_token_secret_key, value=webhook_token_value)
+    _add_tenant_secret_value(
+        target=tenant_secret_values, key=api_token_secret_key, value=api_token_value
+    )
+    _add_tenant_secret_value(
+        target=tenant_secret_values,
+        key=webhook_token_secret_key,
+        value=webhook_token_value,
+    )
 
     secret_ref_updates = {
-        "coolify_api_token": tenant_secret_ref(tenant_id=tenant_id, secret_key=api_token_secret_key),
-        "coolify_webhook_token": tenant_secret_ref(tenant_id=tenant_id, secret_key=webhook_token_secret_key),
+        "coolify_api_token": tenant_secret_ref(
+            tenant_id=tenant_id, secret_key=api_token_secret_key
+        ),
+        "coolify_webhook_token": tenant_secret_ref(
+            tenant_id=tenant_id, secret_key=webhook_token_secret_key
+        ),
     }
     for raw_mapping in args.plane_secret_ref:
-        ref_key, secret_key_or_ref = _parse_assignment(raw_mapping, flag_name="--plane-secret-ref")
+        ref_key, secret_key_or_ref = _parse_assignment(
+            raw_mapping, flag_name="--plane-secret-ref"
+        )
         secret_ref_updates[ref_key] = deployment_plane_secret_ref(
             tenant_id=tenant_id,
             secret_key_or_ref=secret_key_or_ref,
@@ -422,11 +511,18 @@ def _selected_projects(
 ) -> list[dict[str, Any]]:
     if not selected_project_ids:
         return projects
-    selected = [project for project in projects if str(project.get("project_id") or "").strip() in selected_project_ids]
+    selected = [
+        project
+        for project in projects
+        if str(project.get("project_id") or "").strip() in selected_project_ids
+    ]
     unknown = sorted(
         project_id
         for project_id in selected_project_ids
-        if all(str(project.get("project_id") or "").strip() != project_id for project in projects)
+        if all(
+            str(project.get("project_id") or "").strip() != project_id
+            for project in projects
+        )
     )
     if unknown:
         raise WireConfigError("Unknown project ids for tenant: " + ", ".join(unknown))
@@ -434,7 +530,9 @@ def _selected_projects(
 
 
 def run(config: WireConfig) -> tuple[int, dict[str, Any]]:
-    client = AdminApiClient(base_url=config.api_base_url, auth_header=config.auth_header)
+    client = AdminApiClient(
+        base_url=config.api_base_url, auth_header=config.auth_header
+    )
     existing_plane = client.get_tenant_deployment_plane(tenant_id=config.tenant_id)
     merged_plane = merge_deployment_plane_payload(
         existing_plane=existing_plane,
@@ -469,7 +567,9 @@ def run(config: WireConfig) -> tuple[int, dict[str, Any]]:
         updated_plane = merged_plane
 
     projects = client.list_projects(tenant_id=config.tenant_id)
-    selected_projects = _selected_projects(projects=projects, selected_project_ids=config.selected_project_ids)
+    selected_projects = _selected_projects(
+        projects=projects, selected_project_ids=config.selected_project_ids
+    )
     webhook_rows = [
         {
             "project_id": project_id,
@@ -522,7 +622,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not config.execute:
-        print("[plan] Dry-run mode. Add --execute to persist secrets and deployment-plane config.")
+        print(
+            "[plan] Dry-run mode. Add --execute to persist secrets and deployment-plane config."
+        )
     try:
         exit_code, summary = run(config)
     except (WireConfigError, ApiRequestError) as exc:

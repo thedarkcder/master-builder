@@ -6,7 +6,10 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 from orchestrator.tools.project_repo_checkout import collect_local_repo_context
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
@@ -51,7 +54,7 @@ def repo_full_name_from_repository_url(repository_url: str) -> str | None:
     github_prefix = "github.com/"
     if not normalized_repo.startswith(github_prefix):
         return None
-    repo_full_name = normalized_repo[len(github_prefix):].strip("/")
+    repo_full_name = normalized_repo[len(github_prefix) :].strip("/")
     if repo_full_name.count("/") != 1:
         return None
     return repo_full_name
@@ -68,7 +71,9 @@ def collect_github_ask_context(
     github_client_from_tenant_config_fn=github_client_from_tenant_config,
     collect_local_repo_context_fn=collect_local_repo_context,
 ) -> dict:
-    normalized_project_keys = {str(value).strip().upper() for value in project_keys if str(value).strip()}
+    normalized_project_keys = {
+        str(value).strip().upper() for value in project_keys if str(value).strip()
+    }
     query = select(Project).where(
         Project.tenant_id == tenant.tenant_id,
         Project.is_archived.is_(False),
@@ -77,7 +82,8 @@ def collect_github_ask_context(
     scoped_projects = [
         project
         for project in projects
-        if not normalized_project_keys or project.jira_project_key.strip().upper() in normalized_project_keys
+        if not normalized_project_keys
+        or project.jira_project_key.strip().upper() in normalized_project_keys
     ]
     if not scoped_projects:
         return {"available": False, "reason": "no_active_projects", "repositories": []}
@@ -102,7 +108,11 @@ def collect_github_ask_context(
             entry["project_keys"].append(project_key)
 
     if not repo_map:
-        return {"available": False, "reason": "no_github_repositories", "repositories": []}
+        return {
+            "available": False,
+            "reason": "no_github_repositories",
+            "repositories": [],
+        }
 
     settings = get_settings_fn()
     for project in scoped_projects:

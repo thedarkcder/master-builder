@@ -8,16 +8,23 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.clarification.questions import (
+    ClarificationQuestion,
+    ClarificationQuestionSet,
+)
 from orchestrator.core.pm.followup_context_service import upsert_followup_context
 from orchestrator.storage.models import FollowupContext
 
 
-def _question_set(values: tuple[object, ...] | list[object] | None) -> ClarificationQuestionSet:
+def _question_set(
+    values: tuple[object, ...] | list[object] | None,
+) -> ClarificationQuestionSet:
     return ClarificationQuestionSet.from_values(values)
 
 
-def clarification_state_fingerprint(*, questions: tuple[object, ...] | list[object]) -> str:
+def clarification_state_fingerprint(
+    *, questions: tuple[object, ...] | list[object]
+) -> str:
     payload = json.dumps(
         _question_set(questions).to_payload(),
         sort_keys=True,
@@ -69,23 +76,37 @@ def resolve_active_clarification_context(
     normalized_context_type = str(context_type or "").strip()
     normalized_transport = str(transport or "").strip()
     normalized_reply_scope = str(reply_scope or "").strip()
-    if not normalized_tenant_id or not normalized_issue_key or not normalized_context_type:
+    if (
+        not normalized_tenant_id
+        or not normalized_issue_key
+        or not normalized_context_type
+    ):
         return None
-    rows = session.execute(
-        select(FollowupContext)
-        .where(
-            FollowupContext.tenant_id == normalized_tenant_id,
-            FollowupContext.issue_key == normalized_issue_key,
-            FollowupContext.context_type == normalized_context_type,
-            FollowupContext.status == "active",
+    rows = (
+        session.execute(
+            select(FollowupContext)
+            .where(
+                FollowupContext.tenant_id == normalized_tenant_id,
+                FollowupContext.issue_key == normalized_issue_key,
+                FollowupContext.context_type == normalized_context_type,
+                FollowupContext.status == "active",
+            )
+            .order_by(FollowupContext.updated_at.desc())
         )
-        .order_by(FollowupContext.updated_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for row in rows:
         metadata = dict(getattr(row, "metadata_json", {}) or {})
-        if normalized_transport and str(metadata.get("transport") or "").strip() != normalized_transport:
+        if (
+            normalized_transport
+            and str(metadata.get("transport") or "").strip() != normalized_transport
+        ):
             continue
-        if normalized_reply_scope and str(metadata.get("reply_scope") or "").strip() != normalized_reply_scope:
+        if (
+            normalized_reply_scope
+            and str(metadata.get("reply_scope") or "").strip() != normalized_reply_scope
+        ):
             continue
         return row
     return None
@@ -116,12 +137,18 @@ def has_matching_active_clarification_state(
     existing_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
     if not existing_fingerprint:
         existing_questions = ClarificationQuestionSet.from_values(
-            metadata.get("questions") if isinstance(metadata.get("questions"), list) else ()
+            metadata.get("questions")
+            if isinstance(metadata.get("questions"), list)
+            else ()
         )
         if not existing_questions:
             return False
-        existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)
-    return existing_fingerprint == clarification_state_fingerprint(questions=normalized_questions.questions)
+        existing_fingerprint = clarification_state_fingerprint(
+            questions=existing_questions.questions
+        )
+    return existing_fingerprint == clarification_state_fingerprint(
+        questions=normalized_questions.questions
+    )
 
 
 def jira_comment_evidence_id(followup_context: FollowupContext | None) -> str | None:
@@ -132,7 +159,9 @@ def jira_comment_evidence_id(followup_context: FollowupContext | None) -> str | 
         value = str(metadata.get(key) or "").strip()
         if value:
             return value
-    root_message_id = str(getattr(followup_context, "root_message_id", "") or "").strip()
+    root_message_id = str(
+        getattr(followup_context, "root_message_id", "") or ""
+    ).strip()
     return root_message_id or None
 
 
@@ -161,12 +190,18 @@ def matching_active_jira_clarification_evidence_id(
     existing_fingerprint = str(metadata.get("question_state_fingerprint") or "").strip()
     if not existing_fingerprint:
         existing_questions = ClarificationQuestionSet.from_values(
-            metadata.get("questions") if isinstance(metadata.get("questions"), list) else ()
+            metadata.get("questions")
+            if isinstance(metadata.get("questions"), list)
+            else ()
         )
         if not existing_questions:
             return None
-        existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)
-    if existing_fingerprint != clarification_state_fingerprint(questions=normalized_questions.questions):
+        existing_fingerprint = clarification_state_fingerprint(
+            questions=existing_questions.questions
+        )
+    if existing_fingerprint != clarification_state_fingerprint(
+        questions=normalized_questions.questions
+    ):
         return None
     return jira_comment_evidence_id(followup_context)
 
@@ -194,16 +229,24 @@ def upsert_clarification_projection(
         metadata["reply_scope"] = spec.reply_scope
     metadata["question_state_fingerprint"] = fingerprint
     if "questions" not in metadata:
-        metadata["questions"] = ClarificationQuestionSet(questions=spec.questions).to_payload()
+        metadata["questions"] = ClarificationQuestionSet(
+            questions=spec.questions
+        ).to_payload()
     already_projected = False
-    existing_fingerprint = str(existing_metadata.get("question_state_fingerprint") or "").strip()
+    existing_fingerprint = str(
+        existing_metadata.get("question_state_fingerprint") or ""
+    ).strip()
     if existing is not None:
         if not existing_fingerprint:
             existing_questions = ClarificationQuestionSet.from_values(
-                existing_metadata.get("questions") if isinstance(existing_metadata.get("questions"), list) else ()
+                existing_metadata.get("questions")
+                if isinstance(existing_metadata.get("questions"), list)
+                else ()
             )
             if existing_questions:
-                existing_fingerprint = clarification_state_fingerprint(questions=existing_questions.questions)
+                existing_fingerprint = clarification_state_fingerprint(
+                    questions=existing_questions.questions
+                )
         already_projected = existing_fingerprint == fingerprint
     if existing is not None and not already_projected:
         metadata.pop("jira_comment_id", None)

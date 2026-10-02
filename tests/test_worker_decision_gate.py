@@ -39,7 +39,7 @@ def _oauth_context():
 def _run() -> SimpleNamespace:
     return SimpleNamespace(
         tenant_id="tenant-1",
-        issue_key="example-46",
+        issue_key="DEMO-46",
         run_id="run-1",
         project_id=None,
         issue_summary="Summary",
@@ -83,7 +83,9 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1")
     captured: dict[str, object] = {}
 
-    def _mark_terminal(*, session, run_id: str, terminal_status: str, last_error: str | None = None):  # noqa: ANN001
+    def _mark_terminal(
+        *, session, run_id: str, terminal_status: str, last_error: str | None = None
+    ):  # noqa: ANN001
         _ = session
         captured["run_id"] = run_id
         captured["terminal_status"] = terminal_status
@@ -93,14 +95,19 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
         run.finished_at = datetime.now()
         return run
 
-    with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
+    with patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
         terminal, meta = apply_decision_gate(
             session=session,
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
             tenant_atlassian_oauth_context_fn=lambda **_: None,
-            evaluate_worker_decision_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("Tenant Atlassian context is incomplete")),
+            evaluate_worker_decision_fn=lambda **_: (_ for _ in ()).throw(
+                RuntimeError("Tenant Atlassian context is incomplete")
+            ),
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
@@ -124,7 +131,9 @@ def test_apply_decision_gate_marks_failed_when_blocked_decision_has_no_reason() 
     tenant = SimpleNamespace(tenant_id="tenant-1")
     captured: dict[str, object] = {}
 
-    def _mark_terminal(*, session, run_id: str, terminal_status: str, last_error: str | None = None):  # noqa: ANN001
+    def _mark_terminal(
+        *, session, run_id: str, terminal_status: str, last_error: str | None = None
+    ):  # noqa: ANN001
         _ = session
         captured["run_id"] = run_id
         captured["terminal_status"] = terminal_status
@@ -134,7 +143,9 @@ def test_apply_decision_gate_marks_failed_when_blocked_decision_has_no_reason() 
         run.finished_at = datetime.now()
         return run
 
-    worker_decision = _worker_decision(allowed=False, block_reason="decision_gate_required")
+    worker_decision = _worker_decision(
+        allowed=False, block_reason="decision_gate_required"
+    )
     worker_decision.decision_gate = DecisionGateResult(
         triggered=True,
         reason="",
@@ -144,7 +155,10 @@ def test_apply_decision_gate_marks_failed_when_blocked_decision_has_no_reason() 
         tags=(),
     )
 
-    with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
+    with patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
         terminal, meta = apply_decision_gate(
             session=session,
             run=run,
@@ -169,10 +183,15 @@ def test_apply_decision_gate_marks_failed_when_blocked_decision_has_no_reason() 
 def test_apply_decision_gate_returns_none_when_issue_is_ready() -> None:
     session = _Session()
     run = _run()
-    tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
+    tenant = SimpleNamespace(
+        tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"}
+    )
     oauth = _oauth_context()
 
-    with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
+    with patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
         terminal, meta = apply_decision_gate(
             session=session,
             run=run,
@@ -191,13 +210,17 @@ def test_apply_decision_gate_returns_none_when_issue_is_ready() -> None:
     assert meta is None
 
 
-def test_apply_decision_gate_marks_failed_when_worker_decision_has_no_gate_payload() -> None:
+def test_apply_decision_gate_marks_failed_when_worker_decision_has_no_gate_payload() -> (
+    None
+):
     session = _Session()
     run = _run()
     tenant = SimpleNamespace(tenant_id="tenant-1")
     captured: dict[str, object] = {}
 
-    def _mark_terminal(*, session, run_id: str, terminal_status: str, last_error: str | None = None):  # noqa: ANN001
+    def _mark_terminal(
+        *, session, run_id: str, terminal_status: str, last_error: str | None = None
+    ):  # noqa: ANN001
         _ = session
         captured["run_id"] = run_id
         captured["terminal_status"] = terminal_status
@@ -215,7 +238,10 @@ def test_apply_decision_gate_marks_failed_when_worker_decision_has_no_gate_paylo
         classification="clear",
     )
 
-    with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
+    with patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
         terminal, meta = apply_decision_gate(
             session=session,
             run=run,
@@ -266,13 +292,28 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
         thread_intro: str | None = None,
         thread_intro_components: list[dict[str, object]] | None = None,
     ):
-        _ = session, tenant, project, settings, event, open_thread, thread_name, thread_intro, thread_intro_components
+        _ = (
+            session,
+            tenant,
+            project,
+            settings,
+            event,
+            open_thread,
+            thread_name,
+            thread_intro,
+            thread_intro_components,
+        )
         sent_discord_messages.append(str(message or ""))
         return SimpleNamespace(sent=True, reason="sent")
 
     with (
-        patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
-        patch("orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run),
+        patch(
+            "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+            return_value=None,
+        ),
+        patch(
+            "orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run
+        ),
     ):
         terminal, meta = apply_decision_gate(
             session=session,
@@ -295,13 +336,15 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
     assert meta is not None
     assert meta["stage_update"]["stage"] == "run_not_ready"
     assert sent_discord_messages
-    assert "https://jira.example.test/browse/example-46" in sent_discord_messages[0]
+    assert "https://jira.example.test/browse/DEMO-46" in sent_discord_messages[0]
 
 
 def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None:
     session = _Session()
     run = _run()
-    tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
+    tenant = SimpleNamespace(
+        tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"}
+    )
     captured: dict[str, object] = {}
     oauth = SimpleNamespace(
         client=SimpleNamespace(
@@ -319,7 +362,10 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
         captured.update(kwargs)
         return _worker_decision(allowed=True)
 
-    with patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None):
+    with patch(
+        "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+        return_value=None,
+    ):
         terminal, meta = apply_decision_gate(
             session=session,
             run=run,
@@ -338,7 +384,7 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
     assert meta is None
     assert captured["tenant_id"] == "tenant-1"
     assert captured["project_id"] is None
-    assert captured["issue_key"] == "example-46"
+    assert captured["issue_key"] == "DEMO-46"
     assert captured["issue_summary"] == "Live summary"
     assert captured["issue_description"] == "Live description"
     assert captured["issue_labels"] == ["agent:ready", "worker:linux"]
@@ -350,12 +396,19 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
     run.plan = ExecutionSnapshot.empty(
         trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
     ).dump()
-    tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
+    tenant = SimpleNamespace(
+        tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"}
+    )
     oauth = _oauth_context()
 
     with (
-        patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
-        patch("orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run),
+        patch(
+            "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+            return_value=None,
+        ),
+        patch(
+            "orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run
+        ),
     ):
         terminal, _meta = apply_decision_gate(
             session=session,
@@ -368,7 +421,9 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
                 block_reason="missing_ready_label",
                 pre_check_outcome="missing_ready_label",
             ),
-            send_discord_message_fn=lambda **_: SimpleNamespace(sent=True, reason="sent"),
+            send_discord_message_fn=lambda **_: SimpleNamespace(
+                sent=True, reason="sent"
+            ),
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
             blocked_status="blocked",
@@ -377,9 +432,15 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
 
     assert terminal is run
     assert isinstance(run.plan, dict)
-    assert run.plan["context"]["trigger_context"] == {"source": "github_pr_review_feedback", "pr_number": 6}
+    assert run.plan["context"]["trigger_context"] == {
+        "source": "github_pr_review_feedback",
+        "pr_number": 6,
+    }
     assert run.plan["events"]["stage_updates"][0]["stage"] == "run_not_ready"
-    assert run.plan["context"]["execution_context"]["run_not_ready"]["ready_label"] == "agent:ready"
+    assert (
+        run.plan["context"]["execution_context"]["run_not_ready"]["ready_label"]
+        == "agent:ready"
+    )
     assert run.plan["context"]["execution_context"]["run_not_ready"]["next_steps"] == [
         "Apply ready label `agent:ready` to the Jira issue, then retry the run."
     ]
@@ -390,7 +451,9 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
     session = _Session()
     run = _run()
     run.plan = {}
-    tenant = SimpleNamespace(tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"})
+    tenant = SimpleNamespace(
+        tenant_id="tenant-1", jira_config={"ready_label": "agent:ready"}
+    )
     oauth = _oauth_context()
 
     def _refresh(_run, attribute_names=None):  # noqa: ANN001
@@ -404,8 +467,13 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
     session.refresh = _refresh
 
     with (
-        patch("orchestrator.core.worker.decision_gate.resolve_project_for_run", return_value=None),
-        patch("orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run),
+        patch(
+            "orchestrator.core.worker.decision_gate.resolve_project_for_run",
+            return_value=None,
+        ),
+        patch(
+            "orchestrator.core.worker.decision_gate.mark_run_terminal", return_value=run
+        ),
     ):
         terminal, _meta = apply_decision_gate(
             session=session,
@@ -418,7 +486,9 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
                 block_reason="missing_ready_label",
                 pre_check_outcome="missing_ready_label",
             ),
-            send_discord_message_fn=lambda **_: SimpleNamespace(sent=True, reason="sent"),
+            send_discord_message_fn=lambda **_: SimpleNamespace(
+                sent=True, reason="sent"
+            ),
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
             blocked_status="blocked",
@@ -427,4 +497,7 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
 
     assert terminal is run
     assert isinstance(run.plan, dict)
-    assert run.plan["context"]["trigger_context"] == {"source": "github_pr_review_feedback", "pr_number": 6}
+    assert run.plan["context"]["trigger_context"] == {
+        "source": "github_pr_review_feedback",
+        "pr_number": 6,
+    }

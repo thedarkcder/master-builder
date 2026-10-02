@@ -36,6 +36,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
+
+      - name: Install frozen runtime dependencies
+        run: uv sync --frozen --no-dev --no-default-groups
 
       - name: Count Ready to Release issues
         id: detect
@@ -66,14 +72,18 @@ jobs:
           if [ -n "${JIRA_CLOUD_ID:-}" ]; then
             args+=("--jira-cloud-id" "${JIRA_CLOUD_ID}")
           fi
-          ready_count="$(python "${args[@]}")"
+          ready_count="$(uv run --frozen python "${args[@]}")"
           ready_count="$(printf '%s' "${ready_count}" | tr -d '[:space:]')"
-          echo "ready_count=${ready_count:-0}" >> "$GITHUB_OUTPUT"
+          if ! [[ "${ready_count}" =~ ^[0-9]+$ ]]; then
+            echo "Jira ready-issue count must be a non-negative integer; refusing to infer zero."
+            exit 1
+          fi
+          echo "ready_count=${ready_count}" >> "$GITHUB_OUTPUT"
 
   assign-ready-to-release:
     needs: detect-ready-to-release
     if: vars.ENABLE_JIRA_RELEASE_AUTOMATION == 'true' && (github.event_name == 'workflow_dispatch' || needs.detect-ready-to-release.outputs.ready_count != '0')
-    runs-on: self-hosted
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -82,14 +92,12 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: "pip"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
 
-      - name: Install package
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -e .
+      - name: Install frozen runtime dependencies
+        run: uv sync --frozen --no-dev --no-default-groups
 
       - name: Resolve release version
         id: release
@@ -101,7 +109,7 @@ jobs:
           if [ -n "${WORKFLOW_RELEASE_VERSION:-}" ]; then
             release_version="${WORKFLOW_RELEASE_VERSION}"
           else
-            release_version="$(python -c "from orchestrator.core.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
+            release_version="$(uv run --frozen python -c "from orchestrator.core.projects.release_train import next_release_version_from_tags; import subprocess; result = subprocess.run(['git', 'tag', '--list', 'v*.*.*', '--sort=-v:refname'], check=True, capture_output=True, text=True); tags = [line.strip() for line in result.stdout.splitlines() if line.strip()]; print(next_release_version_from_tags(tags))")"
           fi
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
 
@@ -148,4 +156,4 @@ jobs:
           if [ -n "${release_version}" ]; then
             args+=("--release-version" "${release_version}")
           fi
-          python "${args[@]}"
+          uv run --frozen python "${args[@]}"

@@ -26,13 +26,17 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _table_exists("project_deployment_releases"):
         return
-    if not _column_exists("project_deployment_releases", "git_ref") or not _column_exists(
+    if not _column_exists(
+        "project_deployment_releases", "git_ref"
+    ) or not _column_exists(
         "project_deployment_releases",
         "commit_sha",
     ):
@@ -53,8 +57,12 @@ def upgrade() -> None:
     )
 
     with op.batch_alter_table("project_deployment_releases", schema=None) as batch_op:
-        batch_op.alter_column("git_ref", existing_type=sa.String(length=255), nullable=False)
-        batch_op.alter_column("commit_sha", existing_type=sa.String(length=64), nullable=False)
+        batch_op.alter_column(
+            "git_ref", existing_type=sa.String(length=255), nullable=False
+        )
+        batch_op.alter_column(
+            "commit_sha", existing_type=sa.String(length=64), nullable=False
+        )
 
 
 def downgrade() -> None:
@@ -64,6 +72,12 @@ def downgrade() -> None:
         "project_deployment_releases",
         "commit_sha",
     ):
-        with op.batch_alter_table("project_deployment_releases", schema=None) as batch_op:
-            batch_op.alter_column("git_ref", existing_type=sa.String(length=255), nullable=True)
-            batch_op.alter_column("commit_sha", existing_type=sa.String(length=64), nullable=True)
+        with op.batch_alter_table(
+            "project_deployment_releases", schema=None
+        ) as batch_op:
+            batch_op.alter_column(
+                "git_ref", existing_type=sa.String(length=255), nullable=True
+            )
+            batch_op.alter_column(
+                "commit_sha", existing_type=sa.String(length=64), nullable=True
+            )

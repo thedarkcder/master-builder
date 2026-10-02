@@ -38,20 +38,28 @@ def build_backlog_pre_run_check_presentation(
             ready_label=ready_label,
             decision_gate_reason=policy_error_reason,
         )
-    decision_gate_reason = normalize_backlog_pre_run_check_text(pre_check.decision_gate_reason)
-    parsed_outcome = PrecheckOutcome.parse(pre_check.outcome) or PrecheckOutcome.POLICY_EVAL_FAILED
+    decision_gate_reason = normalize_backlog_pre_run_check_text(
+        pre_check.decision_gate_reason
+    )
+    parsed_outcome = (
+        PrecheckOutcome.parse(pre_check.outcome) or PrecheckOutcome.POLICY_EVAL_FAILED
+    )
     return BacklogPreRunCheckPresentation(
         outcome=parsed_outcome,
         ready_label=pre_check.ready_label,
         decision_gate_reason=decision_gate_reason,
         gtd_missing_criteria=tuple(
-            str(item).strip() for item in pre_check.gtd_missing_criteria if str(item).strip()
+            str(item).strip()
+            for item in pre_check.gtd_missing_criteria
+            if str(item).strip()
         ),
         required_worker_label=pre_check.required_worker_label,
     )
 
 
-def normalize_backlog_pre_run_check_text(raw_value: str | None, *, max_chars: int = 240) -> str | None:
+def normalize_backlog_pre_run_check_text(
+    raw_value: str | None, *, max_chars: int = 240
+) -> str | None:
     if not isinstance(raw_value, str):
         return None
     normalized = " ".join(raw_value.strip().split())
@@ -73,9 +81,16 @@ def format_jira_enqueue_skipped_message(
     extra_detail: str | None = None,
 ) -> str:
     detail = f" ({extra_detail})" if extra_detail else ""
-    guidance = str(admission.guidance or "").strip() or "Run was not queued due to current execution policy."
+    guidance = (
+        str(admission.guidance or "").strip()
+        or "Run was not queued due to current execution policy."
+    )
     normalized_issue_url = str(issue_url or "").strip()
-    issue_reference = f"[{issue_key}]({normalized_issue_url})" if normalized_issue_url else f"`{issue_key}`"
+    issue_reference = (
+        f"[{issue_key}]({normalized_issue_url})"
+        if normalized_issue_url
+        else f"`{issue_key}`"
+    )
     return (
         f"Jira webhook did not queue a run for {issue_reference}.\n"
         f"Reason: `{admission.reason_code}`{detail}\n"
@@ -93,7 +108,9 @@ def format_backlog_pre_run_check_message(
 ) -> str:
     outcome = pre_run_check.outcome
     ready_label = pre_run_check.ready_label
-    decision_gate_reason = normalize_backlog_pre_run_check_text(pre_run_check.decision_gate_reason)
+    decision_gate_reason = normalize_backlog_pre_run_check_text(
+        pre_run_check.decision_gate_reason
+    )
     gtd_missing_criteria = list(pre_run_check.gtd_missing_criteria)
     lines = [
         f"New issue `{issue_key}` was added to the backlog on board `{board_id}`.",
@@ -103,7 +120,9 @@ def format_backlog_pre_run_check_message(
         lines.append(f"Issue status: `{issue_status}`")
     if outcome is PrecheckOutcome.READY_FOR_AGENT:
         if isinstance(ready_label, str) and ready_label.strip():
-            lines.append(f"Pre-run check: labeled `{ready_label.strip()}` and ready for agent.")
+            lines.append(
+                f"Pre-run check: labeled `{ready_label.strip()}` and ready for agent."
+            )
         else:
             lines.append("Pre-run check: ready for agent.")
     elif outcome is PrecheckOutcome.DECISION_GATE_REQUIRED:

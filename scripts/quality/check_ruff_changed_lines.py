@@ -109,7 +109,9 @@ def main() -> int:
     _fetch_base(base_ref)
     files = _changed_python_files(base_ref)
     if not files:
-        print("Strict Ruff changed-lines check skipped (no added/modified Python files).")
+        print(
+            "Strict Ruff changed-lines check skipped (no added/modified Python files)."
+        )
         return 0
 
     changed_rows = _changed_line_map(base_ref, files)

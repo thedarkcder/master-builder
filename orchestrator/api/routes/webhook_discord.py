@@ -8,7 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.transport_runtime import execute_http_ingress_result, http_json_response_action
+from orchestrator.api.transport_runtime import (
+    execute_http_ingress_result,
+    http_json_response_action,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.pm.followup_context_service import (
     resolve_discord_command_subject_key as _resolve_discord_command_subject_key,
@@ -41,11 +44,15 @@ async def build_discord_webhook_ingress_result(
     envelope: TransportEnvelope,
 ) -> IngressResult:
     settings = get_settings()
-    logger.info("discord_webhook_received request_id=%s tenant_id=%s", request_id, tenant_id)
+    logger.info(
+        "discord_webhook_received request_id=%s tenant_id=%s", request_id, tenant_id
+    )
 
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant"
+        )
     if not tenant.is_enabled:
         return IngressResult(
             actions=(
@@ -63,41 +70,57 @@ async def build_discord_webhook_ingress_result(
 
     discord_config = tenant.discord_config or {}
     command_secret_ref = str(discord_config.get("command_secret_ref") or "").strip()
-    if command_secret_ref:
-        presented_token = _extract_webhook_token(request)
-        expected_token = resolve_scoped_secret_ref(
-            session,
-            secret_ref=command_secret_ref,
-            encryption_key=settings.secrets_encryption_key,
-            tenant_id=tenant_id,
+    if not command_secret_ref:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Discord command authentication is misconfigured",
         )
-        if not expected_token:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Discord command authentication is misconfigured",
-            )
-        if not presented_token or not secrets.compare_digest(presented_token, expected_token):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Discord webhook token",
-            )
+    presented_token = _extract_webhook_token(request)
+    expected_token = resolve_scoped_secret_ref(
+        session,
+        secret_ref=command_secret_ref,
+        encryption_key=settings.secrets_encryption_key,
+        tenant_id=tenant_id,
+    )
+    if not expected_token:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Discord command authentication is misconfigured",
+        )
+    if not presented_token or not secrets.compare_digest(
+        presented_token, expected_token
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Discord webhook token",
+        )
 
-    payload, _ = await _read_json_payload(request, request_id=request_id, source="discord")
+    payload, _ = await _read_json_payload(
+        request, request_id=request_id, source="discord"
+    )
     user_id = payload.get("user_id")
     command = payload.get("command")
     channel_id = payload.get("channel_id")
     if not isinstance(user_id, str) or not user_id.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing user_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing user_id"
+        )
     if not isinstance(command, str) or not command.strip():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing command")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing command"
+        )
     if channel_id is not None and not isinstance(channel_id, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid channel_id")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid channel_id"
+        )
 
     normalized_command = command.strip()
     command_payload = DiscordCommandRequest(
         user_id=user_id.strip(),
         command=normalized_command,
-        channel_id=channel_id.strip() if isinstance(channel_id, str) and channel_id.strip() else None,
+        channel_id=channel_id.strip()
+        if isinstance(channel_id, str) and channel_id.strip()
+        else None,
     )
     subject_key = _resolve_discord_command_subject_key(
         session=session,

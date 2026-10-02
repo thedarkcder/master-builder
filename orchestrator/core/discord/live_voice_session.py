@@ -106,8 +106,13 @@ class LiveVoiceTurnSegmenter:
             self._sample_rate_hz = int(sample_rate_hz)
             self._channels = int(channels)
         elif normalized_user_id != self._speaker_user_id:
-            raise LiveVoiceSessionError("Turn segmenter is already bound to a different speaker")
-        elif int(sample_rate_hz) != self._sample_rate_hz or int(channels) != self._channels:
+            raise LiveVoiceSessionError(
+                "Turn segmenter is already bound to a different speaker"
+            )
+        elif (
+            int(sample_rate_hz) != self._sample_rate_hz
+            or int(channels) != self._channels
+        ):
             raise LiveVoiceSessionError("Audio format changed mid-turn")
         self._chunks.append(bytes(audio_bytes))
         self._last_audio_at = received_at
@@ -137,7 +142,12 @@ class LiveVoiceTurnSegmenter:
         reason: str | None = None,
     ) -> LiveVoiceTurn | None:
         self._validate_timestamp(now)
-        if not self._chunks or self._speaker_user_id is None or self._started_at is None or self._last_audio_at is None:
+        if (
+            not self._chunks
+            or self._speaker_user_id is None
+            or self._started_at is None
+            or self._last_audio_at is None
+        ):
             return None
         final_reason = reason or self.finalization_reason(now=now)
         if final_reason is None:
@@ -164,7 +174,9 @@ class LiveVoiceTurnSegmenter:
         now: datetime,
         reason: str = "explicit",
     ) -> LiveVoiceTurn | None:
-        return self.finalize(binding=binding, turn_index=turn_index, now=now, reason=reason)
+        return self.finalize(
+            binding=binding, turn_index=turn_index, now=now, reason=reason
+        )
 
     def reset(self) -> None:
         self._speaker_user_id = None
@@ -232,15 +244,21 @@ class LiveVoiceCallbacks:
     on_turn_finalized: Callable[..., None] | None = None
     on_turn_discarded: Callable[..., None] | None = None
 
-    def emit_session_state_changed(self, *, previous: LiveVoiceRoomSession, current: LiveVoiceRoomSession) -> None:
+    def emit_session_state_changed(
+        self, *, previous: LiveVoiceRoomSession, current: LiveVoiceRoomSession
+    ) -> None:
         if self.on_session_state_changed is not None:
             self.on_session_state_changed(previous=previous, current=current)
 
-    def emit_turn_finalized(self, *, session: LiveVoiceRoomSession, turn: LiveVoiceTurn) -> None:
+    def emit_turn_finalized(
+        self, *, session: LiveVoiceRoomSession, turn: LiveVoiceTurn
+    ) -> None:
         if self.on_turn_finalized is not None:
             self.on_turn_finalized(session=session, turn=turn)
 
-    def emit_turn_discarded(self, *, session: LiveVoiceRoomSession, reason: str) -> None:
+    def emit_turn_discarded(
+        self, *, session: LiveVoiceRoomSession, reason: str
+    ) -> None:
         if self.on_turn_discarded is not None:
             self.on_turn_discarded(session=session, reason=reason)
 
@@ -259,32 +277,69 @@ class LiveVoiceSessionManager:
             binding=binding,
             state=LiveVoiceSessionState.DISCONNECTED,
             human_member_count=max(0, int(human_member_count)),
-            bot_user_id=str(bot_user_id).strip() if bot_user_id is not None and str(bot_user_id).strip() else None,
+            bot_user_id=str(bot_user_id).strip()
+            if bot_user_id is not None and str(bot_user_id).strip()
+            else None,
             last_state_change_at=normalized_now,
         )
 
-    def decide_join(self, *, session: LiveVoiceRoomSession, human_member_count: int) -> LiveVoiceTransitionDecision:
+    def decide_join(
+        self, *, session: LiveVoiceRoomSession, human_member_count: int
+    ) -> LiveVoiceTransitionDecision:
         if session.state != LiveVoiceSessionState.DISCONNECTED:
-            return LiveVoiceTransitionDecision(action="join", should_transition=False, reason="session already active")
+            return LiveVoiceTransitionDecision(
+                action="join", should_transition=False, reason="session already active"
+            )
         if int(human_member_count) <= 0:
-            return LiveVoiceTransitionDecision(action="join", should_transition=False, reason="no human listeners present")
-        return LiveVoiceTransitionDecision(action="join", should_transition=True, reason="human listeners joined")
+            return LiveVoiceTransitionDecision(
+                action="join",
+                should_transition=False,
+                reason="no human listeners present",
+            )
+        return LiveVoiceTransitionDecision(
+            action="join", should_transition=True, reason="human listeners joined"
+        )
 
-    def decide_leave(self, *, session: LiveVoiceRoomSession, human_member_count: int) -> LiveVoiceTransitionDecision:
-        if session.state in {LiveVoiceSessionState.DISCONNECTED, LiveVoiceSessionState.LEAVING}:
-            return LiveVoiceTransitionDecision(action="leave", should_transition=False, reason="session not active")
+    def decide_leave(
+        self, *, session: LiveVoiceRoomSession, human_member_count: int
+    ) -> LiveVoiceTransitionDecision:
+        if session.state in {
+            LiveVoiceSessionState.DISCONNECTED,
+            LiveVoiceSessionState.LEAVING,
+        }:
+            return LiveVoiceTransitionDecision(
+                action="leave", should_transition=False, reason="session not active"
+            )
         if session.bot_speaking:
-            return LiveVoiceTransitionDecision(action="leave", should_transition=False, reason="bot is speaking")
+            return LiveVoiceTransitionDecision(
+                action="leave", should_transition=False, reason="bot is speaking"
+            )
         if int(human_member_count) > 0:
-            return LiveVoiceTransitionDecision(action="leave", should_transition=False, reason="listeners remain in room")
+            return LiveVoiceTransitionDecision(
+                action="leave",
+                should_transition=False,
+                reason="listeners remain in room",
+            )
         if session.state == LiveVoiceSessionState.PROCESSING:
-            return LiveVoiceTransitionDecision(action="leave", should_transition=False, reason="turn still buffering")
-        return LiveVoiceTransitionDecision(action="leave", should_transition=True, reason="room is empty")
+            return LiveVoiceTransitionDecision(
+                action="leave", should_transition=False, reason="turn still buffering"
+            )
+        return LiveVoiceTransitionDecision(
+            action="leave", should_transition=True, reason="room is empty"
+        )
 
-    def begin_joining(self, *, session: LiveVoiceRoomSession, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def begin_joining(
+        self, *, session: LiveVoiceRoomSession, now: datetime | None = None
+    ) -> LiveVoiceRoomSession:
         return self._with_state(session, state=LiveVoiceSessionState.JOINING, now=now)
 
-    def mark_joined(self, *, session: LiveVoiceRoomSession, human_member_count: int, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def mark_joined(
+        self,
+        *,
+        session: LiveVoiceRoomSession,
+        human_member_count: int,
+        now: datetime | None = None,
+    ) -> LiveVoiceRoomSession:
         normalized_now = self._now(now)
         return replace(
             session,
@@ -306,7 +361,9 @@ class LiveVoiceSessionManager:
         if session.state != LiveVoiceSessionState.LISTENING:
             raise LiveVoiceSessionError("Can only begin a turn while listening")
         normalized_now = self._now(now)
-        normalized_speaker = self._normalize_identifier(speaker_user_id, field_name="speaker_user_id")
+        normalized_speaker = self._normalize_identifier(
+            speaker_user_id, field_name="speaker_user_id"
+        )
         return replace(
             session,
             state=LiveVoiceSessionState.PROCESSING,
@@ -325,7 +382,9 @@ class LiveVoiceSessionManager:
     ) -> LiveVoiceRoomSession:
         normalized_now = self._now(received_at)
         if session.state != LiveVoiceSessionState.PROCESSING:
-            raise LiveVoiceSessionError("Cannot record turn audio unless a turn is active")
+            raise LiveVoiceSessionError(
+                "Cannot record turn audio unless a turn is active"
+            )
         return replace(
             session,
             current_turn_last_audio_at=normalized_now,
@@ -333,7 +392,9 @@ class LiveVoiceSessionManager:
             last_state_change_at=normalized_now,
         )
 
-    def mark_turn_finished(self, *, session: LiveVoiceRoomSession, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def mark_turn_finished(
+        self, *, session: LiveVoiceRoomSession, now: datetime | None = None
+    ) -> LiveVoiceRoomSession:
         normalized_now = self._now(now)
         if session.state != LiveVoiceSessionState.PROCESSING:
             raise LiveVoiceSessionError("Cannot finish a turn unless a turn is active")
@@ -348,7 +409,9 @@ class LiveVoiceSessionManager:
             last_state_change_at=normalized_now,
         )
 
-    def begin_speaking(self, *, session: LiveVoiceRoomSession, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def begin_speaking(
+        self, *, session: LiveVoiceRoomSession, now: datetime | None = None
+    ) -> LiveVoiceRoomSession:
         normalized_now = self._now(now)
         if session.bot_speaking:
             return session
@@ -359,7 +422,9 @@ class LiveVoiceSessionManager:
             last_state_change_at=normalized_now,
         )
 
-    def finish_speaking(self, *, session: LiveVoiceRoomSession, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def finish_speaking(
+        self, *, session: LiveVoiceRoomSession, now: datetime | None = None
+    ) -> LiveVoiceRoomSession:
         normalized_now = self._now(now)
         if not session.bot_speaking and session.state != LiveVoiceSessionState.SPEAKING:
             return session
@@ -370,10 +435,14 @@ class LiveVoiceSessionManager:
             last_state_change_at=normalized_now,
         )
 
-    def begin_leaving(self, *, session: LiveVoiceRoomSession, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def begin_leaving(
+        self, *, session: LiveVoiceRoomSession, now: datetime | None = None
+    ) -> LiveVoiceRoomSession:
         return self._with_state(session, state=LiveVoiceSessionState.LEAVING, now=now)
 
-    def mark_disconnected(self, *, session: LiveVoiceRoomSession, now: datetime | None = None) -> LiveVoiceRoomSession:
+    def mark_disconnected(
+        self, *, session: LiveVoiceRoomSession, now: datetime | None = None
+    ) -> LiveVoiceRoomSession:
         normalized_now = self._now(now)
         return replace(
             session,
@@ -392,16 +461,27 @@ class LiveVoiceSessionManager:
         speaker_user_id: str,
         is_bot_audio: bool = False,
     ) -> bool:
-        normalized_speaker = self._normalize_identifier(speaker_user_id, field_name="speaker_user_id")
+        normalized_speaker = self._normalize_identifier(
+            speaker_user_id, field_name="speaker_user_id"
+        )
         if is_bot_audio or session.bot_speaking:
             return False
-        if session.bot_user_id is not None and normalized_speaker == session.bot_user_id:
+        if (
+            session.bot_user_id is not None
+            and normalized_speaker == session.bot_user_id
+        ):
             return False
         if session.state == LiveVoiceSessionState.SPEAKING:
             return False
-        if session.state not in {LiveVoiceSessionState.LISTENING, LiveVoiceSessionState.PROCESSING}:
+        if session.state not in {
+            LiveVoiceSessionState.LISTENING,
+            LiveVoiceSessionState.PROCESSING,
+        }:
             return False
-        if session.state == LiveVoiceSessionState.PROCESSING and session.active_speaker_user_id not in {None, normalized_speaker}:
+        if (
+            session.state == LiveVoiceSessionState.PROCESSING
+            and session.active_speaker_user_id not in {None, normalized_speaker}
+        ):
             return False
         return True
 

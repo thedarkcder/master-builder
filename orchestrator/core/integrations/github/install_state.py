@@ -44,14 +44,20 @@ def create_install_state_token(
         "exp": int(exp_utc.timestamp()),
         "return_to": return_to,
     }
-    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
+        "utf-8"
+    )
     payload_token = _b64url_encode(payload_bytes)
-    signature = hmac.new(secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256).digest()
+    signature = hmac.new(
+        secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256
+    ).digest()
     signature_token = _b64url_encode(signature)
     return f"{payload_token}.{signature_token}"
 
 
-def parse_install_state_token(*, token: str, secret: str, now: datetime | None = None) -> GitHubInstallState:
+def parse_install_state_token(
+    *, token: str, secret: str, now: datetime | None = None
+) -> GitHubInstallState:
     if not token:
         raise ValueError("state token is required")
     if not secret:

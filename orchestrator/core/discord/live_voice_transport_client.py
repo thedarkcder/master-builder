@@ -63,14 +63,18 @@ class GoJsonLinesLiveVoiceTransportClient:
     def command(self) -> tuple[str, ...]:
         return self._command
 
-    def set_event_handler(self, handler: Callable[[dict[str, Any]], None] | None) -> None:
+    def set_event_handler(
+        self, handler: Callable[[dict[str, Any]], None] | None
+    ) -> None:
         self._event_handler = handler
 
     def start(self) -> None:
         with self._process_lock:
             process = self._process
             if process is not None and process.poll() is None:
-                if self._ready_event.is_set() or (self._reader_thread is None and self._monitor_thread is None):
+                if self._ready_event.is_set() or (
+                    self._reader_thread is None and self._monitor_thread is None
+                ):
                     return
                 self._wait_for_ready()
                 return
@@ -97,7 +101,9 @@ class GoJsonLinesLiveVoiceTransportClient:
         )
         if process.stdin is None or process.stdout is None or process.stderr is None:
             process.kill()
-            raise LiveVoiceTransportClientError("Live voice transport pipes are unavailable")
+            raise LiveVoiceTransportClientError(
+                "Live voice transport pipes are unavailable"
+            )
 
         self._process = process
         self._stdin = process.stdin
@@ -148,10 +154,14 @@ class GoJsonLinesLiveVoiceTransportClient:
         bot_token: str,
         rooms: Sequence[LiveVoiceTransportRoom],
     ) -> None:
-        normalized_session_id = str(session_id or "").strip() or DEFAULT_TRANSPORT_SESSION_ID
+        normalized_session_id = (
+            str(session_id or "").strip() or DEFAULT_TRANSPORT_SESSION_ID
+        )
         normalized_token = str(bot_token or "").strip()
         if not normalized_token:
-            raise LiveVoiceTransportClientError("Live voice transport session requires a Discord bot token.")
+            raise LiveVoiceTransportClientError(
+                "Live voice transport session requires a Discord bot token."
+            )
 
         room_payload = [
             {
@@ -161,16 +171,25 @@ class GoJsonLinesLiveVoiceTransportClient:
             for room in rooms
             if str(room.guild_id).strip() and str(room.channel_id).strip()
         ]
-        signature = tuple(sorted((room["guild_id"], room["channel_id"]) for room in room_payload))
+        signature = tuple(
+            sorted((room["guild_id"], room["channel_id"]) for room in room_payload)
+        )
 
         if not room_payload:
-            self.close_session(session_id=normalized_session_id, reason="no_rooms_configured")
+            self.close_session(
+                session_id=normalized_session_id, reason="no_rooms_configured"
+            )
             return
-        if self._active_session_id == normalized_session_id and self._active_signature == signature:
+        if (
+            self._active_session_id == normalized_session_id
+            and self._active_signature == signature
+        ):
             return
 
         if self._active_session_id is not None:
-            self.close_session(session_id=self._active_session_id, reason="session_replaced")
+            self.close_session(
+                session_id=self._active_session_id, reason="session_replaced"
+            )
 
         self._send_frame(
             frame_type="open_session",
@@ -213,10 +232,14 @@ class GoJsonLinesLiveVoiceTransportClient:
             raise LiveVoiceTransportClientError(
                 f"Live voice transport only supports WAV reply input, received {content_type!r}."
             )
-        session_id = str(self._active_session_id or DEFAULT_TRANSPORT_SESSION_ID).strip()
+        session_id = str(
+            self._active_session_id or DEFAULT_TRANSPORT_SESSION_ID
+        ).strip()
         opus_frames = encode_wav_to_opus_frames(wav_bytes=audio_bytes)
         if not opus_frames:
-            raise LiveVoiceTransportClientError("Live voice transport could not encode any reply Opus frames.")
+            raise LiveVoiceTransportClientError(
+                "Live voice transport could not encode any reply Opus frames."
+            )
         self._send_frame(
             frame_type="play_audio",
             payload={
@@ -234,7 +257,9 @@ class GoJsonLinesLiveVoiceTransportClient:
         *,
         binding: LiveVoiceRoomBinding,
     ) -> None:
-        session_id = str(self._active_session_id or DEFAULT_TRANSPORT_SESSION_ID).strip()
+        session_id = str(
+            self._active_session_id or DEFAULT_TRANSPORT_SESSION_ID
+        ).strip()
         self._send_frame(
             frame_type="stop_audio",
             payload={
@@ -249,7 +274,9 @@ class GoJsonLinesLiveVoiceTransportClient:
     def _reader_loop(self) -> None:
         stdout = self._stdout
         if stdout is None:
-            self._mark_startup_failed("Live voice transport stdout pipe is unavailable.")
+            self._mark_startup_failed(
+                "Live voice transport stdout pipe is unavailable."
+            )
             return
 
         for raw_line in stdout:
@@ -292,10 +319,14 @@ class GoJsonLinesLiveVoiceTransportClient:
         if self._stop_event.is_set():
             return
         if not self._ready_event.is_set():
-            self._mark_startup_failed(f"Live voice transport process exited with code {return_code} before readiness.")
+            self._mark_startup_failed(
+                f"Live voice transport process exited with code {return_code} before readiness."
+            )
         if not should_emit_failure:
             return
-        _TRANSPORT_LOGGER.warning("live_voice_transport_process_exited return_code=%s", return_code)
+        _TRANSPORT_LOGGER.warning(
+            "live_voice_transport_process_exited return_code=%s", return_code
+        )
         handler = self._event_handler
         if handler is not None:
             handler(
@@ -358,14 +389,17 @@ def build_live_voice_transport_client(
     bot_token: str | None = None,
     event_handler: Callable[[dict[str, Any]], None] | None = None,
 ) -> GoJsonLinesLiveVoiceTransportClient:
-    command_text = str(getattr(settings, "discord_live_voice_transport_command", "") or "").strip()
+    command_text = str(
+        getattr(settings, "discord_live_voice_transport_command", "") or ""
+    ).strip()
     if not command_text:
         raise LiveVoiceTransportClientError(
             "Live voice requires ORCHESTRATOR_LIVE_VOICE_TRANSPORT_COMMAND to launch the Go transport."
         )
 
     startup_timeout_seconds = int(
-        getattr(settings, "discord_live_voice_transport_startup_timeout_seconds", 10) or 10
+        getattr(settings, "discord_live_voice_transport_startup_timeout_seconds", 10)
+        or 10
     )
     command = shlex.split(command_text)
     return GoJsonLinesLiveVoiceTransportClient(
@@ -386,4 +420,6 @@ def _encode_base64(data: bytes) -> str:
 
 
 def _stringify_mapping(mapping: dict[str, Any]) -> dict[str, str]:
-    return {str(key): "" if value is None else str(value) for key, value in mapping.items()}
+    return {
+        str(key): "" if value is None else str(value) for key, value in mapping.items()
+    }

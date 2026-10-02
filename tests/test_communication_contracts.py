@@ -85,8 +85,14 @@ class CommunicationContractsTests(unittest.TestCase):
             issue_key="TP-10",
             title="Decision Gate Required",
             summary_markdown="Need GTD clarifications before retry.",
-            links=(CommunicationLink(label="Issue", url="https://example.atlassian.net/browse/TP-10"),),
-            actions=(CommunicationAction(action_id="reply", label="Reply", kind="button"),),
+            links=(
+                CommunicationLink(
+                    label="Issue", url="https://example.atlassian.net/browse/TP-10"
+                ),
+            ),
+            actions=(
+                CommunicationAction(action_id="reply", label="Reply", kind="button"),
+            ),
         )
         self.assertEqual(event.links[0].label, "Issue")
         self.assertEqual(event.actions[0].action_id, "reply")
@@ -116,8 +122,14 @@ class CommunicationContractsTests(unittest.TestCase):
                 issue_key="TP-1",
                 title="Run started",
                 summary_markdown="Run started for TP-1",
-                links=(CommunicationLink(label="Issue", url="https://example/browse/TP-1"),),
-                actions=(CommunicationAction(action_id="reply", label="Reply", kind="button"),),
+                links=(
+                    CommunicationLink(label="Issue", url="https://example/browse/TP-1"),
+                ),
+                actions=(
+                    CommunicationAction(
+                        action_id="reply", label="Reply", kind="button"
+                    ),
+                ),
                 correlation_id=inbound.correlation_id,
             )
         )
@@ -127,15 +139,21 @@ class CommunicationContractsTests(unittest.TestCase):
 
     def test_http_transport_executor_supports_typed_http_actions(self) -> None:
         executor = HttpTransportExecutor()
-        json_response = executor.execute(action=HttpJsonResponseAction(status_code=200, content={"ok": True}))
+        json_response = executor.execute(
+            action=HttpJsonResponseAction(status_code=200, content={"ok": True})
+        )
         self.assertEqual(json_response.status_code, 200)
 
         raw_response = executor.execute(
-            action=HttpJsonResponseBytesAction(status_code=202, body=b'{"accepted":true}')
+            action=HttpJsonResponseBytesAction(
+                status_code=202, body=b'{"accepted":true}'
+            )
         )
         self.assertEqual(raw_response.status_code, 202)
 
-    def test_http_ingress_executes_side_effect_actions_before_returning_response(self) -> None:
+    def test_http_ingress_executes_side_effect_actions_before_returning_response(
+        self,
+    ) -> None:
         side_effect_executor = MagicMock()
         response = execute_http_ingress_result(
             result=IngressResult(
@@ -155,7 +173,9 @@ class CommunicationContractsTests(unittest.TestCase):
 
     def test_http_ingress_logs_contract_lifecycle_events(self) -> None:
         side_effect_executor = MagicMock()
-        with self.assertLogs("orchestrator.api.transport_runtime", level="INFO") as captured:
+        with self.assertLogs(
+            "orchestrator.api.transport_runtime", level="INFO"
+        ) as captured:
             response = execute_http_ingress_result(
                 result=IngressResult(
                     actions=(
@@ -164,14 +184,16 @@ class CommunicationContractsTests(unittest.TestCase):
                             comment_id=101,
                             content="eyes",
                         ),
-                        HttpJsonResponseAction(status_code=202, content={"accepted": True}),
+                        HttpJsonResponseAction(
+                            status_code=202, content={"accepted": True}
+                        ),
                     )
                 ),
                 envelope=TransportEnvelope(
                     transport="github_webhook",
                     event_type="issue_comment",
                     request_id="req-1",
-                    tenant_id_hint="example",
+                    tenant_id_hint="example-workspace",
                 ),
                 transport_action_executors=(side_effect_executor,),
             )
@@ -183,7 +205,9 @@ class CommunicationContractsTests(unittest.TestCase):
 
     def test_side_effect_ingress_logs_contract_lifecycle_events(self) -> None:
         side_effect_executor = MagicMock()
-        with self.assertLogs("orchestrator.api.transport_runtime", level="INFO") as captured:
+        with self.assertLogs(
+            "orchestrator.api.transport_runtime", level="INFO"
+        ) as captured:
             execute_side_effect_ingress_result(
                 result=IngressResult(
                     actions=(
@@ -198,7 +222,7 @@ class CommunicationContractsTests(unittest.TestCase):
                     transport="discord_gateway",
                     event_type="message_create",
                     request_id="req-2",
-                    tenant_id_hint="example",
+                    tenant_id_hint="example-workspace",
                 ),
                 transport_action_executors=(side_effect_executor,),
             )
@@ -231,9 +255,13 @@ class CommunicationContractsTests(unittest.TestCase):
         )
 
         callback_sender.assert_called_once()
-        client.post_message.assert_called_once_with(channel_id="c-1", content="hello", components=None)
+        client.post_message.assert_called_once_with(
+            channel_id="c-1", content="hello", components=None
+        )
 
-    def test_discord_transport_executor_returns_message_metadata_for_attachment_action(self) -> None:
+    def test_discord_transport_executor_returns_message_metadata_for_attachment_action(
+        self,
+    ) -> None:
         client = MagicMock()
         client.post_message_with_attachment.return_value = {"id": "discord-msg-1"}
         executor = DiscordTransportExecutor(
@@ -255,7 +283,10 @@ class CommunicationContractsTests(unittest.TestCase):
 
     def test_execute_side_effect_action_returns_executor_metadata(self) -> None:
         executor = MagicMock()
-        executor.execute.return_value = {"message_id": "discord-msg-1", "channel_id": "c-1"}
+        executor.execute.return_value = {
+            "message_id": "discord-msg-1",
+            "channel_id": "c-1",
+        }
 
         result = execute_side_effect_action(
             action=GitHubIssueCommentReactionAction(
@@ -273,7 +304,9 @@ class CommunicationContractsTests(unittest.TestCase):
 
         self.assertEqual(result, {"message_id": "discord-msg-1", "channel_id": "c-1"})
 
-    def test_discord_transport_executor_delegates_thread_style_actions_to_handler(self) -> None:
+    def test_discord_transport_executor_delegates_thread_style_actions_to_handler(
+        self,
+    ) -> None:
         handler = MagicMock()
         executor = DiscordTransportExecutor(
             interaction_followup_sender=MagicMock(),
@@ -311,7 +344,9 @@ class CommunicationContractsTests(unittest.TestCase):
         handler.execute_ask_with_thread.assert_called_once()
         handler.execute_seed_with_thread.assert_called_once()
 
-    def test_discord_transport_executor_delegates_tenant_notification_action_to_handler(self) -> None:
+    def test_discord_transport_executor_delegates_tenant_notification_action_to_handler(
+        self,
+    ) -> None:
         notification_handler = MagicMock()
         executor = DiscordTransportExecutor(
             notification_action_handler=notification_handler,
@@ -328,7 +363,9 @@ class CommunicationContractsTests(unittest.TestCase):
 
         notification_handler.execute_tenant_notification.assert_called_once()
 
-    def test_discord_transport_executor_executes_concrete_thread_senders_with_injected_dependencies(self) -> None:
+    def test_discord_transport_executor_executes_concrete_thread_senders_with_injected_dependencies(
+        self,
+    ) -> None:
         session = MagicMock()
         tenant = SimpleNamespace(tenant_id="tenant-1", is_enabled=True)
         session.get.return_value = tenant
@@ -342,9 +379,15 @@ class CommunicationContractsTests(unittest.TestCase):
         )
 
         with (
-            patch.object(followup_module, "_send_discord_thread_followup_impl") as thread_impl,
-            patch.object(followup_module, "_send_discord_ask_response_with_thread_impl") as ask_impl,
-            patch.object(followup_module, "_send_discord_seed_followup_with_thread_impl") as seed_impl,
+            patch.object(
+                followup_module, "_send_discord_thread_followup_impl"
+            ) as thread_impl,
+            patch.object(
+                followup_module, "_send_discord_ask_response_with_thread_impl"
+            ) as ask_impl,
+            patch.object(
+                followup_module, "_send_discord_seed_followup_with_thread_impl"
+            ) as seed_impl,
         ):
             executor.execute(
                 action=DiscordThreadReplyAction(
@@ -381,7 +424,9 @@ class CommunicationContractsTests(unittest.TestCase):
 
     def test_github_transport_executor_supports_reaction_actions(self) -> None:
         github_client = MagicMock()
-        executor = GitHubTransportExecutor(github_client=github_client, session=MagicMock())
+        executor = GitHubTransportExecutor(
+            github_client=github_client, session=MagicMock()
+        )
 
         executor.execute(
             action=GitHubIssueCommentReactionAction(
@@ -427,10 +472,18 @@ class CommunicationContractsTests(unittest.TestCase):
         executor = GitHubTransportExecutor(github_client=github_client, session=session)
 
         with (
-            patch("orchestrator.core.github.transport_executor.upsert_sticky_review_comment") as sticky_review,
-            patch("orchestrator.core.github.transport_executor.publish_inline_review_batch") as inline_review,
-            patch("orchestrator.core.github.transport_executor.upsert_manual_fix_issue_comment_reply") as manual_fix_issue_reply,
-            patch("orchestrator.core.github.transport_executor.upsert_manual_fix_review_thread_reply") as manual_fix_reply,
+            patch(
+                "orchestrator.core.github.transport_executor.upsert_sticky_review_comment"
+            ) as sticky_review,
+            patch(
+                "orchestrator.core.github.transport_executor.publish_inline_review_batch"
+            ) as inline_review,
+            patch(
+                "orchestrator.core.github.transport_executor.upsert_manual_fix_issue_comment_reply"
+            ) as manual_fix_issue_reply,
+            patch(
+                "orchestrator.core.github.transport_executor.upsert_manual_fix_review_thread_reply"
+            ) as manual_fix_reply,
         ):
             executor.execute(
                 action=GitHubStickyReviewCommentAction(

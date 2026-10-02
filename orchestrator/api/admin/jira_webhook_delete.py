@@ -19,14 +19,20 @@ def delete_jira_webhooks(
     atlassian_oauth_client_fn,
 ) -> tuple[bool, str, list[int]]:
     jira_config = dict(tenant.jira_config)
-    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = jira_config_text(
+        jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         jira_config["managed_webhook_ids"] = []
         jira_config["webhook_last_error"] = None
         tenant.jira_config = jira_config
         tenant.updated_at = datetime.now(timezone.utc)
         session.commit()
-        return True, "No Atlassian connection linked; cleared local webhook metadata.", []
+        return (
+            True,
+            "No Atlassian connection linked; cleared local webhook metadata.",
+            [],
+        )
 
     webhook_ids = parse_managed_webhook_ids_fn(jira_config)
     if not webhook_ids:
@@ -39,7 +45,9 @@ def delete_jira_webhooks(
     connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         jira_config["managed_webhook_ids"] = []
-        jira_config["webhook_last_error"] = "Configured Atlassian connection was not found during webhook deletion"
+        jira_config["webhook_last_error"] = (
+            "Configured Atlassian connection was not found during webhook deletion"
+        )
         tenant.jira_config = jira_config
         tenant.updated_at = datetime.now(timezone.utc)
         session.commit()
@@ -52,7 +60,9 @@ def delete_jira_webhooks(
             settings=settings,
             tenant_id=tenant.tenant_id,
         )
-        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant.tenant_id)
+        client = atlassian_oauth_client_fn(
+            session=session, settings=settings, tenant_id=tenant.tenant_id
+        )
         client.delete_webhooks(
             access_token=access_token,
             cloud_id=connection.cloud_id,

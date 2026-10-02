@@ -22,7 +22,10 @@ def _table_exists(bind: sa.engine.Connection, table_name: str) -> bool:
 
 
 def _index_exists(bind: sa.engine.Connection, table_name: str, index_name: str) -> bool:
-    return any(index["name"] == index_name for index in sa.inspect(bind).get_indexes(table_name))
+    return any(
+        index["name"] == index_name
+        for index in sa.inspect(bind).get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -57,9 +60,13 @@ def upgrade() -> None:
     )
 
     if bind.dialect.name == "postgresql":
-        op.execute("ALTER TABLE planning_decision_records ALTER COLUMN source_stage SET NOT NULL")
+        op.execute(
+            "ALTER TABLE planning_decision_records ALTER COLUMN source_stage SET NOT NULL"
+        )
 
-    if not _index_exists(bind, "planning_decision_records", "uq_planning_decision_records_identity"):
+    if not _index_exists(
+        bind, "planning_decision_records", "uq_planning_decision_records_identity"
+    ):
         op.create_index(
             "uq_planning_decision_records_identity",
             "planning_decision_records",
@@ -69,4 +76,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Planning decision record identity migration cannot be downgraded")
+    raise RuntimeError(
+        "Planning decision record identity migration cannot be downgraded"
+    )

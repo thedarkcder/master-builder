@@ -98,7 +98,9 @@ def _extract_payload_comment_url(*, payload: dict) -> str | None:
     return comment_url or None
 
 
-def _resolve_triggering_comment_payload(*, event: str, payload: dict) -> dict[str, object] | None:
+def _resolve_triggering_comment_payload(
+    *, event: str, payload: dict
+) -> dict[str, object] | None:
     comment = _extract_payload_comment(payload)
     comment_id = _extract_payload_comment_id(payload=payload)
     if comment_id is None:
@@ -109,7 +111,11 @@ def _resolve_triggering_comment_payload(*, event: str, payload: dict) -> dict[st
         return None
     user_login = _extract_payload_comment_login(payload=payload)
     normalized_event = str(event or "").strip().lower()
-    comment_type = "review_comment" if normalized_event == "pull_request_review_comment" else "issue_comment"
+    comment_type = (
+        "review_comment"
+        if normalized_event == "pull_request_review_comment"
+        else "issue_comment"
+    )
     resolved = {
         "type": comment_type,
         "id": comment_id,
@@ -157,7 +163,9 @@ def _resolve_manual_fix_code_context(
         return None, "line_out_of_range"
     start_line = max(1, line - _MANUAL_FIX_SNIPPET_RADIUS)
     end_line = min(len(lines), line + _MANUAL_FIX_SNIPPET_RADIUS)
-    snippet = "\n".join(f"{number}: {lines[number - 1]}" for number in range(start_line, end_line + 1))
+    snippet = "\n".join(
+        f"{number}: {lines[number - 1]}" for number in range(start_line, end_line + 1)
+    )
     return (
         {
             "path": path,
@@ -190,7 +198,9 @@ def enqueue_pr_remediation_if_needed(
     normalized_action = str(action or "").strip().lower()
     manual_fix_request = parse_manual_pr_fix_request(payload=payload)
 
-    if not _is_remediation_trigger(event=normalized_event, action=normalized_action, payload=payload):
+    if not _is_remediation_trigger(
+        event=normalized_event, action=normalized_action, payload=payload
+    ):
         return PrRemediationResult(
             triggered=False,
             issue_key=None,

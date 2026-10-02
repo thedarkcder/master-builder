@@ -165,7 +165,9 @@ def create_tenant_user(
     return tenant_user
 
 
-def authenticate_tenant_user(*, session: Session, email: str, password: str) -> TenantUser | None:
+def authenticate_tenant_user(
+    *, session: Session, email: str, password: str
+) -> TenantUser | None:
     normalized_email = normalize_email(email)
     tenant_user = find_tenant_user_by_email(session=session, email=normalized_email)
     if tenant_user is None or not tenant_user.is_active:
@@ -180,7 +182,9 @@ def authenticate_tenant_user(*, session: Session, email: str, password: str) -> 
 
 def find_tenant_user_by_email(*, session: Session, email: str) -> TenantUser | None:
     normalized_email = normalize_email(email)
-    return session.execute(select(TenantUser).where(TenantUser.email == normalized_email)).scalar_one_or_none()
+    return session.execute(
+        select(TenantUser).where(TenantUser.email == normalized_email)
+    ).scalar_one_or_none()
 
 
 def create_membership(
@@ -195,8 +199,13 @@ def create_membership(
     normalized_role = str(role).strip()
     if normalized_role not in VALID_ROLE_KEYS:
         raise ValueError("Invalid tenant role")
-    normalized_mode_override = None if mode_override is None else str(mode_override).strip()
-    if normalized_mode_override is not None and normalized_mode_override not in VALID_MODE_KEYS:
+    normalized_mode_override = (
+        None if mode_override is None else str(mode_override).strip()
+    )
+    if (
+        normalized_mode_override is not None
+        and normalized_mode_override not in VALID_MODE_KEYS
+    ):
         raise ValueError("Invalid tenant mode override")
     if onboarding_kind not in VALID_ONBOARDING_KINDS:
         raise ValueError("Invalid onboarding kind")
@@ -218,7 +227,9 @@ def create_membership(
     return membership
 
 
-def add_membership_teams(*, session: Session, membership_id: str, team_ids: list[str]) -> None:
+def add_membership_teams(
+    *, session: Session, membership_id: str, team_ids: list[str]
+) -> None:
     now = utcnow()
     for team_id in team_ids:
         session.add(
@@ -233,9 +244,13 @@ def add_membership_teams(*, session: Session, membership_id: str, team_ids: list
 
 def mark_membership_signed_in(*, session: Session, user_id: str) -> None:
     now = utcnow()
-    memberships = session.execute(
-        select(TenantMembership).where(TenantMembership.user_id == user_id)
-    ).scalars().all()
+    memberships = (
+        session.execute(
+            select(TenantMembership).where(TenantMembership.user_id == user_id)
+        )
+        .scalars()
+        .all()
+    )
     changed = False
     for membership in memberships:
         if membership.first_signed_in_at is None:
@@ -296,14 +311,22 @@ def create_invite(
 
 
 def list_teams(*, session: Session, tenant_id: str) -> list[TenantTeam]:
-    return session.execute(
-        select(TenantTeam).where(TenantTeam.tenant_id == tenant_id).order_by(TenantTeam.name.asc(), TenantTeam.team_id.asc())
-    ).scalars().all()
+    return (
+        session.execute(
+            select(TenantTeam)
+            .where(TenantTeam.tenant_id == tenant_id)
+            .order_by(TenantTeam.name.asc(), TenantTeam.team_id.asc())
+        )
+        .scalars()
+        .all()
+    )
 
 
 def get_team(*, session: Session, tenant_id: str, team_id: str) -> TenantTeam | None:
     return session.execute(
-        select(TenantTeam).where(TenantTeam.tenant_id == tenant_id, TenantTeam.team_id == team_id)
+        select(TenantTeam).where(
+            TenantTeam.tenant_id == tenant_id, TenantTeam.team_id == team_id
+        )
     ).scalar_one_or_none()
 
 
@@ -349,16 +372,24 @@ def update_team(
 
 
 def list_invites(*, session: Session, tenant_id: str) -> list[TenantInvite]:
-    return session.execute(
-        select(TenantInvite)
-        .where(TenantInvite.tenant_id == tenant_id)
-        .order_by(TenantInvite.created_at.desc(), TenantInvite.invite_id.desc())
-    ).scalars().all()
+    return (
+        session.execute(
+            select(TenantInvite)
+            .where(TenantInvite.tenant_id == tenant_id)
+            .order_by(TenantInvite.created_at.desc(), TenantInvite.invite_id.desc())
+        )
+        .scalars()
+        .all()
+    )
 
 
-def get_invite(*, session: Session, tenant_id: str, invite_id: str) -> TenantInvite | None:
+def get_invite(
+    *, session: Session, tenant_id: str, invite_id: str
+) -> TenantInvite | None:
     return session.execute(
-        select(TenantInvite).where(TenantInvite.tenant_id == tenant_id, TenantInvite.invite_id == invite_id)
+        select(TenantInvite).where(
+            TenantInvite.tenant_id == tenant_id, TenantInvite.invite_id == invite_id
+        )
     ).scalar_one_or_none()
 
 
@@ -460,19 +491,34 @@ def accept_invite(
             mode_override=invite.mode_override,
             onboarding_kind="member_join",
         )
-        add_membership_teams(session=session, membership_id=membership.membership_id, team_ids=list(invite.team_ids or []))
+        add_membership_teams(
+            session=session,
+            membership_id=membership.membership_id,
+            team_ids=list(invite.team_ids or []),
+        )
     else:
         existing_membership.role = invite.role
         existing_membership.mode_override = invite.mode_override
         existing_membership.updated_at = now
         existing_team_ids = {
             team_id
-            for team_id, in session.execute(
-                select(TenantTeamMembership.team_id).where(TenantTeamMembership.membership_id == existing_membership.membership_id)
+            for (team_id,) in session.execute(
+                select(TenantTeamMembership.team_id).where(
+                    TenantTeamMembership.membership_id
+                    == existing_membership.membership_id
+                )
             ).all()
         }
-        missing_team_ids = [team_id for team_id in list(invite.team_ids or []) if team_id not in existing_team_ids]
-        add_membership_teams(session=session, membership_id=existing_membership.membership_id, team_ids=missing_team_ids)
+        missing_team_ids = [
+            team_id
+            for team_id in list(invite.team_ids or [])
+            if team_id not in existing_team_ids
+        ]
+        add_membership_teams(
+            session=session,
+            membership_id=existing_membership.membership_id,
+            team_ids=missing_team_ids,
+        )
 
     # Persist the user row before recording it as the invite acceptor. Postgres enforces
     # the FK on tenant_invites.accepted_by_user_id immediately during the same flush.
@@ -485,13 +531,17 @@ def accept_invite(
     return tenant_user
 
 
-def ensure_team_ids_exist(*, session: Session, tenant_id: str, team_ids: list[str]) -> None:
+def ensure_team_ids_exist(
+    *, session: Session, tenant_id: str, team_ids: list[str]
+) -> None:
     if not team_ids:
         return
     existing_ids = {
         team_id
-        for team_id, in session.execute(
-            select(TenantTeam.team_id).where(TenantTeam.tenant_id == tenant_id, TenantTeam.team_id.in_(team_ids))
+        for (team_id,) in session.execute(
+            select(TenantTeam.team_id).where(
+                TenantTeam.tenant_id == tenant_id, TenantTeam.team_id.in_(team_ids)
+            )
         ).all()
     }
     missing = sorted(set(team_ids) - existing_ids)
@@ -499,19 +549,33 @@ def ensure_team_ids_exist(*, session: Session, tenant_id: str, team_ids: list[st
         raise ValueError(f"Unknown team ids: {', '.join(missing)}")
 
 
-def list_memberships_with_users(*, session: Session, tenant_id: str) -> list[tuple[TenantMembership, TenantUser]]:
+def list_memberships_with_users(
+    *, session: Session, tenant_id: str
+) -> list[tuple[TenantMembership, TenantUser]]:
     return session.execute(
         select(TenantMembership, TenantUser)
         .join(TenantUser, TenantUser.user_id == TenantMembership.user_id)
         .where(TenantMembership.tenant_id == tenant_id)
-        .order_by(TenantUser.full_name.asc(), TenantUser.email.asc(), TenantMembership.created_at.asc())
+        .order_by(
+            TenantUser.full_name.asc(),
+            TenantUser.email.asc(),
+            TenantMembership.created_at.asc(),
+        )
     ).all()
 
 
-def replace_membership_teams(*, session: Session, membership_id: str, team_ids: list[str]) -> None:
-    existing = session.execute(
-        select(TenantTeamMembership).where(TenantTeamMembership.membership_id == membership_id)
-    ).scalars().all()
+def replace_membership_teams(
+    *, session: Session, membership_id: str, team_ids: list[str]
+) -> None:
+    existing = (
+        session.execute(
+            select(TenantTeamMembership).where(
+                TenantTeamMembership.membership_id == membership_id
+            )
+        )
+        .scalars()
+        .all()
+    )
     existing_by_team = {row.team_id: row for row in existing}
     desired = list(dict.fromkeys(team_ids))
     for team_id, row in existing_by_team.items():
@@ -544,7 +608,9 @@ def update_membership(
         raise ValueError("User not found")
     tenant_user.is_active = is_active
     tenant_user.updated_at = membership.updated_at
-    replace_membership_teams(session=session, membership_id=membership_id, team_ids=team_ids)
+    replace_membership_teams(
+        session=session, membership_id=membership_id, team_ids=team_ids
+    )
     return membership
 
 
@@ -576,7 +642,11 @@ def update_membership_mode_override(
     if mode_override is not None and mode_override not in VALID_MODE_KEYS:
         raise ValueError("Invalid tenant mode override")
     normalized_mode_override = mode_override
-    if mode_override == MODE_TECHNICAL and PERMISSION_TECHNICAL_ACCESS not in permission_keys and role == ROLE_BUSINESS_MEMBER:
+    if (
+        mode_override == MODE_TECHNICAL
+        and PERMISSION_TECHNICAL_ACCESS not in permission_keys
+        and role == ROLE_BUSINESS_MEMBER
+    ):
         normalized_mode_override = None
     membership.mode_override = normalized_mode_override
     membership.updated_at = utcnow()
@@ -593,7 +663,9 @@ def change_user_password(
     credential = session.get(TenantUserCredential, user_id)
     if credential is None:
         raise ValueError("Credential not found")
-    if not verify_password(password=current_password, password_hash=credential.password_hash):
+    if not verify_password(
+        password=current_password, password_hash=credential.password_hash
+    ):
         raise PermissionError("Current password is incorrect")
     now = utcnow()
     credential.password_hash = hash_password(new_password)
@@ -620,7 +692,9 @@ def reset_user_password(
     return credential
 
 
-def get_discord_identity(*, session: Session, user_id: str) -> TenantUserDiscordIdentity | None:
+def get_discord_identity(
+    *, session: Session, user_id: str
+) -> TenantUserDiscordIdentity | None:
     return session.get(TenantUserDiscordIdentity, user_id)
 
 
@@ -672,11 +746,15 @@ def update_membership_discord_state(
 
 
 def summarize_delivery(*, session: Session, tenant_id: str) -> DeliverySummary:
-    runs = session.execute(
-        select(Run)
-        .where(Run.tenant_id == tenant_id)
-        .order_by(Run.finished_at.desc().nullslast(), Run.created_at.desc())
-    ).scalars().all()
+    runs = (
+        session.execute(
+            select(Run)
+            .where(Run.tenant_id == tenant_id)
+            .order_by(Run.finished_at.desc().nullslast(), Run.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
     completed_count = 0
     in_review_count = 0
     blocked_count = 0
@@ -697,9 +775,13 @@ def summarize_delivery(*, session: Session, tenant_id: str) -> DeliverySummary:
         else:
             queued_count += 1
         if run.started_at is not None and run.finished_at is not None:
-            cycle_times.append(max(0.0, (run.finished_at - run.started_at).total_seconds() / 3600))
+            cycle_times.append(
+                max(0.0, (run.finished_at - run.started_at).total_seconds() / 3600)
+            )
 
-    average_cycle_time = round(sum(cycle_times) / len(cycle_times), 2) if cycle_times else None
+    average_cycle_time = (
+        round(sum(cycle_times) / len(cycle_times), 2) if cycle_times else None
+    )
     median_cycle_time = round(float(median(cycle_times)), 2) if cycle_times else None
     return DeliverySummary(
         completed_count=completed_count,

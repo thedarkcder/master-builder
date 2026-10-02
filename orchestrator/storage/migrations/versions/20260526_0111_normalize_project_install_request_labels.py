@@ -49,7 +49,10 @@ def _canonical_project_install_request_label(*, kind: str, label: str) -> str:
         return normalized_label
     tokens = [
         token
-        for token in "".join(character.lower() if character.isalnum() else " " for character in normalized_label).split()
+        for token in "".join(
+            character.lower() if character.isalnum() else " "
+            for character in normalized_label
+        ).split()
         if token
     ]
     for known_label in KNOWN_INTEGRATION_LABELS:
@@ -58,7 +61,8 @@ def _canonical_project_install_request_label(*, kind: str, label: str) -> str:
     meaningful_tokens = [
         token
         for token in tokens
-        if token not in GENERIC_INSTALL_LABEL_TOKENS and not any(character.isdigit() for character in token)
+        if token not in GENERIC_INSTALL_LABEL_TOKENS
+        and not any(character.isdigit() for character in token)
     ]
     if meaningful_tokens:
         return "-".join(meaningful_tokens)
@@ -84,9 +88,16 @@ def upgrade() -> None:
     approved_keys: set[tuple[str, str, str, str]] = set()
     canonical_by_request: dict[str, str] = {}
     for row in rows:
-        canonical_label = _canonical_project_install_request_label(kind=str(row["kind"]), label=str(row["label"]))
+        canonical_label = _canonical_project_install_request_label(
+            kind=str(row["kind"]), label=str(row["label"])
+        )
         canonical_by_request[str(row["request_id"])] = canonical_label
-        key = (str(row["tenant_id"]), str(row["project_id"]), str(row["kind"]), canonical_label)
+        key = (
+            str(row["tenant_id"]),
+            str(row["project_id"]),
+            str(row["kind"]),
+            canonical_label,
+        )
         if str(row["status"]).strip().lower() == "approved":
             approved_keys.add(key)
 
@@ -94,8 +105,17 @@ def upgrade() -> None:
         request_id = str(row["request_id"])
         canonical_label = canonical_by_request[request_id]
         current_status = str(row["status"]).strip().lower()
-        key = (str(row["tenant_id"]), str(row["project_id"]), str(row["kind"]), canonical_label)
-        next_status = "approved" if current_status == "pending" and key in approved_keys else current_status
+        key = (
+            str(row["tenant_id"]),
+            str(row["project_id"]),
+            str(row["kind"]),
+            canonical_label,
+        )
+        next_status = (
+            "approved"
+            if current_status == "pending" and key in approved_keys
+            else current_status
+        )
         if canonical_label == row["label"] and next_status == current_status:
             continue
         bind.execute(
@@ -118,4 +138,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Project install request label normalization cannot be downgraded")
+    raise RuntimeError(
+        "Project install request label normalization cannot be downgraded"
+    )

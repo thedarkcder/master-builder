@@ -24,23 +24,40 @@ def _table_exists(table_name: str) -> bool:
 
 def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _column_exists("tenants", "experience_config"):
         with op.batch_alter_table("tenants", recreate="auto") as batch_op:
             batch_op.add_column(
-                sa.Column("experience_config", sa.JSON(), nullable=False, server_default=sa.text("'{}'"))
+                sa.Column(
+                    "experience_config",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'{}'"),
+                )
             )
     if not _column_exists("tenants", "setup_state"):
         with op.batch_alter_table("tenants", recreate="auto") as batch_op:
-            batch_op.add_column(sa.Column("setup_state", sa.JSON(), nullable=False, server_default=sa.text("'{}'")))
+            batch_op.add_column(
+                sa.Column(
+                    "setup_state",
+                    sa.JSON(),
+                    nullable=False,
+                    server_default=sa.text("'{}'"),
+                )
+            )
 
     tenants = sa.table(
         "tenants",
@@ -49,7 +66,11 @@ def upgrade() -> None:
         sa.column("setup_state", sa.JSON()),
     )
     bind = op.get_bind()
-    tenant_rows = bind.execute(sa.select(tenants.c.tenant_id, tenants.c.experience_config, tenants.c.setup_state)).all()
+    tenant_rows = bind.execute(
+        sa.select(
+            tenants.c.tenant_id, tenants.c.experience_config, tenants.c.setup_state
+        )
+    ).all()
     for row in tenant_rows:
         experience_config = dict(row.experience_config or {})
         if "default_mode" not in experience_config:
@@ -67,15 +88,15 @@ def upgrade() -> None:
             sa.Column("user_id", sa.String(length=64), nullable=False),
             sa.Column("email", sa.String(length=320), nullable=False),
             sa.Column("full_name", sa.String(length=255), nullable=False),
-            sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "is_active", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("user_id"),
             sa.UniqueConstraint("email"),
         )
-    for index_name, columns in (
-        ("ix_tenant_users_email", ["email"]),
-    ):
+    for index_name, columns in (("ix_tenant_users_email", ["email"]),):
         if not _has_index("tenant_users", index_name):
             op.create_index(index_name, "tenant_users", columns, unique=False)
 
@@ -84,11 +105,20 @@ def upgrade() -> None:
             "tenant_user_credentials",
             sa.Column("user_id", sa.String(length=64), nullable=False),
             sa.Column("password_hash", sa.Text(), nullable=False),
-            sa.Column("password_updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.Column("must_change_password", sa.Boolean(), nullable=False, server_default=sa.false()),
+            sa.Column(
+                "password_updated_at", sa.DateTime(timezone=True), nullable=False
+            ),
+            sa.Column(
+                "must_change_password",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            ),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["user_id"], ["tenant_users.user_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["user_id"], ["tenant_users.user_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("user_id"),
         )
 
@@ -100,16 +130,29 @@ def upgrade() -> None:
             sa.Column("user_id", sa.String(length=64), nullable=False),
             sa.Column("role", sa.String(length=32), nullable=False),
             sa.Column("mode_override", sa.String(length=32), nullable=True),
-            sa.Column("onboarding_kind", sa.String(length=32), nullable=False, server_default="member_join"),
+            sa.Column(
+                "onboarding_kind",
+                sa.String(length=32),
+                nullable=False,
+                server_default="member_join",
+            ),
             sa.Column("first_signed_in_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("onboarding_completed_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column(
+                "onboarding_completed_at", sa.DateTime(timezone=True), nullable=True
+            ),
             sa.Column("onboarding_version", sa.String(length=64), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["user_id"], ["tenant_users.user_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["user_id"], ["tenant_users.user_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("membership_id"),
-            sa.UniqueConstraint("tenant_id", "user_id", name="uq_tenant_memberships_tenant_user"),
+            sa.UniqueConstraint(
+                "tenant_id", "user_id", name="uq_tenant_memberships_tenant_user"
+            ),
         )
     for index_name, columns in (
         ("ix_tenant_memberships_tenant_id", ["tenant_id"]),
@@ -129,13 +172,15 @@ def upgrade() -> None:
             sa.Column("permission_keys", sa.JSON(), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("team_id"),
-            sa.UniqueConstraint("tenant_id", "name", name="uq_tenant_teams_tenant_name"),
+            sa.UniqueConstraint(
+                "tenant_id", "name", name="uq_tenant_teams_tenant_name"
+            ),
         )
-    for index_name, columns in (
-        ("ix_tenant_teams_tenant_id", ["tenant_id"]),
-    ):
+    for index_name, columns in (("ix_tenant_teams_tenant_id", ["tenant_id"]),):
         if not _has_index("tenant_teams", index_name):
             op.create_index(index_name, "tenant_teams", columns, unique=False)
 
@@ -146,17 +191,27 @@ def upgrade() -> None:
             sa.Column("team_id", sa.String(length=64), nullable=False),
             sa.Column("membership_id", sa.String(length=64), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["team_id"], ["tenant_teams.team_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["membership_id"], ["tenant_memberships.membership_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["team_id"], ["tenant_teams.team_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["membership_id"],
+                ["tenant_memberships.membership_id"],
+                ondelete="CASCADE",
+            ),
             sa.PrimaryKeyConstraint("team_membership_id"),
-            sa.UniqueConstraint("team_id", "membership_id", name="uq_tenant_team_memberships"),
+            sa.UniqueConstraint(
+                "team_id", "membership_id", name="uq_tenant_team_memberships"
+            ),
         )
     for index_name, columns in (
         ("ix_tenant_team_memberships_team_id", ["team_id"]),
         ("ix_tenant_team_memberships_membership_id", ["membership_id"]),
     ):
         if not _has_index("tenant_team_memberships", index_name):
-            op.create_index(index_name, "tenant_team_memberships", columns, unique=False)
+            op.create_index(
+                index_name, "tenant_team_memberships", columns, unique=False
+            )
 
     if not _table_exists("tenant_invites"):
         op.create_table(
@@ -177,9 +232,15 @@ def upgrade() -> None:
             sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["invited_by_user_id"], ["tenant_users.user_id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(["accepted_by_user_id"], ["tenant_users.user_id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["invited_by_user_id"], ["tenant_users.user_id"], ondelete="SET NULL"
+            ),
+            sa.ForeignKeyConstraint(
+                ["accepted_by_user_id"], ["tenant_users.user_id"], ondelete="SET NULL"
+            ),
             sa.PrimaryKeyConstraint("invite_id"),
             sa.UniqueConstraint("invite_token_hash"),
         )
@@ -190,7 +251,10 @@ def upgrade() -> None:
         ("ix_tenant_invites_invited_by_user_id", ["invited_by_user_id"]),
         ("ix_tenant_invites_accepted_by_user_id", ["accepted_by_user_id"]),
         ("ix_tenant_invites_expires_at", ["expires_at"]),
-        ("ix_tenant_invites_tenant_status_created", ["tenant_id", "status", "created_at"]),
+        (
+            "ix_tenant_invites_tenant_status_created",
+            ["tenant_id", "status", "created_at"],
+        ),
     ):
         if not _has_index("tenant_invites", index_name):
             op.create_index(index_name, "tenant_invites", columns, unique=False)

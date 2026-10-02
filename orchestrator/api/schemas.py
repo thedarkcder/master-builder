@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from orchestrator.api.deployment_schemas import (  # noqa: F401
     DeploymentHostBootstrapRead,
@@ -57,7 +64,10 @@ from orchestrator.core.runtime.agent_execution_profiles import (
     normalize_execution_profile_routing,
     normalize_execution_profiles,
 )
-from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.runtime.models import (
+    normalize_codex_model,
+    normalize_codex_reasoning_effort,
+)
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.guardrails import enforce_safe_command
 
@@ -65,8 +75,12 @@ from orchestrator.core.guardrails import enforce_safe_command
 class JiraConfig(BaseModel):
     connection_id: str | None = None
     project_keys: list[str] = Field(default_factory=list)
-    ready_statuses: list[str] = Field(default_factory=lambda: ["Ready for Agent"], min_length=1)
-    ready_trigger_mode: str = Field(default="status_recheck", pattern="^(status_recheck|transition_only)$")
+    ready_statuses: list[str] = Field(
+        default_factory=lambda: ["Ready for Agent"], min_length=1
+    )
+    ready_trigger_mode: str = Field(
+        default="status_recheck", pattern="^(status_recheck|transition_only)$"
+    )
     ready_jql: str | None = None
     ready_label: str = Field(default="agent:ready", min_length=1)
     in_progress_label: str = Field(default="agent:in-progress", min_length=1)
@@ -108,7 +122,9 @@ class ObservabilityPolicyConfig(BaseModel):
     @model_validator(mode="after")
     def validate_legal_hold(self) -> "ObservabilityPolicyConfig":
         if self.legal_hold_enabled and not self.legal_hold_reason:
-            raise ValueError("legal_hold_reason is required when legal_hold_enabled is true")
+            raise ValueError(
+                "legal_hold_reason is required when legal_hold_enabled is true"
+            )
         if not self.legal_hold_enabled:
             self.legal_hold_reason = None
         return self
@@ -130,12 +146,18 @@ class PolicyConfig(BaseModel):
     allowed_commands: list[str] = Field(default_factory=list)
     require_agents_md: bool = False
     knowledge_base_enabled: bool = True
-    knowledge_auto_answer_mode: str = Field(default="aggressive", pattern="^(safe|balanced|aggressive)$")
+    knowledge_auto_answer_mode: str = Field(
+        default="aggressive", pattern="^(safe|balanced|aggressive)$"
+    )
     codex_model: str | None = None
-    codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    codex_reasoning_effort: str | None = Field(
+        default=None, pattern="^(low|medium|high)$"
+    )
     execution_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
     execution_profile_routing: dict[str, str] = Field(default_factory=dict)
-    observability: ObservabilityPolicyConfig = Field(default_factory=ObservabilityPolicyConfig)
+    observability: ObservabilityPolicyConfig = Field(
+        default_factory=ObservabilityPolicyConfig
+    )
 
     @field_validator("allowed_commands")
     @classmethod
@@ -165,16 +187,27 @@ class PolicyConfig(BaseModel):
 
     @field_validator("execution_profiles")
     @classmethod
-    def normalize_execution_profiles(cls, value: dict[str, dict[str, object]] | None) -> dict[str, dict[str, object]]:
+    def normalize_execution_profiles(
+        cls, value: dict[str, dict[str, object]] | None
+    ) -> dict[str, dict[str, object]]:
         return normalize_execution_profiles(value)
 
     @field_validator("execution_profile_routing")
     @classmethod
-    def normalize_execution_profile_routing(cls, value: dict[str, str] | None) -> dict[str, str]:
+    def normalize_execution_profile_routing(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str]:
         return normalize_execution_profile_routing(value)
 
 
 class DiscordConfig(BaseModel):
+    command_secret_ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_./:-]*$",
+        description="Tenant-scoped managed secret reference for X-Webhook-Token; never the token value",
+    )
     guild_id: str | None = None
     installed_at: str | None = None
     installer_user_id: str | None = None
@@ -228,7 +261,11 @@ class DiscordConfig(BaseModel):
             if explicitly_set:
                 serialized[field_name] = value
                 continue
-            default = field_info.default_factory() if field_info.default_factory is not None else field_info.default
+            default = (
+                field_info.default_factory()
+                if field_info.default_factory is not None
+                else field_info.default
+            )
             if value != default:
                 serialized[field_name] = value
         return serialized
@@ -281,7 +318,11 @@ class ProjectDiscordConfig(BaseModel):
             if explicitly_set:
                 serialized[field_name] = value
                 continue
-            default = field_info.default_factory() if field_info.default_factory is not None else field_info.default
+            default = (
+                field_info.default_factory()
+                if field_info.default_factory is not None
+                else field_info.default
+            )
             if value != default:
                 serialized[field_name] = value
         return serialized
@@ -403,8 +444,8 @@ class AuthenticatedPrincipalRead(BaseModel):
 
 
 class TenantUserLoginRequest(BaseModel):
-    email: str = Field(min_length=1)
-    password: str = Field(min_length=1)
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class TenantUserLoginResponse(BaseModel):
@@ -417,7 +458,7 @@ class TenantUserLoginResponse(BaseModel):
 class PublicRegistrationRequest(BaseModel):
     full_name: str = Field(min_length=1, max_length=255)
     email: str = Field(min_length=1, max_length=320)
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=1024)
     tenant_name: str = Field(min_length=1, max_length=255)
 
 
@@ -434,7 +475,9 @@ class TenantInviteCreate(BaseModel):
     full_name: str | None = Field(default=None, max_length=255)
     role: str = Field(pattern="^(tenant_admin|technical_member|business_member)$")
     team_ids: list[str] = Field(default_factory=list)
-    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+    mode_override: str | None = Field(
+        default=None, pattern="^(technical|non_technical)$"
+    )
 
 
 class TenantInviteRead(BaseModel):
@@ -508,7 +551,9 @@ class TenantMemberRead(BaseModel):
 class TenantMemberUpdate(BaseModel):
     role: str = Field(pattern="^(tenant_admin|technical_member|business_member)$")
     team_ids: list[str] = Field(default_factory=list)
-    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+    mode_override: str | None = Field(
+        default=None, pattern="^(technical|non_technical)$"
+    )
     is_active: bool = True
 
 
@@ -755,7 +800,9 @@ class ProjectAutomationWrite(BaseModel):
         }
         for raw_value in value:
             if isinstance(raw_value, bool):
-                raise ValueError("days_of_week must contain integers 0-6 or weekday names")
+                raise ValueError(
+                    "days_of_week must contain integers 0-6 or weekday names"
+                )
             if isinstance(raw_value, int):
                 day = raw_value
             else:
@@ -1168,8 +1215,12 @@ class AgentRuntimeRoutingRead(BaseModel):
     available_roles: list[str] = Field(default_factory=list)
     available_named_agents: list[str] = Field(default_factory=list)
     available_selectors: list[str] = Field(default_factory=list)
-    available_profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
-    effective_defaults: AgentRuntimeRoutingDefaultsRead = Field(default_factory=AgentRuntimeRoutingDefaultsRead)
+    available_profiles: dict[str, AgentExecutionProfileRead] = Field(
+        default_factory=dict
+    )
+    effective_defaults: AgentRuntimeRoutingDefaultsRead = Field(
+        default_factory=AgentRuntimeRoutingDefaultsRead
+    )
 
 
 class AgentRuntimeToolRead(BaseModel):
@@ -1282,7 +1333,15 @@ class WorkflowTranscriptEntryRead(BaseModel):
 
 
 class WorkflowTranscriptSectionRead(BaseModel):
-    kind: Literal["summary", "runtime", "prompts", "tool_calls", "external_requests", "external_responses", "outcome"]
+    kind: Literal[
+        "summary",
+        "runtime",
+        "prompts",
+        "tool_calls",
+        "external_requests",
+        "external_responses",
+        "outcome",
+    ]
     label: str
     entries: list[WorkflowTranscriptEntryRead] = Field(default_factory=list)
 
@@ -1394,9 +1453,13 @@ class WorkflowTypeRead(BaseModel):
     label: str
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
-    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
+    retry_policy: WorkflowRetryPolicyRead = Field(
+        default_factory=WorkflowRetryPolicyRead
+    )
     capabilities: dict[str, object] = Field(default_factory=dict)
-    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
+    lifecycle: WorkflowTypeLifecycleRead = Field(
+        default_factory=WorkflowTypeLifecycleRead
+    )
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
 
 
@@ -1484,9 +1547,13 @@ class WorkflowTypeDetailRead(BaseModel):
     label: str
     description: str | None = None
     orchestration_backend: Literal["legacy", "temporal", "database"]
-    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
+    retry_policy: WorkflowRetryPolicyRead = Field(
+        default_factory=WorkflowRetryPolicyRead
+    )
     capabilities: dict[str, object] = Field(default_factory=dict)
-    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
+    lifecycle: WorkflowTypeLifecycleRead = Field(
+        default_factory=WorkflowTypeLifecycleRead
+    )
     operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
     execution_count: int = 0
     latest_execution_at: datetime | None = None
@@ -1616,7 +1683,9 @@ class StartEngineeringPreviewRead(BaseModel):
 
 
 class WorkflowOperationRestartRequest(BaseModel):
-    restart_reason: str = Field(default="Restarted stale running workflow operation attempt.")
+    restart_reason: str = Field(
+        default="Restarted stale running workflow operation attempt."
+    )
 
 
 class WorkflowAttemptCreateRequest(BaseModel):
@@ -1630,7 +1699,9 @@ class WorkflowAttemptCreateRequest(BaseModel):
                 raise ValueError("checkpoint_kind must be omitted for fresh attempts")
             return self
         if self.checkpoint_kind is None:
-            raise ValueError("checkpoint_kind is required for restart and resume attempts")
+            raise ValueError(
+                "checkpoint_kind is required for restart and resume attempts"
+            )
         return self
 
 
@@ -1950,8 +2021,8 @@ class DiscordCommandSyncStatusRead(BaseModel):
 
 
 class AdminLoginRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=1)
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class AdminLoginResponse(BaseModel):

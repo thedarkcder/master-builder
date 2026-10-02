@@ -20,7 +20,10 @@ from orchestrator.api.webhooks.pr_review_comment_service import (
     upsert_manual_fix_review_thread_reply,
     upsert_sticky_review_comment,
 )
-from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
+from orchestrator.core.review.pr_review_findings import (
+    PrReviewFindingsResult,
+    ReviewFinding,
+)
 from orchestrator.core.review.reviewer import ReviewerSignal
 from orchestrator.core.review.pr_ready import PrReadinessResult
 from orchestrator.storage.models import Base, PrReviewPublication, Project, Tenant
@@ -49,7 +52,9 @@ def _review_session():
         engine,
         tables=[Tenant.__table__, Project.__table__, PrReviewPublication.__table__],
     )
-    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    session_factory = sessionmaker(
+        bind=engine, autoflush=False, autocommit=False, expire_on_commit=False
+    )
     session: Session = session_factory()
     now = datetime.now(timezone.utc)
     session.add(
@@ -94,7 +99,9 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
     with _review_session() as session:
         github_client = SimpleNamespace(
             list_pull_request_issue_comments=lambda **_kwargs: [],
-            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=101),
+            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(
+                comment_id=101
+            ),
             update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=101),
         )
         created = upsert_sticky_review_comment(
@@ -121,8 +128,12 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
 
         marker_body = "<!-- codex:pr-review:t1:p1:org/repo:10 -->"
         github_client = SimpleNamespace(
-            list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=101, body=marker_body)],
-            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+            list_pull_request_issue_comments=lambda **_kwargs: [
+                SimpleNamespace(comment_id=101, body=marker_body)
+            ],
+            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(
+                comment_id=999
+            ),
             update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=101),
         )
         updated = upsert_sticky_review_comment(
@@ -148,16 +159,22 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
         assert updated.comment_id == 101
 
 
-def test_upsert_sticky_review_comment_deletes_existing_comment_when_review_is_clear() -> None:
+def test_upsert_sticky_review_comment_deletes_existing_comment_when_review_is_clear() -> (
+    None
+):
     deleted: dict[str, object] = {}
 
     with _review_session() as session:
         github_client = SimpleNamespace(
             list_pull_request_issue_comments=lambda **_kwargs: [
-                SimpleNamespace(comment_id=101, body="<!-- codex:pr-review:t1:p1:org/repo:10 -->")
+                SimpleNamespace(
+                    comment_id=101, body="<!-- codex:pr-review:t1:p1:org/repo:10 -->"
+                )
             ],
             delete_issue_comment=lambda **kwargs: deleted.update(kwargs),
-            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(
+                comment_id=999
+            ),
             update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
         )
         result = upsert_sticky_review_comment(
@@ -170,7 +187,9 @@ def test_upsert_sticky_review_comment_deletes_existing_comment_when_review_is_cl
             project_id="p1",
             head_sha="sha-clear",
             signal=_signal(ready=True),
-            findings_result=PrReviewFindingsResult(state="ready", summary="all clear", findings=()),
+            findings_result=PrReviewFindingsResult(
+                state="ready", summary="all clear", findings=()
+            ),
             event="pull_request",
             action="synchronize",
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
@@ -187,7 +206,11 @@ def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None
         findings_result=PrReviewFindingsResult(
             state="blocked",
             summary="needs fixes",
-            findings=(ReviewFinding(severity="high", message="Fix this", path=None, line=None),),
+            findings=(
+                ReviewFinding(
+                    severity="high", message="Fix this", path=None, line=None
+                ),
+            ),
         ),
         repo_full_name="org/repo",
         pr_number=10,
@@ -199,7 +222,9 @@ def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None
     assert "https://github.com/org/repo/pull/10#issuecomment-new" in body
 
 
-def test_format_sticky_review_comment_marks_empty_findings_ready_without_queue_fix() -> None:
+def test_format_sticky_review_comment_marks_empty_findings_ready_without_queue_fix() -> (
+    None
+):
     signal = ReviewerSignal(
         ready=False,
         state="missing_checks",
@@ -257,8 +282,12 @@ def test_publish_inline_review_batch_filters_to_valid_locations() -> None:
             project_id="p1",
             findings=(
                 ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),
-                ReviewFinding(severity="low", message="no line", path="src/a.py", line=None),
-                ReviewFinding(severity="low", message="not changed", path="src/b.py", line=4),
+                ReviewFinding(
+                    severity="low", message="no line", path="src/a.py", line=None
+                ),
+                ReviewFinding(
+                    severity="low", message="not changed", path="src/b.py", line=4
+                ),
             ),
             changed_paths={"src/a.py"},
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
@@ -291,16 +320,22 @@ def test_publish_inline_review_batch_skips_duplicate_signature_for_same_sha() ->
             head_sha="sha-1",
             tenant_id="t1",
             project_id="p1",
-            findings=(ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),),
+            findings=(
+                ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),
+            ),
             changed_paths={"src/a.py"},
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
         assert initial_result.submitted is True
 
         duplicate_client = SimpleNamespace(
-            list_pull_request_reviews=lambda **_kwargs: [SimpleNamespace(body=str(captured["body"]))],
+            list_pull_request_reviews=lambda **_kwargs: [
+                SimpleNamespace(body=str(captured["body"]))
+            ],
             submit_pull_request_review=lambda **_kwargs: (_ for _ in ()).throw(
-                AssertionError("submit_pull_request_review should not be called for duplicate signature")
+                AssertionError(
+                    "submit_pull_request_review should not be called for duplicate signature"
+                )
             ),
         )
         duplicate_result = publish_inline_review_batch(
@@ -312,7 +347,9 @@ def test_publish_inline_review_batch_skips_duplicate_signature_for_same_sha() ->
             head_sha="sha-1",
             tenant_id="t1",
             project_id="p1",
-            findings=(ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),),
+            findings=(
+                ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),
+            ),
             changed_paths={"src/a.py"},
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
@@ -343,7 +380,9 @@ def test_publish_inline_review_batch_reposts_when_findings_change_on_same_sha() 
             head_sha="sha-2",
             tenant_id="t1",
             project_id="p1",
-            findings=(ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),),
+            findings=(
+                ReviewFinding(severity="high", message="bad", path="src/a.py", line=11),
+            ),
             changed_paths={"src/a.py"},
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
@@ -354,7 +393,9 @@ def test_publish_inline_review_batch_reposts_when_findings_change_on_same_sha() 
             return SimpleNamespace(review_id=602)
 
         second_client = SimpleNamespace(
-            list_pull_request_reviews=lambda **_kwargs: [SimpleNamespace(body=str(first_captured["body"]))],
+            list_pull_request_reviews=lambda **_kwargs: [
+                SimpleNamespace(body=str(first_captured["body"]))
+            ],
             submit_pull_request_review=_second_submit,
         )
         second_result = publish_inline_review_batch(
@@ -366,7 +407,11 @@ def test_publish_inline_review_batch_reposts_when_findings_change_on_same_sha() 
             head_sha="sha-2",
             tenant_id="t1",
             project_id="p1",
-            findings=(ReviewFinding(severity="high", message="worse", path="src/a.py", line=11),),
+            findings=(
+                ReviewFinding(
+                    severity="high", message="worse", path="src/a.py", line=11
+                ),
+            ),
             changed_paths={"src/a.py"},
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
         )
@@ -469,7 +514,9 @@ def test_review_publication_state_persists_large_review_id() -> None:
         )
         session.commit()
 
-        persisted = session.get(PrReviewPublication, acquired.publication.publication_id)
+        persisted = session.get(
+            PrReviewPublication, acquired.publication.publication_id
+        )
         assert persisted is not None
         assert persisted.review_id == large_review_id
 
@@ -477,8 +524,12 @@ def test_review_publication_state_persists_large_review_id() -> None:
 def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:
     github_client = SimpleNamespace(
         list_pull_request_review_comments=lambda **_kwargs: [],
-        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=303),
-        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(
+            comment_id=303
+        ),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(
+            comment_id=303
+        ),
     )
     created = upsert_manual_fix_review_thread_reply(
         github_client=github_client,
@@ -501,9 +552,15 @@ def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:
 
     marker_body = "<!-- codex:pr-manual-fix:t1:p1:org/repo:10:9001 -->"
     github_client = SimpleNamespace(
-        list_pull_request_review_comments=lambda **_kwargs: [SimpleNamespace(comment_id=303, body=marker_body)],
-        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(comment_id=999),
-        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=303),
+        list_pull_request_review_comments=lambda **_kwargs: [
+            SimpleNamespace(comment_id=303, body=marker_body)
+        ],
+        create_pull_request_review_comment_reply=lambda **_kwargs: SimpleNamespace(
+            comment_id=999
+        ),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(
+            comment_id=303
+        ),
     )
     updated = upsert_manual_fix_review_thread_reply(
         github_client=github_client,
@@ -525,12 +582,18 @@ def test_upsert_manual_fix_review_thread_reply_creates_and_updates() -> None:
     assert updated.comment_id == 303
 
 
-def test_upsert_manual_fix_review_thread_reply_renders_terminal_success_summary() -> None:
+def test_upsert_manual_fix_review_thread_reply_renders_terminal_success_summary() -> (
+    None
+):
     captured: dict[str, object] = {}
     github_client = SimpleNamespace(
         list_pull_request_review_comments=lambda **_kwargs: [],
-        create_pull_request_review_comment_reply=lambda **kwargs: captured.update(kwargs) or SimpleNamespace(comment_id=404),
-        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(comment_id=404),
+        create_pull_request_review_comment_reply=lambda **kwargs: (
+            captured.update(kwargs) or SimpleNamespace(comment_id=404)
+        ),
+        update_pull_request_review_comment=lambda **_kwargs: SimpleNamespace(
+            comment_id=404
+        ),
     )
     created = upsert_manual_fix_review_thread_reply(
         github_client=github_client,
@@ -549,7 +612,10 @@ def test_upsert_manual_fix_review_thread_reply_renders_terminal_success_summary(
         reason=None,
         status_label="SUCCEEDED",
         pr_url="https://github.com/org/repo/pull/10",
-        change_summary=("Moved profile sync off the auth path.", "Added targeted auth tests."),
+        change_summary=(
+            "Moved profile sync off the auth path.",
+            "Added targeted auth tests.",
+        ),
     )
     assert created.action == "created"
     body = str(captured["body"])
@@ -562,7 +628,9 @@ def test_upsert_manual_fix_review_thread_reply_renders_terminal_success_summary(
 def test_upsert_manual_fix_issue_comment_reply_creates_and_updates() -> None:
     github_client = SimpleNamespace(
         list_pull_request_issue_comments=lambda **_kwargs: [],
-        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=505),
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(
+            comment_id=505
+        ),
         update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=505),
     )
     created = upsert_manual_fix_issue_comment_reply(
@@ -589,8 +657,12 @@ def test_upsert_manual_fix_issue_comment_reply_creates_and_updates() -> None:
 
     marker_body = "<!-- codex:pr-manual-fix-issue-comment:t1:p1:org/repo:10:777 -->"
     github_client = SimpleNamespace(
-        list_pull_request_issue_comments=lambda **_kwargs: [SimpleNamespace(comment_id=505, body=marker_body)],
-        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        list_pull_request_issue_comments=lambda **_kwargs: [
+            SimpleNamespace(comment_id=505, body=marker_body)
+        ],
+        create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(
+            comment_id=999
+        ),
         update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=505),
     )
     updated = upsert_manual_fix_issue_comment_reply(

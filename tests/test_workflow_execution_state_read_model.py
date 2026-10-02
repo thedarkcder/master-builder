@@ -21,7 +21,9 @@ def test_bucket_workflow_steps_returns_named_buckets() -> None:
             WorkflowStatePathEntryRead(key="brief", label="Brief", status="completed"),
             WorkflowStatePathEntryRead(key="fanout", label="Fanout", status="failed"),
             WorkflowStatePathEntryRead(key="retry", label="Retry", status="retrying"),
-            WorkflowStatePathEntryRead(key="promote", label="Promote", status="pending"),
+            WorkflowStatePathEntryRead(
+                key="promote", label="Promote", status="pending"
+            ),
         ]
     )
 
@@ -81,7 +83,10 @@ def test_build_workflow_execution_state_read_model_uses_operation_lifecycle() ->
         runs=[SimpleNamespace(entry_mode="fresh")],
     )
 
-    assert [entry.key for entry in read_model.state_path] == ["brief_normalization", "child_fanout"]
+    assert [entry.key for entry in read_model.state_path] == [
+        "brief_normalization",
+        "child_fanout",
+    ]
     assert read_model.step_buckets.completed == ["Brief normalization"]
     assert read_model.step_buckets.failed == ["Child fanout"]
     assert read_model.next_step is None

@@ -27,7 +27,9 @@ def _issue_project_key(issue_key: str) -> str:
 def _assert_issue_key_in_scope(*, issue_key: str, scope: CommandScope) -> None:
     if not scope.project_keys:
         return
-    if _issue_project_key(issue_key) in {value.strip().upper() for value in scope.project_keys if value.strip()}:
+    if _issue_project_key(issue_key) in {
+        value.strip().upper() for value in scope.project_keys if value.strip()
+    }:
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -35,7 +37,9 @@ def _assert_issue_key_in_scope(*, issue_key: str, scope: CommandScope) -> None:
     )
 
 
-def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime | None) -> int:
+def _format_elapsed_seconds(
+    *, started_at: datetime | None, created_at: datetime | None
+) -> int:
     anchor = started_at or created_at
     if anchor is None:
         return 0
@@ -74,10 +78,14 @@ def dispatch_simple_discord_command(
     scope: CommandScope,
 ) -> DiscordCommandResponse | None:
     if command_name == "help":
-        return DiscordCommandResponse(ok=True, command=command_name, message=_command_help_message(), data=None)
+        return DiscordCommandResponse(
+            ok=True, command=command_name, message=_command_help_message(), data=None
+        )
 
     if command_name == "policy":
-        return DiscordCommandResponse(ok=True, command=command_name, message=_command_policy_message(), data=None)
+        return DiscordCommandResponse(
+            ok=True, command=command_name, message=_command_policy_message(), data=None
+        )
 
     if command_name == "status":
         queued_query = select(func.count(Run.run_id)).where(
@@ -131,7 +139,9 @@ def dispatch_simple_discord_command(
             try:
                 limit = min(max(1, int(arguments[0])), 50)
             except ValueError as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid run limit") from exc
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid run limit"
+                ) from exc
 
         runs_query = select(Run).where(Run.tenant_id == tenant_id)
         if scope.project_id is not None:
@@ -157,7 +167,10 @@ def dispatch_simple_discord_command(
 
     if command_name == "link":
         if len(arguments) != 1:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Usage: !link <ISSUE_KEY>")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Usage: !link <ISSUE_KEY>",
+            )
         issue_key = arguments[0].strip().upper()
         _assert_issue_key_in_scope(issue_key=issue_key, scope=scope)
         latest_pr = session.execute(
@@ -170,7 +183,9 @@ def dispatch_simple_discord_command(
             .order_by(Run.created_at.desc())
             .limit(1)
         ).scalar_one_or_none()
-        jira_link = build_jira_issue_url(issue_key=issue_key, browse_base_url=jira_browse_base_url)
+        jira_link = build_jira_issue_url(
+            issue_key=issue_key, browse_base_url=jira_browse_base_url
+        )
         return DiscordCommandResponse(
             ok=True,
             command=command_name,
@@ -209,7 +224,11 @@ def dispatch_simple_discord_command(
             ok=True,
             command=command_name,
             message=f"{message}{suffix}",
-            data={"user_id": payload.user_id.strip(), "requested": True, "permission": permission},
+            data={
+                "user_id": payload.user_id.strip(),
+                "requested": True,
+                "permission": permission,
+            },
         )
 
     return None

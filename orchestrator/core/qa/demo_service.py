@@ -17,7 +17,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from orchestrator.api.admin.deployment_release_service import get_project_deployment_release_logs
+from orchestrator.api.admin.deployment_release_service import (
+    get_project_deployment_release_logs,
+)
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.runtime.agents import CodexWorkflowAgents
 from orchestrator.core.runtime.runtime import build_codex_runtime
@@ -51,13 +53,21 @@ _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 _RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
-_QA_PROOF_STEP_ACTIONS = frozenset({"assert_visible", "assert_text", "wait_for_text", "wait_for_url"})
+_QA_PROOF_STEP_ACTIONS = frozenset(
+    {"assert_visible", "assert_text", "wait_for_text", "wait_for_url"}
+)
 _QA_DEMO_CONTENT_SHA256_METADATA_KEY = "content-sha256"
-_QA_DEMO_CONTENT_SHA256_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_CONTENT_SHA256_METADATA_KEY}"
+_QA_DEMO_CONTENT_SHA256_METADATA_HEADER = (
+    f"x-amz-meta-{_QA_DEMO_CONTENT_SHA256_METADATA_KEY}"
+)
 _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY = "release-context-sha256"
-_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY}"
+_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_HEADER = (
+    f"x-amz-meta-{_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY}"
+)
 _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY = "release-commit-sha"
-_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY}"
+_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER = (
+    f"x-amz-meta-{_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY}"
+)
 _MIN_DEMO_REQUIREMENT_VARIANTS = 2
 
 
@@ -93,7 +103,12 @@ class LocalQaFailureEvidence:
 
 
 class QaDemoRecordingFailure(RuntimeError):
-    def __init__(self, message: str, *, failure_evidence: list[LocalQaFailureEvidence] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_evidence: list[LocalQaFailureEvidence] | None = None,
+    ) -> None:
         super().__init__(message)
         self.failure_evidence = list(failure_evidence or [])
 
@@ -147,13 +162,26 @@ def qa_demo_recorder_process_timeout_seconds(settings) -> float:  # noqa: ANN001
 
 
 def storage_config_from_settings(settings) -> DemoArtifactStorageConfig:  # noqa: ANN001
-    endpoint = str(getattr(settings, "qa_demo_artifact_endpoint", "") or "").strip()
-    access_key = str(getattr(settings, "qa_demo_artifact_access_key", "") or "").strip()
-    secret_key = str(getattr(settings, "qa_demo_artifact_secret_key", "") or "").strip()
-    bucket = str(getattr(settings, "qa_demo_artifact_bucket", "") or "").strip()
-    public_base_url = str(getattr(settings, "qa_demo_artifact_public_base_url", "") or "").strip().rstrip("/")
-    secure = bool(getattr(settings, "qa_demo_artifact_secure", True))
-    if not endpoint or not access_key or not secret_key or not bucket or not public_base_url:
+    try:
+        endpoint = str(settings.qa_demo_artifact_endpoint).strip()
+        access_key = str(settings.qa_demo_artifact_access_key).strip()
+        secret_key = str(settings.qa_demo_artifact_secret_key).strip()
+        bucket = str(settings.qa_demo_artifact_bucket).strip()
+        public_base_url = (
+            str(settings.qa_demo_artifact_public_base_url).strip().rstrip("/")
+        )
+        secure = bool(settings.qa_demo_artifact_secure)
+    except AttributeError:
+        raise RuntimeError(
+            "QA demo artifact storage is not fully configured; required primary settings are missing"
+        ) from None
+    if (
+        not endpoint
+        or not access_key
+        or not secret_key
+        or not bucket
+        or not public_base_url
+    ):
         raise RuntimeError("QA demo artifact storage is not fully configured")
     return DemoArtifactStorageConfig(
         endpoint=endpoint,
@@ -168,9 +196,10 @@ def storage_config_from_settings(settings) -> DemoArtifactStorageConfig:  # noqa
 def resolve_preview_demo_url(release) -> str:  # noqa: ANN001
     urls = list(getattr(release, "service_urls", []) or [])
     for service_url in urls:
-        if str(getattr(service_url, "service_kind", "") or "").strip() == "website" and str(
-            getattr(service_url, "status", "") or ""
-        ).strip() == "active":
+        if (
+            str(getattr(service_url, "service_kind", "") or "").strip() == "website"
+            and str(getattr(service_url, "status", "") or "").strip() == "active"
+        ):
             url = str(getattr(service_url, "url", "") or "").strip()
             if url:
                 return url
@@ -178,7 +207,9 @@ def resolve_preview_demo_url(release) -> str:  # noqa: ANN001
 
 
 def _release_service_kinds(release) -> tuple[str, ...]:  # noqa: ANN001
-    urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
+    urls = (
+        list(getattr(release, "service_urls", []) or []) if release is not None else []
+    )
     ordered: list[str] = []
     for service_url in urls:
         kind = str(getattr(service_url, "service_kind", "") or "").strip()
@@ -192,7 +223,9 @@ def _release_service_urls_payload(
     *,
     include_recording_details: bool = False,
 ) -> list[dict[str, str]]:
-    urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
+    urls = (
+        list(getattr(release, "service_urls", []) or []) if release is not None else []
+    )
     payload: list[dict[str, str]] = []
     for service_url in urls:
         status = str(getattr(service_url, "status", "") or "").strip()
@@ -206,7 +239,9 @@ def _release_service_urls_payload(
             "url": url,
         }
         if include_recording_details:
-            recording_url, recording_headers = _release_service_recording_probe(service_url)
+            recording_url, recording_headers = _release_service_recording_probe(
+                service_url
+            )
             if recording_url and recording_url != url:
                 item["recording_url"] = recording_url
             recording_host_header = recording_headers.get("Host")
@@ -219,15 +254,21 @@ def _release_service_urls_payload(
     return payload
 
 
-def release_context_sha256_for_service_urls(release_service_urls: list[dict[str, str]]) -> str:
+def release_context_sha256_for_service_urls(
+    release_service_urls: list[dict[str, str]],
+) -> str:
     serialized = json.dumps(release_service_urls, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def release_context_sha256_for_release(*, release, release_service_urls: list[dict[str, str]]) -> str:  # noqa: ANN001
+def release_context_sha256_for_release(
+    *, release, release_service_urls: list[dict[str, str]]
+) -> str:  # noqa: ANN001
     commit_sha = str(getattr(release, "commit_sha", "") or "").strip()
     if not commit_sha:
-        raise RuntimeError("QA demo recording requires a preview release commit SHA before proof can be recorded")
+        raise RuntimeError(
+            "QA demo recording requires a preview release commit SHA before proof can be recorded"
+        )
     payload = {
         "commit_sha": commit_sha,
         "service_urls": release_service_urls,
@@ -311,7 +352,12 @@ def _ensure_failure_evidence_has_diagnostics(
         if failure_message in item.error_message:
             updated.append(item)
         else:
-            updated.append(replace(item, error_message=f"{item.error_message}\n\n{failure_message}".strip()))
+            updated.append(
+                replace(
+                    item,
+                    error_message=f"{item.error_message}\n\n{failure_message}".strip(),
+                )
+            )
     return updated
 
 
@@ -320,7 +366,9 @@ def _service_kind_from_item(item: object) -> str | None:
         kind = str(item.get("kind") or item.get("service_kind") or "").strip()
         public = item.get("public", True)
     else:
-        kind = str(getattr(item, "kind", "") or getattr(item, "service_kind", "") or "").strip()
+        kind = str(
+            getattr(item, "kind", "") or getattr(item, "service_kind", "") or ""
+        ).strip()
         public = getattr(item, "public", True)
     if not kind or kind not in {"website", "api"}:
         return None
@@ -348,16 +396,22 @@ def required_release_service_kinds(*, project, preview_release) -> tuple[str, ..
             return snapshot_kinds
     project_deployment_config = getattr(project, "deployment_config", None)
     if isinstance(project_deployment_config, dict):
-        project_kinds = _service_kinds_from_services(project_deployment_config.get("services"))
+        project_kinds = _service_kinds_from_services(
+            project_deployment_config.get("services")
+        )
         if project_kinds:
             return project_kinds
     return _release_service_kinds(preview_release)
 
 
-def _parse_recorder_command(raw_value: object, *, provider_name: str) -> tuple[str, ...]:
+def _parse_recorder_command(
+    raw_value: object, *, provider_name: str
+) -> tuple[str, ...]:
     raw = str(raw_value or "").strip()
     if not raw:
-        raise RuntimeError(f"QA demo {provider_name} recorder command is not configured")
+        raise RuntimeError(
+            f"QA demo {provider_name} recorder command is not configured"
+        )
     parts = tuple(shlex.split(raw))
     if not parts:
         raise RuntimeError(f"QA demo {provider_name} recorder command is invalid")
@@ -374,12 +428,19 @@ def qa_demo_release_health_timeout_seconds(settings) -> float:  # noqa: ANN001
 
 
 def qa_demo_artifact_url_timeout_seconds(settings) -> float:  # noqa: ANN001
+    from math import isfinite
+
     try:
-        raw_value = getattr(settings, "qa_demo_artifact_url_timeout_seconds", 10.0)
-        configured = 10.0 if raw_value is None else float(raw_value)
-    except (TypeError, ValueError):
-        configured = 10.0
-    return max(1.0, configured)
+        configured = float(settings.qa_demo_artifact_url_timeout_seconds)
+    except (AttributeError, TypeError, ValueError):
+        raise RuntimeError(
+            "QA artifact timeout requires an explicit finite positive setting"
+        ) from None
+    if not isfinite(configured) or configured <= 0:
+        raise RuntimeError(
+            "QA artifact timeout requires an explicit finite positive setting"
+        )
+    return configured
 
 
 def _default_service_url_probe(
@@ -405,21 +466,20 @@ def _default_service_url_probe(
 
 
 def _default_artifact_url_probe(url: str, *, timeout_seconds: float) -> int:
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "MasterBuilder-QA-Demo/1.0",
-            "Range": "bytes=0-0",
-        },
-        method="GET",
+    from orchestrator.core.config import get_settings
+    from orchestrator.core.qa.artifact_storage import (
+        object_key_from_delivery_url,
+        private_storage_client,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-            return int(getattr(response, "status", 200))
-    except urllib.error.HTTPError as exc:
-        return int(exc.code)
-    except (OSError, TimeoutError, urllib.error.URLError) as exc:
-        raise RuntimeError(str(exc)) from exc
+
+    storage = storage_config_from_settings(get_settings())
+    key = object_key_from_delivery_url(url, public_base_url=storage.public_base_url)
+    info = private_storage_client(storage, timeout_seconds=timeout_seconds).stat_object(
+        storage.bucket, key
+    )
+    if int(info.size) <= 0:
+        raise RuntimeError("QA artifact storage returned an empty object")
+    return 200
 
 
 def ensure_artifact_url_reachable(
@@ -432,11 +492,17 @@ def ensure_artifact_url_reachable(
     try:
         status_code = int(probe(artifact_url, timeout_seconds=timeout_seconds))
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"QA demo artifact URL is not reachable: {artifact_url}: {exc}") from exc
+        raise RuntimeError(
+            f"QA demo artifact URL is not reachable: {artifact_url}: {exc}"
+        ) from exc
     if status_code >= 400:
-        raise RuntimeError(f"QA demo artifact URL is not reachable: {artifact_url}: HTTP {status_code}")
+        raise RuntimeError(
+            f"QA demo artifact URL is not reachable: {artifact_url}: HTTP {status_code}"
+        )
     if status_code not in {200, 206}:
-        raise RuntimeError(f"QA demo artifact URL did not return playable video evidence: {artifact_url}: HTTP {status_code}")
+        raise RuntimeError(
+            f"QA demo artifact URL did not return playable video evidence: {artifact_url}: HTTP {status_code}"
+        )
 
 
 def ensure_release_ready_for_qa(
@@ -446,17 +512,26 @@ def ensure_release_ready_for_qa(
     service_url_probe: Callable[[str], int] | Callable[..., int] | None = None,
     timeout_seconds: float = 10.0,
 ) -> None:
-    required = tuple(dict.fromkeys(str(kind or "").strip() for kind in required_service_kinds if str(kind or "").strip()))
+    required = tuple(
+        dict.fromkeys(
+            str(kind or "").strip()
+            for kind in required_service_kinds
+            if str(kind or "").strip()
+        )
+    )
     if not required:
         return
-    urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
+    urls = (
+        list(getattr(release, "service_urls", []) or []) if release is not None else []
+    )
     inactive_failures: list[str] = []
     probe_failures: list[str] = []
     for required_kind in required:
         matching_urls = [
             service_url
             for service_url in urls
-            if str(getattr(service_url, "service_kind", "") or "").strip() == required_kind
+            if str(getattr(service_url, "service_kind", "") or "").strip()
+            == required_kind
         ]
         active_service_urls = [
             service_url
@@ -472,7 +547,11 @@ def ensure_release_ready_for_qa(
         for service_url in active_service_urls:
             public_url = str(getattr(service_url, "url", "") or "").strip()
             probe_url, probe_headers = _release_service_recording_probe(service_url)
-            probe_label = public_url if probe_url == public_url else f"{public_url} via {probe_url}"
+            probe_label = (
+                public_url
+                if probe_url == public_url
+                else f"{public_url} via {probe_url}"
+            )
             try:
                 if probe_headers:
                     status_code = int(
@@ -483,12 +562,16 @@ def ensure_release_ready_for_qa(
                         )
                     )
                 else:
-                    status_code = int(service_url_probe(probe_url, timeout_seconds=timeout_seconds))
+                    status_code = int(
+                        service_url_probe(probe_url, timeout_seconds=timeout_seconds)
+                    )
             except Exception as exc:  # noqa: BLE001
                 probe_failures.append(f"{required_kind} ({probe_label}): {exc}")
                 continue
             if not _release_service_status_is_ready(status_code):
-                probe_failures.append(f"{required_kind} ({probe_label}): HTTP {status_code}")
+                probe_failures.append(
+                    f"{required_kind} ({probe_label}): HTTP {status_code}"
+                )
     if inactive_failures:
         raise RuntimeError(
             "QA demo recording requires active release service URL(s); not active: "
@@ -508,7 +591,9 @@ def _release_service_status_is_ready(status_code: int) -> bool:
 def _release_service_recording_probe(service_url) -> tuple[str, dict[str, str]]:  # noqa: ANN001
     public_url = str(getattr(service_url, "url", "") or "").strip()
     internal_url = str(getattr(service_url, "internal_url", "") or "").strip()
-    probe_url = _normalize_release_probe_url_for_current_runtime(internal_url or public_url)
+    probe_url = _normalize_release_probe_url_for_current_runtime(
+        internal_url or public_url
+    )
     headers: dict[str, str] = {}
     host = str(getattr(service_url, "host", "") or "").strip()
     if internal_url and host:
@@ -523,15 +608,21 @@ def _normalize_release_probe_url_for_current_runtime(url: str) -> str:
     netloc = "localhost"
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
-    return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def _is_builtin_android_recorder_command(command: tuple[str, ...] | None) -> bool:
-    return any(str(part).endswith("qa_demo_android_recorder.py") for part in (command or ()))
+    return any(
+        str(part).endswith("qa_demo_android_recorder.py") for part in (command or ())
+    )
 
 
 def _is_builtin_ios_recorder_command(command: tuple[str, ...] | None) -> bool:
-    return any(str(part).endswith("qa_demo_mobile_recorder.py") for part in (command or ()))
+    return any(
+        str(part).endswith("qa_demo_mobile_recorder.py") for part in (command or ())
+    )
 
 
 def _required_android_recorder_tool(*, env_var: str | None, default: str) -> str:
@@ -560,7 +651,9 @@ def _discover_android_sdk_build_tool(tool_name: str) -> str | None:
         build_tools_dir = Path(raw_root).expanduser() / "build-tools"
         if not build_tools_dir.exists():
             continue
-        candidates.extend(path for path in build_tools_dir.glob(f"*/{tool_name}") if path.is_file())
+        candidates.extend(
+            path for path in build_tools_dir.glob(f"*/{tool_name}") if path.is_file()
+        )
     if not candidates:
         return None
     return str(sorted(candidates, key=_android_build_tool_version_key)[-1])
@@ -580,7 +673,10 @@ def _discover_android_emulator() -> str | None:
         if not raw_root:
             continue
         sdk_root = Path(raw_root).expanduser()
-        for candidate in (sdk_root / "emulator" / "emulator", sdk_root / "tools" / "emulator"):
+        for candidate in (
+            sdk_root / "emulator" / "emulator",
+            sdk_root / "tools" / "emulator",
+        ):
             if candidate.is_file():
                 return str(candidate)
     return None
@@ -616,7 +712,9 @@ def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
 
 
 def _available_android_avds(emulator_list_avds_output: str) -> tuple[str, ...]:
-    return tuple(line.strip() for line in emulator_list_avds_output.splitlines() if line.strip())
+    return tuple(
+        line.strip() for line in emulator_list_avds_output.splitlines() if line.strip()
+    )
 
 
 def _ensure_builtin_android_runtime_ready() -> None:
@@ -634,19 +732,27 @@ def _ensure_builtin_android_runtime_ready() -> None:
             timeout=10,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("Android QA demo recording requires adb on the worker PATH") from exc
+        raise RuntimeError(
+            "Android QA demo recording requires adb on the worker PATH"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("Android QA demo recording timed out while checking adb devices") from exc
+        raise RuntimeError(
+            "Android QA demo recording timed out while checking adb devices"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         stderr = str(exc.stderr or "").strip()
         stdout = str(exc.stdout or "").strip()
         details = stderr or stdout or f"exit code {exc.returncode}"
-        raise RuntimeError(f"Android QA demo recording could not list adb devices: {details}") from exc
+        raise RuntimeError(
+            f"Android QA demo recording could not list adb devices: {details}"
+        ) from exc
     if _ready_adb_devices(result.stdout):
         return
     emulator = _discover_android_emulator()
     if emulator is None:
-        raise RuntimeError("No available Android emulator/device found via adb devices and Android emulator is unavailable")
+        raise RuntimeError(
+            "No available Android emulator/device found via adb devices and Android emulator is unavailable"
+        )
     try:
         avd_result = subprocess.run(
             [emulator, "-list-avds"],
@@ -656,17 +762,25 @@ def _ensure_builtin_android_runtime_ready() -> None:
             timeout=10,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("Android QA demo recording timed out while checking Android Virtual Devices") from exc
+        raise RuntimeError(
+            "Android QA demo recording timed out while checking Android Virtual Devices"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         stderr = str(exc.stderr or "").strip()
         details = f": {stderr}" if stderr else ""
-        raise RuntimeError(f"Android QA demo recording could not list Android Virtual Devices{details}") from exc
+        raise RuntimeError(
+            f"Android QA demo recording could not list Android Virtual Devices{details}"
+        ) from exc
     configured_avd = str(os.environ.get("QA_DEMO_ANDROID_AVD") or "").strip()
     avds = _available_android_avds(avd_result.stdout)
     if configured_avd and configured_avd not in avds:
-        raise RuntimeError(f"Configured Android QA demo AVD does not exist: {configured_avd}")
+        raise RuntimeError(
+            f"Configured Android QA demo AVD does not exist: {configured_avd}"
+        )
     if not avds:
-        raise RuntimeError("No available Android emulator/device found via adb devices and no Android Virtual Device exists")
+        raise RuntimeError(
+            "No available Android emulator/device found via adb devices and no Android Virtual Device exists"
+        )
 
 
 def _ensure_builtin_ios_runtime_ready() -> None:
@@ -679,14 +793,20 @@ def _ensure_builtin_ios_runtime_ready() -> None:
             timeout=10,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError("iOS QA demo recording requires xcrun on the worker PATH") from exc
+        raise RuntimeError(
+            "iOS QA demo recording requires xcrun on the worker PATH"
+        ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("iOS QA demo recording timed out while checking available simulators") from exc
+        raise RuntimeError(
+            "iOS QA demo recording timed out while checking available simulators"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         stderr = str(exc.stderr or "").strip()
         stdout = str(exc.stdout or "").strip()
         details = stderr or stdout or f"exit code {exc.returncode}"
-        raise RuntimeError(f"iOS QA demo recording could not list available simulators: {details}") from exc
+        raise RuntimeError(
+            f"iOS QA demo recording could not list available simulators: {details}"
+        ) from exc
     try:
         preferred_simulator_udid(result.stdout)
     except ValueError as exc:
@@ -703,7 +823,9 @@ def _native_provider_runtime_status(
             _ensure_builtin_ios_runtime_ready()
         except RuntimeError as exc:
             return False, str(exc)
-    if capture_target == "android" and _is_builtin_android_recorder_command(recorder_command):
+    if capture_target == "android" and _is_builtin_android_recorder_command(
+        recorder_command
+    ):
         try:
             _ensure_builtin_android_runtime_ready()
         except RuntimeError as exc:
@@ -717,18 +839,25 @@ def ensure_capture_target_runtime_ready(capture_target: DemoCaptureTarget) -> No
         recorder_command=capture_target.recorder_command,
     )
     if not ready:
-        raise RuntimeError(reason or f"QA demo capture target is not runtime-ready: {capture_target.capture_target}")
+        raise RuntimeError(
+            reason
+            or f"QA demo capture target is not runtime-ready: {capture_target.capture_target}"
+        )
 
 
 def _default_ios_recorder_command() -> tuple[str, ...] | None:
-    script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_mobile_recorder.py"
+    script_path = (
+        Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_mobile_recorder.py"
+    )
     if not script_path.exists():
         return None
     return (sys.executable, str(script_path))
 
 
 def _default_android_recorder_command() -> tuple[str, ...] | None:
-    script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_android_recorder.py"
+    script_path = (
+        Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_android_recorder.py"
+    )
     if not script_path.exists():
         return None
     return (sys.executable, str(script_path))
@@ -742,7 +871,7 @@ def _configured_worker_platform(*, raw_value: object, provider_name: str) -> str
     if parsed is None:
         raise RuntimeError(
             f"QA demo {provider_name} worker platform is invalid: {normalized}. Allowed values: linux, macos"
-    )
+        )
     return parsed.value
 
 
@@ -754,7 +883,9 @@ def _qa_demo_worker_platform_label(platform: str | None) -> str:
     return str(platform or "").strip() or "configured"
 
 
-def resolve_available_capture_targets(*, settings, preview_release) -> dict[str, DemoCaptureTarget]:  # noqa: ANN001
+def resolve_available_capture_targets(
+    *, settings, preview_release
+) -> dict[str, DemoCaptureTarget]:  # noqa: ANN001
     targets: dict[str, DemoCaptureTarget] = {}
     try:
         preview_url = resolve_preview_demo_url(preview_release)
@@ -766,7 +897,9 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
             capture_reference=preview_url,
         )
 
-    configured_ios_command = str(getattr(settings, "qa_demo_ios_recorder_command", "") or "").strip()
+    configured_ios_command = str(
+        getattr(settings, "qa_demo_ios_recorder_command", "") or ""
+    ).strip()
     ios_recorder_command = (
         _parse_recorder_command(configured_ios_command, provider_name="ios")
         if configured_ios_command
@@ -776,13 +909,18 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
         targets["ios"] = DemoCaptureTarget(
             capture_target="ios",
             capture_reference=(
-                str(getattr(settings, "qa_demo_ios_capture_reference", "") or "").strip() or "ios-simulator://configured"
+                str(
+                    getattr(settings, "qa_demo_ios_capture_reference", "") or ""
+                ).strip()
+                or "ios-simulator://configured"
             ),
             recorder_command=ios_recorder_command,
             required_worker_platform="macos",
         )
 
-    configured_android_command = str(getattr(settings, "qa_demo_android_recorder_command", "") or "").strip()
+    configured_android_command = str(
+        getattr(settings, "qa_demo_android_recorder_command", "") or ""
+    ).strip()
     android_recorder_command = (
         _parse_recorder_command(configured_android_command, provider_name="android")
         if configured_android_command
@@ -792,7 +930,9 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
         targets["android"] = DemoCaptureTarget(
             capture_target="android",
             capture_reference=(
-                str(getattr(settings, "qa_demo_android_capture_reference", "") or "").strip()
+                str(
+                    getattr(settings, "qa_demo_android_capture_reference", "") or ""
+                ).strip()
                 or "android-emulator://configured"
             ),
             recorder_command=android_recorder_command,
@@ -805,14 +945,21 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
             ),
         )
 
-    desktop_command = str(getattr(settings, "qa_demo_desktop_recorder_command", "") or "").strip()
+    desktop_command = str(
+        getattr(settings, "qa_demo_desktop_recorder_command", "") or ""
+    ).strip()
     if desktop_command:
         targets["desktop"] = DemoCaptureTarget(
             capture_target="desktop",
             capture_reference=(
-                str(getattr(settings, "qa_demo_desktop_capture_reference", "") or "").strip() or "desktop://configured"
+                str(
+                    getattr(settings, "qa_demo_desktop_capture_reference", "") or ""
+                ).strip()
+                or "desktop://configured"
             ),
-            recorder_command=_parse_recorder_command(desktop_command, provider_name="desktop"),
+            recorder_command=_parse_recorder_command(
+                desktop_command, provider_name="desktop"
+            ),
             required_worker_platform=_configured_worker_platform(
                 raw_value=getattr(settings, "qa_demo_desktop_worker_platform", ""),
                 provider_name="desktop",
@@ -821,7 +968,9 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
     return targets
 
 
-def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureTargetConstraint]:  # noqa: ANN001
+def planned_capture_target_constraints(
+    *, settings
+) -> dict[str, PlannedCaptureTargetConstraint]:  # noqa: ANN001
     constraints: dict[str, PlannedCaptureTargetConstraint] = {
         "browser": PlannedCaptureTargetConstraint(
             capture_target="browser",
@@ -830,7 +979,9 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
             availability_reason="Browser capture uses the built-in Playwright recorder and requires a preview website URL at QA time.",
         )
     }
-    configured_ios_command = str(getattr(settings, "qa_demo_ios_recorder_command", "") or "").strip()
+    configured_ios_command = str(
+        getattr(settings, "qa_demo_ios_recorder_command", "") or ""
+    ).strip()
     ios_recorder_command = (
         _parse_recorder_command(configured_ios_command, provider_name="ios")
         if configured_ios_command
@@ -847,7 +998,9 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         ),
     )
 
-    configured_android_command = str(getattr(settings, "qa_demo_android_recorder_command", "") or "").strip()
+    configured_android_command = str(
+        getattr(settings, "qa_demo_android_recorder_command", "") or ""
+    ).strip()
     android_recorder_command = (
         _parse_recorder_command(configured_android_command, provider_name="android")
         if configured_android_command
@@ -874,7 +1027,9 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         ),
     )
 
-    desktop_command = str(getattr(settings, "qa_demo_desktop_recorder_command", "") or "").strip()
+    desktop_command = str(
+        getattr(settings, "qa_demo_desktop_recorder_command", "") or ""
+    ).strip()
     desktop_available = bool(desktop_command)
     constraints["desktop"] = PlannedCaptureTargetConstraint(
         capture_target="desktop",
@@ -896,7 +1051,9 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
     return constraints
 
 
-def planned_capture_target_constraints_payload(*, settings) -> list[dict[str, str | bool | None]]:  # noqa: ANN001
+def planned_capture_target_constraints_payload(
+    *, settings
+) -> list[dict[str, str | bool | None]]:  # noqa: ANN001
     payload: list[dict[str, str | bool | None]] = []
     for constraint in planned_capture_target_constraints(settings=settings).values():
         payload.append(
@@ -925,11 +1082,17 @@ def _available_capture_targets_payload(
             {
                 "capture_target": target.capture_target,
                 "capture_reference": target.capture_reference,
-                "source_paths": list((source_paths_by_target or {}).get(target.capture_target, ())),
+                "source_paths": list(
+                    (source_paths_by_target or {}).get(target.capture_target, ())
+                ),
                 "release_commit_sha": release_commit_sha,
                 "release_service_urls": release_service_urls,
-                "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
-                "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
+                "release_api_base_url": _first_release_service_url(
+                    release_service_urls, service_kind="api"
+                ),
+                "release_browser_url": _first_release_service_url(
+                    release_service_urls, service_kind="website"
+                ),
             }
         )
     return payload
@@ -945,7 +1108,9 @@ def required_capture_targets(plan: PmPlan) -> tuple[str, ...]:
 
 def ensure_pm_demo_requirements_are_recordable(plan: PmPlan) -> None:
     if not plan.demo_requirements:
-        raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
+        raise RuntimeError(
+            "QA demo recording requires PM demo requirements with explicit capture targets"
+        )
     insufficient_variants = [
         f"{requirement.capture_target}: {requirement.title}"
         for requirement in plan.demo_requirements
@@ -958,7 +1123,9 @@ def ensure_pm_demo_requirements_are_recordable(plan: PmPlan) -> None:
         )
 
 
-def ensure_pm_demo_requirements_cover_project_targets(*, plan: PmPlan, request: WorkflowRequest) -> None:
+def ensure_pm_demo_requirements_cover_project_targets(
+    *, plan: PmPlan, request: WorkflowRequest
+) -> None:
     selected_targets = set(required_capture_targets(plan))
     required_project_targets = {
         target
@@ -977,7 +1144,9 @@ def required_recording_counts_by_target(plan: PmPlan) -> dict[str, int]:
     required_counts: dict[str, int] = {}
     for requirement in plan.demo_requirements:
         required_counts[requirement.capture_target] = (
-            required_counts.get(requirement.capture_target, 0) + 1 + len(requirement.variants or [])
+            required_counts.get(requirement.capture_target, 0)
+            + 1
+            + len(requirement.variants or [])
         )
     return required_counts
 
@@ -986,7 +1155,9 @@ def browser_capture_required(plan: PmPlan) -> bool:
     return "browser" in required_capture_targets(plan)
 
 
-def recorded_capture_targets(recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
+def recorded_capture_targets(
+    recordings: list[QaRecording] | tuple[QaRecording, ...],
+) -> tuple[str, ...]:
     ordered: list[str] = []
     for recording in recordings:
         capture_target = str(recording.capture_target or "").strip()
@@ -995,7 +1166,9 @@ def recorded_capture_targets(recordings: list[QaRecording] | tuple[QaRecording, 
     return tuple(ordered)
 
 
-def _normalize_required_capture_targets(required_capture_targets: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+def _normalize_required_capture_targets(
+    required_capture_targets: list[str] | tuple[str, ...] | None,
+) -> tuple[str, ...]:
     ordered: list[str] = []
     for target in required_capture_targets or ():
         normalized = str(target or "").strip()
@@ -1008,7 +1181,9 @@ def _normalize_required_capture_targets(required_capture_targets: list[str] | tu
     return tuple(ordered)
 
 
-def _normalize_required_recording_counts(required_recording_counts: dict[str, int] | None) -> dict[str, int]:
+def _normalize_required_recording_counts(
+    required_recording_counts: dict[str, int] | None,
+) -> dict[str, int]:
     normalized_counts: dict[str, int] = {}
     for target, count in (required_recording_counts or {}).items():
         normalized_target = str(target or "").strip()
@@ -1018,7 +1193,9 @@ def _normalize_required_recording_counts(required_recording_counts: dict[str, in
             raise ValueError(f"Unsupported QA demo capture target: {normalized_target}")
         normalized_count = int(count)
         if normalized_count <= 0:
-            raise ValueError(f"Required QA demo recording count must be positive for target: {normalized_target}")
+            raise ValueError(
+                f"Required QA demo recording count must be positive for target: {normalized_target}"
+            )
         normalized_counts[normalized_target] = normalized_count
     return normalized_counts
 
@@ -1026,14 +1203,18 @@ def _normalize_required_recording_counts(required_recording_counts: dict[str, in
 def _require_demo_evidence_field(value: object, *, field: str) -> str:
     normalized = str(value or "").strip()
     if not normalized or any(char in normalized for char in "\r\n"):
-        raise RuntimeError(f"QA demo evidence recording metadata is not serializable: {field}")
+        raise RuntimeError(
+            f"QA demo evidence recording metadata is not serializable: {field}"
+        )
     return normalized
 
 
 def _require_demo_evidence_line_field(value: object, *, field: str) -> str:
     normalized = _require_demo_evidence_field(value, field=field)
     if "[" in normalized or "]" in normalized:
-        raise RuntimeError(f"QA demo evidence recording metadata is not serializable: {field}")
+        raise RuntimeError(
+            f"QA demo evidence recording metadata is not serializable: {field}"
+        )
     return normalized
 
 
@@ -1048,7 +1229,9 @@ def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) ->
     for recording in recordings:
         _require_demo_evidence_line_field(recording.name, field="name")
         _require_demo_evidence_capture_target(recording.capture_target)
-        _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
+        _require_demo_evidence_line_field(
+            recording.capture_reference, field="capture_reference"
+        )
         _require_demo_evidence_line_field(recording.object_key, field="object_key")
         _require_demo_evidence_content_sha256(recording)
         _require_demo_evidence_release_commit_sha(recording)
@@ -1057,11 +1240,15 @@ def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) ->
     _validate_recordings_share_release_context(recordings)
 
 
-def _validate_demo_failure_evidence_metadata(failure_evidence: list[QaFailureEvidence]) -> None:
+def _validate_demo_failure_evidence_metadata(
+    failure_evidence: list[QaFailureEvidence],
+) -> None:
     for item in failure_evidence:
         _require_demo_evidence_line_field(item.name, field="name")
         _require_demo_evidence_capture_target(item.capture_target)
-        _require_demo_evidence_line_field(item.capture_reference, field="capture_reference")
+        _require_demo_evidence_line_field(
+            item.capture_reference, field="capture_reference"
+        )
         _require_demo_evidence_line_field(item.object_key, field="object_key")
         _require_demo_evidence_content_sha256(item)
         _require_demo_evidence_release_commit_sha(item)
@@ -1074,28 +1261,36 @@ def _validate_demo_failure_evidence_metadata(failure_evidence: list[QaFailureEvi
 def _require_demo_failure_error_message(value: object) -> str:
     normalized = str(value or "").strip()
     if not normalized:
-        raise RuntimeError("QA demo failure evidence error message is required before PR evidence")
+        raise RuntimeError(
+            "QA demo failure evidence error message is required before PR evidence"
+        )
     return normalized
 
 
 def _require_demo_evidence_content_sha256(recording: object) -> str:
     value = str(getattr(recording, "content_sha256", "") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", value):
-        raise RuntimeError("QA demo recording content sha256 is required before PR evidence")
+        raise RuntimeError(
+            "QA demo recording content sha256 is required before PR evidence"
+        )
     return value
 
 
 def _require_demo_evidence_release_context_sha256(recording: object) -> str:
     value = str(getattr(recording, "release_context_sha256", "") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", value):
-        raise RuntimeError("QA demo recording release context sha256 is required before PR evidence")
+        raise RuntimeError(
+            "QA demo recording release context sha256 is required before PR evidence"
+        )
     return value
 
 
 def _require_demo_evidence_release_commit_sha(recording: object) -> str:
     value = str(getattr(recording, "release_commit_sha", "") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{7,64}", value):
-        raise RuntimeError("QA demo recording release commit sha is required before PR evidence")
+        raise RuntimeError(
+            "QA demo recording release commit sha is required before PR evidence"
+        )
     return value
 
 
@@ -1105,28 +1300,38 @@ def _validate_recordings_share_release_context(recordings: list[QaRecording]) ->
         for recording in recordings
     }
     if len(release_contexts) > 1:
-        raise RuntimeError("QA demo recordings must all prove the same release context before PR evidence")
+        raise RuntimeError(
+            "QA demo recordings must all prove the same release context before PR evidence"
+        )
     release_commits = {
         str(getattr(recording, "release_commit_sha", "") or "").strip().lower()
         for recording in recordings
     }
     if len(release_commits) > 1:
-        raise RuntimeError("QA demo recordings must all prove the same release commit before PR evidence")
+        raise RuntimeError(
+            "QA demo recordings must all prove the same release commit before PR evidence"
+        )
 
 
-def _validate_failure_evidence_share_release_context(failure_evidence: list[QaFailureEvidence]) -> None:
+def _validate_failure_evidence_share_release_context(
+    failure_evidence: list[QaFailureEvidence],
+) -> None:
     release_contexts = {
         str(getattr(item, "release_context_sha256", "") or "").strip().lower()
         for item in failure_evidence
     }
     if len(release_contexts) > 1:
-        raise RuntimeError("QA demo failure evidence must all prove the same release context before PR evidence")
+        raise RuntimeError(
+            "QA demo failure evidence must all prove the same release context before PR evidence"
+        )
     release_commits = {
         str(getattr(item, "release_commit_sha", "") or "").strip().lower()
         for item in failure_evidence
     }
     if len(release_commits) > 1:
-        raise RuntimeError("QA demo failure evidence must all prove the same release commit before PR evidence")
+        raise RuntimeError(
+            "QA demo failure evidence must all prove the same release commit before PR evidence"
+        )
 
 
 def _validate_recordings_match_release_context(
@@ -1138,7 +1343,8 @@ def _validate_recordings_match_release_context(
     mismatched = [
         str(getattr(recording, "name", "") or "").strip() or "<unnamed>"
         for recording in recordings
-        if str(getattr(recording, "release_context_sha256", "") or "").strip().lower() != expected
+        if str(getattr(recording, "release_context_sha256", "") or "").strip().lower()
+        != expected
     ]
     if mismatched:
         raise RuntimeError(
@@ -1156,7 +1362,8 @@ def _validate_recordings_match_release_commit(
     mismatched = [
         str(getattr(recording, "name", "") or "").strip() or "<unnamed>"
         for recording in recordings
-        if str(getattr(recording, "release_commit_sha", "") or "").strip().lower() != expected
+        if str(getattr(recording, "release_commit_sha", "") or "").strip().lower()
+        != expected
     ]
     if mismatched:
         raise RuntimeError(
@@ -1166,21 +1373,38 @@ def _validate_recordings_match_release_commit(
 
 
 def _validate_distinct_demo_recording_artifacts(recordings: list[QaRecording]) -> None:
-    object_key_counts = Counter(str(recording.object_key or "").strip() for recording in recordings)
-    duplicate_object_keys = [object_key for object_key, count in object_key_counts.items() if object_key and count > 1]
+    object_key_counts = Counter(
+        str(recording.object_key or "").strip() for recording in recordings
+    )
+    duplicate_object_keys = [
+        object_key
+        for object_key, count in object_key_counts.items()
+        if object_key and count > 1
+    ]
     if duplicate_object_keys:
         raise RuntimeError(
-            "QA demo recording object keys must be unique before PR evidence: " + ", ".join(duplicate_object_keys)
+            "QA demo recording object keys must be unique before PR evidence: "
+            + ", ".join(duplicate_object_keys)
         )
-    artifact_url_counts = Counter(str(recording.artifact_url or "").strip() for recording in recordings)
-    duplicate_artifact_urls = [url for url, count in artifact_url_counts.items() if url and count > 1]
+    artifact_url_counts = Counter(
+        str(recording.artifact_url or "").strip() for recording in recordings
+    )
+    duplicate_artifact_urls = [
+        url for url, count in artifact_url_counts.items() if url and count > 1
+    ]
     if duplicate_artifact_urls:
         raise RuntimeError(
-            "QA demo recording artifact URLs must be unique before PR evidence: " + ", ".join(duplicate_artifact_urls)
+            "QA demo recording artifact URLs must be unique before PR evidence: "
+            + ", ".join(duplicate_artifact_urls)
         )
-    content_sha256_counts = Counter(str(getattr(recording, "content_sha256", "") or "").strip().lower() for recording in recordings)
+    content_sha256_counts = Counter(
+        str(getattr(recording, "content_sha256", "") or "").strip().lower()
+        for recording in recordings
+    )
     duplicate_content_sha256 = [
-        content_sha256 for content_sha256, count in content_sha256_counts.items() if content_sha256 and count > 1
+        content_sha256
+        for content_sha256, count in content_sha256_counts.items()
+        if content_sha256 and count > 1
     ]
     if duplicate_content_sha256:
         raise RuntimeError(
@@ -1189,24 +1413,41 @@ def _validate_distinct_demo_recording_artifacts(recordings: list[QaRecording]) -
         )
 
 
-def _validate_distinct_demo_failure_evidence_artifacts(failure_evidence: list[QaFailureEvidence]) -> None:
-    object_key_counts = Counter(str(item.object_key or "").strip() for item in failure_evidence)
-    duplicate_object_keys = [object_key for object_key, count in object_key_counts.items() if object_key and count > 1]
+def _validate_distinct_demo_failure_evidence_artifacts(
+    failure_evidence: list[QaFailureEvidence],
+) -> None:
+    object_key_counts = Counter(
+        str(item.object_key or "").strip() for item in failure_evidence
+    )
+    duplicate_object_keys = [
+        object_key
+        for object_key, count in object_key_counts.items()
+        if object_key and count > 1
+    ]
     if duplicate_object_keys:
         raise RuntimeError(
-            "QA demo failure evidence object keys must be unique before PR evidence: " + ", ".join(duplicate_object_keys)
+            "QA demo failure evidence object keys must be unique before PR evidence: "
+            + ", ".join(duplicate_object_keys)
         )
-    artifact_url_counts = Counter(str(item.artifact_url or "").strip() for item in failure_evidence)
-    duplicate_artifact_urls = [url for url, count in artifact_url_counts.items() if url and count > 1]
+    artifact_url_counts = Counter(
+        str(item.artifact_url or "").strip() for item in failure_evidence
+    )
+    duplicate_artifact_urls = [
+        url for url, count in artifact_url_counts.items() if url and count > 1
+    ]
     if duplicate_artifact_urls:
         raise RuntimeError(
-            "QA demo failure evidence artifact URLs must be unique before PR evidence: " + ", ".join(duplicate_artifact_urls)
+            "QA demo failure evidence artifact URLs must be unique before PR evidence: "
+            + ", ".join(duplicate_artifact_urls)
         )
     content_sha256_counts = Counter(
-        str(getattr(item, "content_sha256", "") or "").strip().lower() for item in failure_evidence
+        str(getattr(item, "content_sha256", "") or "").strip().lower()
+        for item in failure_evidence
     )
     duplicate_content_sha256 = [
-        content_sha256 for content_sha256, count in content_sha256_counts.items() if content_sha256 and count > 1
+        content_sha256
+        for content_sha256, count in content_sha256_counts.items()
+        if content_sha256 and count > 1
     ]
     if duplicate_content_sha256:
         raise RuntimeError(
@@ -1215,7 +1456,9 @@ def _validate_distinct_demo_failure_evidence_artifacts(failure_evidence: list[Qa
         )
 
 
-def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
+def remaining_capture_targets(
+    plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]
+) -> tuple[str, ...]:
     recorded_counts: dict[str, int] = {}
     for recording in recordings:
         capture_target = str(recording.capture_target or "").strip()
@@ -1237,14 +1480,20 @@ def next_required_qa_demo_worker_capability(
 ):
     constraints = planned_capture_target_constraints(settings=settings)
     for target_name in remaining_capture_targets(plan, recordings):
-        required_platform = constraints.get(target_name).required_worker_platform if target_name in constraints else None
+        required_platform = (
+            constraints.get(target_name).required_worker_platform
+            if target_name in constraints
+            else None
+        )
         parsed = parse_worker_capability(required_platform)
         if parsed is not None:
             return parsed
     return None
 
 
-def _capture_target_runs_on_worker(*, capture_target: DemoCaptureTarget, request: WorkflowRequest) -> bool:
+def _capture_target_runs_on_worker(
+    *, capture_target: DemoCaptureTarget, request: WorkflowRequest
+) -> bool:
     required_platform = str(capture_target.required_worker_platform or "").strip()
     if not required_platform:
         return True
@@ -1260,20 +1509,32 @@ def build_demo_evidence_section(
     lines = [DEMO_EVIDENCE_HEADING, DEMO_EVIDENCE_MARKER]
     required_targets = _normalize_required_capture_targets(required_capture_targets)
     if required_targets:
-        lines.append(f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} {','.join(required_targets)} -->")
+        lines.append(
+            f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} {','.join(required_targets)} -->"
+        )
     normalized_counts = _normalize_required_recording_counts(required_recording_counts)
     if normalized_counts:
-        serialized_counts = ",".join(f"{target}={count}" for target, count in normalized_counts.items())
+        serialized_counts = ",".join(
+            f"{target}={count}" for target, count in normalized_counts.items()
+        )
         lines.append(f"{DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER} {serialized_counts} -->")
     for recording in recordings:
         name = _require_demo_evidence_line_field(recording.name, field="name")
         capture_target = _require_demo_evidence_capture_target(recording.capture_target)
-        capture_reference = _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
-        object_key = _require_demo_evidence_line_field(recording.object_key, field="object_key")
+        capture_reference = _require_demo_evidence_line_field(
+            recording.capture_reference, field="capture_reference"
+        )
+        object_key = _require_demo_evidence_line_field(
+            recording.object_key, field="object_key"
+        )
         content_sha256 = _require_demo_evidence_content_sha256(recording)
         release_commit_sha = _require_demo_evidence_release_commit_sha(recording)
-        release_context_sha256 = _require_demo_evidence_release_context_sha256(recording)
-        artifact_url = _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
+        release_context_sha256 = _require_demo_evidence_release_context_sha256(
+            recording
+        )
+        artifact_url = _require_demo_evidence_field(
+            recording.artifact_url, field="artifact_url"
+        )
         lines.append(
             f"- {name} "
             f"[target={capture_target}; reference={capture_reference}; object_key={object_key}; "
@@ -1284,17 +1545,25 @@ def build_demo_evidence_section(
     return "\n".join(lines).strip()
 
 
-def build_demo_failure_evidence_section(failure_evidence: list[QaFailureEvidence]) -> str:
+def build_demo_failure_evidence_section(
+    failure_evidence: list[QaFailureEvidence],
+) -> str:
     lines = [DEMO_FAILURE_EVIDENCE_HEADING, DEMO_FAILURE_EVIDENCE_MARKER]
     for item in failure_evidence:
         name = _require_demo_evidence_line_field(item.name, field="name")
         capture_target = _require_demo_evidence_capture_target(item.capture_target)
-        capture_reference = _require_demo_evidence_line_field(item.capture_reference, field="capture_reference")
-        object_key = _require_demo_evidence_line_field(item.object_key, field="object_key")
+        capture_reference = _require_demo_evidence_line_field(
+            item.capture_reference, field="capture_reference"
+        )
+        object_key = _require_demo_evidence_line_field(
+            item.object_key, field="object_key"
+        )
         content_sha256 = _require_demo_evidence_content_sha256(item)
         release_commit_sha = _require_demo_evidence_release_commit_sha(item)
         release_context_sha256 = _require_demo_evidence_release_context_sha256(item)
-        artifact_url = _require_demo_evidence_field(item.artifact_url, field="artifact_url")
+        artifact_url = _require_demo_evidence_field(
+            item.artifact_url, field="artifact_url"
+        )
         error_message = _require_demo_failure_error_message(item.error_message)
         lines.append(
             f"- {name} "
@@ -1322,7 +1591,9 @@ def upsert_demo_evidence_section(
     normalized_body = str(body or "").strip()
     if not normalized_body:
         return evidence
-    pattern = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+    pattern = re.compile(
+        r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL
+    )
     if pattern.search(normalized_body):
         return pattern.sub(evidence + "\n\n", normalized_body).strip()
     return f"{normalized_body}\n\n{evidence}".strip()
@@ -1337,7 +1608,9 @@ def upsert_demo_failure_evidence_section(
     normalized_body = str(body or "").strip()
     if not normalized_body:
         return evidence
-    pattern = re.compile(r"^## Demo Failure Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+    pattern = re.compile(
+        r"^## Demo Failure Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL
+    )
     if pattern.search(normalized_body):
         return pattern.sub(evidence + "\n\n", normalized_body).strip()
     return f"{normalized_body}\n\n{evidence}".strip()
@@ -1365,16 +1638,22 @@ def _validate_local_recording_file(path: Path) -> None:
         raise RuntimeError(f"QA demo recording file is missing: {path}")
     payload = path.read_bytes()
     if len(payload) < 1024:
-        raise RuntimeError(f"QA demo recording file is too small to be valid video evidence: {path}")
+        raise RuntimeError(
+            f"QA demo recording file is too small to be valid video evidence: {path}"
+        )
     suffix = path.suffix.lower()
     if suffix == ".webm":
         if not payload.startswith(b"\x1a\x45\xdf\xa3"):
-            raise RuntimeError(f"QA demo recording file is not valid video evidence: {path}")
+            raise RuntimeError(
+                f"QA demo recording file is not valid video evidence: {path}"
+            )
         return
     if suffix in {".mp4", ".mov"}:
         header = payload[:64]
         if b"ftyp" not in header or b"moov" not in payload:
-            raise RuntimeError(f"QA demo recording file is not valid video evidence: {path}")
+            raise RuntimeError(
+                f"QA demo recording file is not valid video evidence: {path}"
+            )
         return
     raise RuntimeError(f"Unsupported QA demo recording file type: {suffix or '<none>'}")
 
@@ -1391,7 +1670,9 @@ def _validate_local_failure_evidence_file(path: Path) -> None:
     try:
         payload.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise RuntimeError(f"QA demo failure evidence file is not valid UTF-8 text: {path}") from exc
+        raise RuntimeError(
+            f"QA demo failure evidence file is not valid UTF-8 text: {path}"
+        ) from exc
 
 
 def _parse_recorder_output(
@@ -1410,15 +1691,23 @@ def _parse_recorder_output(
         name = str(item.get("name") or "").strip()
         path = str(item.get("path") or "").strip()
         if not name or not path:
-            raise RuntimeError("QA demo recorder returned incomplete recording metadata")
+            raise RuntimeError(
+                "QA demo recorder returned incomplete recording metadata"
+            )
         reported_capture_target = str(item.get("capture_target") or "").strip()
-        if reported_capture_target and reported_capture_target != capture_target.capture_target:
+        if (
+            reported_capture_target
+            and reported_capture_target != capture_target.capture_target
+        ):
             raise RuntimeError(
                 "QA demo recorder returned capture target outside planned target: "
                 f"{reported_capture_target} != {capture_target.capture_target}"
             )
         reported_capture_reference = str(item.get("capture_reference") or "").strip()
-        if reported_capture_reference and reported_capture_reference != capture_target.capture_reference:
+        if (
+            reported_capture_reference
+            and reported_capture_reference != capture_target.capture_reference
+        ):
             raise RuntimeError(
                 "QA demo recorder returned capture reference outside planned target: "
                 f"{reported_capture_reference} != {capture_target.capture_reference}"
@@ -1426,7 +1715,9 @@ def _parse_recorder_output(
         source = Path(path).resolve()
         source_key = str(source)
         if source_key in seen_paths:
-            raise RuntimeError(f"QA demo recorder returned duplicate local recording path: {source}")
+            raise RuntimeError(
+                f"QA demo recorder returned duplicate local recording path: {source}"
+            )
         seen_paths.add(source_key)
         try:
             source.relative_to(resolved_output_dir)
@@ -1465,20 +1756,30 @@ def _parse_recorder_failure_evidence(
     resolved_output_dir = output_dir.resolve()
     for item in list(result.get("failure_evidence") or []):
         if not isinstance(item, dict):
-            raise RuntimeError("QA demo recorder returned invalid failure evidence payload")
+            raise RuntimeError(
+                "QA demo recorder returned invalid failure evidence payload"
+            )
         name = str(item.get("name") or "").strip()
         path = str(item.get("path") or "").strip()
         error_message = str(item.get("error_message") or "").strip()
         if not name or not path or not error_message:
-            raise RuntimeError("QA demo recorder returned incomplete failure evidence metadata")
+            raise RuntimeError(
+                "QA demo recorder returned incomplete failure evidence metadata"
+            )
         reported_capture_target = str(item.get("capture_target") or "").strip()
-        if reported_capture_target and reported_capture_target != capture_target.capture_target:
+        if (
+            reported_capture_target
+            and reported_capture_target != capture_target.capture_target
+        ):
             raise RuntimeError(
                 "QA demo recorder returned failure evidence outside planned target: "
                 f"{reported_capture_target} != {capture_target.capture_target}"
             )
         reported_capture_reference = str(item.get("capture_reference") or "").strip()
-        if reported_capture_reference and reported_capture_reference != capture_target.capture_reference:
+        if (
+            reported_capture_reference
+            and reported_capture_reference != capture_target.capture_reference
+        ):
             raise RuntimeError(
                 "QA demo recorder returned failure evidence reference outside planned target: "
                 f"{reported_capture_reference} != {capture_target.capture_reference}"
@@ -1486,7 +1787,9 @@ def _parse_recorder_failure_evidence(
         source = Path(path).resolve()
         source_key = str(source)
         if source_key in seen_paths:
-            raise RuntimeError(f"QA demo recorder returned duplicate local failure evidence path: {source}")
+            raise RuntimeError(
+                f"QA demo recorder returned duplicate local failure evidence path: {source}"
+            )
         seen_paths.add(source_key)
         try:
             source.relative_to(resolved_output_dir)
@@ -1519,7 +1822,9 @@ def _invoke_json_recorder(
     request: WorkflowRequest,
     timeout_seconds: float,
 ) -> list[LocalQaRecording]:
-    with TemporaryDirectory(prefix=f"qa-demo-{capture_target.capture_target}-") as tmp_dir:
+    with TemporaryDirectory(
+        prefix=f"qa-demo-{capture_target.capture_target}-"
+    ) as tmp_dir:
         input_path = Path(tmp_dir) / "input.json"
         output_path = Path(tmp_dir) / "output.json"
         output_dir = Path(tmp_dir) / "videos"
@@ -1565,7 +1870,9 @@ def _invoke_json_recorder(
                 message = f"QA demo recorder command failed ({returncode}): {' '.join(command)}"
             raise QaDemoRecordingFailure(
                 message,
-                failure_evidence=_copy_failure_evidence(failure_evidence, request=request),
+                failure_evidence=_copy_failure_evidence(
+                    failure_evidence, request=request
+                ),
             )
         recordings = _parse_recorder_output(
             output_path=output_path,
@@ -1588,7 +1895,11 @@ def _canonical_native_selector(selector: str | None) -> str | None:
 
 def _normalize_native_step(step: QaStep) -> QaStep:
     selector = _canonical_native_selector(step.selector)
-    if step.action == "wait_for_text" and not str(step.value or "").strip() and selector:
+    if (
+        step.action == "wait_for_text"
+        and not str(step.value or "").strip()
+        and selector
+    ):
         if selector.startswith("text="):
             return replace(step, selector=None, value=selector.removeprefix("text="))
         return replace(step, selector=None, value=selector)
@@ -1610,7 +1921,11 @@ def _validate_native_scenarios(qa_result: QaResult) -> QaResult:
             continue
         normalized = _normalize_native_scenario(scenario)
         for step in normalized.steps:
-            if step.selector in _TRANSIENT_NATIVE_SELECTORS and step.action in {"assert_visible", "assert_text", "click"}:
+            if step.selector in _TRANSIENT_NATIVE_SELECTORS and step.action in {
+                "assert_visible",
+                "assert_text",
+                "click",
+            }:
                 raise RuntimeError(
                     "QA demo native scenarios must not use splash_screen as a required assertion or click target"
                 )
@@ -1641,48 +1956,68 @@ def _validate_recorded_scenario_proof(qa_result: QaResult) -> QaResult:
         return qa_result
     normalized_result = _validate_native_scenarios(qa_result)
     scenario_counts = Counter(
-        _recording_scenario_key(name=scenario.name, capture_target=scenario.capture_target)
+        _recording_scenario_key(
+            name=scenario.name, capture_target=scenario.capture_target
+        )
         for scenario in normalized_result.scenarios
     )
     duplicate_scenarios = [
-        f"{capture_target}: {name}" for (capture_target, name), count in scenario_counts.items() if count > 1
+        f"{capture_target}: {name}"
+        for (capture_target, name), count in scenario_counts.items()
+        if count > 1
     ]
     if duplicate_scenarios:
         raise RuntimeError(
-            "QA demo scenario proof keys must be unique before PR evidence: " + ", ".join(duplicate_scenarios)
+            "QA demo scenario proof keys must be unique before PR evidence: "
+            + ", ".join(duplicate_scenarios)
         )
     recording_counts = Counter(
-        _recording_scenario_key(name=recording.name, capture_target=recording.capture_target)
+        _recording_scenario_key(
+            name=recording.name, capture_target=recording.capture_target
+        )
         for recording in normalized_result.recordings
     )
     duplicate_recordings = [
-        f"{capture_target}: {name}" for (capture_target, name), count in recording_counts.items() if count > 1
+        f"{capture_target}: {name}"
+        for (capture_target, name), count in recording_counts.items()
+        if count > 1
     ]
     if duplicate_recordings:
         raise RuntimeError(
-            "QA demo recording proof keys must be unique before PR evidence: " + ", ".join(duplicate_recordings)
+            "QA demo recording proof keys must be unique before PR evidence: "
+            + ", ".join(duplicate_recordings)
         )
     scenarios_by_key = {
-        _recording_scenario_key(name=scenario.name, capture_target=scenario.capture_target): scenario
+        _recording_scenario_key(
+            name=scenario.name, capture_target=scenario.capture_target
+        ): scenario
         for scenario in normalized_result.scenarios
     }
     recording_keys = set(recording_counts)
     missing = [
         f"{recording.capture_target}: {recording.name}"
         for recording in normalized_result.recordings
-        if _recording_scenario_key(name=recording.name, capture_target=recording.capture_target) not in scenarios_by_key
+        if _recording_scenario_key(
+            name=recording.name, capture_target=recording.capture_target
+        )
+        not in scenarios_by_key
     ]
     if missing:
         raise RuntimeError(
-            "QA demo recording proof is missing matching executable scenario(s): " + ", ".join(missing)
+            "QA demo recording proof is missing matching executable scenario(s): "
+            + ", ".join(missing)
         )
     recorded_scenarios = [
         scenario
         for scenario in normalized_result.scenarios
-        if _recording_scenario_key(name=scenario.name, capture_target=scenario.capture_target)
+        if _recording_scenario_key(
+            name=scenario.name, capture_target=scenario.capture_target
+        )
         in recording_keys
     ]
-    _validate_executable_qa_scenarios(replace(normalized_result, scenarios=recorded_scenarios))
+    _validate_executable_qa_scenarios(
+        replace(normalized_result, scenarios=recorded_scenarios)
+    )
     return normalized_result
 
 
@@ -1693,7 +2028,9 @@ def _validate_browser_scenarios_stay_on_preview_origin(
 ) -> None:
     parsed_preview = urllib.parse.urlparse(str(capture_reference or "").strip())
     if not parsed_preview.scheme or not parsed_preview.netloc:
-        raise RuntimeError("QA demo browser capture reference must be an absolute preview release URL")
+        raise RuntimeError(
+            "QA demo browser capture reference must be an absolute preview release URL"
+        )
     preview_origin = (parsed_preview.scheme, parsed_preview.netloc)
     for scenario in scenarios:
         _validate_browser_url_value(
@@ -1738,10 +2075,13 @@ def _validate_recordings_cover_required_targets(
     if not required_targets:
         return
     recorded_targets = set(recorded_capture_targets(recordings))
-    missing_targets = [target for target in required_targets if target not in recorded_targets]
+    missing_targets = [
+        target for target in required_targets if target not in recorded_targets
+    ]
     if missing_targets:
         raise RuntimeError(
-            "QA demo evidence is missing required capture target(s): " + ", ".join(missing_targets)
+            "QA demo evidence is missing required capture target(s): "
+            + ", ".join(missing_targets)
         )
 
 
@@ -1753,7 +2093,9 @@ def _validate_recordings_cover_required_counts(
     required_counts = _normalize_required_recording_counts(required_recording_counts)
     if not required_counts:
         return
-    recorded_counts = Counter(str(recording.capture_target or "").strip() for recording in recordings)
+    recorded_counts = Counter(
+        str(recording.capture_target or "").strip() for recording in recordings
+    )
     missing_counts = [
         f"{target} requires {required_count}, recorded {recorded_counts.get(target, 0)}"
         for target, required_count in required_counts.items()
@@ -1761,7 +2103,8 @@ def _validate_recordings_cover_required_counts(
     ]
     if missing_counts:
         raise RuntimeError(
-            "QA demo evidence is missing required recording count(s): " + "; ".join(missing_counts)
+            "QA demo evidence is missing required recording count(s): "
+            + "; ".join(missing_counts)
         )
 
 
@@ -1778,10 +2121,13 @@ def _validate_failure_evidence_cover_required_targets(
         for item in failure_evidence
         if str(item.capture_target or "").strip()
     }
-    missing_targets = [target for target in required_targets if target not in evidence_targets]
+    missing_targets = [
+        target for target in required_targets if target not in evidence_targets
+    ]
     if missing_targets:
         raise RuntimeError(
-            "QA demo failure evidence is missing required capture target(s): " + ", ".join(missing_targets)
+            "QA demo failure evidence is missing required capture target(s): "
+            + ", ".join(missing_targets)
         )
 
 
@@ -1917,7 +2263,9 @@ def _validate_qa_scenario_coverage(
             continue
         target_scenarios = scenarios_by_target.get(requirement.capture_target, [])
         normalized_title = _normalized_demo_text(requirement.title)
-        normalized_acceptance_criterion = _normalized_demo_text(requirement.acceptance_criterion)
+        normalized_acceptance_criterion = _normalized_demo_text(
+            requirement.acceptance_criterion
+        )
         if not any(
             normalized_title in _normalized_scenario_text(scenario)
             or normalized_acceptance_criterion in _normalized_scenario_text(scenario)
@@ -1928,7 +2276,10 @@ def _validate_qa_scenario_coverage(
             )
         for variant in requirement.variants or []:
             normalized_variant = _normalized_demo_text(variant)
-            if not any(normalized_variant in _normalized_scenario_text(scenario) for scenario in target_scenarios):
+            if not any(
+                normalized_variant in _normalized_scenario_text(scenario)
+                for scenario in target_scenarios
+            ):
                 missing_variants.append(f"{requirement.capture_target}: {variant}")
     missing = [
         f"{target}: expected at least {required_count}, got {len(scenarios_by_target.get(target, []))}"
@@ -1939,14 +2290,21 @@ def _validate_qa_scenario_coverage(
     if missing:
         messages.append("insufficient scenario count: " + "; ".join(missing))
     if missing_requirements:
-        messages.append("missing requirement coverage: " + "; ".join(missing_requirements))
+        messages.append(
+            "missing requirement coverage: " + "; ".join(missing_requirements)
+        )
     if missing_variants:
         messages.append("missing variant coverage: " + "; ".join(missing_variants))
     if messages:
-        raise RuntimeError("QA demo scenarios do not cover PM demo requirement variants: " + " | ".join(messages))
+        raise RuntimeError(
+            "QA demo scenarios do not cover PM demo requirement variants: "
+            + " | ".join(messages)
+        )
 
 
-def _validate_recorded_qa_result_covers_plan(*, plan: PmPlan, qa_result: QaResult) -> None:
+def _validate_recorded_qa_result_covers_plan(
+    *, plan: PmPlan, qa_result: QaResult
+) -> None:
     required_targets = set(required_capture_targets(plan))
     out_of_plan_targets = [
         target
@@ -2023,7 +2381,9 @@ def _normalized_scenario_text(scenario: QaScenario) -> str:
     )
 
 
-def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowRequest) -> list[LocalQaRecording]:
+def _copy_recordings(
+    recordings: list[LocalQaRecording], *, request: WorkflowRequest
+) -> list[LocalQaRecording]:
     tenant_id = _require_safe_recording_scope_segment(
         request.tenant_id,
         field_name="tenant_id",
@@ -2035,13 +2395,17 @@ def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowReq
         scope_name="recording copy scope",
     )
     persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id
-    for segment in _artifact_scope_dir(request=request, scope_name="recording copy scope"):
+    for segment in _artifact_scope_dir(
+        request=request, scope_name="recording copy scope"
+    ):
         persisted_dir /= segment
     persisted_dir.mkdir(parents=True, exist_ok=True)
     copied: list[LocalQaRecording] = []
     for index, recording in enumerate(recordings, start=1):
         source = Path(recording.path)
-        target = persisted_dir / f"{recording.capture_target}-{index}{source.suffix.lower()}"
+        target = (
+            persisted_dir / f"{recording.capture_target}-{index}{source.suffix.lower()}"
+        )
         target.write_bytes(source.read_bytes())
         copied.append(
             LocalQaRecording(
@@ -2072,7 +2436,9 @@ def _copy_failure_evidence(
         scope_name="failure evidence copy scope",
     )
     persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id
-    for segment in _artifact_scope_dir(request=request, scope_name="failure evidence copy scope"):
+    for segment in _artifact_scope_dir(
+        request=request, scope_name="failure evidence copy scope"
+    ):
         persisted_dir /= segment
     persisted_dir /= "failures"
     persisted_dir.mkdir(parents=True, exist_ok=True)
@@ -2111,7 +2477,9 @@ def _capture_recording_terminal_failure_evidence(
         field_name="project_id",
         scope_name="failure evidence diagnostic scope",
     )
-    artifact_scope = _artifact_scope_dir(request=request, scope_name="failure evidence diagnostic scope")
+    artifact_scope = _artifact_scope_dir(
+        request=request, scope_name="failure evidence diagnostic scope"
+    )
     persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id
     for segment in artifact_scope:
         persisted_dir /= segment
@@ -2121,18 +2489,21 @@ def _capture_recording_terminal_failure_evidence(
     evidence: list[LocalQaFailureEvidence] = []
     for capture_target_name in sorted(capture_targets):
         capture_target = capture_targets[capture_target_name]
-        content = "\n".join(
-            [
-                "QA demo recording failed before video evidence was produced.",
-                f"tenant_id: {tenant_id}",
-                f"project_id: {project_id}",
-                f"artifact_scope: {'/'.join(artifact_scope)}",
-                f"capture_target: {capture_target.capture_target}",
-                f"capture_reference: {capture_target.capture_reference}",
-                "error:",
-                error_message,
-            ]
-        ).strip() + "\n"
+        content = (
+            "\n".join(
+                [
+                    "QA demo recording failed before video evidence was produced.",
+                    f"tenant_id: {tenant_id}",
+                    f"project_id: {project_id}",
+                    f"artifact_scope: {'/'.join(artifact_scope)}",
+                    f"capture_target: {capture_target.capture_target}",
+                    f"capture_reference: {capture_target.capture_reference}",
+                    "error:",
+                    error_message,
+                ]
+            ).strip()
+            + "\n"
+        )
         target = persisted_dir / f"{capture_target.capture_target}-terminal-failure.txt"
         payload = content.encode("utf-8")
         target.write_bytes(payload)
@@ -2158,7 +2529,9 @@ def _capture_release_readiness_diagnostic_failure_evidence(
     existing_evidence: list[LocalQaFailureEvidence],
     failure_message: str,
 ) -> list[LocalQaFailureEvidence]:
-    existing_targets = {str(item.capture_target or "").strip() for item in existing_evidence}
+    existing_targets = {
+        str(item.capture_target or "").strip() for item in existing_evidence
+    }
     tenant_id = _require_safe_recording_scope_segment(
         request.tenant_id,
         field_name="tenant_id",
@@ -2174,7 +2547,9 @@ def _capture_release_readiness_diagnostic_failure_evidence(
         field_name="run_id",
         scope_name="release readiness failure diagnostic scope",
     )
-    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    persisted_dir = (
+        Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    )
     persisted_dir.mkdir(parents=True, exist_ok=True)
 
     evidence: list[LocalQaFailureEvidence] = []
@@ -2193,18 +2568,21 @@ def _capture_release_readiness_diagnostic_failure_evidence(
             if capture_target is not None
             else f"{capture_target_name}://unavailable"
         )
-        content = "\n".join(
-            [
-                "QA demo release readiness failed before target recording could start.",
-                f"tenant_id: {tenant_id}",
-                f"project_id: {project_id}",
-                f"run_id: {run_id}",
-                f"capture_target: {capture_target_name}",
-                f"capture_reference: {capture_reference}",
-                "error:",
-                failure_message,
-            ]
-        ).strip() + "\n"
+        content = (
+            "\n".join(
+                [
+                    "QA demo release readiness failed before target recording could start.",
+                    f"tenant_id: {tenant_id}",
+                    f"project_id: {project_id}",
+                    f"run_id: {run_id}",
+                    f"capture_target: {capture_target_name}",
+                    f"capture_reference: {capture_reference}",
+                    "error:",
+                    failure_message,
+                ]
+            ).strip()
+            + "\n"
+        )
         target = persisted_dir / f"{safe_capture_target}-release-readiness-failure.txt"
         payload = content.encode("utf-8")
         target.write_bytes(payload)
@@ -2235,7 +2613,9 @@ def _capture_release_readiness_failure_evidence(
     required_capture_targets: tuple[str, ...],
     failure_message: str,
 ) -> list[LocalQaFailureEvidence]:
-    available_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
+    available_targets = resolve_available_capture_targets(
+        settings=settings, preview_release=preview_release
+    )
     diagnostic_failure_message = _append_failure_diagnostics(
         failure_message=failure_message,
         diagnostics=_release_readiness_failure_diagnostics(
@@ -2248,7 +2628,9 @@ def _capture_release_readiness_failure_evidence(
     )
     browser_target = available_targets.get("browser")
     evidence: list[LocalQaFailureEvidence] = []
-    if browser_target is not None and _capture_target_runs_on_worker(capture_target=browser_target, request=request):
+    if browser_target is not None and _capture_target_runs_on_worker(
+        capture_target=browser_target, request=request
+    ):
         scenario = QaScenario(
             name="Release readiness failure",
             objective="Record the preview release failing to load before QA demo execution.",
@@ -2299,17 +2681,23 @@ def _capture_release_readiness_failure_evidence(
     return evidence
 
 
-def _first_release_service_url(release_service_urls: list[dict[str, str]], *, service_kind: str) -> str:
+def _first_release_service_url(
+    release_service_urls: list[dict[str, str]], *, service_kind: str
+) -> str:
     for service_url in release_service_urls:
         if service_url.get("service_kind") == service_kind:
             return str(service_url.get("url") or "").strip()
     return ""
 
 
-def _first_release_service_recording_url(release_service_urls: list[dict[str, str]], *, service_kind: str) -> str:
+def _first_release_service_recording_url(
+    release_service_urls: list[dict[str, str]], *, service_kind: str
+) -> str:
     for service_url in release_service_urls:
         if service_url.get("service_kind") == service_kind:
-            return str(service_url.get("recording_url") or service_url.get("url") or "").strip()
+            return str(
+                service_url.get("recording_url") or service_url.get("url") or ""
+            ).strip()
     return ""
 
 
@@ -2334,9 +2722,15 @@ def _recorder_env_with_release_context(
     serialized_urls = json.dumps(release_service_urls, sort_keys=True)
     release_commit_sha = str(release_commit_sha or "").strip()
     api_base_url = _first_release_service_url(release_service_urls, service_kind="api")
-    browser_url = _first_release_service_url(release_service_urls, service_kind="website")
-    api_recording_url = _first_release_service_recording_url(release_service_urls, service_kind="api")
-    browser_recording_url = _first_release_service_recording_url(release_service_urls, service_kind="website")
+    browser_url = _first_release_service_url(
+        release_service_urls, service_kind="website"
+    )
+    api_recording_url = _first_release_service_recording_url(
+        release_service_urls, service_kind="api"
+    )
+    browser_recording_url = _first_release_service_recording_url(
+        release_service_urls, service_kind="website"
+    )
     env["MB_QA_DEMO_RELEASE_COMMIT_SHA"] = release_commit_sha
     env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"] = serialized_urls
     env["MB_QA_DEMO_RELEASE_API_BASE_URL"] = api_base_url
@@ -2352,26 +2746,42 @@ def _recorder_env_with_release_context(
     return env
 
 
-def _require_safe_recording_scope_segment(value: str | None, *, field_name: str, scope_name: str) -> str:
+def _require_safe_recording_scope_segment(
+    value: str | None, *, field_name: str, scope_name: str
+) -> str:
     raw = str(value or "").strip()
     if not raw:
         raise RuntimeError(f"QA demo {scope_name} requires {field_name}")
-    if raw in {".", ".."} or "/" in raw or "\\" in raw or not re.fullmatch(r"[A-Za-z0-9._-]+", raw):
+    if (
+        raw in {".", ".."}
+        or "/" in raw
+        or "\\" in raw
+        or not re.fullmatch(r"[A-Za-z0-9._-]+", raw)
+    ):
         raise RuntimeError(f"QA demo {scope_name} has unsafe {field_name}: {raw!r}")
     return raw
 
 
-def _require_safe_demo_proof_scope_segment(value: str | None, *, scope_name: str) -> str:
+def _require_safe_demo_proof_scope_segment(
+    value: str | None, *, scope_name: str
+) -> str:
     raw = str(value or "").strip()
     if not raw:
         raise RuntimeError(f"QA demo {scope_name} requires run_id or proof_scope_id")
-    if raw in {".", ".."} or "/" in raw or "\\" in raw or not re.fullmatch(r"[A-Za-z0-9._:-]+", raw):
+    if (
+        raw in {".", ".."}
+        or "/" in raw
+        or "\\" in raw
+        or not re.fullmatch(r"[A-Za-z0-9._:-]+", raw)
+    ):
         raise RuntimeError(f"QA demo {scope_name} has unsafe proof_scope_id: {raw!r}")
     return raw
 
 
 def _demo_proof_scope_id_from_request(request: WorkflowRequest) -> str | None:
-    context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
+    context = (
+        request.trigger_context if isinstance(request.trigger_context, dict) else {}
+    )
     demo_context = context.get("demo_proof")
     if isinstance(demo_context, dict):
         raw_value = demo_context.get("proof_scope_id")
@@ -2389,11 +2799,15 @@ def _artifact_scope_path(*, run, proof_scope_id: str | None, scope_name: str) ->
             field_name="run_id",
             scope_name=scope_name,
         )
-    proof_scope = _require_safe_demo_proof_scope_segment(proof_scope_id, scope_name=scope_name)
+    proof_scope = _require_safe_demo_proof_scope_segment(
+        proof_scope_id, scope_name=scope_name
+    )
     return f"proofs/{proof_scope}"
 
 
-def _artifact_scope_dir(*, request: WorkflowRequest, scope_name: str) -> tuple[str, ...]:
+def _artifact_scope_dir(
+    *, request: WorkflowRequest, scope_name: str
+) -> tuple[str, ...]:
     raw_run_id = str(request.run_id or "").strip()
     if raw_run_id:
         return (
@@ -2470,14 +2884,19 @@ def _validate_recordings_cover_scenarios(
     scenarios: list[QaScenario],
     recordings: list[LocalQaRecording],
 ) -> None:
-    unmatched_scenario_names = [str(scenario.name or "").strip() for scenario in scenarios]
+    unmatched_scenario_names = [
+        str(scenario.name or "").strip() for scenario in scenarios
+    ]
     planned_scenario_names = set(unmatched_scenario_names)
     seen_recording_names: set[str] = set()
     duplicate_recording_names: list[str] = []
     unplanned_recording_names: list[str] = []
     for recording in recordings:
         recording_name = str(recording.name or "").strip()
-        if recording_name in seen_recording_names and recording_name not in duplicate_recording_names:
+        if (
+            recording_name in seen_recording_names
+            and recording_name not in duplicate_recording_names
+        ):
             duplicate_recording_names.append(recording_name or "<unnamed>")
             continue
         seen_recording_names.add(recording_name)
@@ -2526,7 +2945,9 @@ def _validate_distinct_local_recording_content(
         )
 
 
-def _validate_unique_scenario_names(*, capture_target_name: str, scenarios: list[QaScenario]) -> None:
+def _validate_unique_scenario_names(
+    *, capture_target_name: str, scenarios: list[QaScenario]
+) -> None:
     seen: set[str] = set()
     duplicates: list[str] = []
     for scenario in scenarios:
@@ -2536,7 +2957,8 @@ def _validate_unique_scenario_names(*, capture_target_name: str, scenarios: list
         seen.add(name)
     if duplicates:
         raise RuntimeError(
-            f"QA demo scenarios for {capture_target_name} must have unique names: " + ", ".join(duplicates)
+            f"QA demo scenarios for {capture_target_name} must have unique names: "
+            + ", ".join(duplicates)
         )
 
 
@@ -2558,8 +2980,14 @@ def record_demo_scenarios(
     for scenario in qa_result.scenarios:
         target = available_capture_targets.get(scenario.capture_target)
         if target is None:
-            raise RuntimeError(f"QA demo capture target is unavailable for this run: {scenario.capture_target}")
-        if target.required_worker_platform is not None and request.current_worker_capability.value != target.required_worker_platform:
+            raise RuntimeError(
+                f"QA demo capture target is unavailable for this run: {scenario.capture_target}"
+            )
+        if (
+            target.required_worker_platform is not None
+            and request.current_worker_capability.value
+            != target.required_worker_platform
+        ):
             raise RuntimeError(
                 f"QA demo capture target '{scenario.capture_target}' requires worker platform {target.required_worker_platform}, "
                 f"but run is on {request.current_worker_capability.value}"
@@ -2570,7 +2998,9 @@ def record_demo_scenarios(
     release_service_urls = list(release_service_urls or [])
     release_commit_sha = str(release_commit_sha or "").strip()
     for capture_target_name, scenarios in scenarios_by_target.items():
-        _validate_unique_scenario_names(capture_target_name=capture_target_name, scenarios=scenarios)
+        _validate_unique_scenario_names(
+            capture_target_name=capture_target_name, scenarios=scenarios
+        )
         capture_target = available_capture_targets[capture_target_name]
         payload = {
             "capture_target": capture_target.capture_target,
@@ -2581,12 +3011,18 @@ def record_demo_scenarios(
             "issue_key": request.issue_key,
             "execution_repo_dir": request.execution_repo_dir or "",
             "target_source_paths": list(
-                (request.project_demo_capture_target_sources or {}).get(capture_target_name, ())
+                (request.project_demo_capture_target_sources or {}).get(
+                    capture_target_name, ()
+                )
             ),
             "release_commit_sha": release_commit_sha,
             "release_service_urls": release_service_urls,
-            "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
-            "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
+            "release_api_base_url": _first_release_service_url(
+                release_service_urls, service_kind="api"
+            ),
+            "release_browser_url": _first_release_service_url(
+                release_service_urls, service_kind="website"
+            ),
             "release_api_recording_url": _first_release_service_recording_url(
                 release_service_urls,
                 service_kind="api",
@@ -2619,10 +3055,14 @@ def record_demo_scenarios(
                 scenarios=scenarios,
                 capture_reference=capture_target.capture_reference,
             )
-            script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_recorder.mjs"
+            script_path = (
+                Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_recorder.mjs"
+            )
             if not script_path.exists():
                 raise RuntimeError(f"QA demo recorder script is missing: {script_path}")
-            playwright_module_dir = str(getattr(settings, "qa_demo_playwright_module_dir", "") or "").strip()
+            playwright_module_dir = str(
+                getattr(settings, "qa_demo_playwright_module_dir", "") or ""
+            ).strip()
             if not playwright_module_dir:
                 try:
                     playwright_module_dir = subprocess.run(
@@ -2649,9 +3089,11 @@ def record_demo_scenarios(
                 release_service_urls,
                 service_kind="website",
             )
-            browser_recording_host_header = _first_release_service_recording_host_header(
-                release_service_urls,
-                service_kind="website",
+            browser_recording_host_header = (
+                _first_release_service_recording_host_header(
+                    release_service_urls,
+                    service_kind="website",
+                )
             )
             if browser_recording_url:
                 payload["recording_url"] = browser_recording_url
@@ -2728,7 +3170,10 @@ def upload_recording(
     object_stat = client.stat_object(storage.bucket, object_key)
     stored_digest = _metadata_sha256(
         getattr(object_stat, "metadata", None),
-        keys=(_QA_DEMO_CONTENT_SHA256_METADATA_KEY, _QA_DEMO_CONTENT_SHA256_METADATA_HEADER),
+        keys=(
+            _QA_DEMO_CONTENT_SHA256_METADATA_KEY,
+            _QA_DEMO_CONTENT_SHA256_METADATA_HEADER,
+        ),
     )
     if stored_digest != digest:
         raise RuntimeError(
@@ -2737,7 +3182,10 @@ def upload_recording(
         )
     stored_release_commit = _metadata_sha256(
         getattr(object_stat, "metadata", None),
-        keys=(_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY, _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER),
+        keys=(
+            _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY,
+            _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER,
+        ),
     )
     if stored_release_commit != release_commit:
         raise RuntimeError(
@@ -2746,7 +3194,10 @@ def upload_recording(
         )
     stored_release_context_digest = _metadata_sha256(
         getattr(object_stat, "metadata", None),
-        keys=(_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY, _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_HEADER),
+        keys=(
+            _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY,
+            _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_HEADER,
+        ),
     )
     if stored_release_context_digest != release_context_digest:
         raise RuntimeError(
@@ -2759,14 +3210,18 @@ def upload_recording(
 def _require_content_sha256_value(value: object) -> str:
     digest = str(value or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
-        raise RuntimeError("QA demo recording content sha256 is required before artifact upload")
+        raise RuntimeError(
+            "QA demo recording content sha256 is required before artifact upload"
+        )
     return digest
 
 
 def _require_release_commit_sha_value(value: object) -> str:
     commit_sha = str(value or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{7,64}", commit_sha):
-        raise RuntimeError("QA demo recording release commit sha is required before artifact upload")
+        raise RuntimeError(
+            "QA demo recording release commit sha is required before artifact upload"
+        )
     return commit_sha
 
 
@@ -2802,9 +3257,15 @@ def execute_qa_demo_stage(
     required_targets = required_capture_targets(plan)
     if previous_qa_result is not None:
         previous_qa_result = _validate_recorded_scenario_proof(previous_qa_result)
-        _validate_recorded_qa_result_covers_plan(plan=plan, qa_result=previous_qa_result)
-    previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])
-    previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
+        _validate_recorded_qa_result_covers_plan(
+            plan=plan, qa_result=previous_qa_result
+        )
+    previous_recordings = list(
+        previous_qa_result.recordings if previous_qa_result is not None else []
+    )
+    previous_scenarios = list(
+        previous_qa_result.scenarios if previous_qa_result is not None else []
+    )
     proof_scope_id = _demo_proof_scope_id_from_request(request)
     release_service_urls = _release_service_urls_payload(preview_release)
     recorder_release_service_urls = _release_service_urls_payload(
@@ -2814,13 +3275,19 @@ def execute_qa_demo_stage(
     try:
         ensure_release_ready_for_qa(
             preview_release,
-            required_service_kinds=required_release_service_kinds(project=project, preview_release=preview_release),
+            required_service_kinds=required_release_service_kinds(
+                project=project, preview_release=preview_release
+            ),
             service_url_probe=_default_service_url_probe,
             timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
         )
     except RuntimeError as exc:
-        message = f"QA demo recording cannot start because the release did not load: {exc}"
-        release_commit_sha = str(getattr(preview_release, "commit_sha", "") or "").strip()
+        message = (
+            f"QA demo recording cannot start because the release did not load: {exc}"
+        )
+        release_commit_sha = str(
+            getattr(preview_release, "commit_sha", "") or ""
+        ).strip()
         local_failure_evidence = _capture_release_readiness_failure_evidence(
             session=session,
             settings=settings,
@@ -2899,18 +3366,29 @@ def execute_qa_demo_stage(
             required_recording_counts=required_recording_counts_by_target(plan),
         )
         return QaResult(
-            summary=[f"QA demo recording already has proof for required target(s): {', '.join(required_targets)}."],
+            summary=[
+                f"QA demo recording already has proof for required target(s): {', '.join(required_targets)}."
+            ],
             scenarios=previous_scenarios,
             recordings=previous_recordings,
             outcome="continue",
         )
-    available_capture_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
+    available_capture_targets = resolve_available_capture_targets(
+        settings=settings, preview_release=preview_release
+    )
     if not available_capture_targets:
-        raise RuntimeError("QA demo recording requires at least one configured capture target")
-    missing_targets = [target for target in remaining_targets if target not in available_capture_targets]
+        raise RuntimeError(
+            "QA demo recording requires at least one configured capture target"
+        )
+    missing_targets = [
+        target
+        for target in remaining_targets
+        if target not in available_capture_targets
+    ]
     if missing_targets:
         raise RuntimeError(
-            "QA demo recording requires unavailable capture target(s): " + ", ".join(sorted(missing_targets))
+            "QA demo recording requires unavailable capture target(s): "
+            + ", ".join(sorted(missing_targets))
         )
     remaining_available_capture_targets = {
         target_name: available_capture_targets[target_name]
@@ -3045,13 +3523,21 @@ def execute_qa_demo_stage(
             combined_recordings = [*previous_recordings, *uploaded]
             combined_scenarios = [*previous_scenarios, *qa_result.scenarios]
             combined_result = _validate_recorded_scenario_proof(
-                replace(qa_result, scenarios=combined_scenarios, recordings=combined_recordings)
+                replace(
+                    qa_result,
+                    scenarios=combined_scenarios,
+                    recordings=combined_recordings,
+                )
             )
-            _validate_recorded_qa_result_covers_plan(plan=plan, qa_result=combined_result)
+            _validate_recorded_qa_result_covers_plan(
+                plan=plan, qa_result=combined_result
+            )
             still_remaining = remaining_capture_targets(plan, combined_recordings)
             if still_remaining:
                 missing_current_worker_targets = [
-                    target for target in still_remaining if target in current_worker_capture_targets
+                    target
+                    for target in still_remaining
+                    if target in current_worker_capture_targets
                 ]
                 if missing_current_worker_targets:
                     raise RuntimeError(
@@ -3152,10 +3638,14 @@ def _load_pull_request_update_context(
             encryption_key=settings.secrets_encryption_key,
         ),
     )
-    pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+    pr_details = github_client.get_pull_request_details(
+        repo_full_name=repo_full_name, pr_number=pr_number
+    )
     base_branch = str(pr_details.base_ref or "").strip()
     if not base_branch:
-        raise RuntimeError("QA demo evidence PR update requires PR details to include a base branch")
+        raise RuntimeError(
+            "QA demo evidence PR update requires PR details to include a base branch"
+        )
     return _PullRequestBodyUpdateContext(
         github_client=github_client,
         repo_full_name=repo_full_name,
@@ -3185,7 +3675,9 @@ def _persist_pull_request_body(
         pr_number=context.pr_number,
     )
     if updated_pr_details.body != body:
-        raise RuntimeError("QA demo evidence PR update did not persist required evidence")
+        raise RuntimeError(
+            "QA demo evidence PR update did not persist required evidence"
+        )
 
 
 def update_pull_request_with_demo_evidence(
@@ -3276,7 +3768,9 @@ def update_pull_request_with_demo_failure_evidence(
     required_capture_targets: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     if not qa_result.failure_evidence:
-        raise RuntimeError("QA demo failure evidence PR update requires at least one failure artifact")
+        raise RuntimeError(
+            "QA demo failure evidence PR update requires at least one failure artifact"
+        )
     _validate_demo_failure_evidence_metadata(qa_result.failure_evidence)
     _validate_distinct_demo_failure_evidence_artifacts(qa_result.failure_evidence)
     _validate_failure_evidence_cover_required_targets(

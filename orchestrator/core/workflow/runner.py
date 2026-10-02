@@ -8,7 +8,9 @@ from orchestrator.core.pm.followups import build_backlog_follow_up_draft
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 
 StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
-WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]
+WorkflowOutcome = Literal[
+    "success", "requeue", "waiting_for_input", "blocked", "failed"
+]
 QaCaptureTarget = Literal["browser", "ios", "android", "desktop"]
 QaFailureKind = Literal["release_readiness", "recording"]
 TestValidationScope = Literal["targeted_only", "current_head_acceptance", "full_suite"]
@@ -33,9 +35,15 @@ class WorkflowRequest:
     github_repository: str | None = None
     jira_project_key: str | None = None
     current_worker_capability: WorkerCapability = WorkerCapability.LINUX
-    available_worker_capabilities: tuple[WorkerCapability, ...] = field(default_factory=lambda: (WorkerCapability.LINUX,))
-    project_demo_capture_targets: tuple[QaCaptureTarget, ...] = field(default_factory=tuple)
-    project_demo_capture_target_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    available_worker_capabilities: tuple[WorkerCapability, ...] = field(
+        default_factory=lambda: (WorkerCapability.LINUX,)
+    )
+    project_demo_capture_targets: tuple[QaCaptureTarget, ...] = field(
+        default_factory=tuple
+    )
+    project_demo_capture_target_sources: dict[str, tuple[str, ...]] = field(
+        default_factory=dict
+    )
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None
@@ -205,7 +213,9 @@ class WorkflowResult:
     review_summary: list[str] = field(default_factory=list)
     review_feedback: str | None = None
     orchestration_stage_trace: list[dict[str, object]] = field(default_factory=list)
-    orchestration_workstream_trace: list[dict[str, object]] = field(default_factory=list)
+    orchestration_workstream_trace: list[dict[str, object]] = field(
+        default_factory=list
+    )
     follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
     requeue_target: WorkerCapability | None = None
@@ -220,8 +230,7 @@ class WorkflowAgents(Protocol):
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
         stage_checkpoint_hook: Callable[[WorkflowStageCheckpoint], None] | None = None,
-    ) -> WorkflowResult:
-        ...
+    ) -> WorkflowResult: ...
 
 
 class WorkflowRunner:

@@ -36,20 +36,57 @@ SLOT_ALIASES: dict[str, tuple[str, ...]] = {
     "out_of_scope": ("out of scope", "not in scope"),
     "rollout_constraints": ("rollout constraints", "migration constraints"),
     "decision_owner": ("decision owner", "owner"),
-    "dependencies_and_risks": ("dependencies / risks", "dependencies and risks", "risks", "dependencies"),
+    "dependencies_and_risks": (
+        "dependencies / risks",
+        "dependencies and risks",
+        "risks",
+        "dependencies",
+    ),
 }
 
 FACT_SLOT_ORDER = tuple(SLOT_ALIASES.keys())
 _WORD_PATTERN = re.compile(r"[a-z0-9]{2,}")
 _SECTION_PATTERN = re.compile(r"(?im)^\s*#+\s*(.+?)\s*$")
-_LABELED_FACT_PATTERN = re.compile(r"(?i)^(?P<label>[a-z0-9][a-z0-9 /_().-]{1,96})\s*:\s*(?P<value>.+)$")
+_LABELED_FACT_PATTERN = re.compile(
+    r"(?i)^(?P<label>[a-z0-9][a-z0-9 /_().-]{1,96})\s*:\s*(?P<value>.+)$"
+)
 
 _FACT_TYPE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("configuration", ("bundle id", "service id", "redirect uri", "url scheme", "project id", "callback", "client id", "endpoint", "host")),
+    (
+        "configuration",
+        (
+            "bundle id",
+            "service id",
+            "redirect uri",
+            "url scheme",
+            "project id",
+            "callback",
+            "client id",
+            "endpoint",
+            "host",
+        ),
+    ),
     ("ownership", ("owner", "approver", "approval", "sign-off", "responsible")),
-    ("rollout_constraint", ("rollout", "migration", "release", "deploy", "cutover", "rollback")),
-    ("security_policy", ("session", "token", "auth", "security", "revocation", "expiration", "rotation")),
-    ("merge_policy", ("merge", "duplicate", "stale", "conflict", "retry", "failure policy")),
+    (
+        "rollout_constraint",
+        ("rollout", "migration", "release", "deploy", "cutover", "rollback"),
+    ),
+    (
+        "security_policy",
+        (
+            "session",
+            "token",
+            "auth",
+            "security",
+            "revocation",
+            "expiration",
+            "rotation",
+        ),
+    ),
+    (
+        "merge_policy",
+        ("merge", "duplicate", "stale", "conflict", "retry", "failure policy"),
+    ),
 )
 _INLINE_CONFIGURATION_ALIASES: dict[str, tuple[str, ...]] = {
     "production_bundle_id": ("production bundle id",),
@@ -136,12 +173,18 @@ def _normalize_fact_key(value: str) -> str:
     return normalized[:128] or "fact"
 
 
-def _normalize_fact_slot_name(*, fact_type: str, slot_name: str | None, fact_key: str) -> str:
+def _normalize_fact_slot_name(
+    *, fact_type: str, slot_name: str | None, fact_key: str
+) -> str:
     canonical_slot = normalize_slot_name(slot_name or "")
     if canonical_slot:
         return canonical_slot
     if fact_type == "decision_slot":
-        return normalize_slot_name(fact_key) or _normalize_fact_key(fact_key)[:_SLOT_NAME_MAX_LENGTH] or "fact"
+        return (
+            normalize_slot_name(fact_key)
+            or _normalize_fact_key(fact_key)[:_SLOT_NAME_MAX_LENGTH]
+            or "fact"
+        )
     return _REFERENCE_FACT_SLOT_NAME
 
 
@@ -300,7 +343,9 @@ def decode_base64_content(raw_value: str | None) -> bytes | None:
         return None
 
 
-def _chunk_text(text: str, *, max_chars: int = 900, overlap_chars: int = 120) -> list[str]:
+def _chunk_text(
+    text: str, *, max_chars: int = 900, overlap_chars: int = 120
+) -> list[str]:
     normalized = str(text or "").strip()
     if not normalized:
         return []
@@ -325,13 +370,17 @@ def _chunk_text(text: str, *, max_chars: int = 900, overlap_chars: int = 120) ->
     return chunks
 
 
-def _extract_text_from_binary(*, content: bytes | None, mime_type: str | None, title: str) -> str:
+def _extract_text_from_binary(
+    *, content: bytes | None, mime_type: str | None, title: str
+) -> str:
     if not content:
         return ""
     normalized_mime = str(mime_type or "").strip().lower()
     lower_title = title.lower()
 
-    if normalized_mime.startswith("text/") or lower_title.endswith((".txt", ".md", ".markdown", ".json", ".yaml", ".yml")):
+    if normalized_mime.startswith("text/") or lower_title.endswith(
+        (".txt", ".md", ".markdown", ".json", ".yaml", ".yml")
+    ):
         try:
             return content.decode("utf-8", errors="ignore")
         except Exception:  # noqa: BLE001
@@ -357,11 +406,17 @@ def _extract_text_from_binary(*, content: bytes | None, mime_type: str | None, t
             from io import BytesIO
 
             document = Document(BytesIO(content))
-            return "\n".join(paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip())
+            return "\n".join(
+                paragraph.text.strip()
+                for paragraph in document.paragraphs
+                if paragraph.text.strip()
+            )
         except Exception:  # noqa: BLE001
             return ""
 
-    if normalized_mime.startswith("image/") or lower_title.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff")):
+    if normalized_mime.startswith("image/") or lower_title.endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff")
+    ):
         try:
             from PIL import Image  # type: ignore[import-not-found]
             import pytesseract  # type: ignore[import-not-found]
@@ -418,7 +473,9 @@ def extract_slot_facts(text: str) -> dict[str, str]:
             )
             match = pattern.search(normalized)
             if match:
-                candidate = " ".join(line.strip() for line in match.group(1).splitlines() if line.strip())
+                candidate = " ".join(
+                    line.strip() for line in match.group(1).splitlines() if line.strip()
+                )
                 if candidate:
                     extracted[slot_name] = candidate
                     break
@@ -426,7 +483,11 @@ def extract_slot_facts(text: str) -> dict[str, str]:
 
 
 def _candidate_tokens(value: str) -> set[str]:
-    return {token for token in _WORD_PATTERN.findall(str(value or "").lower()) if len(token) >= 2}
+    return {
+        token
+        for token in _WORD_PATTERN.findall(str(value or "").lower())
+        if len(token) >= 2
+    }
 
 
 def _lexical_score(*, query_tokens: set[str], text: str) -> float:
@@ -485,20 +546,30 @@ def _embed_texts(
 
 
 def _embedding_model_retry_suppressed(*, now_epoch: float | None = None) -> bool:
-    now_value = float(now_epoch) if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+    now_value = (
+        float(now_epoch)
+        if now_epoch is not None
+        else datetime.now(timezone.utc).timestamp()
+    )
     return now_value < _embedding_model_unavailable_until_epoch
 
 
 def _mark_embedding_model_unavailable(*, now_epoch: float | None = None) -> None:
     global _embedding_model_unavailable_until_epoch
-    now_value = float(now_epoch) if now_epoch is not None else datetime.now(timezone.utc).timestamp()
+    now_value = (
+        float(now_epoch)
+        if now_epoch is not None
+        else datetime.now(timezone.utc).timestamp()
+    )
     _embedding_model_unavailable_until_epoch = max(
         _embedding_model_unavailable_until_epoch,
         now_value + float(_EMBEDDING_MODEL_RETRY_COOLDOWN_SECONDS),
     )
 
 
-def ensure_knowledge_embedding_model_ready(*, local_files_only: bool | None = None) -> str:
+def ensure_knowledge_embedding_model_ready(
+    *, local_files_only: bool | None = None
+) -> str:
     model_name = _knowledge_embedding_model_name()
     model = _knowledge_text_embedding_model(local_files_only)
     list(model.embed(["knowledge prewarm"]))
@@ -530,7 +601,9 @@ def _suppress_known_onnxruntime_warning_noise() -> None:
         onnxruntime = importlib.import_module("onnxruntime")
     except Exception:  # noqa: BLE001
         return
-    set_default_logger_severity = getattr(onnxruntime, "set_default_logger_severity", None)
+    set_default_logger_severity = getattr(
+        onnxruntime, "set_default_logger_severity", None
+    )
     if not callable(set_default_logger_severity):
         return
     try:
@@ -557,7 +630,9 @@ def _knowledge_embedding_offline_enabled() -> bool:
     return normalized in {"1", "true", "yes", "on"}
 
 
-def _resolve_knowledge_embedding_local_files_only(local_files_only: bool | None) -> bool:
+def _resolve_knowledge_embedding_local_files_only(
+    local_files_only: bool | None,
+) -> bool:
     if local_files_only is not None:
         return local_files_only
     return _knowledge_embedding_offline_enabled()
@@ -571,7 +646,11 @@ def _local_files_only_for_embedding_access_mode(
 
 
 def _asset_checksum(*, text_content: str, binary_content: bytes | None) -> str | None:
-    checksum_input = binary_content if binary_content else text_content.encode("utf-8", errors="ignore")
+    checksum_input = (
+        binary_content
+        if binary_content
+        else text_content.encode("utf-8", errors="ignore")
+    )
     return hashlib.sha256(checksum_input).hexdigest() if checksum_input else None
 
 
@@ -582,7 +661,9 @@ def _attachment_extension(filename: str) -> str:
     return "." + lowered.rsplit(".", 1)[-1]
 
 
-def _is_supported_text_attachment(*, filename: str, mime_type: str | None, size_bytes: int | None) -> bool:
+def _is_supported_text_attachment(
+    *, filename: str, mime_type: str | None, size_bytes: int | None
+) -> bool:
     if isinstance(size_bytes, int) and size_bytes > 5 * 1024 * 1024:
         return False
     normalized_mime = str(mime_type or "").strip().lower()
@@ -633,8 +714,12 @@ def _jira_attachment_asset_ref(issue_key: str, attachment_id: str) -> str:
     return f"attachment:{issue_key}:{attachment_id}"
 
 
-def _issue_key_from_jira_asset(*, source_type: str, source_ref: str | None, metadata_json: dict[str, Any] | None) -> str | None:
-    metadata_issue_key = str((metadata_json or {}).get("issue_key") or "").strip().upper()
+def _issue_key_from_jira_asset(
+    *, source_type: str, source_ref: str | None, metadata_json: dict[str, Any] | None
+) -> str | None:
+    metadata_issue_key = (
+        str((metadata_json or {}).get("issue_key") or "").strip().upper()
+    )
     if metadata_issue_key:
         return metadata_issue_key
     normalized_ref = str(source_ref or "").strip()
@@ -647,7 +732,9 @@ def _issue_key_from_jira_asset(*, source_type: str, source_ref: str | None, meta
         _, _, remainder = normalized_ref.partition(":")
         issue_key, _, _ = remainder.partition(":")
         return issue_key.strip().upper() or None
-    if normalized_type == "jira_attachment" and normalized_ref.startswith("attachment:"):
+    if normalized_type == "jira_attachment" and normalized_ref.startswith(
+        "attachment:"
+    ):
         _, _, remainder = normalized_ref.partition(":")
         issue_key, _, _ = remainder.partition(":")
         return issue_key.strip().upper() or None
@@ -658,13 +745,19 @@ def _asset_matches_issue_scope(*, asset: KnowledgeAsset, issue_key: str | None) 
     normalized_issue_key = str(issue_key or "").strip().upper()
     if not normalized_issue_key:
         return True
-    if str(asset.source_type or "").strip().lower() not in {"jira_issue", "jira_comment", "jira_attachment"}:
+    if str(asset.source_type or "").strip().lower() not in {
+        "jira_issue",
+        "jira_comment",
+        "jira_attachment",
+    }:
         return True
     return (
         _issue_key_from_jira_asset(
             source_type=str(asset.source_type or ""),
             source_ref=asset.source_ref,
-            metadata_json=asset.metadata_json if isinstance(asset.metadata_json, dict) else None,
+            metadata_json=asset.metadata_json
+            if isinstance(asset.metadata_json, dict)
+            else None,
         )
         == normalized_issue_key
     )
@@ -704,12 +797,18 @@ def _store_asset_facts(
         )
 
 
-def sync_knowledge_fact_approval_state_for_asset(*, session: Session, asset: KnowledgeAsset) -> None:
+def sync_knowledge_fact_approval_state_for_asset(
+    *, session: Session, asset: KnowledgeAsset
+) -> None:
     approval_state = approval_state_for_asset_status(asset.status)
     now = datetime.now(timezone.utc)
-    facts = session.execute(
-        select(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id)
-    ).scalars().all()
+    facts = (
+        session.execute(
+            select(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id)
+        )
+        .scalars()
+        .all()
+    )
     for fact in facts:
         fact.approval_state = approval_state
         if approval_state == "rejected":
@@ -746,13 +845,19 @@ def _refresh_asset_content(
     asset.source_timestamp = source_timestamp
     asset.text_content = extracted_text or None
     asset.binary_content = binary_content
-    asset.checksum = _asset_checksum(text_content=extracted_text, binary_content=binary_content)
+    asset.checksum = _asset_checksum(
+        text_content=extracted_text, binary_content=binary_content
+    )
     asset.metadata_json = dict(metadata_json)
     asset.status = "ready"
     asset.updated_at = now
 
-    session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.asset_id == asset.asset_id))
-    session.execute(delete(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id))
+    session.execute(
+        delete(KnowledgeChunk).where(KnowledgeChunk.asset_id == asset.asset_id)
+    )
+    session.execute(
+        delete(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id)
+    )
     session.flush()
 
     chunks = _chunk_text(extracted_text)
@@ -811,7 +916,9 @@ def _upsert_knowledge_asset(
             mime_type=mime_type,
             title=normalized_title,
         )
-    checksum = _asset_checksum(text_content=extracted_text, binary_content=binary_content)
+    checksum = _asset_checksum(
+        text_content=extracted_text, binary_content=binary_content
+    )
     existing = session.execute(
         select(KnowledgeAsset).where(
             KnowledgeAsset.tenant_id == tenant_id,
@@ -865,16 +972,22 @@ def _upsert_knowledge_asset(
     return "updated"
 
 
-def list_knowledge_assets(*, session: Session, tenant_id: str, project_id: str) -> list[KnowledgeAsset]:
-    return session.execute(
-        select(KnowledgeAsset)
-        .where(
-            KnowledgeAsset.tenant_id == tenant_id,
-            KnowledgeAsset.project_id == project_id,
-            KnowledgeAsset.status != "deleted",
+def list_knowledge_assets(
+    *, session: Session, tenant_id: str, project_id: str
+) -> list[KnowledgeAsset]:
+    return (
+        session.execute(
+            select(KnowledgeAsset)
+            .where(
+                KnowledgeAsset.tenant_id == tenant_id,
+                KnowledgeAsset.project_id == project_id,
+                KnowledgeAsset.status != "deleted",
+            )
+            .order_by(desc(KnowledgeAsset.updated_at))
         )
-        .order_by(desc(KnowledgeAsset.updated_at))
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def list_knowledge_assets_page(
@@ -907,17 +1020,25 @@ def list_knowledge_assets_page(
         wildcard_query = f"%{normalized_query}%"
         filters.append(
             func.lower(func.coalesce(KnowledgeAsset.title, "")).like(wildcard_query)
-            | func.lower(func.coalesce(KnowledgeAsset.source_ref, "")).like(wildcard_query)
+            | func.lower(func.coalesce(KnowledgeAsset.source_ref, "")).like(
+                wildcard_query
+            )
         )
 
-    total = session.execute(select(func.count()).select_from(KnowledgeAsset).where(*filters)).scalar_one()
-    items = session.execute(
-        select(KnowledgeAsset)
-        .where(*filters)
-        .order_by(desc(KnowledgeAsset.updated_at), desc(KnowledgeAsset.created_at))
-        .limit(safe_limit)
-        .offset(safe_offset)
-    ).scalars().all()
+    total = session.execute(
+        select(func.count()).select_from(KnowledgeAsset).where(*filters)
+    ).scalar_one()
+    items = (
+        session.execute(
+            select(KnowledgeAsset)
+            .where(*filters)
+            .order_by(desc(KnowledgeAsset.updated_at), desc(KnowledgeAsset.created_at))
+            .limit(safe_limit)
+            .offset(safe_offset)
+        )
+        .scalars()
+        .all()
+    )
     return items, int(total)
 
 
@@ -937,14 +1058,20 @@ def list_knowledge_chunks_page(
         KnowledgeChunk.project_id == project_id,
         KnowledgeChunk.asset_id == asset_id,
     ]
-    total = session.execute(select(func.count()).select_from(KnowledgeChunk).where(*filters)).scalar_one()
-    items = session.execute(
-        select(KnowledgeChunk)
-        .where(*filters)
-        .order_by(KnowledgeChunk.chunk_index.asc())
-        .limit(safe_limit)
-        .offset(safe_offset)
-    ).scalars().all()
+    total = session.execute(
+        select(func.count()).select_from(KnowledgeChunk).where(*filters)
+    ).scalar_one()
+    items = (
+        session.execute(
+            select(KnowledgeChunk)
+            .where(*filters)
+            .order_by(KnowledgeChunk.chunk_index.asc())
+            .limit(safe_limit)
+            .offset(safe_offset)
+        )
+        .scalars()
+        .all()
+    )
     return items, int(total)
 
 
@@ -955,25 +1082,31 @@ def list_knowledge_facts_for_asset(
     project_id: str,
     asset_id: str,
 ) -> list[KnowledgeFact]:
-    return session.execute(
-        select(KnowledgeFact)
-        .where(
-            KnowledgeFact.tenant_id == tenant_id,
-            KnowledgeFact.project_id == project_id,
-            KnowledgeFact.asset_id == asset_id,
+    return (
+        session.execute(
+            select(KnowledgeFact)
+            .where(
+                KnowledgeFact.tenant_id == tenant_id,
+                KnowledgeFact.project_id == project_id,
+                KnowledgeFact.asset_id == asset_id,
+            )
+            .order_by(
+                case((KnowledgeFact.superseded_at.is_(None), 0), else_=1),
+                KnowledgeFact.approval_state.asc(),
+                KnowledgeFact.fact_type.asc(),
+                KnowledgeFact.fact_key.asc(),
+                desc(KnowledgeFact.source_timestamp),
+                desc(KnowledgeFact.updated_at),
+            )
         )
-        .order_by(
-            case((KnowledgeFact.superseded_at.is_(None), 0), else_=1),
-            KnowledgeFact.approval_state.asc(),
-            KnowledgeFact.fact_type.asc(),
-            KnowledgeFact.fact_key.asc(),
-            desc(KnowledgeFact.source_timestamp),
-            desc(KnowledgeFact.updated_at),
-        )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
-def get_knowledge_asset_stats(*, session: Session, tenant_id: str, project_id: str) -> dict[str, Any]:
+def get_knowledge_asset_stats(
+    *, session: Session, tenant_id: str, project_id: str
+) -> dict[str, Any]:
     filters = [
         KnowledgeAsset.tenant_id == tenant_id,
         KnowledgeAsset.project_id == project_id,
@@ -1003,11 +1136,23 @@ def get_knowledge_asset_stats(*, session: Session, tenant_id: str, project_id: s
     fact_totals = session.execute(
         select(
             func.count(KnowledgeFact.fact_id),
-            func.coalesce(func.sum(case((KnowledgeFact.approval_state == "approved", 1), else_=0)), 0),
-            func.coalesce(func.sum(case((KnowledgeFact.approval_state == "pending_review", 1), else_=0)), 0),
-            func.coalesce(func.sum(case((KnowledgeFact.superseded_at.is_not(None), 1), else_=0)), 0),
-        )
-        .where(
+            func.coalesce(
+                func.sum(
+                    case((KnowledgeFact.approval_state == "approved", 1), else_=0)
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(
+                    case((KnowledgeFact.approval_state == "pending_review", 1), else_=0)
+                ),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((KnowledgeFact.superseded_at.is_not(None), 1), else_=0)),
+                0,
+            ),
+        ).where(
             KnowledgeFact.tenant_id == tenant_id,
             KnowledgeFact.project_id == project_id,
         )
@@ -1023,7 +1168,9 @@ def get_knowledge_asset_stats(*, session: Session, tenant_id: str, project_id: s
         "ready_assets": int(status_counts.get("ready", 0)),
         "pending_review_assets": int(status_counts.get("pending_review", 0)),
         "rejected_assets": int(status_counts.get("rejected", 0)),
-        "source_type_counts": {str(key): int(value) for key, value in source_type_counts.items()},
+        "source_type_counts": {
+            str(key): int(value) for key, value in source_type_counts.items()
+        },
     }
 
 
@@ -1055,7 +1202,9 @@ def create_knowledge_asset(
             mime_type=normalized_mime_type,
             title=normalized_title,
         )
-    checksum = _asset_checksum(text_content=extracted_text, binary_content=binary_content)
+    checksum = _asset_checksum(
+        text_content=extracted_text, binary_content=binary_content
+    )
 
     asset = KnowledgeAsset(
         asset_id=uuid4().hex,
@@ -1111,7 +1260,9 @@ def create_knowledge_asset(
     return asset
 
 
-def delete_knowledge_asset(*, session: Session, tenant_id: str, project_id: str, asset_id: str) -> bool:
+def delete_knowledge_asset(
+    *, session: Session, tenant_id: str, project_id: str, asset_id: str
+) -> bool:
     asset = session.get(KnowledgeAsset, asset_id)
     if asset is None:
         return False
@@ -1230,7 +1381,11 @@ def sync_project_knowledge_from_jira(
             summary = str(getattr(detail, "summary", "") or "").strip()
             description = str(getattr(detail, "description", "") or "").strip()
             status = str(getattr(detail, "status", "") or "").strip()
-            labels = [str(label).strip() for label in list(getattr(detail, "labels", []) or []) if str(label).strip()]
+            labels = [
+                str(label).strip()
+                for label in list(getattr(detail, "labels", []) or [])
+                if str(label).strip()
+            ]
             issue_body_text = "\n".join(
                 line
                 for line in [
@@ -1246,23 +1401,25 @@ def sync_project_knowledge_from_jira(
             ).strip()
             issue_ref = _jira_issue_asset_ref(issue_key)
             active_refs.add(issue_ref)
-            counts[_upsert_knowledge_asset(
-                session=session,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                source_type="jira_issue",
-                source_ref=issue_ref,
-                title=f"{issue_key}: {summary[:220] if summary else 'Jira issue'}",
-                mime_type="text/plain",
-                source_timestamp=datetime.now(timezone.utc),
-                text_content=issue_body_text,
-                binary_content=None,
-                metadata_json={
-                    "issue_key": issue_key,
-                    "status": status,
-                    "labels": labels,
-                },
-            )] += 1
+            counts[
+                _upsert_knowledge_asset(
+                    session=session,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    source_type="jira_issue",
+                    source_ref=issue_ref,
+                    title=f"{issue_key}: {summary[:220] if summary else 'Jira issue'}",
+                    mime_type="text/plain",
+                    source_timestamp=datetime.now(timezone.utc),
+                    text_content=issue_body_text,
+                    binary_content=None,
+                    metadata_json={
+                        "issue_key": issue_key,
+                        "status": status,
+                        "labels": labels,
+                    },
+                )
+            ] += 1
 
             for comment in comments:
                 comment_id = str(getattr(comment, "comment_id", "") or "").strip()
@@ -1275,29 +1432,38 @@ def sync_project_knowledge_from_jira(
                     continue
                 comment_ref = _jira_comment_asset_ref(issue_key, comment_id)
                 active_refs.add(comment_ref)
-                counts[_upsert_knowledge_asset(
-                    session=session,
-                    tenant_id=tenant_id,
-                    project_id=project_id,
-                    source_type="jira_comment",
-                    source_ref=comment_ref,
-                    title=f"{issue_key} comment {comment_id}",
-                    mime_type="text/plain",
-                    source_timestamp=getattr(comment, "updated_at", None),
-                    text_content=comment_body,
-                    binary_content=None,
-                    metadata_json={
-                        "issue_key": issue_key,
-                        "comment_id": comment_id,
-                        "author_display_name": getattr(comment, "author_display_name", None),
-                    },
-                )] += 1
+                counts[
+                    _upsert_knowledge_asset(
+                        session=session,
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                        source_type="jira_comment",
+                        source_ref=comment_ref,
+                        title=f"{issue_key} comment {comment_id}",
+                        mime_type="text/plain",
+                        source_timestamp=getattr(comment, "updated_at", None),
+                        text_content=comment_body,
+                        binary_content=None,
+                        metadata_json={
+                            "issue_key": issue_key,
+                            "comment_id": comment_id,
+                            "author_display_name": getattr(
+                                comment, "author_display_name", None
+                            ),
+                        },
+                    )
+                ] += 1
 
             for attachment in attachments:
-                attachment_id = str(getattr(attachment, "attachment_id", "") or "").strip()
+                attachment_id = str(
+                    getattr(attachment, "attachment_id", "") or ""
+                ).strip()
                 filename = str(getattr(attachment, "filename", "") or "").strip()
                 content_url = str(getattr(attachment, "content_url", "") or "").strip()
-                mime_type = str(getattr(attachment, "mime_type", "") or "").strip() or mimetypes.guess_type(filename)[0]
+                mime_type = (
+                    str(getattr(attachment, "mime_type", "") or "").strip()
+                    or mimetypes.guess_type(filename)[0]
+                )
                 size_bytes = getattr(attachment, "size_bytes", None)
                 if not attachment_id or not filename or not content_url:
                     counts["skipped"] += 1
@@ -1327,41 +1493,51 @@ def sync_project_knowledge_from_jira(
                 if not extracted_text:
                     counts["skipped"] += 1
                     continue
-                counts[_upsert_knowledge_asset(
-                    session=session,
-                    tenant_id=tenant_id,
-                    project_id=project_id,
-                    source_type="jira_attachment",
-                    source_ref=attachment_ref,
-                    title=f"{issue_key} attachment {filename}",
-                    mime_type=mime_type,
-                    source_timestamp=getattr(attachment, "created_at", None),
-                    text_content=extracted_text,
-                    binary_content=content_bytes,
-                    metadata_json={
-                        "issue_key": issue_key,
-                        "attachment_id": attachment_id,
-                        "filename": filename,
-                        "content_url": content_url,
-                        "size_bytes": size_bytes,
-                    },
-                )] += 1
+                counts[
+                    _upsert_knowledge_asset(
+                        session=session,
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                        source_type="jira_attachment",
+                        source_ref=attachment_ref,
+                        title=f"{issue_key} attachment {filename}",
+                        mime_type=mime_type,
+                        source_timestamp=getattr(attachment, "created_at", None),
+                        text_content=extracted_text,
+                        binary_content=content_bytes,
+                        metadata_json={
+                            "issue_key": issue_key,
+                            "attachment_id": attachment_id,
+                            "filename": filename,
+                            "content_url": content_url,
+                            "size_bytes": size_bytes,
+                        },
+                    )
+                ] += 1
 
         next_page_token = page.next_page_token
         if not next_page_token:
             break
         if next_page_token in seen_page_tokens:
-            raise RuntimeError("Jira knowledge sync pagination loop detected (repeated nextPageToken)")
+            raise RuntimeError(
+                "Jira knowledge sync pagination loop detected (repeated nextPageToken)"
+            )
         seen_page_tokens.add(next_page_token)
 
-    existing_assets = session.execute(
-        select(KnowledgeAsset).where(
-            KnowledgeAsset.tenant_id == tenant_id,
-            KnowledgeAsset.project_id == project_id,
-            KnowledgeAsset.source_type.in_(("jira_issue", "jira_comment", "jira_attachment")),
-            KnowledgeAsset.status != "deleted",
+    existing_assets = (
+        session.execute(
+            select(KnowledgeAsset).where(
+                KnowledgeAsset.tenant_id == tenant_id,
+                KnowledgeAsset.project_id == project_id,
+                KnowledgeAsset.source_type.in_(
+                    ("jira_issue", "jira_comment", "jira_attachment")
+                ),
+                KnowledgeAsset.status != "deleted",
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     now = datetime.now(timezone.utc)
     for asset in existing_assets:
         source_ref = str(asset.source_ref or "").strip()
@@ -1369,8 +1545,12 @@ def sync_project_knowledge_from_jira(
             continue
         asset.status = "deleted"
         asset.updated_at = now
-        session.execute(delete(KnowledgeChunk).where(KnowledgeChunk.asset_id == asset.asset_id))
-        session.execute(delete(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id))
+        session.execute(
+            delete(KnowledgeChunk).where(KnowledgeChunk.asset_id == asset.asset_id)
+        )
+        session.execute(
+            delete(KnowledgeFact).where(KnowledgeFact.asset_id == asset.asset_id)
+        )
         counts["deleted"] += 1
 
     session.commit()
@@ -1416,7 +1596,11 @@ def _match_facts(
             KnowledgeAsset.status == "ready",
         )
         .order_by(
-            desc(func.coalesce(KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp)),
+            desc(
+                func.coalesce(
+                    KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp
+                )
+            ),
             desc(KnowledgeFact.updated_at),
         )
         .limit(max(20, max_items * 10))
@@ -1446,7 +1630,10 @@ def _match_facts(
         source_time = fact.source_timestamp or asset.source_timestamp
         recency_bonus = 0.0
         if source_time is not None:
-            age_days = max(0.0, (now - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+            age_days = max(
+                0.0,
+                (now - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0,
+            )
             recency_bonus = 1.0 / (1.0 + age_days / 30.0)
         approval_bonus = 0.05 if str(fact.approval_state or "") == "approved" else 0.0
         score = (lexical * 0.85) + (recency_bonus * 0.10) + approval_bonus
@@ -1460,7 +1647,7 @@ def _match_facts(
     scored.sort(key=lambda item: item[0], reverse=True)
     lines: list[str] = []
     citations: list[dict[str, Any]] = []
-    for score, fact, asset in scored[:max(1, max_items)]:
+    for score, fact, asset in scored[: max(1, max_items)]:
         source_time = fact.source_timestamp or asset.source_timestamp
         lines.append(
             (
@@ -1522,7 +1709,8 @@ def _match_chunk_debug(
                 source_type=str(citation.get("source_type") or ""),
                 title=str(citation.get("title") or ""),
                 source_ref=str(citation.get("source_ref") or "").strip() or None,
-                source_timestamp=str(citation.get("source_timestamp") or "").strip() or None,
+                source_timestamp=str(citation.get("source_timestamp") or "").strip()
+                or None,
                 snippet=snippet,
                 metadata={},
             )
@@ -1558,10 +1746,13 @@ def search_knowledge_debug(
             source_type=str(citation.get("source_type") or ""),
             title=str(citation.get("title") or ""),
             source_ref=str(citation.get("source_ref") or "").strip() or None,
-            source_timestamp=str(citation.get("source_timestamp") or "").strip() or None,
+            source_timestamp=str(citation.get("source_timestamp") or "").strip()
+            or None,
             snippet=str(
                 (
-                    session.get(KnowledgeFact, str(citation.get("fact_id") or "").strip()).fact_value
+                    session.get(
+                        KnowledgeFact, str(citation.get("fact_id") or "").strip()
+                    ).fact_value
                     if citation.get("fact_id")
                     else ""
                 )
@@ -1612,7 +1803,11 @@ def resolve_missing_slots_from_knowledge(
                 KnowledgeAsset.status == "ready",
             )
             .order_by(
-                desc(func.coalesce(KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp)),
+                desc(
+                    func.coalesce(
+                        KnowledgeFact.source_timestamp, KnowledgeAsset.source_timestamp
+                    )
+                ),
                 desc(KnowledgeFact.confidence),
                 desc(KnowledgeFact.updated_at),
             )
@@ -1623,7 +1818,9 @@ def resolve_missing_slots_from_knowledge(
         chosen: SlotResolution | None = None
         for fact, asset in facts:
             confidence = float(fact.confidence or 0.0)
-            threshold = inferred_threshold if bool(fact.is_inferred) else confidence_threshold
+            threshold = (
+                inferred_threshold if bool(fact.is_inferred) else confidence_threshold
+            )
             if confidence < threshold:
                 continue
             candidate = SlotResolution(
@@ -1636,7 +1833,9 @@ def resolve_missing_slots_from_knowledge(
                     "asset_id": asset.asset_id,
                     "title": asset.title,
                     "source_type": asset.source_type,
-                    "source_timestamp": (fact.source_timestamp or asset.source_timestamp).isoformat()
+                    "source_timestamp": (
+                        fact.source_timestamp or asset.source_timestamp
+                    ).isoformat()
                     if (fact.source_timestamp or asset.source_timestamp)
                     else None,
                 },
@@ -1676,7 +1875,11 @@ def _sqlite_fallback_context(
             KnowledgeAsset.status == "ready",
         )
         .order_by(
-            desc(func.coalesce(KnowledgeChunk.source_timestamp, KnowledgeAsset.source_timestamp)),
+            desc(
+                func.coalesce(
+                    KnowledgeChunk.source_timestamp, KnowledgeAsset.source_timestamp
+                )
+            ),
             desc(KnowledgeChunk.updated_at),
         )
         .limit(350)
@@ -1705,14 +1908,19 @@ def _sqlite_fallback_context(
         if source_time is not None:
             age_days = max(
                 0.0,
-                (datetime.now(timezone.utc) - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0,
+                (
+                    datetime.now(timezone.utc) - source_time.astimezone(timezone.utc)
+                ).total_seconds()
+                / 86400.0,
             )
             recency_bonus = 1.0 / (1.0 + age_days / 30.0)
         score = (lexical * 0.55) + (semantic * 0.35) + (recency_bonus * 0.10)
         if score <= 0.0:
             continue
         scored.append((score, chunk, asset))
-    return _format_knowledge_context(scored=scored, max_items=max_items, max_chars=max_chars)
+    return _format_knowledge_context(
+        scored=scored, max_items=max_items, max_chars=max_chars
+    )
 
 
 def _format_knowledge_context(
@@ -1778,9 +1986,10 @@ def _postgres_hybrid_context(
     if query_embedding:
         embedding_literal = vector_literal(query_embedding)
         if embedding_literal:
-            vector_rows = session.execute(
-                text(
-                    """
+            vector_rows = (
+                session.execute(
+                    text(
+                        """
                     SELECT chunk_id, 1 - (embedding <=> CAST(:embedding AS vector)) AS semantic_score
                     FROM knowledge_chunks
                     WHERE tenant_id = :tenant_id
@@ -1789,14 +1998,17 @@ def _postgres_hybrid_context(
                     ORDER BY embedding <=> CAST(:embedding AS vector)
                     LIMIT :candidate_limit
                     """
-                ),
-                {
-                    "tenant_id": tenant_id,
-                    "project_id": project_id,
-                    "embedding": embedding_literal,
-                    "candidate_limit": max(20, max_items * 4),
-                },
-            ).mappings().all()
+                    ),
+                    {
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "embedding": embedding_literal,
+                        "candidate_limit": max(20, max_items * 4),
+                    },
+                )
+                .mappings()
+                .all()
+            )
             for row in vector_rows:
                 chunk_id = str(row.get("chunk_id") or "").strip()
                 if not chunk_id:
@@ -1806,9 +2018,10 @@ def _postgres_hybrid_context(
                     float(row.get("semantic_score") or 0.0),
                 )
 
-    lexical_rows = session.execute(
-        text(
-            """
+    lexical_rows = (
+        session.execute(
+            text(
+                """
             SELECT chunk_id, ts_rank_cd(to_tsvector('simple', content), plainto_tsquery('simple', :query)) AS lexical_score
             FROM knowledge_chunks
             WHERE tenant_id = :tenant_id
@@ -1817,14 +2030,17 @@ def _postgres_hybrid_context(
             ORDER BY lexical_score DESC, updated_at DESC
             LIMIT :candidate_limit
             """
-        ),
-        {
-            "tenant_id": tenant_id,
-            "project_id": project_id,
-            "query": normalized_query,
-            "candidate_limit": max(20, max_items * 4),
-        },
-    ).mappings().all()
+            ),
+            {
+                "tenant_id": tenant_id,
+                "project_id": project_id,
+                "query": normalized_query,
+                "candidate_limit": max(20, max_items * 4),
+            },
+        )
+        .mappings()
+        .all()
+    )
     for row in lexical_rows:
         chunk_id = str(row.get("chunk_id") or "").strip()
         if not chunk_id:
@@ -1863,13 +2079,20 @@ def _postgres_hybrid_context(
         source_time = chunk.source_timestamp or asset.source_timestamp
         recency_bonus = 0.0
         if source_time is not None:
-            age_days = max(0.0, (now - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0)
+            age_days = max(
+                0.0,
+                (now - source_time.astimezone(timezone.utc)).total_seconds() / 86400.0,
+            )
             recency_bonus = 1.0 / (1.0 + age_days / 30.0)
-        score = (float(lexical) * 0.45) + (float(semantic) * 0.45) + (recency_bonus * 0.10)
+        score = (
+            (float(lexical) * 0.45) + (float(semantic) * 0.45) + (recency_bonus * 0.10)
+        )
         if score <= 0.0:
             continue
         scored.append((score, chunk, asset))
-    return _format_knowledge_context(scored=scored, max_items=max_items, max_chars=max_chars)
+    return _format_knowledge_context(
+        scored=scored, max_items=max_items, max_chars=max_chars
+    )
 
 
 def build_knowledge_prompt_context(

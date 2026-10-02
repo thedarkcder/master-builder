@@ -58,7 +58,9 @@ def initialize_telemetry(
         return True
 
     try:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -71,7 +73,9 @@ def initialize_telemetry(
         )
         return False
 
-    base_endpoint = str(getattr(settings, "otel_exporter_otlp_endpoint", "") or "").strip()
+    base_endpoint = str(
+        getattr(settings, "otel_exporter_otlp_endpoint", "") or ""
+    ).strip()
     if not base_endpoint:
         logger.warning(
             "telemetry_initialization_skipped_missing_endpoint service_name=%s",
@@ -82,13 +86,19 @@ def initialize_telemetry(
     resource = Resource.create(
         {
             "service.name": normalized_service_name,
-            "service.namespace": str(getattr(settings, "otel_service_namespace", "") or "").strip()
+            "service.namespace": str(
+                getattr(settings, "otel_service_namespace", "") or ""
+            ).strip()
             or "master-builder",
-            "deployment.environment": str(getattr(settings, "sentry_environment", "") or "").strip()
+            "deployment.environment": str(
+                getattr(settings, "sentry_environment", "") or ""
+            ).strip()
             or "dev",
         }
     )
-    headers = _parse_otlp_headers(str(getattr(settings, "otel_exporter_otlp_headers", "") or ""))
+    headers = _parse_otlp_headers(
+        str(getattr(settings, "otel_exporter_otlp_headers", "") or "")
+    )
     sample_ratio = float(getattr(settings, "otel_traces_sample_ratio", 1.0) or 1.0)
     sample_ratio = min(max(sample_ratio, 0.0), 1.0)
 
@@ -144,7 +154,10 @@ def _instrument_fastapi_app(*, app: "FastAPI") -> None:
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
                 raise
-            span.set_attribute("http.response.status_code", int(getattr(response, "status_code", 0) or 0))
+            span.set_attribute(
+                "http.response.status_code",
+                int(getattr(response, "status_code", 0) or 0),
+            )
             if int(getattr(response, "status_code", 0) or 0) >= 500:
                 span.set_status(Status(StatusCode.ERROR))
             return response

@@ -110,7 +110,9 @@ def format_sticky_review_comment(
             if finding.path and finding.line:
                 location = f" ({finding.path}:{finding.line})"
             lines.append(f"- [{finding.severity}] {finding.message}{location}")
-        compose_url = f"https://github.com/{repo_full_name}/pull/{pr_number}#issuecomment-new"
+        compose_url = (
+            f"https://github.com/{repo_full_name}/pull/{pr_number}#issuecomment-new"
+        )
         lines.extend(
             [
                 "",
@@ -157,7 +159,9 @@ def upsert_sticky_review_comment(
             repo_full_name=repo_full_name,
             comment_id=existing.comment_id,
         )
-        return StickyReviewCommentResult(action="deleted", comment_id=existing.comment_id)
+        return StickyReviewCommentResult(
+            action="deleted", comment_id=existing.comment_id
+        )
     body = format_sticky_review_comment(
         signal=signal,
         findings_result=findings_result,
@@ -204,7 +208,9 @@ def upsert_sticky_review_comment(
                 publication=acquisition.publication,
                 review_id=None,
             )
-            return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
+            return StickyReviewCommentResult(
+                action="created", comment_id=created.comment_id
+            )
         updated = github_client.update_issue_comment(
             repo_full_name=repo_full_name,
             comment_id=existing.comment_id,
@@ -215,7 +221,9 @@ def upsert_sticky_review_comment(
             publication=acquisition.publication,
             review_id=None,
         )
-        return StickyReviewCommentResult(action="updated", comment_id=updated.comment_id)
+        return StickyReviewCommentResult(
+            action="updated", comment_id=updated.comment_id
+        )
     except Exception as exc:
         mark_review_publication_failed(
             session,
@@ -327,7 +335,9 @@ def upsert_manual_fix_review_thread_reply(
             in_reply_to=triggering_comment_id,
             body=body,
         )
-        return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
+        return StickyReviewCommentResult(
+            action="created", comment_id=created.comment_id
+        )
     updated = github_client.update_pull_request_review_comment(
         repo_full_name=repo_full_name,
         comment_id=existing.comment_id,
@@ -388,7 +398,9 @@ def upsert_manual_fix_issue_comment_reply(
             pr_number=pr_number,
             body=body,
         )
-        return StickyReviewCommentResult(action="created", comment_id=created.comment_id)
+        return StickyReviewCommentResult(
+            action="created", comment_id=created.comment_id
+        )
     updated = github_client.update_issue_comment(
         repo_full_name=repo_full_name,
         comment_id=existing.comment_id,
@@ -417,7 +429,9 @@ def publish_inline_review_batch(
         path = str(finding.path or "").strip()
         if not path or path not in changed_paths:
             continue
-        line = finding.line if isinstance(finding.line, int) and finding.line > 0 else None
+        line = (
+            finding.line if isinstance(finding.line, int) and finding.line > 0 else None
+        )
         if line is None:
             continue
         message = f"[{finding.severity}] {finding.message}".strip()
@@ -430,7 +444,9 @@ def publish_inline_review_batch(
         drafts.append(PullRequestInlineCommentDraft(path=path, line=line, body=message))
 
     if not drafts:
-        return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
+        return InlineReviewPublishResult(
+            submitted=False, review_id=None, inline_count=0
+        )
 
     signature = _build_inline_review_signature(head_sha=head_sha, drafts=drafts)
     acquisition = acquire_review_publication(
@@ -456,7 +472,9 @@ def publish_inline_review_batch(
             PR_REVIEW_PUBLICATION_KIND_INLINE,
             acquisition.reason or "duplicate_signature",
         )
-        return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
+        return InlineReviewPublishResult(
+            submitted=False, review_id=None, inline_count=0
+        )
     if _inline_review_signature_exists(
         github_client=github_client,
         repo_full_name=repo_full_name,
@@ -468,16 +486,20 @@ def publish_inline_review_batch(
             publication=acquisition.publication,
             review_id=None,
         )
-        return InlineReviewPublishResult(submitted=False, review_id=None, inline_count=0)
+        return InlineReviewPublishResult(
+            submitted=False, review_id=None, inline_count=0
+        )
 
     marker = _build_inline_review_marker(signature=signature)
     try:
-        review_result: PullRequestReviewSubmissionResult = github_client.submit_pull_request_review(
-            repo_full_name=repo_full_name,
-            pr_number=pr_number,
-            commit_id=head_sha,
-            body=f"Codex inline review findings.\n\n{marker}",
-            comments=drafts,
+        review_result: PullRequestReviewSubmissionResult = (
+            github_client.submit_pull_request_review(
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                commit_id=head_sha,
+                body=f"Codex inline review findings.\n\n{marker}",
+                comments=drafts,
+            )
         )
     except Exception as exc:
         mark_review_publication_failed(
@@ -491,7 +513,9 @@ def publish_inline_review_batch(
         publication=acquisition.publication,
         review_id=review_result.review_id,
     )
-    return InlineReviewPublishResult(submitted=True, review_id=review_result.review_id, inline_count=len(drafts))
+    return InlineReviewPublishResult(
+        submitted=True, review_id=review_result.review_id, inline_count=len(drafts)
+    )
 
 
 def _build_inline_review_signature(
@@ -500,8 +524,7 @@ def _build_inline_review_signature(
     drafts: list[PullRequestInlineCommentDraft],
 ) -> str:
     normalized_entries = sorted(
-        (draft.path, int(draft.line), draft.body.strip())
-        for draft in drafts
+        (draft.path, int(draft.line), draft.body.strip()) for draft in drafts
     )
     payload = {
         "head_sha": str(head_sha or "").strip(),

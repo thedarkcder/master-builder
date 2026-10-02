@@ -25,19 +25,39 @@ from orchestrator.tools.project_repo_checkout import (
 
 
 def test_ensure_project_checkout_clones_when_repo_missing() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
         calls: list[tuple[tuple[str, ...], str, dict[str, str] | None]] = []
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             calls.append((tuple(args), str(cwd), env))
             if args[:2] == ["clone", "--origin"]:
-                (Path(tmpdir) / "tenant-a" / "project-1" / "repo" / ".git").mkdir(parents=True, exist_ok=True)
+                (Path(tmpdir) / "tenant-a" / "project-1" / "repo" / ".git").mkdir(
+                    parents=True, exist_ok=True
+                )
             if args == ["rev-parse", "--git-path", "info/exclude"]:
-                return str(Path(tmpdir) / "tenant-a" / "project-1" / "repo" / ".git" / "info" / "exclude") + "\n"
+                return (
+                    str(
+                        Path(tmpdir)
+                        / "tenant-a"
+                        / "project-1"
+                        / "repo"
+                        / ".git"
+                        / "info"
+                        / "exclude"
+                    )
+                    + "\n"
+                )
             return ""
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             repo_dir = ensure_project_checkout(
                 base_dir=tmpdir,
                 tenant_id="tenant-a",
@@ -59,18 +79,21 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert calls[2][0] == ("rev-parse", "--git-path", "info/exclude")
         assert (repo_dir / "AGENTS.md").exists()
         assert (repo_dir / ".codex").is_dir()
-        copied_codex_config = (repo_dir / ".codex" / "config.toml").read_text(encoding="utf-8")
-        assert "[mcp_servers.jira_master_builder]" in copied_codex_config
-        assert "[mcp_servers.jira_bsktpay]" in copied_codex_config
+        copied_codex_config = (repo_dir / ".codex" / "config.toml").read_text(
+            encoding="utf-8"
+        )
+        assert "[mcp_servers.atlassian]" in copied_codex_config
         assert "enabled = true" not in copied_codex_config
-        assert copied_codex_config.count("enabled = false") >= 2
+        assert copied_codex_config.count("enabled = false") >= 1
         assert "[features]" in copied_codex_config
         assert "apps = false" in copied_codex_config
         assert "plugins = false" in copied_codex_config
         assert (repo_dir / ".gitignore").exists()
         gitignore_content = (repo_dir / ".gitignore").read_text(encoding="utf-8")
         assert "Seeded by Master Builder" in gitignore_content
-        exclude_lines = (repo_dir / ".git" / "info" / "exclude").read_text(encoding="utf-8")
+        exclude_lines = (repo_dir / ".git" / "info" / "exclude").read_text(
+            encoding="utf-8"
+        )
         assert "AGENTS.md" in exclude_lines
         assert ".codex/" in exclude_lines
         assert ".master-builder-run.json" in exclude_lines
@@ -78,20 +101,27 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
 
 
 def test_check_run_snapshot_freshness_fetches_with_github_app_auth() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
         repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
         repo_dir.mkdir(parents=True)
         calls: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             assert cwd == repo_dir
             calls.append((tuple(args), env))
             if args == ["rev-parse", "origin/main"]:
                 return "abc123\n"
             return ""
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             freshness = check_run_snapshot_freshness(
                 base_dir=tmpdir,
                 tenant_id="tenant-a",
@@ -120,18 +150,26 @@ def test_github_git_extraheader_uses_basic_auth_with_x_access_token() -> None:
 
 
 def test_existing_project_checkout_preserves_tracked_agent_workspace_files() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
-        repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         repo_dir.mkdir(parents=True)
-        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True
+        )
         (repo_dir / "AGENTS.md").write_text("project-owned agents\n", encoding="utf-8")
         (repo_dir / ".codex").mkdir()
         (repo_dir / ".codex" / "config.toml").write_text(
             "[features]\napps = true\nplugins = true\n",
             encoding="utf-8",
         )
-        subprocess.run(["git", "add", "AGENTS.md", ".codex/config.toml"], cwd=repo_dir, check=True)
+        subprocess.run(
+            ["git", "add", "AGENTS.md", ".codex/config.toml"], cwd=repo_dir, check=True
+        )
         subprocess.run(
             [
                 "git",
@@ -149,14 +187,34 @@ def test_existing_project_checkout_preserves_tracked_agent_workspace_files() -> 
             text=True,
         )
 
-        assert ensure_project_checkout(
-            base_dir=tmpdir,
-            tenant_id="tenant-a",
-            project=project,
-            github_installation_token="unused",
-        ) == repo_dir
+        origin_dir = Path(tmpdir) / "origin.git"
+        subprocess.run(
+            ["git", "clone", "--bare", str(repo_dir), str(origin_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(origin_dir)],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
-        assert (repo_dir / "AGENTS.md").read_text(encoding="utf-8") == "project-owned agents\n"
+        assert (
+            ensure_project_checkout(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project=project,
+                github_installation_token="unused",
+            )
+            == repo_dir
+        )
+
+        assert (repo_dir / "AGENTS.md").read_text(
+            encoding="utf-8"
+        ) == "project-owned agents\n"
         assert (repo_dir / ".codex" / "config.toml").read_text(encoding="utf-8") == (
             "[features]\napps = true\nplugins = true\n"
         )
@@ -171,7 +229,9 @@ def test_existing_project_checkout_preserves_tracked_agent_workspace_files() -> 
 
 
 def test_collect_local_repo_context_returns_not_cloned_when_missing() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
         context = collect_local_repo_context(
             base_dir=tmpdir,
@@ -184,11 +244,15 @@ def test_collect_local_repo_context_returns_not_cloned_when_missing() -> None:
 
 
 def test_ensure_project_checkout_cleans_up_directory_when_clone_fails() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
         repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = cwd
             _ = env
             if args[:2] == ["clone", "--origin"]:
@@ -196,7 +260,10 @@ def test_ensure_project_checkout_cleans_up_directory_when_clone_fails() -> None:
                 raise ProjectRepoCheckoutError("clone failed")
             return ""
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             try:
                 ensure_project_checkout(
                     base_dir=tmpdir,
@@ -212,9 +279,13 @@ def test_ensure_project_checkout_cleans_up_directory_when_clone_fails() -> None:
 
 
 def test_collect_local_repo_context_reads_existing_repo_metadata() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
-        repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
         command_outputs = {
@@ -227,15 +298,36 @@ def test_collect_local_repo_context_reads_existing_repo_metadata() -> None:
                 "refs/heads",
                 "refs/remotes/origin",
             ): "staging\norigin/staging\njira/TP-123-work\n",
-            ("log", "--oneline", "--decorate", "-n", "25", "--all"): "abc123 TP-123: work done\n",
-            ("log", "--oneline", "--decorate", "--all", "--grep", "TP-123", "-n", "10"): "abc123 TP-123: work done\n",
+            (
+                "log",
+                "--oneline",
+                "--decorate",
+                "-n",
+                "25",
+                "--all",
+            ): "abc123 TP-123: work done\n",
+            (
+                "log",
+                "--oneline",
+                "--decorate",
+                "--all",
+                "--grep",
+                "TP-123",
+                "-n",
+                "10",
+            ): "abc123 TP-123: work done\n",
         }
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = env
             return command_outputs[tuple(args)]
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             context = collect_local_repo_context(
                 base_dir=tmpdir,
                 tenant_id="tenant-a",
@@ -250,7 +342,9 @@ def test_collect_local_repo_context_reads_existing_repo_metadata() -> None:
 
 
 def test_ensure_project_checkout_preserves_existing_gitignore() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
         repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
         (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
@@ -268,13 +362,19 @@ def test_ensure_project_checkout_preserves_existing_gitignore() -> None:
             )
 
         assert resolved == repo_dir
-        assert (repo_dir / ".gitignore").read_text(encoding="utf-8") == "custom-ignore\n"
+        assert (repo_dir / ".gitignore").read_text(
+            encoding="utf-8"
+        ) == "custom-ignore\n"
         assert run_git_mock.call_count == 2
         fetch_call = run_git_mock.call_args_list[0]
         assert fetch_call.args[0] == ["fetch", "origin", "--prune"]
         assert fetch_call.kwargs["cwd"] == repo_dir
-        assert fetch_call.kwargs["env"]["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")
-        encoded_credential = fetch_call.kwargs["env"]["GIT_CONFIG_VALUE_0"].split(" ", 2)[2]
+        assert fetch_call.kwargs["env"]["GIT_CONFIG_VALUE_0"].startswith(
+            "AUTHORIZATION: basic "
+        )
+        encoded_credential = fetch_call.kwargs["env"]["GIT_CONFIG_VALUE_0"].split(
+            " ", 2
+        )[2]
         decoded_credential = base64.b64decode(encoded_credential).decode("utf-8")
         assert decoded_credential == "x-access-token:token-123"
         run_git_mock.assert_any_call(
@@ -284,12 +384,18 @@ def test_ensure_project_checkout_preserves_existing_gitignore() -> None:
 
 
 def test_ensure_project_checkout_seeds_stack_specific_gitignore_defaults() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
         repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
         (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
-        (repo_dir / "Package.swift").write_text("import PackageDescription\n", encoding="utf-8")
-        (repo_dir / "next.config.js").write_text("module.exports = {}\n", encoding="utf-8")
+        (repo_dir / "Package.swift").write_text(
+            "import PackageDescription\n", encoding="utf-8"
+        )
+        (repo_dir / "next.config.js").write_text(
+            "module.exports = {}\n", encoding="utf-8"
+        )
         (repo_dir / "pom.xml").write_text("<project></project>\n", encoding="utf-8")
 
         with patch(
@@ -329,7 +435,7 @@ def test_restrict_external_tool_surfaces_preserves_section_boundaries() -> None:
                 "[mcp_servers.jira_master_builder]\n"
                 'url = "https://mcp.atlassian.com/v1/mcp"\n'
                 "enabled = true\n"
-                "[mcp_servers.jira_bsktpay]\n"
+                "[mcp_servers.jira_example-tenant]\n"
                 'url = "https://mcp.atlassian.com/v1/mcp"\n'
                 "enabled = true\n"
                 "[features]\n"
@@ -342,11 +448,11 @@ def test_restrict_external_tool_surfaces_preserves_section_boundaries() -> None:
 
         updated = config_path.read_text(encoding="utf-8")
         assert "[mcp_servers.jira_master_builder]" in updated
-        assert "[mcp_servers.jira_bsktpay]" in updated
+        assert "[mcp_servers.jira_example-tenant]" in updated
         assert "enabled = true" not in updated
         assert updated.count("enabled = false") == 2
-        assert "enabled = false[mcp_servers.jira_bsktpay]" not in updated
-        assert "enabled = false\n[mcp_servers.jira_bsktpay]" in updated
+        assert "enabled = false[mcp_servers.jira_example-tenant]" not in updated
+        assert "enabled = false\n[mcp_servers.jira_example-tenant]" in updated
         assert "[features]" in updated
         assert "apps = false" in updated
         assert "plugins = false" in updated
@@ -378,14 +484,20 @@ def test_restrict_external_tool_surfaces_adds_features_section_when_missing() ->
 
 
 def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
-        shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        shared_repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         calls: list[tuple[tuple[str, ...], str]] = []
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = env
             calls.append((tuple(args), str(cwd)))
             if args == ["fetch", "origin", "--prune"]:
@@ -401,18 +513,36 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
                 run_repo_dir.mkdir(parents=True, exist_ok=True)
                 git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
                 git_dir.mkdir(parents=True, exist_ok=True)
-                (run_repo_dir / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+                (run_repo_dir / ".git").write_text(
+                    f"gitdir: {git_dir}\n", encoding="utf-8"
+                )
             if args[:3] == ["rev-parse", "--verify", "--quiet"]:
                 return "abc123\n"
             if args == ["rev-parse", "HEAD"]:
                 return "abc123def456\n"
             if args == ["rev-parse", "--git-path", "info/exclude"]:
-                return str(shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude") + "\n"
+                return (
+                    str(
+                        shared_repo_dir
+                        / ".git"
+                        / "worktrees"
+                        / "run-1"
+                        / "info"
+                        / "exclude"
+                    )
+                    + "\n"
+                )
             return ""
 
         with (
-            patch("orchestrator.tools.project_repo_checkout._git_ref_exists", return_value=False),
-            patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git),
+            patch(
+                "orchestrator.tools.project_repo_checkout._git_ref_exists",
+                return_value=False,
+            ),
+            patch(
+                "orchestrator.tools.project_repo_checkout._run_git",
+                side_effect=_fake_run_git,
+            ),
         ):
             run_repo_dir, execution_branch = ensure_run_worktree(
                 base_dir=tmpdir,
@@ -435,13 +565,17 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
         assert execution_branch == "run/tp-99/run-1"
         assert any(call[0][:3] == ("fetch", "origin", "--prune") for call in calls)
         assert any(call[0][:2] == ("worktree", "add") for call in calls)
-        metadata = json.loads((run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8"))
+        metadata = json.loads(
+            (run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8")
+        )
         assert metadata["run_id"] == "run-1"
         assert metadata["execution_branch"] == "run/tp-99/run-1"
         assert metadata["workspace_key"] == workspace_key
         assert metadata["start_point_ref"] == "HEAD"
         assert metadata["start_point_sha"] == "abc123def456"
-        exclude_lines = (shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude").read_text(encoding="utf-8")
+        exclude_lines = (
+            shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude"
+        ).read_text(encoding="utf-8")
         assert "AGENTS.md" in exclude_lines
         assert ".codex/" in exclude_lines
         assert ".master-builder-run.json" in exclude_lines
@@ -449,14 +583,20 @@ def test_ensure_run_worktree_creates_run_scoped_repo_and_metadata() -> None:
 
 
 def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
-        shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        shared_repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         calls: list[tuple[tuple[str, ...], str]] = []
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = env
             calls.append((tuple(args), str(cwd)))
             if args == ["fetch", "origin", "--prune"]:
@@ -472,12 +612,24 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
                 run_repo_dir.mkdir(parents=True, exist_ok=True)
                 git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
                 git_dir.mkdir(parents=True, exist_ok=True)
-                (run_repo_dir / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+                (run_repo_dir / ".git").write_text(
+                    f"gitdir: {git_dir}\n", encoding="utf-8"
+                )
                 return ""
             if args == ["rev-parse", "origin/feature/team/TP-99"]:
                 return "branchsha987654\n"
             if args == ["rev-parse", "--git-path", "info/exclude"]:
-                return str(shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude") + "\n"
+                return (
+                    str(
+                        shared_repo_dir
+                        / ".git"
+                        / "worktrees"
+                        / "run-1"
+                        / "info"
+                        / "exclude"
+                    )
+                    + "\n"
+                )
             raise AssertionError(f"unexpected git args: {args}")
 
         def _fake_ref_exists(*, cwd: Path, ref: str) -> bool:
@@ -485,8 +637,14 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
             return ref == "refs/remotes/origin/feature/team/TP-99"
 
         with (
-            patch("orchestrator.tools.project_repo_checkout._git_ref_exists", side_effect=_fake_ref_exists),
-            patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git),
+            patch(
+                "orchestrator.tools.project_repo_checkout._git_ref_exists",
+                side_effect=_fake_ref_exists,
+            ),
+            patch(
+                "orchestrator.tools.project_repo_checkout._run_git",
+                side_effect=_fake_run_git,
+            ),
         ):
             run_repo_dir, execution_branch = ensure_run_worktree(
                 base_dir=tmpdir,
@@ -507,20 +665,35 @@ def test_ensure_run_worktree_preserves_full_remote_branch_path() -> None:
             workspace_key=workspace_key,
         )
         assert execution_branch == "run/tp-99/run-1"
-        metadata = json.loads((run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8"))
+        metadata = json.loads(
+            (run_repo_dir / ".master-builder-run.json").read_text(encoding="utf-8")
+        )
         assert metadata["start_point_ref"] == "origin/feature/team/TP-99"
         assert metadata["start_point_sha"] == "branchsha987654"
         assert any(
-            call[0] == ("worktree", "add", "--force", "-B", "run/tp-99/run-1", str(run_repo_dir), "branchsha987654")
+            call[0]
+            == (
+                "worktree",
+                "add",
+                "--force",
+                "-B",
+                "run/tp-99/run-1",
+                str(run_repo_dir),
+                "branchsha987654",
+            )
             for call in calls
         )
 
 
 def test_ensure_run_worktree_recreates_unusable_existing_checkout() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
-        shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        shared_repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         run_repo_dir = project_run_repo_dir(
             base_dir=tmpdir,
@@ -530,7 +703,9 @@ def test_ensure_run_worktree_recreates_unusable_existing_checkout() -> None:
             workspace_key=workspace_key,
         )
         run_repo_dir.mkdir(parents=True, exist_ok=True)
-        (run_repo_dir / ".git").write_text("gitdir: /tmp/other-root/repo/.git/worktrees/run-1\n", encoding="utf-8")
+        (run_repo_dir / ".git").write_text(
+            "gitdir: /tmp/other-root/repo/.git/worktrees/run-1\n", encoding="utf-8"
+        )
         (run_repo_dir / ".master-builder-run.json").write_text(
             json.dumps(
                 {
@@ -549,7 +724,9 @@ def test_ensure_run_worktree_recreates_unusable_existing_checkout() -> None:
         )
         calls: list[tuple[tuple[str, ...], str]] = []
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = env
             calls.append((tuple(args), str(cwd)))
             if args == ["fetch", "origin", "--prune"]:
@@ -563,18 +740,39 @@ def test_ensure_run_worktree_recreates_unusable_existing_checkout() -> None:
                 run_repo_dir.mkdir(parents=True, exist_ok=True)
                 git_dir = shared_repo_dir / ".git" / "worktrees" / "run-1"
                 git_dir.mkdir(parents=True, exist_ok=True)
-                (run_repo_dir / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+                (run_repo_dir / ".git").write_text(
+                    f"gitdir: {git_dir}\n", encoding="utf-8"
+                )
                 return ""
             if args == ["rev-parse", "HEAD"]:
                 return "abc123def456\n"
             if args == ["rev-parse", "--git-path", "info/exclude"]:
-                return str(shared_repo_dir / ".git" / "worktrees" / "run-1" / "info" / "exclude") + "\n"
+                return (
+                    str(
+                        shared_repo_dir
+                        / ".git"
+                        / "worktrees"
+                        / "run-1"
+                        / "info"
+                        / "exclude"
+                    )
+                    + "\n"
+                )
             raise AssertionError(f"unexpected git args: {args}")
 
         with (
-            patch("orchestrator.tools.project_repo_checkout._git_ref_exists", return_value=False),
-            patch("orchestrator.tools.project_repo_checkout._is_worktree_checkout_usable", return_value=False),
-            patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git),
+            patch(
+                "orchestrator.tools.project_repo_checkout._git_ref_exists",
+                return_value=False,
+            ),
+            patch(
+                "orchestrator.tools.project_repo_checkout._is_worktree_checkout_usable",
+                return_value=False,
+            ),
+            patch(
+                "orchestrator.tools.project_repo_checkout._run_git",
+                side_effect=_fake_run_git,
+            ),
         ):
             result_repo_dir, execution_branch = ensure_run_worktree(
                 base_dir=tmpdir,
@@ -589,18 +787,27 @@ def test_ensure_run_worktree_recreates_unusable_existing_checkout() -> None:
 
         assert result_repo_dir == run_repo_dir
         assert execution_branch == "run/tp-99/run-1"
-        assert any(call[0] == ("worktree", "remove", "--force", str(run_repo_dir)) for call in calls)
+        assert any(
+            call[0] == ("worktree", "remove", "--force", str(run_repo_dir))
+            for call in calls
+        )
         assert any(call[0] == ("worktree", "prune") for call in calls)
         assert any(call[0][:2] == ("worktree", "add") for call in calls)
 
 
 def test_check_run_snapshot_freshness_detects_ref_drift() -> None:
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/example/repo"
+    )
     with TemporaryDirectory() as tmpdir:
-        shared_repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        shared_repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         (shared_repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = (cwd, env)
             if args == ["fetch", "origin", "--prune"]:
                 return ""
@@ -608,7 +815,10 @@ def test_check_run_snapshot_freshness_detects_ref_drift() -> None:
                 return "newsha987654321\n"
             raise AssertionError(f"unexpected git args: {args}")
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             freshness = check_run_snapshot_freshness(
                 base_dir=tmpdir,
                 tenant_id="tenant-a",
@@ -641,7 +851,9 @@ def test_validate_run_worktree_rejects_branch_mismatch() -> None:
             encoding="utf-8",
         )
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = (cwd, env)
             if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
                 return "feature/other\n"
@@ -649,7 +861,10 @@ def test_validate_run_worktree_rejects_branch_mismatch() -> None:
                 return ""
             raise AssertionError(f"unexpected git args: {args}")
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             error = validate_run_worktree(
                 repo_dir=run_repo_dir,
                 run_id="run-1",
@@ -657,10 +872,15 @@ def test_validate_run_worktree_rejects_branch_mismatch() -> None:
                 workspace_key=workspace_key,
             )
 
-        assert error == "run worktree branch mismatch: expected run/tp-99/run-1, found feature/other"
+        assert (
+            error
+            == "run worktree branch mismatch: expected run/tp-99/run-1, found feature/other"
+        )
 
 
-def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtiness() -> None:
+def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtiness() -> (
+    None
+):
     workspace_key = "worker-a"
     with TemporaryDirectory() as tmpdir:
         run_repo_dir = project_run_repo_dir(
@@ -679,7 +899,9 @@ def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtine
             encoding="utf-8",
         )
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = (cwd, env)
             if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
                 return "run/tp-99/run-1\n"
@@ -687,7 +909,10 @@ def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtine
                 return ""
             raise AssertionError(f"unexpected git args: {args}")
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             error = validate_run_worktree(
                 repo_dir=run_repo_dir,
                 run_id="run-1",
@@ -700,7 +925,9 @@ def test_validate_run_worktree_allows_seeded_gitignore_without_reporting_dirtine
 
 def test_cleanup_run_workspaces_removes_workspace_dir_and_prunes() -> None:
     with TemporaryDirectory() as tmpdir:
-        repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        repo_dir = project_repo_dir(
+            base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1"
+        )
         (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
         workspace_root = (
             Path(tmpdir)
@@ -714,12 +941,17 @@ def test_cleanup_run_workspaces_removes_workspace_dir_and_prunes() -> None:
         (workspace_root / "repo").mkdir(parents=True, exist_ok=True)
         calls: list[tuple[str, ...]] = []
 
-        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+        def _fake_run_git(
+            args: list[str], *, cwd: Path, env: dict[str, str] | None = None
+        ) -> str:
             _ = (cwd, env)
             calls.append(tuple(args))
             return ""
 
-        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+        with patch(
+            "orchestrator.tools.project_repo_checkout._run_git",
+            side_effect=_fake_run_git,
+        ):
             cleanup_run_workspaces(
                 base_dir=tmpdir,
                 tenant_id="tenant-a",

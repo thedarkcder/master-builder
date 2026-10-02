@@ -35,23 +35,45 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
         self.assertEqual(dispatcher._issue_project_key("mab-1"), "MAB")
         self.assertEqual(dispatcher._issue_project_key("mab"), "")
 
-        dispatcher._assert_issue_key_in_scope(issue_key="MAB-1", scope=CommandScope(project_id=None, project_keys=[]))
-        dispatcher._assert_issue_key_in_scope(issue_key="MAB-1", scope=CommandScope(project_id=None, project_keys=[" MAB "]))
+        dispatcher._assert_issue_key_in_scope(
+            issue_key="MAB-1", scope=CommandScope(project_id=None, project_keys=[])
+        )
+        dispatcher._assert_issue_key_in_scope(
+            issue_key="MAB-1",
+            scope=CommandScope(project_id=None, project_keys=[" MAB "]),
+        )
 
         with self.assertRaises(HTTPException) as ctx:
-            dispatcher._assert_issue_key_in_scope(issue_key="APP-1", scope=CommandScope(project_id=None, project_keys=["MAB"]))
+            dispatcher._assert_issue_key_in_scope(
+                issue_key="APP-1",
+                scope=CommandScope(project_id=None, project_keys=["MAB"]),
+            )
         self.assertEqual(ctx.exception.status_code, 403)
 
     def test_format_elapsed_seconds(self) -> None:
-        self.assertEqual(dispatcher._format_elapsed_seconds(started_at=None, created_at=None), 0)
+        self.assertEqual(
+            dispatcher._format_elapsed_seconds(started_at=None, created_at=None), 0
+        )
         naive = datetime.now().replace(microsecond=0)
-        self.assertGreaterEqual(dispatcher._format_elapsed_seconds(started_at=naive, created_at=None), 0)
+        self.assertGreaterEqual(
+            dispatcher._format_elapsed_seconds(started_at=naive, created_at=None), 0
+        )
 
     def test_dispatch_help_policy_and_status(self) -> None:
         session = MagicMock()
         session.execute.side_effect = [
             _ExecResult(scalar_one=2),
-            _ExecResult(items=[SimpleNamespace(run_id="r1", issue_key="MAB-1", status="running", started_at=None, created_at=None)]),
+            _ExecResult(
+                items=[
+                    SimpleNamespace(
+                        run_id="r1",
+                        issue_key="MAB-1",
+                        status="running",
+                        started_at=None,
+                        created_at=None,
+                    )
+                ]
+            ),
         ]
         tenant = SimpleNamespace(is_enabled=True)
         payload = SimpleNamespace(user_id="u1", channel_id="c1")
@@ -59,7 +81,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
         help_result = dispatcher.dispatch_simple_discord_command(
             session=session,
             tenant=tenant,
-            tenant_id="example",
+            tenant_id="example-workspace",
             payload=payload,
             command_name="help",
             arguments=[],
@@ -73,7 +95,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
         policy_result = dispatcher.dispatch_simple_discord_command(
             session=session,
             tenant=tenant,
-            tenant_id="example",
+            tenant_id="example-workspace",
             payload=payload,
             command_name="policy",
             arguments=[],
@@ -87,12 +109,14 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
         status_result = dispatcher.dispatch_simple_discord_command(
             session=session,
             tenant=tenant,
-            tenant_id="example",
+            tenant_id="example-workspace",
             payload=payload,
             command_name="status",
             arguments=[],
             jira_browse_base_url=None,
-            scope=CommandScope(project_id="example-default", project_keys=["MAB"]),
+            scope=CommandScope(
+                project_id="example-workspace-default", project_keys=["MAB"]
+            ),
         )
         self.assertIsNotNone(status_result)
         assert status_result is not None
@@ -101,9 +125,11 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
 
     def test_dispatch_runs_and_link_and_request(self) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace(is_enabled=True, tenant_id="example")
+        tenant = SimpleNamespace(is_enabled=True, tenant_id="example-workspace")
         payload = SimpleNamespace(user_id=" user-1 ", channel_id=" c1 ")
-        scope = CommandScope(project_id="example-default", project_keys=["MAB"])
+        scope = CommandScope(
+            project_id="example-workspace-default", project_keys=["MAB"]
+        )
 
         session.execute.side_effect = [
             _ExecResult(
@@ -117,13 +143,15 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
                     )
                 ]
             ),
-            _ExecResult(scalar_one_or_none=SimpleNamespace(pr_url="https://github/pr/1")),
+            _ExecResult(
+                scalar_one_or_none=SimpleNamespace(pr_url="https://github/pr/1")
+            ),
         ]
 
         runs_result = dispatcher.dispatch_simple_discord_command(
             session=session,
             tenant=tenant,
-            tenant_id="example",
+            tenant_id="example-workspace",
             payload=payload,
             command_name="runs",
             arguments=["5"],
@@ -138,7 +166,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
             dispatcher.dispatch_simple_discord_command(
                 session=session,
                 tenant=tenant,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 payload=payload,
                 command_name="runs",
                 arguments=["bad"],
@@ -146,11 +174,13 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
                 scope=scope,
             )
 
-        with patch.object(dispatcher, "build_jira_issue_url", return_value="https://jira/MAB-1"):
+        with patch.object(
+            dispatcher, "build_jira_issue_url", return_value="https://jira/MAB-1"
+        ):
             link_result = dispatcher.dispatch_simple_discord_command(
                 session=session,
                 tenant=tenant,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 payload=payload,
                 command_name="link",
                 arguments=["mab-1"],
@@ -165,7 +195,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
             dispatcher.dispatch_simple_discord_command(
                 session=session,
                 tenant=tenant,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 payload=payload,
                 command_name="link",
                 arguments=[],
@@ -173,11 +203,15 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
                 scope=scope,
             )
 
-        with patch.object(dispatcher, "_create_allowlist_request", return_value=("req-1", "Request submitted.")):
+        with patch.object(
+            dispatcher,
+            "_create_allowlist_request",
+            return_value=("req-1", "Request submitted."),
+        ):
             request_result = dispatcher.dispatch_simple_discord_command(
                 session=session,
                 tenant=tenant,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 payload=payload,
                 command_name="request",
                 arguments=["run_controls", "need", "this"],
@@ -192,7 +226,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
             dispatcher.dispatch_simple_discord_command(
                 session=session,
                 tenant=tenant,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 payload=payload,
                 command_name="request",
                 arguments=[],
@@ -204,7 +238,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
             dispatcher.dispatch_simple_discord_command(
                 session=session,
                 tenant=tenant,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 payload=payload,
                 command_name="request",
                 arguments=["bad-permission"],
@@ -215,7 +249,7 @@ class DiscordCommandDispatcherModuleTests(unittest.TestCase):
         none_result = dispatcher.dispatch_simple_discord_command(
             session=session,
             tenant=tenant,
-            tenant_id="example",
+            tenant_id="example-workspace",
             payload=payload,
             command_name="unknown",
             arguments=[],

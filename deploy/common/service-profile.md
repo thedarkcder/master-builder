@@ -1,5 +1,7 @@
 # Production Service Profile
 
+Status: intended production topology and validation requirements, not evidence that a provider package has passed them. Enable optional workers only after their prerequisites and integration verification; see [the support matrix](../../docs/support-matrix.md).
+
 ## Required Services (Default)
 - `api`
 - `admin-ui`

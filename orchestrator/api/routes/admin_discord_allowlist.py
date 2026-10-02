@@ -10,7 +10,10 @@ from orchestrator.api.admin.tenant_actions import (
     list_discord_allowlist_requests as list_discord_allowlist_requests_impl,
 )
 from orchestrator.api.dependencies import get_session
-from orchestrator.api.schemas import DiscordAllowlistApprovalResult, DiscordAllowlistRequestRead
+from orchestrator.api.schemas import (
+    DiscordAllowlistApprovalResult,
+    DiscordAllowlistRequestRead,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import require_admin
 

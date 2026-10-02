@@ -12,12 +12,18 @@ from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
-def release_bootstrap_report_from_config(*, tenant_id: str, jira_config: dict) -> ReleaseBootstrapReportRead | None:
+def release_bootstrap_report_from_config(
+    *, tenant_id: str, jira_config: dict
+) -> ReleaseBootstrapReportRead | None:
     raw_report = jira_config.get("release_bootstrap")
     if not isinstance(raw_report, dict):
         return None
     raw_checked_at = raw_report.get("checked_at")
-    checked_at = str(raw_checked_at).strip() if isinstance(raw_checked_at, str) and str(raw_checked_at).strip() else ""
+    checked_at = (
+        str(raw_checked_at).strip()
+        if isinstance(raw_checked_at, str) and str(raw_checked_at).strip()
+        else ""
+    )
     if not checked_at:
         return None
     raw_checks = raw_report.get("checks")
@@ -27,7 +33,9 @@ def release_bootstrap_report_from_config(*, tenant_id: str, jira_config: dict) -
         else {}
     )
     raw_details = raw_report.get("details")
-    details = [str(item) for item in raw_details] if isinstance(raw_details, list) else []
+    details = (
+        [str(item) for item in raw_details] if isinstance(raw_details, list) else []
+    )
     return ReleaseBootstrapReportRead(
         tenant_id=tenant_id,
         ok=bool(raw_report.get("ok")),
@@ -61,7 +69,9 @@ def compute_release_bootstrap_result(
     if not normalized_project_keys:
         details.append("Missing Jira project keys.")
 
-    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = jira_config_text(
+        jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         details.append("Atlassian connection is not linked.")
         connection = None
@@ -79,11 +89,13 @@ def compute_release_bootstrap_result(
                 settings=settings,
                 tenant_id=tenant_id,
             )
-            client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+            client = atlassian_oauth_client_fn(
+                session=session, settings=settings, tenant_id=tenant_id
+            )
             quoted_projects = ", ".join(f'"{key}"' for key in normalized_project_keys)
             for required_status in required_statuses:
                 jql = (
-                    f"project in ({quoted_projects}) AND status = \"{required_status}\" "
+                    f'project in ({quoted_projects}) AND status = "{required_status}" '
                     "ORDER BY updated DESC"
                 )
                 client.search_issues_by_jql(
@@ -100,7 +112,9 @@ def compute_release_bootstrap_result(
             )
             checks["jira_required_statuses"] = False
 
-    github_installation_id = str(tenant.github_config.get("installation_id") or "").strip()
+    github_installation_id = str(
+        tenant.github_config.get("installation_id") or ""
+    ).strip()
     checks["github_installation"] = bool(github_installation_id)
     if not github_installation_id:
         details.append("GitHub App installation is not connected.")

@@ -7,17 +7,25 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_command
-from orchestrator.api.discord.interactions.application import build_default_discord_interaction_dispatch_deps
-from orchestrator.api.discord.interactions.dispatcher import dispatch_discord_interaction
+from orchestrator.api.discord.interactions.application import (
+    build_default_discord_interaction_dispatch_deps,
+)
+from orchestrator.api.discord.interactions.dispatcher import (
+    dispatch_discord_interaction,
+)
 from orchestrator.api.discord.shared.state import command_matches
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
     build_http_transport_action_executors,
     execute_side_effect_action,
     execute_side_effect_ingress_result,
 )
-from orchestrator.api.webhooks.github_application import build_github_webhook_ingress_result
+from orchestrator.api.webhooks.github_application import (
+    build_github_webhook_ingress_result,
+)
 from orchestrator.api.webhooks.github_webhook_context import (
     GitHubWebhookContext,
     GitHubWebhookPreparedRuntime,
@@ -28,7 +36,10 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     JiraWebhookContextSnapshot,
     hydrate_jira_webhook_context,
 )
-from orchestrator.api.webhooks.contracts import JIRA_COMMENT_EVENTS, resolve_active_project_for_issue
+from orchestrator.api.webhooks.contracts import (
+    JIRA_COMMENT_EVENTS,
+    resolve_active_project_for_issue,
+)
 from orchestrator.core.communications import (
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -43,7 +54,9 @@ from orchestrator.core.deployment_github_events import (
 from orchestrator.core.deployment_previews import destroy_run_preview_deployments_for_pr
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
-from orchestrator.core.project_app_artifact_pr_runtime import create_project_app_artifact_pr
+from orchestrator.core.project_app_artifact_pr_runtime import (
+    create_project_app_artifact_pr,
+)
 from orchestrator.core.project_app_planner import (
     get_project_app_analysis_run,
     mark_project_app_analysis_run_completed,
@@ -109,7 +122,11 @@ def _process_coolify_deployment_job(
     project = session.get(Project, claimed_job.project_id)
     if tenant is None or not tenant.is_enabled:
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
-    if project is None or project.tenant_id != tenant.tenant_id or bool(getattr(project, "is_archived", False)):
+    if (
+        project is None
+        or project.tenant_id != tenant.tenant_id
+        or bool(getattr(project, "is_archived", False))
+    ):
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
     context_json = dict(claimed_job.context_json or {})
@@ -149,7 +166,11 @@ def _process_project_app_analysis_job(
     project = session.get(Project, claimed_job.project_id)
     if tenant is None or not tenant.is_enabled:
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
-    if project is None or project.tenant_id != tenant.tenant_id or bool(getattr(project, "is_archived", False)):
+    if (
+        project is None
+        or project.tenant_id != tenant.tenant_id
+        or bool(getattr(project, "is_archived", False))
+    ):
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
     payload_json = dict(claimed_job.payload_json or {})
@@ -169,7 +190,11 @@ def _process_project_app_analysis_job(
         )
 
     run = get_project_app_analysis_run(session=session, analysis_run_id=analysis_run_id)
-    if run is None or run.tenant_id != tenant.tenant_id or run.project_id != project.project_id:
+    if (
+        run is None
+        or run.tenant_id != tenant.tenant_id
+        or run.project_id != project.project_id
+    ):
         return mark_webhook_jobs_failed(
             session,
             jobs=(claimed_job,),
@@ -177,7 +202,9 @@ def _process_project_app_analysis_job(
             error=f"Project app analysis run '{analysis_run_id}' was not found",
         )
 
-    checkout_path = str(payload_json.get("checkout_path") or context_json.get("checkout_path") or "").strip()
+    checkout_path = str(
+        payload_json.get("checkout_path") or context_json.get("checkout_path") or ""
+    ).strip()
     if not checkout_path:
         return mark_webhook_jobs_failed(
             session,
@@ -186,10 +213,19 @@ def _process_project_app_analysis_job(
             error="Project app analysis webhook job is missing checkout_path",
         )
 
-    analysis_source = str(payload_json.get("analysis_source") or context_json.get("analysis_source") or "worker").strip()
-    planner_version = str(payload_json.get("planner_version") or run.planner_version or "").strip() or None
+    analysis_source = str(
+        payload_json.get("analysis_source")
+        or context_json.get("analysis_source")
+        or "worker"
+    ).strip()
+    planner_version = (
+        str(payload_json.get("planner_version") or run.planner_version or "").strip()
+        or None
+    )
     try:
-        mark_project_app_analysis_run_running(session=session, analysis_run_id=analysis_run_id)
+        mark_project_app_analysis_run_running(
+            session=session, analysis_run_id=analysis_run_id
+        )
         result = run_project_app_analysis(
             tenant=tenant,
             project=project,
@@ -284,13 +320,17 @@ def _non_http_ingress_result(result: IngressResult) -> IngressResult:
         actions=tuple(
             action
             for action in result.actions
-            if not isinstance(action, (HttpJsonResponseAction, HttpJsonResponseBytesAction))
+            if not isinstance(
+                action, (HttpJsonResponseAction, HttpJsonResponseBytesAction)
+            )
         ),
     )
 
 
 def _refresh_jira_context_from_live_issue(*, context, session, settings) -> None:  # noqa: ANN001
-    oauth = tenant_atlassian_oauth_context(session=session, tenant=context.tenant, settings=settings)
+    oauth = tenant_atlassian_oauth_context(
+        session=session, tenant=context.tenant, settings=settings
+    )
     issue_detail = oauth.client.get_issue_detail(
         access_token=oauth.access_token,
         cloud_id=oauth.connection.cloud_id,
@@ -314,18 +354,32 @@ def _jira_snapshot_from_job(job: WebhookJob) -> JiraWebhookContextSnapshot:
         request_id=str(payload.get("request_id") or job.request_id),
         tenant_id=str(payload.get("tenant_id") or job.tenant_id or ""),
         payload=dict(payload.get("payload") or job.payload_json or {}),
-        webhook_event=str(payload.get("webhook_event") or job.event_type or "").strip() or None,
+        webhook_event=str(payload.get("webhook_event") or job.event_type or "").strip()
+        or None,
         issue_key=str(payload.get("issue_key") or "").strip(),
-        issue_labels=tuple(str(item).strip() for item in payload.get("issue_labels", []) if str(item).strip()),
+        issue_labels=tuple(
+            str(item).strip()
+            for item in payload.get("issue_labels", [])
+            if str(item).strip()
+        ),
         issue_status=str(payload.get("issue_status") or "").strip() or None,
-        issue_status_category_key=str(payload.get("issue_status_category_key") or "").strip() or None,
+        issue_status_category_key=str(
+            payload.get("issue_status_category_key") or ""
+        ).strip()
+        or None,
         issue_summary=str(payload.get("issue_summary") or "").strip() or None,
         issue_description=str(payload.get("issue_description") or "").strip() or None,
         comment_command=str(payload.get("comment_command") or "").strip() or None,
-        comment_command_argument=str(payload.get("comment_command_argument") or "").strip() or None,
-        comment_command_error=str(payload.get("comment_command_error") or "").strip() or None,
-        delivery_id=str(payload.get("delivery_id") or job.dedupe_key or "").strip() or None,
-        project_id=str(payload.get("project_id") or job.project_id or "").strip() or None,
+        comment_command_argument=str(
+            payload.get("comment_command_argument") or ""
+        ).strip()
+        or None,
+        comment_command_error=str(payload.get("comment_command_error") or "").strip()
+        or None,
+        delivery_id=str(payload.get("delivery_id") or job.dedupe_key or "").strip()
+        or None,
+        project_id=str(payload.get("project_id") or job.project_id or "").strip()
+        or None,
     )
 
 
@@ -434,19 +488,29 @@ def _process_github_subject_jobs(
     context_json = dict(source_job.context_json or {})
     tenant = session.get(Tenant, context_json.get("tenant_id"))
     project = session.get(Project, context_json.get("project_id"))
-    if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
+    if (
+        tenant is None
+        or project is None
+        or not tenant.is_enabled
+        or bool(getattr(project, "is_archived", False))
+    ):
         return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
     raw_pr_number = context_json.get("pr_number")
     pr_number = int(raw_pr_number) if raw_pr_number is not None else None
     review_summary_present = bool(context_json.get("review_summary_present"))
     payload = dict(source_job.payload_json or {})
     if (
-        str(context_json.get("github_event") or source_job.event_type or "").strip() == "pull_request"
+        str(context_json.get("github_event") or source_job.event_type or "").strip()
+        == "pull_request"
         and str(context_json.get("normalized_action") or "").strip() == "closed"
         and pr_number is not None
     ):
         pull_request = payload.get("pull_request")
-        merged = bool(pull_request.get("merged")) if isinstance(pull_request, dict) else False
+        merged = (
+            bool(pull_request.get("merged"))
+            if isinstance(pull_request, dict)
+            else False
+        )
         if merged:
             destroy_run_preview_deployments_for_pr(
                 session=session,
@@ -458,14 +522,19 @@ def _process_github_subject_jobs(
     context = GitHubWebhookContext(
         request_id=source_job.request_id,
         delivery_id=str(context_json.get("delivery_id") or source_job.dedupe_key or ""),
-        github_event=str(context_json.get("github_event") or source_job.event_type or ""),
+        github_event=str(
+            context_json.get("github_event") or source_job.event_type or ""
+        ),
         payload=payload,
-        normalized_action=str(context_json.get("normalized_action") or "").strip() or None,
+        normalized_action=str(context_json.get("normalized_action") or "").strip()
+        or None,
         installation_id=int(context_json.get("installation_id") or 0),
         tenant=tenant,
         project=project,
         repo_full_name=str(context_json.get("repo_full_name") or ""),
-        pr_targets=[(pr_number, review_summary_present)] if pr_number is not None else [],
+        pr_targets=[(pr_number, review_summary_present)]
+        if pr_number is not None
+        else [],
         ref_name=str(context_json.get("ref_name") or "").strip() or None,
     )
     try:
@@ -514,7 +583,9 @@ def _process_github_subject_jobs(
         transport_action_executors=build_http_transport_action_executors(
             session=session,
             settings=settings,
-            extra_transport_action_executors=tuple(getattr(prepared_runtime, "transport_action_executors", ()) or ()),
+            extra_transport_action_executors=tuple(
+                getattr(prepared_runtime, "transport_action_executors", ()) or ()
+            ),
         ),
     )
     return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
@@ -535,7 +606,12 @@ def _process_github_deployment_job(
         )
     tenant = session.get(Tenant, claimed_job.tenant_id)
     project = session.get(Project, claimed_job.project_id)
-    if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
+    if (
+        tenant is None
+        or project is None
+        or not tenant.is_enabled
+        or bool(getattr(project, "is_archived", False))
+    ):
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
     context_json = dict(claimed_job.context_json or {})
@@ -546,7 +622,10 @@ def _process_github_deployment_job(
         request=GitHubDeploymentReleaseRequest(
             branch=str(context_json.get("branch") or ""),
             commit_sha=str(context_json.get("commit_sha") or ""),
-            delivery_id=str(context_json.get("delivery_id") or claimed_job.dedupe_key or "").strip() or None,
+            delivery_id=str(
+                context_json.get("delivery_id") or claimed_job.dedupe_key or ""
+            ).strip()
+            or None,
         ),
     )
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
@@ -574,7 +653,9 @@ def _process_project_automation_job(
             owner_id=owner_id,
             error=f"Project automation tenant '{claimed_job.tenant_id}' is unavailable",
         )
-    project = session.get(Project, claimed_job.project_id) if claimed_job.project_id else None
+    project = (
+        session.get(Project, claimed_job.project_id) if claimed_job.project_id else None
+    )
     if project is not None and bool(getattr(project, "is_archived", False)):
         return mark_webhook_jobs_failed(
             session,
@@ -584,7 +665,9 @@ def _process_project_automation_job(
         )
 
     payload = dict(claimed_job.payload_json or {})
-    execution_id = str(payload.get("execution_id") or "").strip() or claimed_job.request_id
+    execution_id = (
+        str(payload.get("execution_id") or "").strip() or claimed_job.request_id
+    )
     plan = None
     try:
         plan = prepare_project_automation_execution(
@@ -596,7 +679,9 @@ def _process_project_automation_job(
             payload_json=payload,
         )
         if plan.already_succeeded or plan.action is None:
-            return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+            return mark_webhook_jobs_done(
+                session, jobs=(claimed_job,), owner_id=owner_id
+            )
         delivery = execute_side_effect_action(
             action=plan.action,
             envelope=TransportEnvelope(
@@ -613,7 +698,9 @@ def _process_project_automation_job(
         )
         discord_message_id = str((delivery or {}).get("message_id") or "").strip()
         if not discord_message_id:
-            raise RuntimeError("Project automation delivery did not return a Discord message id")
+            raise RuntimeError(
+                "Project automation delivery did not return a Discord message id"
+            )
         mark_project_automation_execution_success(
             session=session,
             execution_id=plan.execution_id,
@@ -665,7 +752,9 @@ def _process_discord_command_job(
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 
-async def _run_discord_interaction_job_async(*, session: Session, claimed_job: WebhookJob) -> None:
+async def _run_discord_interaction_job_async(
+    *, session: Session, claimed_job: WebhookJob
+) -> None:
     queued: list[object] = []
 
     def _capture(awaitable: object) -> object:
@@ -691,7 +780,9 @@ def _process_discord_interaction_job(
     owner_id: str,
     claimed_job: WebhookJob,
 ) -> tuple[WebhookJob, ...]:
-    asyncio.run(_run_discord_interaction_job_async(session=session, claimed_job=claimed_job))
+    asyncio.run(
+        _run_discord_interaction_job_async(session=session, claimed_job=claimed_job)
+    )
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 

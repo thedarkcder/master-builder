@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,8 @@ from orchestrator.core.observability.events import ProductEvent, record_product_
 from orchestrator.core.observability.otel_telemetry import current_trace_context
 from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
+
+logger = logging.getLogger(__name__)
 
 
 def record_audit_event(
@@ -40,8 +43,12 @@ def record_audit_event(
         {
             "actor_type": str(actor_type or "").strip() or None,
             "actor_id": str(actor_id or "").strip() or None,
-            "correlation_id": str(correlation_id or log_context["correlation_id"] or "").strip() or None,
-            "trace_id": str(trace_id or trace_context["trace_id"] or "").strip() or None,
+            "correlation_id": str(
+                correlation_id or log_context["correlation_id"] or ""
+            ).strip()
+            or None,
+            "trace_id": str(trace_id or trace_context["trace_id"] or "").strip()
+            or None,
             "span_id": str(span_id or trace_context["span_id"] or "").strip() or None,
         }
     )
@@ -76,30 +83,45 @@ def record_workflow_operation_audit_event(
     payload: dict | None = None,
     actor_type: str | None = None,
     actor_id: str | None = None,
-) -> ProductEvent:
+) -> ProductEvent | None:
     workflow = session.get(WorkflowExecution, operation.workflow_id)
     if workflow is None:
-        raise ValueError(f"Workflow {operation.workflow_id} is missing for operation audit event.")
+        raise ValueError(
+            f"Workflow {operation.workflow_id} is missing for operation audit event."
+        )
     attempt_ref.assert_matches_operation(operation.operation_id)
-    return record_audit_event(
-        session,
-        tenant_id=workflow.tenant_id,
-        project_id=workflow.project_id,
-        workflow_id=workflow.workflow_id,
-        run_id=operation.run_id,
-        operation_id=operation.operation_id,
-        attempt_id=attempt_ref.require_attempt_id(),
-        issue_key=workflow.source_ref,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        source_component=source_component,
-        event_kind=event_kind,
-        level=level,
-        message=message,
-        payload=payload,
-    )
+    attempt_id = attempt_ref.require_attempt_id()
+    try:
+        return record_audit_event(
+            session,
+            tenant_id=workflow.tenant_id,
+            project_id=workflow.project_id,
+            workflow_id=workflow.workflow_id,
+            run_id=operation.run_id,
+            operation_id=operation.operation_id,
+            attempt_id=attempt_id,
+            issue_key=workflow.source_ref,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            source_component=source_component,
+            event_kind=event_kind,
+            level=level,
+            message=message,
+            payload=payload,
+        )
+    except Exception:
+        logger.exception(
+            "workflow_operation_audit_downstream_observability_failed workflow_id=%s operation_id=%s attempt_id=%s event_kind=%s",
+            workflow.workflow_id,
+            operation.operation_id,
+            attempt_id,
+            event_kind,
+        )
+        return None
 
 
 def prune_audit_events(*, session: Session, now: datetime | None = None) -> int:
     del session, now
-    raise RuntimeError("Audit evidence retention is managed by ClickHouse/object storage policy")
+    raise RuntimeError(
+        "Audit evidence retention is managed by ClickHouse/object storage policy"
+    )

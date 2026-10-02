@@ -17,13 +17,20 @@ class DiscordThreadContextTests(unittest.TestCase):
         self.assertEqual(normalize_issue_key("invalid"), "")
 
     def test_put_and_get_thread_issue_key_roundtrip(self) -> None:
-        config = put_thread_issue_key(discord_config={}, channel_id="thread-1", issue_key="mab-10")
+        config = put_thread_issue_key(
+            discord_config={}, channel_id="thread-1", issue_key="mab-10"
+        )
         self.assertEqual(config[THREAD_ISSUE_BY_CHANNEL_ID_KEY]["thread-1"], "MAB-10")
-        self.assertEqual(get_thread_issue_key(discord_config=config, channel_id="thread-1"), "MAB-10")
+        self.assertEqual(
+            get_thread_issue_key(discord_config=config, channel_id="thread-1"), "MAB-10"
+        )
 
     def test_remove_thread_issue_key_clears_mapping(self) -> None:
         config = {
-            THREAD_ISSUE_BY_CHANNEL_ID_KEY: {"thread-9": "MAB-90", "thread-10": "MAB-91"},
+            THREAD_ISSUE_BY_CHANNEL_ID_KEY: {
+                "thread-9": "MAB-90",
+                "thread-10": "MAB-91",
+            },
         }
 
         updated = remove_thread_issue_key(discord_config=config, channel_id="thread-9")

@@ -57,7 +57,9 @@ from orchestrator.core.decision.state_machine import (
     resolve_execution_gate_state,
     resolve_decision_state_transition,
 )
-from orchestrator.core.decision.effect_service import publish_decision_effects as publish_decision_effects_repo
+from orchestrator.core.decision.effect_service import (
+    publish_decision_effects as publish_decision_effects_repo,
+)
 from orchestrator.core.decision.types import (
     DecisionClassification,
     DecisionEngineResult,
@@ -68,7 +70,10 @@ from orchestrator.core.decision.types import (
     PrecheckOutcome,
     WorkerDecision,
 )
-from orchestrator.core.knowledge.base import SlotResolution, resolve_missing_slots_from_knowledge
+from orchestrator.core.knowledge.base import (
+    SlotResolution,
+    resolve_missing_slots_from_knowledge,
+)
 from orchestrator.core.precheck.pre_run_check import (
     evaluate_execution_readiness_only,
     PreRunCheckResult,
@@ -97,7 +102,9 @@ def _apply_decision_owner_account_policy(
         return None
     return enforce_decision_owner_account_policy(
         planner_result=planner_result,
-        decision_owner_required=tenant_has_multiple_active_members(session=session, tenant_id=tenant.tenant_id),
+        decision_owner_required=tenant_has_multiple_active_members(
+            session=session, tenant_id=tenant.tenant_id
+        ),
     )
 
 
@@ -106,6 +113,7 @@ def _evaluate_terminal_execution_readiness_ingress(
     source: DecisionSource,
     tenant_id: str | None,
     project_id: str | None,
+    project_policy_overrides: dict[str, object],
     issue_key: str | None,
     issue_summary: str | None,
     issue_description: str | None,
@@ -118,6 +126,7 @@ def _evaluate_terminal_execution_readiness_ingress(
     pre_check = evaluate_execution_readiness_only(
         tenant_id=tenant_id,
         project_id=project_id,
+        project_policy_overrides=project_policy_overrides,
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,
@@ -164,6 +173,7 @@ def evaluate_ingress_precheck(
     source: DecisionSource,
     tenant_id: str | None,
     project_id: str | None,
+    project_policy_overrides: dict[str, object],
     issue_key: str | None,
     issue_summary: str | None,
     issue_description: str | None,
@@ -176,6 +186,7 @@ def evaluate_ingress_precheck(
         pre_check = evaluate_pre_run_check_fn(
             tenant_id=tenant_id,
             project_id=project_id,
+            project_policy_overrides=project_policy_overrides,
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
@@ -301,9 +312,7 @@ def _handle_open_cycle_blocked_transition(
         cycle_id=existing_cycle.cycle_id,
     )
     issue_labels = [
-        str(label).strip()
-        for label in event.issue_labels or []
-        if str(label).strip()
+        str(label).strip() for label in event.issue_labels or [] if str(label).strip()
     ]
     if planner_result is not None:
         reduced = reduce_decision_planner_result(
@@ -396,7 +405,11 @@ def _persist_terminal_clear_result(
 ) -> DecisionEngineResult:
     issue_labels = [
         str(label).strip()
-        for label in (issue_labels_override if issue_labels_override is not None else event.issue_labels or [])
+        for label in (
+            issue_labels_override
+            if issue_labels_override is not None
+            else event.issue_labels or []
+        )
         if str(label).strip()
     ]
     issue_description = event.issue_description
@@ -457,7 +470,11 @@ def _handle_transition_result_or_none(
     oauth_context: Any | None,
     publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
 ) -> DecisionEngineResult | None:
-    if transition == DecisionStateTransition.OPEN_CYCLE_BLOCKED and existing_case is not None and existing_cycle is not None:
+    if (
+        transition == DecisionStateTransition.OPEN_CYCLE_BLOCKED
+        and existing_case is not None
+        and existing_cycle is not None
+    ):
         return _handle_open_cycle_blocked_transition(
             session=session,
             settings=settings,
@@ -474,7 +491,11 @@ def _handle_transition_result_or_none(
             publish_jira_comment_fn=publish_jira_comment_fn,
         )
 
-    if transition == DecisionStateTransition.OPEN_CYCLE_CLEAR_AND_CLOSE and existing_case is not None and existing_cycle is not None:
+    if (
+        transition == DecisionStateTransition.OPEN_CYCLE_CLEAR_AND_CLOSE
+        and existing_case is not None
+        and existing_cycle is not None
+    ):
         existing_cycle.status = "resolved"
         existing_cycle.closed_at = occurred_at
         existing_cycle.updated_at = occurred_at
@@ -506,7 +527,10 @@ def _handle_transition_result_or_none(
             publish_jira_comment_fn=publish_jira_comment_fn,
         )
 
-    if transition == DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR and existing_case is not None:
+    if (
+        transition == DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR
+        and existing_case is not None
+    ):
         terminal = _terminally_closed_gate_evaluation(
             session=session,
             settings=settings,
@@ -526,11 +550,16 @@ def _handle_transition_result_or_none(
             decision=terminal.decision,
             accepted_question_ids=set(),
             issue_labels_override=terminal.issue_labels,
-            terminal_gate_closed_cycle_id=decision_gate_closed_cycle_id_state(case=existing_case),
+            terminal_gate_closed_cycle_id=decision_gate_closed_cycle_id_state(
+                case=existing_case
+            ),
             publish_jira_comment_fn=publish_jira_comment_fn,
         )
 
-    if transition == DecisionStateTransition.REUSE_CLEAR_FINGERPRINT and existing_case is not None:
+    if (
+        transition == DecisionStateTransition.REUSE_CLEAR_FINGERPRINT
+        and existing_case is not None
+    ):
         snapshot = (
             existing_case.metadata_json.get("result_snapshot")
             if isinstance(existing_case.metadata_json, dict)
@@ -618,7 +647,9 @@ def evaluate_decision_event(
             issue_key=event.issue_key,
         )
     )
-    structured_recorded_answers = serialize_recorded_answers_for_policy(recorded_answers)
+    structured_recorded_answers = serialize_recorded_answers_for_policy(
+        recorded_answers
+    )
     current_issue_fingerprint = issue_fingerprint_state(
         issue_summary=event.issue_summary,
         issue_description=event.issue_description,
@@ -637,11 +668,15 @@ def evaluate_decision_event(
             has_case=existing_case is not None,
             has_open_cycle=existing_cycle is not None,
             unresolved_question_count=len(unresolved_question_ids),
-            decision_gate_closed_permanently=decision_gate_closed_permanently_state(case=existing_case),
+            decision_gate_closed_permanently=decision_gate_closed_permanently_state(
+                case=existing_case
+            ),
             case_classification=DecisionClassification.parse(
                 str(getattr(existing_case, "classification", "") or "").strip()
             ),
-            case_issue_fingerprint=str(getattr(existing_case, "issue_fingerprint", "") or "").strip(),
+            case_issue_fingerprint=str(
+                getattr(existing_case, "issue_fingerprint", "") or ""
+            ).strip(),
             current_issue_fingerprint=current_issue_fingerprint,
         ),
         event=DecisionLifecycleEvent.EVALUATE_INGRESS,
@@ -685,16 +720,24 @@ def evaluate_decision_event(
     decision = initial.decision
     issue_labels = initial.issue_labels
     issue_description = event.issue_description
-    missing_slots = decision_missing_slots_for_precheck(decision.pre_check) if decision.pre_check is not None else []
+    missing_slots = (
+        decision_missing_slots_for_precheck(decision.pre_check)
+        if decision.pre_check is not None
+        else []
+    )
     persisted_slot_answers = slot_resolutions_from_case_resolution(case=existing_case)
     auto_resolved_answers: dict[str, SlotResolution] = {}
     accepted_question_ids = (
-        accepted_question_ids_for_cycle(session=session, cycle_id=existing_cycle.cycle_id)
+        accepted_question_ids_for_cycle(
+            session=session, cycle_id=existing_cycle.cycle_id
+        )
         if existing_cycle is not None
         else set()
     )
 
-    if decision.pre_check is not None and PrecheckOutcome.parse(decision.block_reason) in {
+    if decision.pre_check is not None and PrecheckOutcome.parse(
+        decision.block_reason
+    ) in {
         PrecheckOutcome.DECISION_GATE_REQUIRED,
         PrecheckOutcome.GTD_REQUIRED,
     }:
@@ -709,12 +752,14 @@ def evaluate_decision_event(
             settings=settings,
             persisted_slot_answers=persisted_slot_answers,
             resolve_missing_slots_from_knowledge_fn=resolve_missing_slots_from_knowledge,
-            resolve_slots_with_runtime_fn=lambda **kwargs: resolve_slots_with_runtime_resolution(
-                **kwargs,
-                build_runtime_fn=build_codex_runtime,
-                invoke_runtime_json_fn=invoke_runtime_json,
-                project_repo_dir_fn=project_repo_dir,
-                runtime_error_type=CodexRuntimeError,
+            resolve_slots_with_runtime_fn=lambda **kwargs: (
+                resolve_slots_with_runtime_resolution(
+                    **kwargs,
+                    build_runtime_fn=build_codex_runtime,
+                    invoke_runtime_json_fn=invoke_runtime_json,
+                    project_repo_dir_fn=project_repo_dir,
+                    runtime_error_type=CodexRuntimeError,
+                )
             ),
         )
         if slot_answers:
@@ -741,7 +786,11 @@ def evaluate_decision_event(
             )
             decision = reevaluated.decision
             issue_labels = reevaluated.issue_labels
-            missing_slots = decision_missing_slots_for_precheck(decision.pre_check) if decision.pre_check is not None else []
+            missing_slots = (
+                decision_missing_slots_for_precheck(decision.pre_check)
+                if decision.pre_check is not None
+                else []
+            )
 
     classification = (
         decision_classification_for_precheck(decision.pre_check)

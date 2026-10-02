@@ -7,7 +7,9 @@ from orchestrator.core.platform.email_delivery import EmailMessagePayload, deliv
 logger = logging.getLogger(__name__)
 
 
-def send_password_reset_email(*, email: str, full_name: str | None, reset_url: str) -> None:
+def send_password_reset_email(
+    *, email: str, full_name: str | None, reset_url: str
+) -> None:
     greeting_name = (full_name or email).strip()
     subject = "Reset your Master Builder password"
     text_body = (
@@ -36,5 +38,10 @@ def send_password_reset_email(*, email: str, full_name: str | None, reset_url: s
             )
         )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("password_reset_email_failed email=%s full_name=%s error=%s", email, full_name, exc)
+        logger.exception(
+            "password_reset_email_failed email=%s full_name=%s error=%s",
+            email,
+            full_name,
+            exc,
+        )
         raise

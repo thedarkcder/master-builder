@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
 from orchestrator.core.discord.personas import build_voice_room_spoken_reply_text
-from orchestrator.core.projects.automation_briefing_service import safe_build_project_automation_briefing
+from orchestrator.core.projects.automation_briefing_service import (
+    safe_build_project_automation_briefing,
+)
 from orchestrator.core.projects.automation_repository import (
     get_project_automation,
     get_project_automation_execution,
@@ -78,7 +80,9 @@ def _stitch_wav_segments(*, segments: list[bytes]) -> bytes:
                     or source_params.sampwidth != params.sampwidth
                     or source_params.framerate != params.framerate
                 ):
-                    raise ValueError("Cannot stitch voice segments with incompatible WAV parameters")
+                    raise ValueError(
+                        "Cannot stitch voice segments with incompatible WAV parameters"
+                    )
             frames.append(source.readframes(source.getnframes()))
     assert params is not None
     output = io.BytesIO()
@@ -103,9 +107,13 @@ def prepare_project_automation_execution(
     execution_id = str(payload_json.get("execution_id") or "").strip()
     automation_id = str(payload_json.get("automation_id") or "").strip()
     if not execution_id or not automation_id:
-        raise ValueError("Project automation job payload missing execution_id or automation_id")
+        raise ValueError(
+            "Project automation job payload missing execution_id or automation_id"
+        )
 
-    execution = get_project_automation_execution(session=session, execution_id=execution_id)
+    execution = get_project_automation_execution(
+        session=session, execution_id=execution_id
+    )
     if execution is None:
         raise ValueError(f"Project automation execution '{execution_id}' was not found")
     if execution.status == PROJECT_AUTOMATION_EXECUTION_STATUS_SUCCEEDED:
@@ -135,13 +143,22 @@ def prepare_project_automation_execution(
         window_start_at=window_start_at,
         window_end_at=window_end_at,
     )
-    room_config = project.discord_config if isinstance(project.discord_config, dict) else {}
+    room_config = (
+        project.discord_config if isinstance(project.discord_config, dict) else {}
+    )
     persona_segments = tuple(getattr(briefing, "persona_segments", ()) or ())
     if not persona_segments:
-        persona_segments = (type("Segment", (), {"persona_id": "pm", "text": briefing.transcript})(),)
+        persona_segments = (
+            type("Segment", (), {"persona_id": "pm", "text": briefing.transcript})(),
+        )
     audio_segments: list[bytes] = []
     for segment in persona_segments:
-        persona_name = str(room_config.get("persona_names", {}).get(str(segment.persona_id or "").strip().lower()) or "").strip()
+        persona_name = str(
+            room_config.get("persona_names", {}).get(
+                str(segment.persona_id or "").strip().lower()
+            )
+            or ""
+        ).strip()
         spoken_text = build_voice_room_spoken_reply_text(
             message=segment.text,
             persona_id=segment.persona_id,

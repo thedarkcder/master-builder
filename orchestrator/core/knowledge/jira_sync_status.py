@@ -63,22 +63,32 @@ def _database_backend(settings: Settings) -> str:
 
 
 def _stale_cutoff(settings: Settings) -> timedelta:
-    interval_seconds = max(60, int(getattr(settings, "knowledge_jira_sync_interval_seconds", 3600)))
-    poll_seconds = max(5, int(getattr(settings, "knowledge_jira_sync_poll_seconds", 30)))
+    interval_seconds = max(
+        60, int(getattr(settings, "knowledge_jira_sync_interval_seconds", 3600))
+    )
+    poll_seconds = max(
+        5, int(getattr(settings, "knowledge_jira_sync_poll_seconds", 30))
+    )
     return timedelta(seconds=max(interval_seconds * 2, poll_seconds * 4, 300))
 
 
-def get_runtime_status(*, session: Session, settings: Settings) -> KnowledgeJiraSyncRuntimeStatus:
+def get_runtime_status(
+    *, session: Session, settings: Settings
+) -> KnowledgeJiraSyncRuntimeStatus:
     runtime_row = session.get(KnowledgeJiraSyncRuntimeState, RUNTIME_NAME)
-    project_rows = session.execute(
-        select(KnowledgeJiraSyncProjectState)
-        .where(KnowledgeJiraSyncProjectState.runtime_name == RUNTIME_NAME)
-        .order_by(
-            KnowledgeJiraSyncProjectState.tenant_id.asc(),
-            KnowledgeJiraSyncProjectState.project_id.asc(),
-            KnowledgeJiraSyncProjectState.jira_project_key.asc(),
+    project_rows = (
+        session.execute(
+            select(KnowledgeJiraSyncProjectState)
+            .where(KnowledgeJiraSyncProjectState.runtime_name == RUNTIME_NAME)
+            .order_by(
+                KnowledgeJiraSyncProjectState.tenant_id.asc(),
+                KnowledgeJiraSyncProjectState.project_id.asc(),
+                KnowledgeJiraSyncProjectState.jira_project_key.asc(),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     projects = tuple(
         KnowledgeJiraSyncProjectStatus(
@@ -164,7 +174,9 @@ def upsert_runtime_status(
             last_pass_started_at=last_pass_started_at,
             last_pass_finished_at=last_pass_finished_at,
             last_heartbeat_at=last_heartbeat_at,
-            leader_acquired=bool(leader_acquired) if leader_acquired is not None else False,
+            leader_acquired=bool(leader_acquired)
+            if leader_acquired is not None
+            else False,
             service_instance_id=service_instance_id,
             updated_at=now,
         )

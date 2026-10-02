@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from orchestrator.core.integrations.workflow.provider import WorkflowIntegrationAdapterProvider
+from orchestrator.core.integrations.workflow.provider import (
+    WorkflowIntegrationAdapterProvider,
+)
 
 
 @dataclass
 class WorkflowIntegrationRouter:
-    adapter_provider: WorkflowIntegrationAdapterProvider = field(default_factory=WorkflowIntegrationAdapterProvider)
+    adapter_provider: WorkflowIntegrationAdapterProvider = field(
+        default_factory=WorkflowIntegrationAdapterProvider
+    )
 
     def jira(self, *, session, tenant, settings):  # noqa: ANN001
         return self.adapter_provider.jira(
@@ -15,4 +19,3 @@ class WorkflowIntegrationRouter:
             tenant=tenant,
             settings=settings,
         )
-

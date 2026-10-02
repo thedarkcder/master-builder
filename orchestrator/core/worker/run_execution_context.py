@@ -16,7 +16,9 @@ class RunExecutionPolicyContext:
     effective_policy: dict[str, Any]
 
 
-def effective_policy_for_project(*, tenant: Tenant, project: Project | None) -> dict[str, Any]:
+def effective_policy_for_project(
+    *, tenant: Tenant, project: Project | None
+) -> dict[str, Any]:
     project_overrides = project.policy_overrides if project is not None else {}
     return resolve_effective_policy(
         tenant_policy=tenant.policy_config,

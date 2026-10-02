@@ -68,9 +68,13 @@ def _require_positive_policy_int(effective_policy: dict, field_name: str) -> int
     try:
         parsed_value = int(raw_value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Effective policy field {field_name} must be a positive integer") from exc
+        raise ValueError(
+            f"Effective policy field {field_name} must be a positive integer"
+        ) from exc
     if parsed_value < 1:
-        raise ValueError(f"Effective policy field {field_name} must be a positive integer")
+        raise ValueError(
+            f"Effective policy field {field_name} must be a positive integer"
+        )
     return parsed_value
 
 
@@ -95,10 +99,15 @@ def _project_app_declares_website(app: ProjectApp) -> bool:
     services = deployment_config.get("services")
     if not isinstance(services, list):
         return False
-    return any(isinstance(service, dict) and service.get("kind") == "website" for service in services)
+    return any(
+        isinstance(service, dict) and service.get("kind") == "website"
+        for service in services
+    )
 
 
-def _project_demo_capture_target_sources(*, session, tenant_id: str, project_id: str) -> dict[QaCaptureTarget, tuple[str, ...]]:  # noqa: ANN001
+def _project_demo_capture_target_sources(
+    *, session, tenant_id: str, project_id: str
+) -> dict[QaCaptureTarget, tuple[str, ...]]:  # noqa: ANN001
     apps = (
         session.execute(
             select(ProjectApp).where(
@@ -112,12 +121,18 @@ def _project_demo_capture_target_sources(*, session, tenant_id: str, project_id:
     return _demo_capture_target_sources_from_apps(apps)
 
 
-def _demo_capture_target_sources_from_apps(apps: list[object] | tuple[object, ...]) -> dict[QaCaptureTarget, tuple[str, ...]]:
-    sources: dict[QaCaptureTarget, set[str]] = {target: set() for target in _PROJECT_DEMO_TARGET_ORDER}
+def _demo_capture_target_sources_from_apps(
+    apps: list[object] | tuple[object, ...],
+) -> dict[QaCaptureTarget, tuple[str, ...]]:
+    sources: dict[QaCaptureTarget, set[str]] = {
+        target: set() for target in _PROJECT_DEMO_TARGET_ORDER
+    }
     for app in apps:
         descriptor = _project_app_descriptor(app)
         source_path = str(getattr(app, "source_path", "") or "").strip() or "."
-        if _project_app_declares_website(app) or any(marker in descriptor for marker in _BROWSER_PROJECT_MARKERS):
+        if _project_app_declares_website(app) or any(
+            marker in descriptor for marker in _BROWSER_PROJECT_MARKERS
+        ):
             sources["browser"].add(source_path)
         if any(marker in descriptor for marker in _IOS_PROJECT_MARKERS):
             sources["ios"].add(source_path)
@@ -173,8 +188,12 @@ def _refresh_project_demo_capture_target_sources_from_checkout(
     return _demo_capture_target_sources_from_apps(tuple(refreshed_apps))
 
 
-def _project_demo_capture_targets(source_map: dict[QaCaptureTarget, tuple[str, ...]]) -> tuple[QaCaptureTarget, ...]:
-    return tuple(target for target in _PROJECT_DEMO_TARGET_ORDER if target in source_map)
+def _project_demo_capture_targets(
+    source_map: dict[QaCaptureTarget, tuple[str, ...]],
+) -> tuple[QaCaptureTarget, ...]:
+    return tuple(
+        target for target in _PROJECT_DEMO_TARGET_ORDER if target in source_map
+    )
 
 
 def _resolve_base_branch(
@@ -191,20 +210,28 @@ def _resolve_base_branch(
     if remediation_base_branch:
         return remediation_base_branch
 
-    project_environment = getattr(project, "environment", {}) if project is not None else {}
+    project_environment = (
+        getattr(project, "environment", {}) if project is not None else {}
+    )
     configured_default_branch = (
-        project_environment.get("default_branch") if isinstance(project_environment, dict) else None
+        project_environment.get("default_branch")
+        if isinstance(project_environment, dict)
+        else None
     )
     normalized_configured_default_branch = normalize_branch(configured_default_branch)
     if normalized_configured_default_branch:
         return normalized_configured_default_branch
 
     if project is None:
-        raise ValueError("Run project routing is required before resolving the repository base branch")
+        raise ValueError(
+            "Run project routing is required before resolving the repository base branch"
+        )
     github_repository = str(getattr(project, "github_repository", "") or "").strip()
     repo_full_name = repo_full_name_from_repository(github_repository)
     if repo_full_name is None:
-        raise ValueError("Project GitHub repository must be a GitHub owner/repo URL before resolving base branch")
+        raise ValueError(
+            "Project GitHub repository must be a GitHub owner/repo URL before resolving base branch"
+        )
     github_config_raw = getattr(tenant, "github_config", {})
     github_config = github_config_raw if isinstance(github_config_raw, dict) else {}
     if not github_config:
@@ -271,8 +298,12 @@ def build_workflow_request(
     if entry_checkpoint_fn is None:
         entry_checkpoint_fn = entry_checkpoint
     if resolve_branch_from_open_pull_requests_fn is None:
-        resolve_branch_from_open_pull_requests_fn = resolve_branch_from_open_pull_requests
-    max_loops = _require_positive_policy_int(effective_policy, "max_dev_test_review_loops")
+        resolve_branch_from_open_pull_requests_fn = (
+            resolve_branch_from_open_pull_requests
+        )
+    max_loops = _require_positive_policy_int(
+        effective_policy, "max_dev_test_review_loops"
+    )
     suggested_test_commands_raw = effective_policy.get("allowed_commands") or []
     suggested_test_commands: list[str] = []
     for command in suggested_test_commands_raw:
@@ -294,8 +325,12 @@ def build_workflow_request(
         issue_description = issue_description.strip()
 
     trigger_context = extract_trigger_context(getattr(run, "plan", None))
-    parsed_trigger_context = load_parsed_trigger_context_from_plan(getattr(run, "plan", None))
-    entry_mode = str(getattr(run, "entry_mode", "fresh") or "fresh").strip().lower() or "fresh"
+    parsed_trigger_context = load_parsed_trigger_context_from_plan(
+        getattr(run, "plan", None)
+    )
+    entry_mode = (
+        str(getattr(run, "entry_mode", "fresh") or "fresh").strip().lower() or "fresh"
+    )
     entry_stage = str(getattr(run, "entry_stage", "") or "").strip().lower() or None
     checkpoint = entry_checkpoint_fn(session=session, run=run)
     checkpoint_payload = None
@@ -304,7 +339,9 @@ def build_workflow_request(
             checkpoint.payload_json,
             allow_empty=False,
         ).dump()
-    remediation_base_branch = extract_remediation_base_ref(parsed_trigger_context, normalize_branch)
+    remediation_base_branch = extract_remediation_base_ref(
+        parsed_trigger_context, normalize_branch
+    )
     base_branch = _resolve_base_branch(
         session=session,
         settings=settings,
@@ -315,7 +352,9 @@ def build_workflow_request(
         resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref_fn,
         resolve_platform_secret_ref_fn=resolve_platform_secret_ref_fn,
     )
-    remediation_head_branch = extract_remediation_head_ref(parsed_trigger_context, normalize_branch)
+    remediation_head_branch = extract_remediation_head_ref(
+        parsed_trigger_context, normalize_branch
+    )
     integration_branch = resolve_integration_branch(
         session=session,
         settings=settings,
@@ -329,7 +368,13 @@ def build_workflow_request(
         resolve_platform_secret_ref_fn=resolve_platform_secret_ref_fn,
         resolve_branch_from_open_pull_requests_fn=resolve_branch_from_open_pull_requests_fn,
     )
-    execution_repo_dir, execution_branch, start_point_ref, start_point_sha, workspace_key = _resolve_execution_repo_dir(
+    (
+        execution_repo_dir,
+        execution_branch,
+        start_point_ref,
+        start_point_sha,
+        workspace_key,
+    ) = _resolve_execution_repo_dir(
         session=session,
         settings=settings,
         tenant=tenant,
@@ -391,7 +436,9 @@ def build_workflow_request(
         workspace_key=workspace_key,
         current_worker_capability=capability_context.current,
         available_worker_capabilities=capability_context.available,
-        project_demo_capture_targets=_project_demo_capture_targets(project_demo_capture_target_sources),
+        project_demo_capture_targets=_project_demo_capture_targets(
+            project_demo_capture_target_sources
+        ),
         project_demo_capture_target_sources=dict(project_demo_capture_target_sources),
         base_branch=base_branch,
         integration_branch=integration_branch,
@@ -406,11 +453,17 @@ def build_workflow_request(
         checkpoint_kind=(
             checkpoint.checkpoint_kind
             if checkpoint is not None
-            else (checkpoint_kind_for_stage(entry_stage) if entry_mode == "resume" and entry_stage else None)
+            else (
+                checkpoint_kind_for_stage(entry_stage)
+                if entry_mode == "resume" and entry_stage
+                else None
+            )
         ),
         checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else None,
         checkpoint_payload=checkpoint_payload,
-        checkpoint_session_id=checkpoint.codex_session_id if checkpoint is not None else None,
+        checkpoint_session_id=checkpoint.codex_session_id
+        if checkpoint is not None
+        else None,
         human_inputs=human_inputs,
     )
 

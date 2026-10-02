@@ -9,7 +9,9 @@ from typing import Any
 
 
 def _load_module() -> Any:
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "release_train_sync.py"
+    module_path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "release_train_sync.py"
+    )
     spec = importlib.util.spec_from_file_location("release_train_sync", module_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Failed to load release_train_sync module")
@@ -46,7 +48,9 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
 
         class FakeJiraClient(module.JiraClient):
             def __init__(self, responses: list[dict[str, Any]]) -> None:
-                super().__init__(base_url="https://example.atlassian.net", email="e", api_token="t")
+                super().__init__(
+                    base_url="https://example.atlassian.net", email="e", api_token="t"
+                )
                 self._responses = responses
                 self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
 
@@ -65,13 +69,25 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
             responses=[
                 {
                     "issues": [
-                        {"key": "MAB-1", "fields": {"labels": ["a"], "status": {"name": "Ready to Release"}}}
+                        {
+                            "key": "MAB-1",
+                            "fields": {
+                                "labels": ["a"],
+                                "status": {"name": "Ready to Release"},
+                            },
+                        }
                     ],
                     "nextPageToken": "token-1",
                 },
                 {
                     "issues": [
-                        {"key": "MAB-2", "fields": {"labels": ["b"], "status": {"name": "Ready to Release"}}}
+                        {
+                            "key": "MAB-2",
+                            "fields": {
+                                "labels": ["b"],
+                                "status": {"name": "Ready to Release"},
+                            },
+                        }
                     ]
                 },
             ]
@@ -89,7 +105,9 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
 
         class FakeJiraClient(module.JiraClient):
             def __init__(self, responses: list[dict[str, Any]]) -> None:
-                super().__init__(base_url="https://example.atlassian.net", email="e", api_token="t")
+                super().__init__(
+                    base_url="https://example.atlassian.net", email="e", api_token="t"
+                )
                 self._responses = responses
 
             def _request_json(  # type: ignore[override]
@@ -105,11 +123,21 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
         client = FakeJiraClient(
             responses=[
                 {
-                    "issues": [{"key": "MAB-1", "fields": {"labels": [], "status": {"name": "Ready"}}}],
+                    "issues": [
+                        {
+                            "key": "MAB-1",
+                            "fields": {"labels": [], "status": {"name": "Ready"}},
+                        }
+                    ],
                     "nextPageToken": "token-1",
                 },
                 {
-                    "issues": [{"key": "MAB-2", "fields": {"labels": [], "status": {"name": "Ready"}}}],
+                    "issues": [
+                        {
+                            "key": "MAB-2",
+                            "fields": {"labels": [], "status": {"name": "Ready"}},
+                        }
+                    ],
                     "nextPageToken": "token-1",
                 },
             ]
@@ -123,14 +151,22 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
 
         class FakeJiraClient(module.JiraClient):
             def __init__(self) -> None:
-                super().__init__(base_url="https://example.atlassian.net", email="e", api_token="t")
+                super().__init__(
+                    base_url="https://example.atlassian.net", email="e", api_token="t"
+                )
                 self.recorded_jql: str | None = None
 
             def search_issues(self, *, jql: str):  # type: ignore[override]
                 self.recorded_jql = jql
                 return [
-                    module.JiraIssue(key="MAB-1", labels=[], status_name="READY TO RELEASE"),
-                    module.JiraIssue(key="MAB-2", labels=["release:v1.2.3"], status_name="READY TO RELEASE"),
+                    module.JiraIssue(
+                        key="MAB-1", labels=[], status_name="READY TO RELEASE"
+                    ),
+                    module.JiraIssue(
+                        key="MAB-2",
+                        labels=["release:v1.2.3"],
+                        status_name="READY TO RELEASE",
+                    ),
                 ]
 
         client = FakeJiraClient()
@@ -142,11 +178,15 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(client.recorded_jql, 'project = "MAB" AND status = "READY TO RELEASE"')
+        self.assertEqual(
+            client.recorded_jql, 'project = "MAB" AND status = "READY TO RELEASE"'
+        )
         stdout.write.assert_any_call("2")
         stdout.write.assert_any_call("\n")
 
-    def test_release_train_sync_workflow_skips_self_hosted_job_without_ready_issues(self) -> None:
+    def test_release_train_sync_workflow_skips_self_hosted_job_without_ready_issues(
+        self,
+    ) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
             / ".github"
@@ -157,7 +197,9 @@ class ReleaseTrainSyncSearchTests(unittest.TestCase):
         self.assertIn("detect-ready-to-release:", workflow)
         self.assertIn("runs-on: ubuntu-latest", workflow)
         self.assertIn("needs: detect-ready-to-release", workflow)
-        self.assertIn("needs.detect-ready-to-release.outputs.ready_count != '0'", workflow)
+        self.assertIn(
+            "needs.detect-ready-to-release.outputs.ready_count != '0'", workflow
+        )
 
 
 if __name__ == "__main__":

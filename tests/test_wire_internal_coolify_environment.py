@@ -8,8 +8,14 @@ from urllib.parse import urlsplit
 
 
 def _load_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "wire_internal_coolify_environment.py"
-    spec = importlib.util.spec_from_file_location("wire_internal_coolify_environment", module_path)
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "wire_internal_coolify_environment.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "wire_internal_coolify_environment", module_path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("Failed to load wire_internal_coolify_environment module")
     module = importlib.util.module_from_spec(spec)
@@ -22,19 +28,27 @@ class WireInternalCoolifyEnvironmentTests(unittest.TestCase):
     def test_tenant_secret_ref_builds_scoped_ref(self) -> None:
         module = _load_module()
         self.assertEqual(
-            module.tenant_secret_ref(tenant_id="tenant-alpha", secret_key="COOLIFY_API_TOKEN"),
+            module.tenant_secret_ref(
+                tenant_id="tenant-alpha", secret_key="COOLIFY_API_TOKEN"
+            ),
             "tenant/tenant-alpha/COOLIFY_API_TOKEN",
         )
         with self.assertRaises(module.WireConfigError):
-            module.tenant_secret_ref(tenant_id="tenant-alpha", secret_key="platform/COOLIFY_API_TOKEN")
+            module.tenant_secret_ref(
+                tenant_id="tenant-alpha", secret_key="platform/COOLIFY_API_TOKEN"
+            )
 
-    def test_merge_deployment_plane_payload_preserves_and_merges_secret_refs(self) -> None:
+    def test_merge_deployment_plane_payload_preserves_and_merges_secret_refs(
+        self,
+    ) -> None:
         module = _load_module()
         existing_plane = {
             "provider": "internal_coolify",
             "state": "degraded",
             "api_base_url": "https://coolify.example.com/api/v1",
-            "secret_refs": {"coolify_api_token": "tenant/tenant-alpha/COOLIFY_API_TOKEN"},
+            "secret_refs": {
+                "coolify_api_token": "tenant/tenant-alpha/COOLIFY_API_TOKEN"
+            },
             "last_error": "temporary",
         }
         merged = module.merge_deployment_plane_payload(
@@ -50,7 +64,9 @@ class WireInternalCoolifyEnvironmentTests(unittest.TestCase):
             coolify_server_uuid="server-uuid-1",
             coolify_destination_uuid="destination-uuid-1",
             coolify_github_app_uuid="github-app-uuid-1",
-            secret_ref_updates={"coolify_webhook_token": "tenant/tenant-alpha/COOLIFY_WEBHOOK_TOKEN"},
+            secret_ref_updates={
+                "coolify_webhook_token": "tenant/tenant-alpha/COOLIFY_WEBHOOK_TOKEN"
+            },
         )
         self.assertEqual(merged["provider"], "internal_coolify")
         self.assertEqual(merged["state"], "active")
@@ -114,7 +130,9 @@ class WireInternalCoolifyEnvironmentTests(unittest.TestCase):
         )
         self.assertTrue(config.webhook_token_value)
         self.assertEqual(config.webhook_token_source, "generated")
-        self.assertEqual(config.tenant_secret_values["COOLIFY_API_TOKEN"], "coolify-api-token-value")
+        self.assertEqual(
+            config.tenant_secret_values["COOLIFY_API_TOKEN"], "coolify-api-token-value"
+        )
         self.assertEqual(config.tenant_secret_values["BACKUP_BUCKET"], "mb-backups")
         self.assertEqual(
             config.deployment_plane_secret_ref_updates["coolify_api_token"],

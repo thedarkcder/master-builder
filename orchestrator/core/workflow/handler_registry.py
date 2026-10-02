@@ -18,14 +18,20 @@ class WorkflowHandlerRegistry:
         normalized = str(handler_key or "").strip()
         handler = self.advance_handlers.get(normalized)
         if handler is None:
-            raise LookupError(f"No workflow advance handler is registered for {handler_key}")
+            raise LookupError(
+                f"No workflow advance handler is registered for {handler_key}"
+            )
         return handler
 
-    def resolve_operation_retry_handler(self, handler_key: str) -> WorkflowOperationRetryHandler:
+    def resolve_operation_retry_handler(
+        self, handler_key: str
+    ) -> WorkflowOperationRetryHandler:
         normalized = str(handler_key or "").strip()
         handler = self.operation_retry_handlers.get(normalized)
         if handler is None:
-            raise LookupError(f"No workflow operation retry handler is registered for {handler_key}")
+            raise LookupError(
+                f"No workflow operation retry handler is registered for {handler_key}"
+            )
         return handler
 
     def operation_retry_capabilities(

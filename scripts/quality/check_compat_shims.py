@@ -37,6 +37,8 @@ def _violations_for_path(path: Path) -> list[str]:
             line = source.count("\n", 0, match.start()) + 1
             violations.append(f"{relative}:{line}:text:{compiled.pattern}")
     return violations
+
+
 def main() -> int:
     violations: list[str] = []
     for path in sorted(SCAN_ROOT.rglob("*.py")):

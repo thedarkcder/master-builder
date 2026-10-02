@@ -100,7 +100,9 @@ def acquire_review_publication(
             request_id=request_id,
             now=timestamp,
         )
-    return ReviewPublicationAcquireResult(acquired=True, reason=None, publication=publication)
+    return ReviewPublicationAcquireResult(
+        acquired=True, reason=None, publication=publication
+    )
 
 
 def mark_review_publication_published(
@@ -193,4 +195,6 @@ def _reacquire_existing_publication(
     publication.last_error = None
     publication.updated_at = now
     session.flush()
-    return ReviewPublicationAcquireResult(acquired=True, reason=None, publication=publication)
+    return ReviewPublicationAcquireResult(
+        acquired=True, reason=None, publication=publication
+    )

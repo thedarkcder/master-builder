@@ -41,12 +41,18 @@ def _resolve_agent_execution_profiles(
     platform_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[AgentExecutionProfile, dict[str, dict[str, Any]]]:
     platform_profiles = normalize_execution_profiles(platform_profiles)
-    tenant_profiles = normalize_execution_profiles((tenant_policy or {}).get("execution_profiles"))
-    project_profiles = normalize_execution_profiles((project_overrides or {}).get("execution_profiles"))
+    tenant_profiles = normalize_execution_profiles(
+        (tenant_policy or {}).get("execution_profiles")
+    )
+    project_profiles = normalize_execution_profiles(
+        (project_overrides or {}).get("execution_profiles")
+    )
     default_profiles = default_execution_profiles(
         default_codex_cli_command=settings.codex_cli_command,
         default_codex_reasoning_effort=settings.codex_reasoning_effort,
-        default_codex_supported_models=getattr(settings, "codex_supported_models", None),
+        default_codex_supported_models=getattr(
+            settings, "codex_supported_models", None
+        ),
         default_chat_cli_command=settings.chat_cli_command,
         default_chat_reasoning_effort=settings.chat_reasoning_effort,
         default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
@@ -58,10 +64,16 @@ def _resolve_agent_execution_profiles(
         project_profiles=project_profiles,
     )
     routing = merge_execution_profile_routing(
-        tenant_routing=normalize_execution_profile_routing((tenant_policy or {}).get("execution_profile_routing")),
-        project_routing=normalize_execution_profile_routing((project_overrides or {}).get("execution_profile_routing")),
+        tenant_routing=normalize_execution_profile_routing(
+            (tenant_policy or {}).get("execution_profile_routing")
+        ),
+        project_routing=normalize_execution_profile_routing(
+            (project_overrides or {}).get("execution_profile_routing")
+        ),
     )
-    platform_selector_routing = normalize_execution_profile_routing(platform_selector_routing)
+    platform_selector_routing = normalize_execution_profile_routing(
+        platform_selector_routing
+    )
     merged_routing = dict(routing)
     merged_routing.update(platform_selector_routing or {})
     merged_platform_role_routing = merge_agent_routing(
@@ -80,7 +92,9 @@ def _resolve_agent_execution_profiles(
         platform_role_routing=merged_platform_role_routing,
         platform_name_routing=merged_platform_name_routing,
     )
-    return build_agent_execution_profile(profile_name=profile_name, profiles=profiles), profiles
+    return build_agent_execution_profile(
+        profile_name=profile_name, profiles=profiles
+    ), profiles
 
 
 def resolve_agent_execution_profile(
@@ -110,7 +124,9 @@ def resolve_agent_execution_profile(
     return profile
 
 
-def _platform_agent_runtime_settings(*, session) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, dict[str, Any]]]:  # noqa: ANN001
+def _platform_agent_runtime_settings(
+    *, session
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], dict[str, dict[str, Any]]]:  # noqa: ANN001
     if session is None:
         return {}, {}, {}, {}
     routing_payload = platform_settings_service.get_json(
@@ -149,11 +165,16 @@ def build_runtime_for_selector(
             tenant_policy = dict(tenant.policy_config or {})
     if session is not None and normalized_project_id:
         project = session.get(Project, normalized_project_id)
-        if project is not None and (not normalized_tenant_id or project.tenant_id == normalized_tenant_id):
+        if project is not None and (
+            not normalized_tenant_id or project.tenant_id == normalized_tenant_id
+        ):
             project_overrides = dict(project.policy_overrides or {})
-    platform_role_routing, platform_name_routing, platform_selector_routing, platform_profiles = _platform_agent_runtime_settings(
-        session=session
-    )
+    (
+        platform_role_routing,
+        platform_name_routing,
+        platform_selector_routing,
+        platform_profiles,
+    ) = _platform_agent_runtime_settings(session=session)
     profile, profiles = _resolve_agent_execution_profiles(
         settings=settings,
         tenant_policy=tenant_policy,
@@ -208,11 +229,16 @@ def resolve_execution_profile_for_selector(
             tenant_policy = dict(tenant.policy_config or {})
     if session is not None and normalized_project_id:
         project = session.get(Project, normalized_project_id)
-        if project is not None and (not normalized_tenant_id or project.tenant_id == normalized_tenant_id):
+        if project is not None and (
+            not normalized_tenant_id or project.tenant_id == normalized_tenant_id
+        ):
             project_overrides = dict(project.policy_overrides or {})
-    platform_role_routing, platform_name_routing, platform_selector_routing, platform_profiles = _platform_agent_runtime_settings(
-        session=session
-    )
+    (
+        platform_role_routing,
+        platform_name_routing,
+        platform_selector_routing,
+        platform_profiles,
+    ) = _platform_agent_runtime_settings(session=session)
     profile, _profiles = _resolve_agent_execution_profiles(
         settings=settings,
         tenant_policy=tenant_policy,

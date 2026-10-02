@@ -1,4 +1,3 @@
-
 name: CI
 
 on:
@@ -15,418 +14,127 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  detect:
-    name: Detect project type
-    runs-on: self-hosted
-    outputs:
-      is_java: ${{ steps.detect.outputs.is_java }}
-      is_node: ${{ steps.detect.outputs.is_node }}
-      is_python: ${{ steps.detect.outputs.is_python }}
-      node_pm: ${{ steps.detect.outputs.node_pm }}
-      node_project_dir: ${{ steps.detect.outputs.node_project_dir }}
-      node_lockfile: ${{ steps.detect.outputs.node_lockfile }}
-      java_build_tool: ${{ steps.detect.outputs.java_build_tool }}
+  repository:
+    name: Repository hygiene
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-
-      - id: detect
+      - name: Check tracked files and shell syntax
         shell: bash
         run: |
           set -euo pipefail
-
-          is_java=false
-          is_node=false
-          is_python=false
-          node_pm="npm"
-          node_project_dir="."
-          node_lockfile=""
-          java_build_tool="maven"
-
-          has_file_named() {
-            local filename="$1"
-            first_file_named "$filename" >/dev/null
-          }
-
-          first_file_named() {
-            local filename="$1"
-            local match=""
-            local path
-            while IFS= read -r path; do
-              if [ -z "$match" ]; then
-                match="$path"
-              fi
-            done < <(git ls-files -- "$filename" "*/$filename")
-            if [ -z "$match" ]; then
-              return 1
-            fi
-            printf '%s\n' "$match"
-          }
-
-          # Java detection
-          if has_file_named "pom.xml" || has_file_named "mvnw"; then
-            is_java=true
-            java_build_tool="maven"
-          elif has_file_named "build.gradle" || has_file_named "build.gradle.kts" || has_file_named "gradlew"; then
-            is_java=true
-            java_build_tool="gradle"
-          fi
-
-          # Node/React detection
-          if has_file_named "package.json"; then
-            is_node=true
-            package_json_path="$(first_file_named "package.json")"
-            node_project_dir="$(dirname "$package_json_path")"
-            if [ -f "${node_project_dir}/pnpm-lock.yaml" ]; then
-              node_pm="pnpm"
-              node_lockfile="${node_project_dir}/pnpm-lock.yaml"
-            elif [ -f "${node_project_dir}/yarn.lock" ]; then
-              node_pm="yarn"
-              node_lockfile="${node_project_dir}/yarn.lock"
-            else
-              node_pm="npm"
-              if [ -f "${node_project_dir}/package-lock.json" ]; then
-                node_lockfile="${node_project_dir}/package-lock.json"
-              elif [ -f "${node_project_dir}/npm-shrinkwrap.json" ]; then
-                node_lockfile="${node_project_dir}/npm-shrinkwrap.json"
-              elif has_file_named "pnpm-lock.yaml"; then
-                node_pm="pnpm"
-                node_lockfile="$(first_file_named "pnpm-lock.yaml")"
-              elif has_file_named "yarn.lock"; then
-                node_pm="yarn"
-                node_lockfile="$(first_file_named "yarn.lock")"
-              elif has_file_named "package-lock.json"; then
-                node_lockfile="$(first_file_named "package-lock.json")"
-              elif has_file_named "npm-shrinkwrap.json"; then
-                node_lockfile="$(first_file_named "npm-shrinkwrap.json")"
-              fi
-            fi
-          fi
-
-          # Python detection
-          if has_file_named "pyproject.toml" || has_file_named "requirements.txt"; then
-            is_python=true
-          fi
-
-          echo "is_java=$is_java" >> "$GITHUB_OUTPUT"
-          echo "is_node=$is_node" >> "$GITHUB_OUTPUT"
-          echo "is_python=$is_python" >> "$GITHUB_OUTPUT"
-          echo "node_pm=$node_pm" >> "$GITHUB_OUTPUT"
-          echo "node_project_dir=$node_project_dir" >> "$GITHUB_OUTPUT"
-          echo "node_lockfile=$node_lockfile" >> "$GITHUB_OUTPUT"
-          echo "java_build_tool=$java_build_tool" >> "$GITHUB_OUTPUT"
-
-  repo-hygiene:
-    name: Repo hygiene
-    runs-on: self-hosted
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Block forbidden files
-        shell: bash
-        run: |
-          set -euo pipefail
-          forbidden="$(git ls-files | grep -E '\.DS_Store$' || true)"
+          forbidden="$(git ls-files | grep -E '(^|/)(\.DS_Store|\.env|\.env\.local)$|\.(pem|key|p12|log|pid)$' || true)"
           if [ -n "$forbidden" ]; then
-            echo "Forbidden files tracked:"
-            echo "$forbidden"
+            printf 'Forbidden tracked files:\n%s\n' "$forbidden"
             exit 1
           fi
-
-      - name: Validate shell script syntax
-        shell: bash
-        run: |
-          set -euo pipefail
           while IFS= read -r script; do
-            echo "Checking $script"
             bash -n "$script"
           done < <(git ls-files '*.sh')
 
-  java:
-    name: Java (lint/test)
-    needs: detect
-    if: needs.detect.outputs.is_java == 'true'
-    runs-on: self-hosted
-    permissions:
-      contents: read
+  python:
+    name: Python checks and package
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-
-      - name: Setup Java
-        uses: actions/setup-java@v5
         with:
-          distribution: temurin
-          java-version: "21"
-          cache: ${{ needs.detect.outputs.java_build_tool }}
-
-      - name: Maven test
-        if: needs.detect.outputs.java_build_tool == 'maven'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f "./mvnw" ]; then chmod +x ./mvnw && ./mvnw -q test; else mvn -q test; fi
-
-      - name: Gradle test
-        if: needs.detect.outputs.java_build_tool == 'gradle'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -f "./gradlew" ]; then chmod +x ./gradlew && ./gradlew test; else gradle test; fi
-
-  node:
-    name: Node/React (lint/test/build)
-    needs: detect
-    if: needs.detect.outputs.is_node == 'true'
-    runs-on: self-hosted
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup Node (npm/yarn)
-        if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile != ''
-        uses: actions/setup-node@v5
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
         with:
-          node-version: "20"
-
-      - name: Setup Node (npm/yarn no-cache fallback)
-        if: needs.detect.outputs.node_pm != 'pnpm' && needs.detect.outputs.node_lockfile == ''
-        uses: actions/setup-node@v5
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
         with:
-          node-version: "20"
-
-      - name: Setup Node (pnpm no cache)
-        if: needs.detect.outputs.node_pm == 'pnpm'
-        uses: actions/setup-node@v5
-        with:
-          node-version: "20"
-
-      - name: Setup pnpm
-        if: needs.detect.outputs.node_pm == 'pnpm'
-        uses: pnpm/action-setup@v4
-        with:
-          version: "9"
-
-      - name: Install dependencies
-        working-directory: ${{ needs.detect.outputs.node_project_dir }}
-        shell: bash
+          version: '0.9.24'
+      - name: Install locked development dependencies
+        run: uv sync --frozen --extra dev
+      - name: Generate isolated test signing keys
         run: |
-          set -euo pipefail
-          case "${{ needs.detect.outputs.node_pm }}" in
-            pnpm) pnpm install --frozen-lockfile ;;
-            yarn) yarn install --frozen-lockfile ;;
-            npm)
-              if [ -f "package-lock.json" ] || [ -f "npm-shrinkwrap.json" ]; then
-                npm ci
-              else
-                npm install
-              fi
-              ;;
-          esac
-
-      - name: Lint
-        working-directory: ${{ needs.detect.outputs.node_project_dir }}
-        shell: bash
+          uv run --frozen python - <<'PY'
+          import os
+          import secrets
+          from cryptography.fernet import Fernet
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+              for name in ('ADMIN_PASSWORD', 'ADMIN_TOKEN_SECRET', 'AUTH_TOKEN_SECRET'):
+                  output.write(f'ORCHESTRATOR_{name}={secrets.token_urlsafe(48)}\n')
+              output.write(f'ORCHESTRATOR_SECRETS_ENCRYPTION_KEY={Fernet.generate_key().decode()}\n')
+          PY
+      - name: Python lint
+        run: uv run --frozen ruff check orchestrator tests scripts
+      - name: Python formatting
+        run: uv run --frozen ruff format --check orchestrator tests scripts
+      - name: Quality policies
         run: |
-          set -euo pipefail
-          # If no lint script, skip
-          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.lint ? 0 : 1)"; then
-            case "${{ needs.detect.outputs.node_pm }}" in
-              pnpm) pnpm lint ;;
-              yarn) yarn lint ;;
-              npm)  npm run lint ;;
-            esac
-          else
-            echo "No lint script found; skipping."
-          fi
-
-      - name: Test
-        working-directory: ${{ needs.detect.outputs.node_project_dir }}
-        shell: bash
-        env:
-          CI: "true"
-        run: |
-          set -euo pipefail
-          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)"; then
-            case "${{ needs.detect.outputs.node_pm }}" in
-              pnpm) pnpm test ;;
-              yarn) yarn test ;;
-              npm)  npm test ;;
-            esac
-          else
-            echo "No test script found; skipping."
-          fi
-
-      - name: Build (if script exists)
-        working-directory: ${{ needs.detect.outputs.node_project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts.build ? 0 : 1)"; then
-            case "${{ needs.detect.outputs.node_pm }}" in
-              pnpm) pnpm build ;;
-              yarn) yarn build ;;
-              npm)  npm run build ;;
-            esac
-          else
-            echo "No build script found; skipping."
-          fi
-
-      - name: Deterministic UI e2e gate (admin-ui)
-        if: needs.detect.outputs.node_project_dir == 'admin-ui'
-        working-directory: ${{ needs.detect.outputs.node_project_dir }}
-        shell: bash
-        env:
-          CI: "true"
-        run: |
-          set -euo pipefail
-          npm run test:e2e
-
-  python-audit:
-    name: Python audit gate
-    needs: detect
-    if: needs.detect.outputs.is_python == 'true'
-    runs-on: self-hosted
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install deps
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          if [ -f "pyproject.toml" ]; then
-            python -m pip install -e .[dev] || python -m pip install -e .
-            python -m pip install ruff pytest pytest-cov httpx vulture
-          elif [ -f "requirements.txt" ]; then
-            python -m pip install -r requirements.txt
-            python -m pip install ruff pytest pytest-cov httpx vulture
-          else
-            python -m pip install ruff pytest pytest-cov httpx vulture
-          fi
-
-      - name: Ruff
-        shell: bash
-        run: |
-          set -euo pipefail
-          ruff check . || (echo "ruff failed" && exit 1)
-
-      - name: Ruff strict on changed Python lines
+          uv run --frozen python scripts/quality/check_compat_shims.py
+          uv run --frozen python scripts/quality/check_dead_code.py
+          uv run --frozen python scripts/quality/check_no_todo_markers.py
+      - name: Changed-line Python review
         if: github.event_name == 'pull_request'
-        shell: bash
         env:
           GITHUB_BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          python scripts/quality/check_ruff_changed_lines.py
-
-      - name: Compatibility shim policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/quality/check_compat_shims.py
-
-      - name: Dead code policy
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/quality/check_dead_code.py
-
-      - name: Architecture boundary gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          pytest -q tests/test_architecture_boundaries.py
-
-      - name: No untracked TODO/FIXME in production paths
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/quality/check_no_todo_markers.py
-
-      - name: Production-path audit pack
-        shell: bash
-        run: |
-          set -euo pipefail
-          pytest -q \
-            tests/test_discord_interactions_production_paths.py \
-            tests/test_discord_commands_production_paths.py \
-            tests/test_jira_webhook_production_paths.py \
-            tests/test_github_webhook_production_paths.py \
-            tests/test_gateway_listener_production_paths.py \
-            tests/test_live_voice_production_paths.py \
-            tests/test_agent_tool_cli_runtime.py \
-            tests/test_decision_engine_stateful.py \
-            tests/test_decision_planner.py
-
-  python-rest:
-    name: Python coverage
-    needs: detect
-    if: needs.detect.outputs.is_python == 'true'
-    runs-on: self-hosted
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
+        run: uv run --frozen python scripts/quality/check_ruff_changed_lines.py
+      - name: Full Python test suite
+        run: uv run --frozen pytest --cov=orchestrator --cov-report=term-missing --cov-report=xml
+      - name: Build distribution
+        run: uv build
+      - uses: actions/upload-artifact@v4
         with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install deps
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          if [ -f "pyproject.toml" ]; then
-            python -m pip install -e .[dev] || python -m pip install -e .
-            python -m pip install ruff pytest pytest-cov httpx vulture
-          elif [ -f "requirements.txt" ]; then
-            python -m pip install -r requirements.txt
-            python -m pip install ruff pytest pytest-cov httpx vulture
-          else
-            python -m pip install ruff pytest pytest-cov httpx vulture
-          fi
-
-      - name: Pytest with coverage
-        shell: bash
-        run: |
-          set -euo pipefail
-          pytest -q -m "not production_path" --cov=orchestrator --cov-report=term-missing --cov-report=xml
-
-      - name: Upload Python coverage report
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-coverage-xml
+          name: python-coverage
           path: coverage.xml
           if-no-files-found: error
 
-      - name: Build package
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install build
-          python -m build
-
-  summary:
-    name: CI summary
-    needs: [detect, repo-hygiene, java, node, python-audit, python-rest]
-    runs-on: self-hosted
-    if: always()
+  postgres-rls:
+    name: Isolated PostgreSQL tenant isolation
+    runs-on: ubuntu-24.04
     steps:
-      - name: Result
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "CI completed."
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.9.24'
+      - name: Install locked development dependencies
+        run: uv sync --frozen --extra dev
+      - name: Verify RLS using a disposable loopback PostgreSQL container
+        run: uv run --frozen python scripts/verify_postgres_rls.py
+
+  administration-ui:
+    name: UI types, build and mocked browser behavior
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: admin-ui
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      AUTH_TRUST_HOST: 'true'
+      ORCHESTRATOR_API_BASE_URL: 'http://localhost:60001'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: admin-ui/package-lock.json
+      - name: Generate isolated browser session key
+        run: printf 'AUTH_SECRET=%s\n' "$(openssl rand -hex 48)" >> "$GITHUB_ENV"
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Configuration unit tests
+        run: npm run test:unit
+      - name: Type checking
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Install Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Mocked frontend behavior suite
+        run: npm run test:e2e
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-evidence
+          path: |
+            admin-ui/playwright-report/
+            admin-ui/test-results/
+          if-no-files-found: ignore

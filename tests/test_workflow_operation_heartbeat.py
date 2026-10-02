@@ -4,7 +4,9 @@ from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.workflow.operation_heartbeat import WorkflowOperationAttemptHeartbeatController
+from orchestrator.core.workflow.operation_heartbeat import (
+    WorkflowOperationAttemptHeartbeatController,
+)
 
 
 class _FakeSession:
@@ -36,12 +38,20 @@ def test_operation_attempt_heartbeat_controller_touches_running_attempt() -> Non
         touched.set()
 
     with (
-        patch("orchestrator.core.workflow.operation_heartbeat.create_session_factory", return_value=_session_factory),
+        patch(
+            "orchestrator.core.workflow.operation_heartbeat.create_session_factory",
+            return_value=_session_factory,
+        ),
         patch(
             "orchestrator.core.workflow.operation_heartbeat.get_settings",
-            return_value=SimpleNamespace(workflow_operation_attempt_heartbeat_interval_seconds=1),
+            return_value=SimpleNamespace(
+                workflow_operation_attempt_heartbeat_interval_seconds=1
+            ),
         ),
-        patch("orchestrator.core.workflow.operation_heartbeat.touch_workflow_operation_attempt_heartbeat", side_effect=_touch),
+        patch(
+            "orchestrator.core.workflow.operation_heartbeat.touch_workflow_operation_attempt_heartbeat",
+            side_effect=_touch,
+        ),
     ):
         controller = WorkflowOperationAttemptHeartbeatController(
             database_url="sqlite:////tmp/test.db",
@@ -50,6 +60,8 @@ def test_operation_attempt_heartbeat_controller_touches_running_attempt() -> Non
         )
         controller.start()
         try:
-            assert touched.wait(2.5), "expected heartbeat controller to refresh the operation attempt lease"
+            assert touched.wait(2.5), (
+                "expected heartbeat controller to refresh the operation attempt lease"
+            )
         finally:
             controller.stop()

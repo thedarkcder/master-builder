@@ -51,7 +51,8 @@ def upgrade() -> None:
                     latest_attempt_by_workflow,
                     sa.and_(
                         latest_attempt_by_workflow.c.workflow_id == runs.c.workflow_id,
-                        latest_attempt_by_workflow.c.attempt_number == runs.c.attempt_number,
+                        latest_attempt_by_workflow.c.attempt_number
+                        == runs.c.attempt_number,
                     ),
                 ).join(workflows, workflows.c.workflow_id == runs.c.workflow_id)
             )
@@ -78,8 +79,7 @@ def upgrade() -> None:
         )
         operation_rows = list(
             bind.execute(
-                sa.select(operations.c.operation_id)
-                .where(
+                sa.select(operations.c.operation_id).where(
                     operations.c.workflow_id == row["workflow_id"],
                     operations.c.run_id == row["run_id"],
                     operations.c.operation_type == "run_attempt_execution",
@@ -129,7 +129,8 @@ def repair_terminal_run_workflow_split_brain_rows(
         }
         for row in rows
         if str(row.get("run_status") or "").strip().lower() in set(_FAILED_RUN_STATUSES)
-        and str(row.get("workflow_status") or "").strip().lower() in set(_SUCCESS_WORKFLOW_STATUSES)
+        and str(row.get("workflow_status") or "").strip().lower()
+        in set(_SUCCESS_WORKFLOW_STATUSES)
     ]
 
 

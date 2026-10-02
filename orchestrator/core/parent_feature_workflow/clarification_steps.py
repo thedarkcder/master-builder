@@ -8,7 +8,9 @@ from orchestrator.core.workflow.step_runner import (
     start_workflow_step_attempt,
     wait_workflow_step_attempt,
 )
-from orchestrator.core.workflow.execution_projection import classify_external_workflow_failure
+from orchestrator.core.workflow.execution_projection import (
+    classify_external_workflow_failure,
+)
 from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
     PARENT_OP_JIRA_COMMENT_PROJECTION,
@@ -22,7 +24,9 @@ class ParentPlanningClarificationStepRunner:
     issue_gateway: object
 
     def update_sync_label(self, *, lifecycle, parent_detail, target_label: str) -> None:  # noqa: ANN001
-        step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_PARENT_UPDATE)
+        step = start_workflow_step_attempt(
+            lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_PARENT_UPDATE
+        )
         try:
             self.issue_gateway.update_issue_sync_label(
                 issue_detail=parent_detail,
@@ -43,7 +47,9 @@ class ParentPlanningClarificationStepRunner:
         )
 
     def mark_issues_sync_blocked(self, *, lifecycle, issue_keys: list[str]) -> None:  # noqa: ANN001
-        step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_PARENT_UPDATE)
+        step = start_workflow_step_attempt(
+            lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_PARENT_UPDATE
+        )
         try:
             self.issue_gateway.mark_issues_sync_blocked(issue_keys=issue_keys)
         except Exception as exc:  # noqa: BLE001
@@ -69,9 +75,11 @@ class ParentPlanningClarificationStepRunner:
         questions: tuple[ClarificationQuestion, ...],
         context: str,
     ) -> None:  # noqa: ANN001
-        required_questions = self.clarification_service.require_questions_for_waiting_state(
-            questions=questions,
-            context=context,
+        required_questions = (
+            self.clarification_service.require_questions_for_waiting_state(
+                questions=questions,
+                context=context,
+            )
         )
         try:
             self.update_sync_label(
@@ -117,10 +125,14 @@ class ParentPlanningClarificationStepRunner:
         issue_key: str,
         questions: tuple[ClarificationQuestion, ...],
     ):  # noqa: ANN201, ANN001
-        active_effects = self.issue_gateway.active_clarification_effects(issue_key=issue_key, questions=questions)
+        active_effects = self.issue_gateway.active_clarification_effects(
+            issue_key=issue_key, questions=questions
+        )
         if active_effects is not None:
             if not active_effects.jira_comment_id:
-                raise RuntimeError(f"Active clarification for {issue_key} has no persisted Jira comment id")
+                raise RuntimeError(
+                    f"Active clarification for {issue_key} has no persisted Jira comment id"
+                )
             return self.clarification_service.ensure_active_clarification(
                 issue_key=issue_key,
                 questions=questions,

@@ -25,7 +25,9 @@ class LiveVoiceRuntimeError(RuntimeError):
 class LiveVoiceTransport(Protocol):
     def sync_session(self, *, session_id: str, bot_token: str, rooms) -> None: ...  # noqa: ANN001
 
-    def close_session(self, *, session_id: str | None = None, reason: str = "") -> None: ...
+    def close_session(
+        self, *, session_id: str | None = None, reason: str = ""
+    ) -> None: ...
 
     def play_audio(
         self,
@@ -45,7 +47,9 @@ def _utcnow() -> datetime:
 
 @dataclass
 class LiveVoiceRuntimeService:
-    session_manager: LiveVoiceSessionManager = field(default_factory=LiveVoiceSessionManager)
+    session_manager: LiveVoiceSessionManager = field(
+        default_factory=LiveVoiceSessionManager
+    )
     callbacks: LiveVoiceCallbacks = field(default_factory=LiveVoiceCallbacks)
     clock: Callable[[], datetime] = _utcnow
     _sessions: dict[str, LiveVoiceRoomSession] = field(default_factory=dict)
@@ -68,16 +72,26 @@ class LiveVoiceRuntimeService:
         self._sessions[binding.room_key] = session
         return session
 
-    def get_session(self, *, binding: LiveVoiceRoomBinding) -> LiveVoiceRoomSession | None:
+    def get_session(
+        self, *, binding: LiveVoiceRoomBinding
+    ) -> LiveVoiceRoomSession | None:
         return self._sessions.get(binding.room_key)
 
-    def evaluate_join(self, *, binding: LiveVoiceRoomBinding, human_member_count: int) -> LiveVoiceTransitionDecision:
+    def evaluate_join(
+        self, *, binding: LiveVoiceRoomBinding, human_member_count: int
+    ) -> LiveVoiceTransitionDecision:
         session = self._require_session(binding=binding)
-        return self.session_manager.decide_join(session=session, human_member_count=human_member_count)
+        return self.session_manager.decide_join(
+            session=session, human_member_count=human_member_count
+        )
 
-    def evaluate_leave(self, *, binding: LiveVoiceRoomBinding, human_member_count: int) -> LiveVoiceTransitionDecision:
+    def evaluate_leave(
+        self, *, binding: LiveVoiceRoomBinding, human_member_count: int
+    ) -> LiveVoiceTransitionDecision:
         session = self._require_session(binding=binding)
-        return self.session_manager.decide_leave(session=session, human_member_count=human_member_count)
+        return self.session_manager.decide_leave(
+            session=session, human_member_count=human_member_count
+        )
 
     def join_room(
         self,
@@ -88,7 +102,9 @@ class LiveVoiceRuntimeService:
     ) -> LiveVoiceRoomSession:
         session = self._require_session(binding=binding)
         previous = session
-        session = self.session_manager.begin_joining(session=session, now=now or self.clock())
+        session = self.session_manager.begin_joining(
+            session=session, now=now or self.clock()
+        )
         self._sessions[binding.room_key] = session
         self.callbacks.emit_session_state_changed(previous=previous, current=session)
 
@@ -110,12 +126,16 @@ class LiveVoiceRuntimeService:
     ) -> LiveVoiceRoomSession:
         session = self._require_session(binding=binding)
         previous = session
-        session = self.session_manager.begin_leaving(session=session, now=now or self.clock())
+        session = self.session_manager.begin_leaving(
+            session=session, now=now or self.clock()
+        )
         self._sessions[binding.room_key] = session
         self.callbacks.emit_session_state_changed(previous=previous, current=session)
 
         previous = session
-        session = self.session_manager.mark_disconnected(session=session, now=now or self.clock())
+        session = self.session_manager.mark_disconnected(
+            session=session, now=now or self.clock()
+        )
         self._sessions[binding.room_key] = session
         self._segmenters.pop(binding.room_key, None)
         self.callbacks.emit_session_state_changed(previous=previous, current=session)
@@ -131,9 +151,13 @@ class LiveVoiceRuntimeService:
         session = self._require_session(binding=binding)
         previous = session
         session = (
-            self.session_manager.begin_speaking(session=session, now=now or self.clock())
+            self.session_manager.begin_speaking(
+                session=session, now=now or self.clock()
+            )
             if speaking
-            else self.session_manager.finish_speaking(session=session, now=now or self.clock())
+            else self.session_manager.finish_speaking(
+                session=session, now=now or self.clock()
+            )
         )
         self._sessions[binding.room_key] = session
         self.callbacks.emit_session_state_changed(previous=previous, current=session)
@@ -158,7 +182,10 @@ class LiveVoiceRuntimeService:
         ):
             return None
 
-        if session.state == LiveVoiceSessionState.LISTENING and binding.room_key not in self._segmenters:
+        if (
+            session.state == LiveVoiceSessionState.LISTENING
+            and binding.room_key not in self._segmenters
+        ):
             previous = session
             session = self.session_manager.begin_turn(
                 session=session,
@@ -166,7 +193,9 @@ class LiveVoiceRuntimeService:
                 now=received_at or self.clock(),
             )
             self._sessions[binding.room_key] = session
-            self.callbacks.emit_session_state_changed(previous=previous, current=session)
+            self.callbacks.emit_session_state_changed(
+                previous=previous, current=session
+            )
             self._segmenters[binding.room_key] = LiveVoiceTurnSegmenter()
 
         segmenter = self._segmenters.get(binding.room_key)
@@ -180,11 +209,15 @@ class LiveVoiceRuntimeService:
             sample_rate_hz=sample_rate_hz,
             channels=channels,
         )
-        session = self.session_manager.mark_turn_audio(session=session, received_at=received_at or self.clock())
+        session = self.session_manager.mark_turn_audio(
+            session=session, received_at=received_at or self.clock()
+        )
         self._sessions[binding.room_key] = session
 
         if segmenter.finalization_reason(now=received_at or self.clock()) is not None:
-            return self._finalize_segmenter(binding=binding, segmenter=segmenter, now=received_at or self.clock())
+            return self._finalize_segmenter(
+                binding=binding, segmenter=segmenter, now=received_at or self.clock()
+            )
         return None
 
     def poll(self, *, now: datetime | None = None) -> list[LiveVoiceTurn]:
@@ -237,7 +270,9 @@ class LiveVoiceRuntimeService:
                 now=now,
             )
             self._sessions[binding.room_key] = session
-            self.callbacks.emit_session_state_changed(previous=previous, current=session)
+            self.callbacks.emit_session_state_changed(
+                previous=previous, current=session
+            )
 
         turn = LiveVoiceTurn(
             binding=binding,
@@ -262,9 +297,13 @@ class LiveVoiceRuntimeService:
         session = self._require_session(binding=binding)
         if session.state == LiveVoiceSessionState.PROCESSING:
             previous = session
-            session = self.session_manager.mark_turn_finished(session=session, now=self.clock())
+            session = self.session_manager.mark_turn_finished(
+                session=session, now=self.clock()
+            )
             self._sessions[binding.room_key] = session
-            self.callbacks.emit_session_state_changed(previous=previous, current=session)
+            self.callbacks.emit_session_state_changed(
+                previous=previous, current=session
+            )
         self._segmenters.pop(binding.room_key, None)
         self.callbacks.emit_turn_discarded(session=session, reason=reason)
 
@@ -291,10 +330,14 @@ class LiveVoiceRuntimeService:
         self.callbacks.emit_turn_finalized(session=session, turn=turn)
         return turn
 
-    def _require_session(self, *, binding: LiveVoiceRoomBinding) -> LiveVoiceRoomSession:
+    def _require_session(
+        self, *, binding: LiveVoiceRoomBinding
+    ) -> LiveVoiceRoomSession:
         session = self._sessions.get(binding.room_key)
         if session is None:
-            raise LiveVoiceRuntimeError(f"Live voice room '{binding.room_key}' is not registered")
+            raise LiveVoiceRuntimeError(
+                f"Live voice room '{binding.room_key}' is not registered"
+            )
         return session
 
 

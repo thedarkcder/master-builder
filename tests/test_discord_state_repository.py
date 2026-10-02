@@ -5,7 +5,9 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
+from orchestrator.api.discord.shared.state_repository import (
+    resolve_project_for_discord_channel,
+)
 from orchestrator.core.discord.channel_tenant_index import (
     invalidate_discord_channel_tenant_index,
     resolve_tenant_for_discord_channel,
@@ -64,8 +66,8 @@ class DiscordStateRepositoryIntegrationTests(unittest.TestCase):
         with self.session_factory() as session:
             upsert_followup_context(
                 session=session,
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 context_type="ask_thread",
                 channel_id="project-home-1",
                 thread_channel_id="ask-thread-1",
@@ -75,19 +77,21 @@ class DiscordStateRepositoryIntegrationTests(unittest.TestCase):
             session.commit()
 
         with self.session_factory() as session:
-            tenant = resolve_tenant_for_discord_channel(session=session, channel_id="ask-thread-1")
+            tenant = resolve_tenant_for_discord_channel(
+                session=session, channel_id="ask-thread-1"
+            )
             project = resolve_project_for_discord_channel(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 channel_id="ask-thread-1",
             )
 
         self.assertIsNotNone(tenant)
         assert tenant is not None
-        self.assertEqual(tenant.tenant_id, "example")
+        self.assertEqual(tenant.tenant_id, "example-workspace")
         self.assertIsNotNone(project)
         assert project is not None
-        self.assertEqual(project.project_id, "example-default")
+        self.assertEqual(project.project_id, "example-workspace-default")
 
 
 if __name__ == "__main__":

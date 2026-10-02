@@ -44,7 +44,9 @@ def _json_list(value: object) -> list:
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    if not inspector.has_table("project_install_requests") or not inspector.has_table("project_installs"):
+    if not inspector.has_table("project_install_requests") or not inspector.has_table(
+        "project_installs"
+    ):
         return
 
     timestamp = datetime.now(timezone.utc)

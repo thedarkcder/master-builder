@@ -26,7 +26,9 @@ def _has_table(table_name: str) -> bool:
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -50,7 +52,10 @@ def upgrade() -> None:
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.PrimaryKeyConstraint("runtime_name"),
         )
-    if not _has_index("discord_command_sync_runtime_states", "ix_discord_command_sync_runtime_states_updated_at"):
+    if not _has_index(
+        "discord_command_sync_runtime_states",
+        "ix_discord_command_sync_runtime_states_updated_at",
+    ):
         op.create_index(
             "ix_discord_command_sync_runtime_states_updated_at",
             "discord_command_sync_runtime_states",
@@ -61,7 +66,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     if _has_table("discord_command_sync_runtime_states"):
-        if _has_index("discord_command_sync_runtime_states", "ix_discord_command_sync_runtime_states_updated_at"):
+        if _has_index(
+            "discord_command_sync_runtime_states",
+            "ix_discord_command_sync_runtime_states_updated_at",
+        ):
             op.drop_index(
                 "ix_discord_command_sync_runtime_states_updated_at",
                 table_name="discord_command_sync_runtime_states",

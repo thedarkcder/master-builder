@@ -23,19 +23,27 @@ def list_workflow_operation_live_events(
     limit: int = 500,
 ):  # noqa: ANN001
     if operation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found"
+        )
     normalized_attempt_id = str(attempt_id or "").strip() or None
     if normalized_attempt_id is not None:
         attempt = session.get(WorkflowOperationAttempt, normalized_attempt_id)
         if attempt is None or attempt.operation_id != operation.operation_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation attempt not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Workflow operation attempt not found",
+            )
     rows = list_operation_observability_events(
         session=session,
         operation_id=operation.operation_id,
         attempt_id=normalized_attempt_id,
         limit=limit,
     )
-    return [WorkflowObservabilityEventRead(**observability_stream_event_to_payload(row)) for row in rows]
+    return [
+        WorkflowObservabilityEventRead(**observability_stream_event_to_payload(row))
+        for row in rows
+    ]
 
 
 def stream_workflow_operation_live_events_ndjson(
@@ -47,7 +55,9 @@ def stream_workflow_operation_live_events_ndjson(
 ) -> Iterator[str]:  # noqa: ANN001
     normalized_operation_id = str(operation_id or "").strip()
     if not normalized_operation_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found"
+        )
 
     filters = {"operation_id": normalized_operation_id}
     if attempt_id:
@@ -57,7 +67,12 @@ def stream_workflow_operation_live_events_ndjson(
         snapshot_loader=lambda: build_observability_snapshot_query(
             operation_id=normalized_operation_id,
             attempt_id=attempt_id,
-            limit=max(1, min(int(getattr(settings, "logging_pane_initial_log_limit", 200)), 1000)),
+            limit=max(
+                1,
+                min(
+                    int(getattr(settings, "logging_pane_initial_log_limit", 200)), 1000
+                ),
+            ),
         ),
         after_cursor_loader=lambda cursor: list_product_events_after_sequence(
             event_class="execution_log",

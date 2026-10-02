@@ -38,8 +38,7 @@ class WorkflowEngine(Protocol):
         workflow_type,
         request: "WorkflowAdvanceRequest",
         resolve_advance_handler_fn: Callable[[str], "WorkflowAdvanceHandler"] | None,
-    ) -> "WorkflowAdvanceOutcome":
-        ...
+    ) -> "WorkflowAdvanceOutcome": ...
 
     def start_workflow(
         self,
@@ -50,8 +49,7 @@ class WorkflowEngine(Protocol):
         workflow: WorkflowExecution,
         run: Run,
         claim_id: str,
-    ) -> Run:
-        ...
+    ) -> Run: ...
 
     def resume_workflow(
         self,
@@ -61,15 +59,13 @@ class WorkflowEngine(Protocol):
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         request: RunHumanInputRequest,
-    ) -> Run:
-        ...
+    ) -> Run: ...
 
     def query_workflow(
         self,
         *,
         workflow: WorkflowExecution,
-    ) -> WorkflowEngineState:
-        ...
+    ) -> WorkflowEngineState: ...
 
     def retry_workflow_operation(
         self,
@@ -79,5 +75,4 @@ class WorkflowEngine(Protocol):
         session_factory: sessionmaker[Session],
         workflow: WorkflowExecution,
         operation: WorkflowOperation,
-    ) -> WorkflowOperationHandle:
-        ...
+    ) -> WorkflowOperationHandle: ...

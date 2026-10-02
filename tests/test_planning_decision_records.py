@@ -5,7 +5,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from orchestrator.core.planning.decision_records import PlanningDecisionRecordStore
-from orchestrator.core.runtime.payload_models import TechnicalDecision, TechnicalDecisionOption
+from orchestrator.core.runtime.payload_models import (
+    TechnicalDecision,
+    TechnicalDecisionOption,
+)
 from orchestrator.storage.models import PlanningDecisionRecord
 
 
@@ -64,17 +67,19 @@ def test_decision_records_are_stage_scoped_not_workflow_global() -> None:
         store = PlanningDecisionRecordStore(session=session)
 
         store.record_technical_decisions(
-            tenant_id="example",
+            tenant_id="example-workspace",
             project_id="project-1",
             workflow_id="parent_planning:MAB-243",
             source_operation_id="operation-1",
             source_attempt_id="attempt-1",
             parent_issue_key="MAB-243",
             source_stage="engineering_planning",
-            decisions=(_decision(decision_id="TD-001", question="Engineering decision?"),),
+            decisions=(
+                _decision(decision_id="TD-001", question="Engineering decision?"),
+            ),
         )
         store.record_technical_decisions(
-            tenant_id="example",
+            tenant_id="example-workspace",
             project_id="project-1",
             workflow_id="parent_planning:MAB-243",
             source_operation_id="operation-1",
@@ -102,7 +107,7 @@ def test_decision_records_update_same_stage_identity() -> None:
     with session_factory() as session:
         store = PlanningDecisionRecordStore(session=session)
         common_kwargs = {
-            "tenant_id": "example",
+            "tenant_id": "example-workspace",
             "project_id": "project-1",
             "workflow_id": "parent_planning:MAB-243",
             "source_operation_id": "operation-1",
@@ -132,13 +137,14 @@ def test_decision_records_require_source_stage() -> None:
 
         with pytest.raises(ValueError, match="source_stage"):
             store.record_technical_decisions(
-                tenant_id="example",
+                tenant_id="example-workspace",
                 project_id="project-1",
                 workflow_id="parent_planning:MAB-243",
                 source_operation_id="operation-1",
                 source_attempt_id="attempt-1",
                 parent_issue_key="MAB-243",
                 source_stage=None,
-                decisions=(_decision(decision_id="TD-001", question="Engineering decision?"),),
+                decisions=(
+                    _decision(decision_id="TD-001", question="Engineering decision?"),
+                ),
             )
-

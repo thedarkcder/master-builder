@@ -57,11 +57,21 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
             "enqueue_webhook_job": MagicMock(
                 return_value=SimpleNamespace(
                     created=True,
-                    job=SimpleNamespace(job_id="job-1", dedupe_key=str(payload.get("id") or "").strip() or None, subject_key="discord_interaction:unknown"),
+                    job=SimpleNamespace(
+                        job_id="job-1",
+                        dedupe_key=str(payload.get("id") or "").strip() or None,
+                        subject_key="discord_interaction:unknown",
+                    ),
                 )
             ),
             "notify_webhook_job_enqueued": MagicMock(),
-            "_resolve_interaction_subject_scope": MagicMock(return_value=("example", None, "discord_channel:example:c1")),
+            "_resolve_interaction_subject_scope": MagicMock(
+                return_value=(
+                    "example-workspace",
+                    None,
+                    "discord_channel:example-workspace:c1",
+                )
+            ),
             "_close_deferred_interaction_work": MagicMock(),
             "build_discord_interaction_ingress_result": AsyncMock(
                 return_value=self._result(body=b'{"type":1}', deferred=False)
@@ -71,8 +81,15 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
 
         with ExitStack() as stack:
             for name, value in base.items():
-                stack.enter_context(patch(f"orchestrator.api.routes.webhook_discord_interactions.{name}", value))
-            response = await ingest_discord_interaction(request=request, session=session)
+                stack.enter_context(
+                    patch(
+                        f"orchestrator.api.routes.webhook_discord_interactions.{name}",
+                        value,
+                    )
+                )
+            response = await ingest_discord_interaction(
+                request=request, session=session
+            )
         return response, session, base
 
     async def test_ping_and_unsupported_type_do_not_enqueue(self) -> None:
@@ -109,7 +126,9 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 "member": {"user": {"id": "u-1"}},
             },
             build_discord_interaction_ingress_result=AsyncMock(
-                return_value=self._result(body=b'{"type":5,"data":{"flags":64}}', deferred=True)
+                return_value=self._result(
+                    body=b'{"type":5,"data":{"flags":64}}', deferred=True
+                )
             ),
         )
         self.assertEqual(response.status_code, 200)
@@ -122,7 +141,9 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         patched["notify_webhook_job_enqueued"].assert_called_once()
         session.commit.assert_called_once()
 
-    async def test_application_command_with_unresolved_scope_returns_discord_error_without_enqueue(self) -> None:
+    async def test_application_command_with_unresolved_scope_returns_discord_error_without_enqueue(
+        self,
+    ) -> None:
         response, session, patched = await self._call(
             {
                 "type": 2,
@@ -134,9 +155,13 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 "member": {"user": {"id": "u-1"}},
             },
             build_discord_interaction_ingress_result=AsyncMock(
-                return_value=self._result(body=b'{"type":5,"data":{"flags":64}}', deferred=True)
+                return_value=self._result(
+                    body=b'{"type":5,"data":{"flags":64}}', deferred=True
+                )
             ),
-            _resolve_interaction_subject_scope=MagicMock(return_value=(None, None, "discord_channel::thread-1")),
+            _resolve_interaction_subject_scope=MagicMock(
+                return_value=(None, None, "discord_channel::thread-1")
+            ),
         )
 
         self.assertEqual(response.status_code, 200)
@@ -157,7 +182,9 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 "user": {"id": "u-1"},
             },
             build_discord_interaction_ingress_result=AsyncMock(
-                return_value=self._result(body=b'{"type":5,"data":{"flags":64}}', deferred=True)
+                return_value=self._result(
+                    body=b'{"type":5,"data":{"flags":64}}', deferred=True
+                )
             ),
         )
         self.assertEqual(response.status_code, 200)
@@ -179,14 +206,20 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
             build_discord_interaction_ingress_result=AsyncMock(
-                return_value=self._result(body=b'{"type":8,"data":{"choices":[]}}', deferred=False)
+                return_value=self._result(
+                    body=b'{"type":8,"data":{"choices":[]}}', deferred=False
+                )
             ),
         )
         self.assertEqual(response.status_code, 200)
         patched["enqueue_webhook_job"].assert_not_called()
 
-    def test_resolve_interaction_subject_scope_uses_top_level_user_for_dm_payloads(self) -> None:
-        deps = SimpleNamespace(find_tenant_for_discord_channel=MagicMock(return_value=None))
+    def test_resolve_interaction_subject_scope_uses_top_level_user_for_dm_payloads(
+        self,
+    ) -> None:
+        deps = SimpleNamespace(
+            find_tenant_for_discord_channel=MagicMock(return_value=None)
+        )
         with patch(
             "orchestrator.api.routes.webhook_discord_interactions.build_default_discord_interaction_dispatch_deps",
             return_value=deps,

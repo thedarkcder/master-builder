@@ -4,7 +4,9 @@ import re
 
 from orchestrator.core.pm.followups import build_backlog_follow_up_draft
 
-PLACEHOLDER_PATTERN = re.compile(r"\b(todo|fixme|tbd|placeholder|stub)\b", re.IGNORECASE)
+PLACEHOLDER_PATTERN = re.compile(
+    r"\b(todo|fixme|tbd|placeholder|stub)\b", re.IGNORECASE
+)
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 FILE_PATH_PATTERN = re.compile(r"\b[\w./-]+\.[A-Za-z0-9]+\b")
 
@@ -35,7 +37,9 @@ def evaluate_placeholder_policy(
         return None
 
     detected_issue_keys = {
-        key for key in ISSUE_KEY_PATTERN.findall(evidence_text) if key != request.issue_key
+        key
+        for key in ISSUE_KEY_PATTERN.findall(evidence_text)
+        if key != request.issue_key
     }
     detected_paths = sorted(set(FILE_PATH_PATTERN.findall(evidence_text)))
     path_summary = ", ".join(detected_paths[:8]) if detected_paths else "not specified"
@@ -69,7 +73,11 @@ def evaluate_placeholder_policy(
         )
 
     history.append(
-        {"stage": "review", "attempt": str(attempts), "event": "placeholder_detected_untracked"}
+        {
+            "stage": "review",
+            "attempt": str(attempts),
+            "event": "placeholder_detected_untracked",
+        }
     )
     if not terminal:
         return failure_factory(

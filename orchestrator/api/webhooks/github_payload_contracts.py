@@ -31,10 +31,14 @@ def extract_installation_id(payload: dict) -> str | None:
     return None
 
 
-def find_tenant_by_installation_id(session: Session, installation_id: str) -> Tenant | None:
+def find_tenant_by_installation_id(
+    session: Session, installation_id: str
+) -> Tenant | None:
     tenants = session.execute(select(Tenant)).scalars().all()
     for tenant in tenants:
-        configured_installation_id = str(tenant.github_config.get("installation_id") or "").strip()
+        configured_installation_id = str(
+            tenant.github_config.get("installation_id") or ""
+        ).strip()
         if configured_installation_id and configured_installation_id == installation_id:
             return tenant
     return None
@@ -59,7 +63,7 @@ def extract_push_deployment_source(payload: dict) -> GitHubPushDeploymentSource 
     commit_sha = after.strip()
     if set(commit_sha) == {"0"}:
         return None
-    branch = ref[len("refs/heads/"):].strip()
+    branch = ref[len("refs/heads/") :].strip()
     if not branch:
         return None
     return GitHubPushDeploymentSource(branch=branch, commit_sha=commit_sha)
@@ -97,7 +101,12 @@ def extract_pull_request_targets(payload: dict) -> list[tuple[int, bool]]:
     if isinstance(issue, dict):
         number = issue.get("number")
         pull_request = issue.get("pull_request")
-        if isinstance(number, int) and number > 0 and isinstance(pull_request, dict) and number not in seen:
+        if (
+            isinstance(number, int)
+            and number > 0
+            and isinstance(pull_request, dict)
+            and number not in seen
+        ):
             targets.append((number, True))
             seen.add(number)
 

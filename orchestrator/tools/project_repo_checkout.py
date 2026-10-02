@@ -69,7 +69,9 @@ out/
 *.class
 """
 
-_MCP_SERVER_SECTION_PATTERN = re.compile(r"(?ms)^(\[mcp_servers\.(?P<name>[^\]]+)\]\s*\n)(.*?)(?=^\[|\Z)")
+_MCP_SERVER_SECTION_PATTERN = re.compile(
+    r"(?ms)^(\[mcp_servers\.(?P<name>[^\]]+)\]\s*\n)(.*?)(?=^\[|\Z)"
+)
 _FEATURES_SECTION_PATTERN = re.compile(r"(?ms)^(\[features\]\s*\n)(.*?)(?=^\[|\Z)")
 
 
@@ -77,8 +79,10 @@ def _repo_full_name(repository_url: str) -> str:
     normalized = normalize_repo_identifier(repository_url)
     prefix = "github.com/"
     if not normalized.startswith(prefix):
-        raise ProjectRepoCheckoutError("Only GitHub repositories are supported for project checkout")
-    repo_full_name = normalized[len(prefix):].strip("/")
+        raise ProjectRepoCheckoutError(
+            "Only GitHub repositories are supported for project checkout"
+        )
+    repo_full_name = normalized[len(prefix) :].strip("/")
     if repo_full_name.count("/") != 1:
         raise ProjectRepoCheckoutError("Repository URL must be in owner/repo format")
     return repo_full_name
@@ -87,7 +91,11 @@ def _repo_full_name(repository_url: str) -> str:
 def _safe_git_error(stderr: str, stdout: str) -> str:
     message = (stderr or stdout or "git command failed").strip()
     return redact_sensitive_text(
-        re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
+        re.sub(
+            r"https://x-access-token:[^@]+@",
+            "https://x-access-token:[REDACTED]@",
+            message,
+        )
     )
 
 
@@ -140,18 +148,26 @@ def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
 
 
-def project_checkout_root_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
+def project_checkout_root_dir(
+    *, base_dir: str, tenant_id: str, project_id: str
+) -> Path:
     return Path(base_dir) / tenant_id / project_id
 
 
-def project_run_root_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
+def project_run_root_dir(
+    *, base_dir: str, tenant_id: str, project_id: str, run_id: str
+) -> Path:
     return Path(base_dir) / tenant_id / project_id / "runs" / run_id
 
 
 def _normalize_workspace_key(value: object) -> str:
-    normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip().lower()).strip("-.")
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip().lower()).strip(
+        "-."
+    )
     if not normalized:
-        raise ProjectRepoCheckoutError("Worker workspace key must not be empty for run worktree setup")
+        raise ProjectRepoCheckoutError(
+            "Worker workspace key must not be empty for run worktree setup"
+        )
     return normalized[:128]
 
 
@@ -183,18 +199,25 @@ def project_run_repo_dir(
     run_id: str,
     workspace_key: str,
 ) -> Path:
-    return project_run_workspace_root_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        run_id=run_id,
-        workspace_key=workspace_key,
-    ) / "repo"
+    return (
+        project_run_workspace_root_dir(
+            base_dir=base_dir,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+            workspace_key=workspace_key,
+        )
+        / "repo"
+    )
 
 
 def execution_branch_name(*, issue_key: str, run_id: str) -> str:
-    normalized_issue = re.sub(r"[^a-z0-9._/-]+", "-", str(issue_key).strip().lower()).strip("-")
-    normalized_run = re.sub(r"[^a-z0-9._/-]+", "-", str(run_id).strip().lower()).strip("-")
+    normalized_issue = re.sub(
+        r"[^a-z0-9._/-]+", "-", str(issue_key).strip().lower()
+    ).strip("-")
+    normalized_run = re.sub(r"[^a-z0-9._/-]+", "-", str(run_id).strip().lower()).strip(
+        "-"
+    )
     issue_component = normalized_issue or "issue"
     run_component = normalized_run or "run"
     return f"run/{issue_component}/{run_component}"
@@ -213,7 +236,12 @@ def _is_swift_repo(repo_dir: Path) -> bool:
 def _is_next_repo(repo_dir: Path) -> bool:
     if any(
         (repo_dir / filename).exists()
-        for filename in ("next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs")
+        for filename in (
+            "next.config.js",
+            "next.config.mjs",
+            "next.config.ts",
+            "next.config.cjs",
+        )
     ):
         return True
     if (repo_dir / "next-env.d.ts").exists():
@@ -222,7 +250,10 @@ def _is_next_repo(repo_dir: Path) -> bool:
 
 
 def _is_java_repo(repo_dir: Path) -> bool:
-    if any((repo_dir / filename).exists() for filename in ("pom.xml", "build.gradle", "build.gradle.kts", "gradlew")):
+    if any(
+        (repo_dir / filename).exists()
+        for filename in ("pom.xml", "build.gradle", "build.gradle.kts", "gradlew")
+    ):
         return True
     return False
 
@@ -243,17 +274,25 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
     agents_src = source_root / "AGENTS.md"
     codex_src = source_root / ".codex"
 
-    if agents_src.exists() and not _is_git_path_tracked(repo_dir=repo_dir, path="AGENTS.md"):
+    if agents_src.exists() and not _is_git_path_tracked(
+        repo_dir=repo_dir, path="AGENTS.md"
+    ):
         shutil.copy2(agents_src, repo_dir / "AGENTS.md")
 
-    if codex_src.exists() and codex_src.is_dir() and not _is_git_path_tracked(repo_dir=repo_dir, path=".codex"):
+    if (
+        codex_src.exists()
+        and codex_src.is_dir()
+        and not _is_git_path_tracked(repo_dir=repo_dir, path=".codex")
+    ):
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
         _restrict_external_tool_surfaces_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
     seeded_gitignore = False
     if not gitignore_path.exists():
-        gitignore_path.write_text(_build_seeded_gitignore_content(repo_dir=repo_dir), encoding="utf-8")
+        gitignore_path.write_text(
+            _build_seeded_gitignore_content(repo_dir=repo_dir), encoding="utf-8"
+        )
         seeded_gitignore = True
 
     # Keep workspace policy files out of accidental commits inside project repos/worktrees.
@@ -266,12 +305,23 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
             for line in exclude_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-    required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json", ".master-builder-execution-repo.json"}
+    required_lines = {
+        "AGENTS.md",
+        ".codex/",
+        ".master-builder-run.json",
+        ".master-builder-execution-repo.json",
+    }
     if seeded_gitignore:
         required_lines.add(".gitignore")
-    missing_lines = [line for line in sorted(required_lines) if line not in existing_lines]
+    missing_lines = [
+        line for line in sorted(required_lines) if line not in existing_lines
+    ]
     if missing_lines:
-        prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
+        prefix = (
+            "\n"
+            if exclude_path.exists() and exclude_path.read_text(encoding="utf-8")
+            else ""
+        )
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(prefix + "\n".join(missing_lines) + "\n")
 
@@ -398,14 +448,20 @@ def validate_execution_repo(
             f"Execution repo {resolved_repo_dir} is outside checkout root {resolved_checkout_root}"
         ) from exc
     if not (resolved_repo_dir / ".git").exists():
-        raise ProjectRepoCheckoutError(f"Execution repo is missing git metadata at {resolved_repo_dir}")
+        raise ProjectRepoCheckoutError(
+            f"Execution repo is missing git metadata at {resolved_repo_dir}"
+        )
 
     _sync_agent_workspace_files(repo_dir=resolved_repo_dir)
     metadata = read_execution_repo_metadata(repo_dir=resolved_repo_dir)
     if metadata is None:
-        raise ProjectRepoCheckoutError(f"Execution repo metadata is missing at {resolved_repo_dir}")
+        raise ProjectRepoCheckoutError(
+            f"Execution repo metadata is missing at {resolved_repo_dir}"
+        )
     if str(metadata.get("run_id") or "").strip() != str(run_id or "").strip():
-        raise ProjectRepoCheckoutError(f"Execution repo metadata does not match run_id={run_id}")
+        raise ProjectRepoCheckoutError(
+            f"Execution repo metadata does not match run_id={run_id}"
+        )
 
     normalized_workspace_key = _normalize_workspace_key(workspace_key)
     actual_workspace_key = str(metadata.get("workspace_key") or "").strip()
@@ -415,22 +471,33 @@ def validate_execution_repo(
             f"expected {normalized_workspace_key}, found {actual_workspace_key or '<missing>'}"
         )
 
-    expected_branch = str(metadata.get("execution_branch") or "").strip() or str(execution_branch or "").strip()
+    expected_branch = (
+        str(metadata.get("execution_branch") or "").strip()
+        or str(execution_branch or "").strip()
+    )
     if not expected_branch:
-        raise ProjectRepoCheckoutError("Execution repo metadata is missing execution_branch")
-    current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=resolved_repo_dir).strip()
+        raise ProjectRepoCheckoutError(
+            "Execution repo metadata is missing execution_branch"
+        )
+    current_branch = _run_git(
+        ["rev-parse", "--abbrev-ref", "HEAD"], cwd=resolved_repo_dir
+    ).strip()
     if current_branch != expected_branch:
         raise ProjectRepoCheckoutError(
             f"Execution repo branch mismatch: expected {expected_branch}, found {current_branch}"
         )
     if _run_git(["status", "--porcelain"], cwd=resolved_repo_dir).strip():
-        raise ProjectRepoCheckoutError("Execution repo is unexpectedly dirty before execution")
+        raise ProjectRepoCheckoutError(
+            "Execution repo is unexpectedly dirty before execution"
+        )
 
     start_point_ref = str(metadata.get("start_point_ref") or "").strip()
     start_point_sha = str(metadata.get("start_point_sha") or "").strip()
     repo_kind = str(metadata.get("repo_kind") or "").strip()
     if not start_point_ref or not start_point_sha:
-        raise ProjectRepoCheckoutError("Execution repo metadata is missing start point data")
+        raise ProjectRepoCheckoutError(
+            "Execution repo metadata is missing start point data"
+        )
     if not repo_kind:
         raise ProjectRepoCheckoutError("Execution repo metadata is missing repo_kind")
 
@@ -457,7 +524,9 @@ def _git_ref_exists(*, cwd: Path, ref: str) -> bool:
     return process.returncode == 0
 
 
-def _resolve_worktree_start_point(*, repo_dir: Path, base_branch: str, integration_branch: str) -> str:
+def _resolve_worktree_start_point(
+    *, repo_dir: Path, base_branch: str, integration_branch: str
+) -> str:
     candidate_refs = [
         f"refs/remotes/origin/{integration_branch}",
         f"refs/heads/{integration_branch}",
@@ -514,8 +583,12 @@ def cleanup_run_workspaces(
     run_id: str,
     workspace_key: str | None = None,
 ) -> None:
-    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id)
-    run_root = project_run_root_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id, run_id=run_id)
+    repo_dir = project_repo_dir(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project_id
+    )
+    run_root = project_run_root_dir(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project_id, run_id=run_id
+    )
     workspaces_root = run_root / "workspaces"
     if workspace_key is not None:
         workspace_root = project_run_workspace_root_dir(
@@ -567,8 +640,14 @@ def check_run_snapshot_freshness(
     start_point_sha: str,
     github_installation_token: str | None = None,
 ) -> RunSnapshotFreshness:
-    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
-    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=_github_git_env(github_installation_token))
+    repo_dir = project_repo_dir(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id
+    )
+    _run_git(
+        ["fetch", "origin", "--prune"],
+        cwd=repo_dir,
+        env=_github_git_env(github_installation_token),
+    )
     try:
         current_sha = _resolve_ref_commit_sha(repo_dir=repo_dir, ref=start_point_ref)
     except ProjectRepoCheckoutError:
@@ -611,7 +690,9 @@ def ensure_run_worktree(
     workspace_key: str,
     github_installation_token: str | None = None,
 ) -> tuple[Path, str]:
-    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
+    repo_dir = project_repo_dir(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id
+    )
     if not (repo_dir / ".git").exists():
         raise ProjectRepoCheckoutError(
             f"Project repository checkout is missing for run worktree creation (repo_dir={repo_dir})"
@@ -626,7 +707,11 @@ def ensure_run_worktree(
         workspace_key=normalized_workspace_key,
     )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
-    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=_github_git_env(github_installation_token))
+    _run_git(
+        ["fetch", "origin", "--prune"],
+        cwd=repo_dir,
+        env=_github_git_env(github_installation_token),
+    )
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,
@@ -667,7 +752,15 @@ def ensure_run_worktree(
 
     run_repo.parent.mkdir(parents=True, exist_ok=True)
     _run_git(
-        ["worktree", "add", "--force", "-B", execution_branch, str(run_repo), start_point_sha],
+        [
+            "worktree",
+            "add",
+            "--force",
+            "-B",
+            execution_branch,
+            str(run_repo),
+            start_point_sha,
+        ],
         cwd=repo_dir,
     )
     _sync_agent_workspace_files(repo_dir=run_repo)
@@ -717,8 +810,12 @@ def validate_run_worktree(
                 "run worktree metadata workspace_key mismatch: "
                 f"expected {normalized_workspace_key}, found {actual_workspace_key or '<missing>'}"
             )
-    expected_branch = str(metadata.get("execution_branch") or "").strip() or execution_branch
-    current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir).strip()
+    expected_branch = (
+        str(metadata.get("execution_branch") or "").strip() or execution_branch
+    )
+    current_branch = _run_git(
+        ["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir
+    ).strip()
     if current_branch != expected_branch:
         return f"run worktree branch mismatch: expected {expected_branch}, found {current_branch}"
     if _run_git(["status", "--porcelain"], cwd=repo_dir).strip():
@@ -754,25 +851,23 @@ def _restrict_external_tool_surfaces_in_project_codex(*, repo_dir: Path) -> None
         if not section_body.endswith("\n"):
             section_body += "\n"
         updated = (
-            f"{updated[:section_match.start()]}"
+            f"{updated[: section_match.start()]}"
             f"{section_header}{section_body}"
-            f"{updated[section_match.end():]}"
+            f"{updated[section_match.end() :]}"
         )
         cursor = section_match.start() + len(section_header) + len(section_body)
 
     features_match = _FEATURES_SECTION_PATTERN.search(updated)
     if features_match is None:
         suffix = "" if updated.endswith("\n") else "\n"
-        updated = (
-            f"{updated}{suffix}\n[features]\n"
-            "apps = false\n"
-            "plugins = false\n"
-        )
+        updated = f"{updated}{suffix}\n[features]\napps = false\nplugins = false\n"
     else:
         section_header = features_match.group(1)
         section_body = features_match.group(2)
         for feature_name in ("apps", "plugins"):
-            feature_pattern = rf"(?m)^\s*{re.escape(feature_name)}\s*=\s*(true|false)\s*$"
+            feature_pattern = (
+                rf"(?m)^\s*{re.escape(feature_name)}\s*=\s*(true|false)\s*$"
+            )
             if re.search(feature_pattern, section_body):
                 section_body = re.sub(
                     feature_pattern,
@@ -787,9 +882,9 @@ def _restrict_external_tool_surfaces_in_project_codex(*, repo_dir: Path) -> None
         if not section_body.endswith("\n"):
             section_body += "\n"
         updated = (
-            f"{updated[:features_match.start()]}"
+            f"{updated[: features_match.start()]}"
             f"{section_header}{section_body}"
-            f"{updated[features_match.end():]}"
+            f"{updated[features_match.end() :]}"
         )
     if updated != raw:
         config_path.write_text(updated, encoding="utf-8")
@@ -802,7 +897,9 @@ def ensure_project_checkout(
     project: Project,
     github_installation_token: str,
 ) -> Path:
-    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
+    repo_dir = project_repo_dir(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id
+    )
     repo_root = repo_dir.parent
     repo_root.mkdir(parents=True, exist_ok=True)
     git_dir = repo_dir / ".git"
@@ -820,7 +917,11 @@ def ensure_project_checkout(
     repo_full_name = _repo_full_name(project.github_repository)
     clone_url = f"https://github.com/{repo_full_name}.git"
     try:
-        _run_git(["clone", "--origin", "origin", clone_url, str(repo_dir)], cwd=repo_root, env=clone_env)
+        _run_git(
+            ["clone", "--origin", "origin", clone_url, str(repo_dir)],
+            cwd=repo_root,
+            env=clone_env,
+        )
     except ProjectRepoCheckoutError:
         if repo_dir.exists():
             shutil.rmtree(repo_dir, ignore_errors=True)
@@ -849,7 +950,9 @@ def collect_local_repo_context(
     project: Project,
     issue_key: str | None = None,
 ) -> LocalRepoContext:
-    repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
+    repo_dir = project_repo_dir(
+        base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id
+    )
     if not (repo_dir / ".git").exists():
         return LocalRepoContext(
             available=False,
@@ -863,7 +966,10 @@ def collect_local_repo_context(
         )
 
     try:
-        current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir).strip() or None
+        current_branch = (
+            _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir).strip()
+            or None
+        )
         head_sha = _run_git(["rev-parse", "HEAD"], cwd=repo_dir).strip() or None
         branches_raw = _run_git(
             [
@@ -875,12 +981,23 @@ def collect_local_repo_context(
             ],
             cwd=repo_dir,
         )
-        recent_commits_raw = _run_git(["log", "--oneline", "--decorate", "-n", "25", "--all"], cwd=repo_dir)
+        recent_commits_raw = _run_git(
+            ["log", "--oneline", "--decorate", "-n", "25", "--all"], cwd=repo_dir
+        )
         issue_commit_raw = ""
         normalized_issue_key = str(issue_key or "").strip().upper()
         if normalized_issue_key:
             issue_commit_raw = _run_git(
-                ["log", "--oneline", "--decorate", "--all", "--grep", normalized_issue_key, "-n", "10"],
+                [
+                    "log",
+                    "--oneline",
+                    "--decorate",
+                    "--all",
+                    "--grep",
+                    normalized_issue_key,
+                    "-n",
+                    "10",
+                ],
                 cwd=repo_dir,
             )
     except ProjectRepoCheckoutError as exc:
@@ -896,8 +1013,12 @@ def collect_local_repo_context(
         )
 
     branches = [line.strip() for line in branches_raw.splitlines() if line.strip()][:20]
-    recent_commits = [line.strip() for line in recent_commits_raw.splitlines() if line.strip()][:25]
-    issue_related_commits = [line.strip() for line in issue_commit_raw.splitlines() if line.strip()][:10]
+    recent_commits = [
+        line.strip() for line in recent_commits_raw.splitlines() if line.strip()
+    ][:25]
+    issue_related_commits = [
+        line.strip() for line in issue_commit_raw.splitlines() if line.strip()
+    ][:10]
     return LocalRepoContext(
         available=True,
         reason=None,

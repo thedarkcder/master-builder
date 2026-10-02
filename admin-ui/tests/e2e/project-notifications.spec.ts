@@ -10,13 +10,13 @@ import {
 
 test("project Discord live voice settings use clear empty placeholders and save entered IDs", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
     discord: {
       notify_events: ["pr_opened"],
       live_voice_enabled: false,
@@ -31,22 +31,22 @@ test("project Discord live voice settings use clear empty placeholders and save 
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "PATCH",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/discord",
       handler: async (route) => {
         savedPayload = await route.request().postDataJSON();
         return fulfillJson(route, {
@@ -57,10 +57,10 @@ test("project Discord live voice settings use clear empty placeholders and save 
     },
   ]);
 
-  await page.goto("/example/projects/example-default/notifications");
+  await page.goto("/example-workspace/projects/example-workspace-default/notifications");
 
   await expect(page.getByRole("heading", { name: "Notification Settings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Route 25 Default", level: 1 })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Example Workspace Default", level: 1 })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Access Requests" })).toHaveCount(0);
   await page.getByLabel("Enable live voice rooms for this project").check();
   await expect(page.getByLabel("Voice channel ID")).toHaveValue("");
@@ -93,13 +93,13 @@ test("project Discord live voice settings use clear empty placeholders and save 
 
 test("project access requests live on their own page and can be approved", async ({ page }) => {
   const tenant = makeTenant({
-    tenant_id: "example",
-    name: "Route 25",
+    tenant_id: "example-workspace",
+    name: "Example Workspace",
   });
   const project = makeProject({
-    project_id: "example-default",
-    tenant_id: "example",
-    name: "Route 25 Default",
+    project_id: "example-workspace-default",
+    tenant_id: "example-workspace",
+    name: "Example Workspace Default",
   });
   let approvedUserId: string | null = null;
 
@@ -107,22 +107,22 @@ test("project access requests live on their own page and can be approved", async
   await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example-workspace",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "GET",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/discord/allowlist-requests",
       handler: (route) =>
         fulfillJson(
           route,
@@ -130,7 +130,7 @@ test("project access requests live on their own page and can be approved", async
             ? []
             : [
                 {
-                  project_id: "example-default",
+                  project_id: "example-workspace-default",
                   user_id: "discord-user-1",
                   requested_at: "2026-06-01T09:30:00Z",
                   channel_id: "voice-1",
@@ -142,13 +142,13 @@ test("project access requests live on their own page and can be approved", async
     },
     {
       method: "POST",
-      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord/allowlist-requests/discord-user-1/approve",
+      pathname: "/api/bff/api/admin/tenants/example-workspace/projects/example-workspace-default/discord/allowlist-requests/discord-user-1/approve",
       handler: (route) => {
         approvedUserId = "discord-user-1";
         return fulfillJson(route, {
           ok: true,
           details: "discord-user-1 can now access the project room.",
-          project_id: "example-default",
+          project_id: "example-workspace-default",
           user_id: "discord-user-1",
           notified: true,
         });
@@ -156,10 +156,10 @@ test("project access requests live on their own page and can be approved", async
     },
   ]);
 
-  await page.goto("/example/projects/example-default/access-requests");
+  await page.goto("/example-workspace/projects/example-workspace-default/access-requests");
 
   await expect(page.getByRole("heading", { name: "Access Requests" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Route 25 Default", level: 1 })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Example Workspace Default", level: 1 })).toHaveCount(0);
   await expect(page.getByText("discord-user-1")).toBeVisible();
   await expect(page.getByText("Needs access to the project room.")).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click();

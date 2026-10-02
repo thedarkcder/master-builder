@@ -8,7 +8,9 @@ from fastapi import status
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
 from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
@@ -30,13 +32,22 @@ from orchestrator.core.webhooks.job_queue import (
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
-from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
-from orchestrator.core.communications.execution_admission_format import present_jira_admission
+from orchestrator.core.communications import (
+    HttpJsonResponseAction,
+    IngressResult,
+    TransportAction,
+    TransportEnvelope,
+)
+from orchestrator.core.communications.execution_admission_format import (
+    present_jira_admission,
+)
 from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.core.integrations.atlassian.issue_intake_routing import classify_jira_issue_intake_with_runtime
+from orchestrator.core.integrations.atlassian.issue_intake_routing import (
+    classify_jira_issue_intake_with_runtime,
+)
 from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.core.runtime.invocation import AgentInvocationContext
 from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
@@ -73,10 +84,15 @@ def _maybe_apply_runtime_issue_intake_routing(
 ) -> str | None:
     normalized_event = str(context.webhook_event or "").strip().lower()
     normalized_status = str(context.issue_status or "").strip().casefold()
-    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
+    normalized_labels = {
+        str(label).strip().casefold() for label in context.issue_labels or []
+    }
     if normalized_event not in {"issue_created", "issue_updated"}:
         return None
-    if _PM_PARENT_LABEL in normalized_labels or _ENGINEERING_CHILD_LABEL in normalized_labels:
+    if (
+        _PM_PARENT_LABEL in normalized_labels
+        or _ENGINEERING_CHILD_LABEL in normalized_labels
+    ):
         return None
     board_location, _detail = resolve_jira_issue_board_location(
         context=context,
@@ -107,7 +123,9 @@ def _maybe_apply_runtime_issue_intake_routing(
             invocation_context=AgentInvocationContext(
                 channel="jira_webhook",
                 tenant_id=context.tenant_id,
-                project_id=context.project.project_id if context.project is not None else None,
+                project_id=context.project.project_id
+                if context.project is not None
+                else None,
                 command="jira_webhook",
                 stage="jira_issue_intake_routing",
                 working_dir=".",
@@ -169,6 +187,7 @@ def _maybe_apply_runtime_issue_intake_routing(
     )
     return target_label
 
+
 async def build_jira_webhook_ingress_result(
     *,
     tenant_id: str,
@@ -177,15 +196,27 @@ async def build_jira_webhook_ingress_result(
     settings,  # noqa: ANN001
     envelope: TransportEnvelope,
 ) -> IngressResult:
-    context_tokens = set_log_context(correlation_id=envelope.request_id, tenant_id=tenant_id)
+    context_tokens = set_log_context(
+        correlation_id=envelope.request_id, tenant_id=tenant_id
+    )
     try:
-        from orchestrator.api.webhooks.jira_ingress import stage_parse_jira_webhook_context
+        from orchestrator.api.webhooks.jira_ingress import (
+            stage_parse_jira_webhook_context,
+        )
 
-        logger.info("jira_webhook_received request_id=%s tenant_id=%s", envelope.request_id, tenant_id)
+        logger.info(
+            "jira_webhook_received request_id=%s tenant_id=%s",
+            envelope.request_id,
+            tenant_id,
+        )
 
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            logger.warning("jira_webhook_unknown_tenant request_id=%s tenant_id=%s", envelope.request_id, tenant_id)
+            logger.warning(
+                "jira_webhook_unknown_tenant request_id=%s tenant_id=%s",
+                envelope.request_id,
+                tenant_id,
+            )
             raise HTTPException(status_code=404, detail="Unknown tenant")
         if not tenant.is_enabled:
             logger.info(
@@ -219,7 +250,9 @@ async def build_jira_webhook_ingress_result(
                 transport=WEBHOOK_TRANSPORT_JIRA,
                 request_id=context.request_id,
                 tenant_id=context.tenant_id,
-                project_id=context.project.project_id if context.project is not None else None,
+                project_id=context.project.project_id
+                if context.project is not None
+                else None,
                 subject_key=f"jira:{context.tenant_id}:{context.issue_key}",
                 dedupe_key=context.delivery_id,
                 event_type=context.webhook_event,
@@ -249,7 +282,9 @@ async def build_jira_webhook_ingress_result(
             session,
             transport=WEBHOOK_TRANSPORT_JIRA,
             tenant_id=context.tenant_id,
-            project_id=context.project.project_id if context.project is not None else None,
+            project_id=context.project.project_id
+            if context.project is not None
+            else None,
             subject_key=f"jira:{context.tenant_id}:{context.issue_key}",
             job_id=enqueue_result.job.job_id,
             dedupe_key=enqueue_result.job.dedupe_key,
@@ -269,13 +304,17 @@ async def build_jira_webhook_ingress_result(
                 content={
                     "request_id": context.request_id,
                     "tenant_id": context.tenant_id,
-                    "project_id": context.project.project_id if context.project is not None else None,
+                    "project_id": context.project.project_id
+                    if context.project is not None
+                    else None,
                     "issue_key": context.issue_key,
                     "delivery_id": context.delivery_id,
                     "accepted": True,
                     "enqueued": False,
                     "queued": enqueue_result.created,
-                    "reason": "queued_for_reconciliation" if enqueue_result.created else "duplicate_delivery",
+                    "reason": "queued_for_reconciliation"
+                    if enqueue_result.created
+                    else "duplicate_delivery",
                     "job_id": enqueue_result.job.job_id,
                     "webhook_event": context.webhook_event,
                 },

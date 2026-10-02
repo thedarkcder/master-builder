@@ -24,13 +24,18 @@ _VECTOR_EXTENSION_LOCK_KEY = 202603110025
 def _has_column(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def _column_type(table_name: str, column_name: str) -> str | None:
@@ -81,25 +86,42 @@ def upgrade() -> None:
     if bind.dialect.name != "postgresql":
         return
 
-    bind.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": _VECTOR_EXTENSION_LOCK_KEY})
+    bind.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {"lock_key": _VECTOR_EXTENSION_LOCK_KEY},
+    )
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     if _column_type("knowledge_chunks", "embedding") != "vector(384)":
         if not _has_column("knowledge_chunks", "embedding_tmp"):
-            op.execute("ALTER TABLE knowledge_chunks ADD COLUMN embedding_tmp vector(384)")
+            op.execute(
+                "ALTER TABLE knowledge_chunks ADD COLUMN embedding_tmp vector(384)"
+            )
 
-        rows = bind.execute(text("SELECT chunk_id, embedding FROM knowledge_chunks WHERE embedding IS NOT NULL")).mappings().all()
+        rows = (
+            bind.execute(
+                text(
+                    "SELECT chunk_id, embedding FROM knowledge_chunks WHERE embedding IS NOT NULL"
+                )
+            )
+            .mappings()
+            .all()
+        )
         for row in rows:
             literal = _vector_literal(row.get("embedding"))
             if not literal:
                 continue
             bind.execute(
-                text("UPDATE knowledge_chunks SET embedding_tmp = CAST(:embedding AS vector) WHERE chunk_id = :chunk_id"),
+                text(
+                    "UPDATE knowledge_chunks SET embedding_tmp = CAST(:embedding AS vector) WHERE chunk_id = :chunk_id"
+                ),
                 {"embedding": literal, "chunk_id": row["chunk_id"]},
             )
 
         op.execute("ALTER TABLE knowledge_chunks DROP COLUMN embedding")
-        op.execute("ALTER TABLE knowledge_chunks RENAME COLUMN embedding_tmp TO embedding")
+        op.execute(
+            "ALTER TABLE knowledge_chunks RENAME COLUMN embedding_tmp TO embedding"
+        )
 
     if not _has_index("knowledge_chunks", "ix_knowledge_chunks_embedding_ivfflat"):
         op.execute(
@@ -130,20 +152,37 @@ def downgrade() -> None:
         op.drop_index("ix_knowledge_chunks_content_fts", table_name="knowledge_chunks")
 
     if _has_index("knowledge_chunks", "ix_knowledge_chunks_embedding_ivfflat"):
-        op.drop_index("ix_knowledge_chunks_embedding_ivfflat", table_name="knowledge_chunks")
+        op.drop_index(
+            "ix_knowledge_chunks_embedding_ivfflat", table_name="knowledge_chunks"
+        )
 
     if _column_type("knowledge_chunks", "embedding") == "vector(384)":
         if not _has_column("knowledge_chunks", "embedding_json"):
-            op.add_column("knowledge_chunks", sa.Column("embedding_json", sa.JSON(), nullable=True))
-        rows = bind.execute(text("SELECT chunk_id, embedding::text AS embedding_text FROM knowledge_chunks WHERE embedding IS NOT NULL")).mappings().all()
+            op.add_column(
+                "knowledge_chunks",
+                sa.Column("embedding_json", sa.JSON(), nullable=True),
+            )
+        rows = (
+            bind.execute(
+                text(
+                    "SELECT chunk_id, embedding::text AS embedding_text FROM knowledge_chunks WHERE embedding IS NOT NULL"
+                )
+            )
+            .mappings()
+            .all()
+        )
         for row in rows:
             literal = _vector_literal(row.get("embedding_text"))
             if not literal:
                 continue
             parsed = json.loads(literal)
             bind.execute(
-                text("UPDATE knowledge_chunks SET embedding_json = CAST(:embedding AS jsonb) WHERE chunk_id = :chunk_id"),
+                text(
+                    "UPDATE knowledge_chunks SET embedding_json = CAST(:embedding AS jsonb) WHERE chunk_id = :chunk_id"
+                ),
                 {"embedding": json.dumps(parsed), "chunk_id": row["chunk_id"]},
             )
         op.execute("ALTER TABLE knowledge_chunks DROP COLUMN embedding")
-        op.execute("ALTER TABLE knowledge_chunks RENAME COLUMN embedding_json TO embedding")
+        op.execute(
+            "ALTER TABLE knowledge_chunks RENAME COLUMN embedding_json TO embedding"
+        )

@@ -71,12 +71,18 @@ def test_mark_workflow_waiting_for_input_clears_terminal_failure() -> None:
     assert workflow.updated_at == timestamp
 
 
-def test_recompute_workflow_status_marks_completion_from_required_operations(monkeypatch) -> None:
+def test_recompute_workflow_status_marks_completion_from_required_operations(
+    monkeypatch,
+) -> None:
     workflow = _workflow()
     workflow.status = "running"
     operations = [
-        SimpleNamespace(operation_type="jira_parent_update", status="completed", summary="done"),
-        SimpleNamespace(operation_type="jira_child_fanout", status="completed", summary="done"),
+        SimpleNamespace(
+            operation_type="jira_parent_update", status="completed", summary="done"
+        ),
+        SimpleNamespace(
+            operation_type="jira_child_fanout", status="completed", summary="done"
+        ),
     ]
     definitions = [
         SimpleNamespace(key="jira_parent_update", required=True),
@@ -98,11 +104,17 @@ def test_recompute_workflow_status_marks_completion_from_required_operations(mon
     assert workflow.finished_at is not None
 
 
-def test_recompute_workflow_status_marks_failure_from_required_operation(monkeypatch) -> None:
+def test_recompute_workflow_status_marks_failure_from_required_operation(
+    monkeypatch,
+) -> None:
     workflow = _workflow()
     operations = [
-        SimpleNamespace(operation_type="jira_parent_update", status="completed", summary="done"),
-        SimpleNamespace(operation_type="jira_child_fanout", status="failed", summary="content limit"),
+        SimpleNamespace(
+            operation_type="jira_parent_update", status="completed", summary="done"
+        ),
+        SimpleNamespace(
+            operation_type="jira_child_fanout", status="failed", summary="content limit"
+        ),
     ]
     definitions = [
         SimpleNamespace(key="jira_parent_update", required=True),

@@ -97,7 +97,9 @@ class SqliteTemplateApiTestCase(SqliteTemplateDbTestCase):
             if cls._class_original_database_url is None:
                 os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
             else:
-                os.environ["ORCHESTRATOR_DATABASE_URL"] = cls._class_original_database_url
+                os.environ["ORCHESTRATOR_DATABASE_URL"] = (
+                    cls._class_original_database_url
+                )
             for key, original_value in cls._class_env_originals.items():
                 if original_value is None:
                     os.environ.pop(key, None)

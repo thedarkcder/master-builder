@@ -24,7 +24,9 @@ def _table_exists(table_name: str) -> bool:
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -43,7 +45,9 @@ def upgrade() -> None:
             sa.Column("owner_id", sa.String(length=128), nullable=True),
             sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("available_at", sa.DateTime(timezone=True), nullable=False),
-            sa.Column("attempt_count", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column(
+                "attempt_count", sa.Integer(), nullable=False, server_default="0"
+            ),
             sa.Column("last_error", sa.Text(), nullable=True),
             sa.Column("payload_json", sa.JSON(), nullable=False),
             sa.Column("context_json", sa.JSON(), nullable=False),
@@ -51,8 +55,12 @@ def upgrade() -> None:
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
             sa.PrimaryKeyConstraint("job_id"),
             sa.UniqueConstraint(
                 "transport",
@@ -69,7 +77,9 @@ def upgrade() -> None:
             ["status", "available_at", "created_at"],
             unique=False,
         )
-    if not _has_index("webhook_jobs", "ix_webhook_jobs_transport_subject_status_created"):
+    if not _has_index(
+        "webhook_jobs", "ix_webhook_jobs_transport_subject_status_created"
+    ):
         op.create_index(
             "ix_webhook_jobs_transport_subject_status_created",
             "webhook_jobs",

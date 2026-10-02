@@ -38,13 +38,17 @@ def child_work_item_id(*, execution_id: str, issue_key: str) -> str:
 def parse_work_item_id(work_item_id: str) -> ExecutableWorkItemRef:
     normalized = str(work_item_id or "").strip()
     if normalized.startswith(_PARENT_PREFIX):
-        execution_id = _required_text(normalized[len(_PARENT_PREFIX) :], field_name="execution_id")
+        execution_id = _required_text(
+            normalized[len(_PARENT_PREFIX) :], field_name="execution_id"
+        )
         return ExecutableWorkItemRef(kind="parent", execution_id=execution_id)
     if normalized.startswith(_CHILD_PREFIX):
         remainder = normalized[len(_CHILD_PREFIX) :]
         execution_id, separator, issue_key = remainder.rpartition(":")
         if not separator:
-            raise ValueError("Child work item id must include execution_id and issue_key")
+            raise ValueError(
+                "Child work item id must include execution_id and issue_key"
+            )
         return ExecutableWorkItemRef(
             kind="child",
             execution_id=_required_text(execution_id, field_name="execution_id"),

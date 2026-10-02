@@ -32,14 +32,19 @@ def create_discord_bug_issue(
 ) -> tuple[str, dict]:
     project_keys = tenant_project_keys_fn(session=session, tenant=tenant)
     if not project_keys:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant has no Jira project keys")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant has no Jira project keys",
+        )
     scoped_project_key = str(selected_project_key or "").strip().upper()
     if not scoped_project_key:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Bug creation requires a project-scoped Discord channel",
         )
-    available_project_keys = {str(key).strip().upper() for key in project_keys if str(key).strip()}
+    available_project_keys = {
+        str(key).strip().upper() for key in project_keys if str(key).strip()
+    }
     if scoped_project_key not in available_project_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -52,7 +57,9 @@ def create_discord_bug_issue(
         channel_id=channel_id,
     )
     normalized_channel = (
-        f"{channel_display_name} ({channel_id})" if channel_display_name and channel_id else channel_display_name or channel_id
+        f"{channel_display_name} ({channel_id})"
+        if channel_display_name and channel_id
+        else channel_display_name or channel_id
     )
 
     description = build_discord_bug_description(
@@ -71,7 +78,9 @@ def create_discord_bug_issue(
     )
 
     try:
-        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context_fn(
+            session=session, tenant=tenant, settings=settings
+        )
         create_result = oauth["client"].create_issues_bulk(
             access_token=oauth["access_token"],
             cloud_id=oauth["connection"].cloud_id,
@@ -113,13 +122,17 @@ def create_discord_bug_issue(
         )
 
     browse_base_url = str(oauth["connection"].site_url or "").strip().rstrip("/")
-    issue_url = build_jira_issue_url(issue_key=created_issue.key, browse_base_url=browse_base_url)
+    issue_url = build_jira_issue_url(
+        issue_key=created_issue.key, browse_base_url=browse_base_url
+    )
     if issue_url:
         message = f"Bug logged: [{created_issue.key}]({issue_url})"
     else:
         message = f"Bug logged: {created_issue.key}"
     if attachments:
-        message = f"{message}. Attached {uploaded_count}/{len(attachments)} file(s) to Jira."
+        message = (
+            f"{message}. Attached {uploaded_count}/{len(attachments)} file(s) to Jira."
+        )
     if create_result.errors:
         message = f"{message} (warnings: {'; '.join(create_result.errors)})"
     return (

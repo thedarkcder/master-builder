@@ -14,21 +14,43 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.api.atlassian_oauth.service import (
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.platform.binding_resolution_service import check_project_bindings
 from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.core.platform.install_registry_service import get_project_install, list_project_installs
-from orchestrator.core.platform.install_request_service import ProjectInstallRequestWrite, create_install_request, request_kind_for_install
-from orchestrator.core.knowledge.exact_read import ExactReadRequest, exact_read_knowledge_source
-from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode, build_knowledge_prompt_context
+from orchestrator.core.platform.install_registry_service import (
+    get_project_install,
+    list_project_installs,
+)
+from orchestrator.core.platform.install_request_service import (
+    ProjectInstallRequestWrite,
+    create_install_request,
+    request_kind_for_install,
+)
+from orchestrator.core.knowledge.exact_read import (
+    ExactReadRequest,
+    exact_read_knowledge_source,
+)
+from orchestrator.core.knowledge.base import (
+    KnowledgeEmbeddingAccessMode,
+    build_knowledge_prompt_context,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.runs.human_input_service import create_human_input_request
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.core.platform.trusted_install_executor import run_install as execute_project_install
+from orchestrator.core.platform.trusted_install_executor import (
+    run_install as execute_project_install,
+)
 from orchestrator.core.worker.workspace import resolve_worker_workspace_key
-from orchestrator.core.workflow.execution_artifacts import record_pushed_execution_artifact
-from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
+from orchestrator.core.workflow.execution_artifacts import (
+    record_pushed_execution_artifact,
+)
+from orchestrator.core.workflow.execution_snapshot import (
+    load_parsed_trigger_context_from_plan,
+)
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.storage.models import (
     DecisionAnswer,
@@ -41,7 +63,10 @@ from orchestrator.storage.models import (
     Tenant,
 )
 from orchestrator.tools.git_ops import build_branch_name
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 from orchestrator.tools.project_repo_checkout import (
     project_checkout_root_dir,
     project_repo_dir,
@@ -267,7 +292,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "plain operator language. Put reusable detail in suggested_config for the UI, but do not make the operator "
         "read JSON or internal config names."
     ),
-    "repo.read": "Run guarded read-only repository commands through portable POSIX sh and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes. Arguments: {\"command\":\"<single read-only shell command>\"}. Use the exact key `command`, not `cmd`; do not use pipes, redirects, semicolons, or other shell operators. If output is too large, the tool fails with output_overflow and you must issue a narrower read; overflow output is not evidence.",
+    "repo.read": 'Run guarded read-only repository commands through portable POSIX sh and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes. Arguments: {"command":"<single read-only shell command>"}. Use the exact key `command`, not `cmd`; do not use pipes, redirects, semicolons, or other shell operators. If output is too large, the tool fails with output_overflow and you must issue a narrower read; overflow output is not evidence.',
     "repo.exec_bootstrap": "Run a bounded bootstrap shell command inside the project checkout root. Use this only in repo_setup to clone, fetch, repair, prune, or create the execution repo before agent workflow stages begin. If output is too large, the tool fails with output_overflow instead of returning partial evidence.",
     "run.request_human_input": "Create a structured human-input request for the active run and pause the workflow until a reply arrives. Use this when one-time operator clarification or data is required to continue.",
     "exec.run_install": "Execute a registered project install with its pre-approved bindings injected server-side. Use this when a configured integration must run and the model must not see the binding values.",
@@ -280,7 +305,7 @@ TOOL_ARGUMENT_SCHEMAS: dict[str, dict[str, object]] = {
         "properties": {
             "command": {
                 "type": "string",
-                "description": "Single read-only shell command, for example `rg -n \"pattern\" .`.",
+                "description": 'Single read-only shell command, for example `rg -n "pattern" .`.',
             },
         },
         "additionalProperties": False,
@@ -289,8 +314,14 @@ TOOL_ARGUMENT_SCHEMAS: dict[str, dict[str, object]] = {
         "type": "object",
         "required": ["command"],
         "properties": {
-            "command": {"type": "string", "description": "Single bounded bootstrap command."},
-            "cwd": {"type": "string", "description": "Optional checkout-root-relative directory."},
+            "command": {
+                "type": "string",
+                "description": "Single bounded bootstrap command.",
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Optional checkout-root-relative directory.",
+            },
         },
         "additionalProperties": False,
     },
@@ -347,7 +378,9 @@ _READ_ONLY_GIT_BLOCKED_OPTIONS: dict[str, set[str]] = {
 _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS = {
     "push",
 }
-_NATIVE_CODEX_TOOL_NAMES = frozenset({"web.search", "web.fetch", "browser.open", "browser.snapshot"})
+_NATIVE_CODEX_TOOL_NAMES = frozenset(
+    {"web.search", "web.fetch", "browser.open", "browser.snapshot"}
+)
 _SUPPORTED_TOOL_PLATFORMS = frozenset({"linux", "macos"})
 _TOOL_PLATFORM_SCOPES: dict[str, frozenset[str]] = {
     # Keep platform support explicit so future Mac-only/Linux-only tools cannot leak
@@ -364,12 +397,16 @@ def _normalize_worker_platform(worker_platform: str | None) -> str | None:
         return None
     if normalized not in _SUPPORTED_TOOL_PLATFORMS:
         allowed = ", ".join(sorted(_SUPPORTED_TOOL_PLATFORMS))
-        raise ValueError(f"Unsupported worker platform '{normalized}'. Allowed values: {allowed}.")
+        raise ValueError(
+            f"Unsupported worker platform '{normalized}'. Allowed values: {allowed}."
+        )
     return normalized
 
 
 def _tool_platforms(tool_name: str) -> frozenset[str]:
-    return _TOOL_PLATFORM_SCOPES.get(str(tool_name or "").strip(), _SUPPORTED_TOOL_PLATFORMS)
+    return _TOOL_PLATFORM_SCOPES.get(
+        str(tool_name or "").strip(), _SUPPORTED_TOOL_PLATFORMS
+    )
 
 
 def _tool_allowed_on_platform(tool_name: str, *, worker_platform: str | None) -> bool:
@@ -392,7 +429,9 @@ class AgentToolContext:
     run: Run | None = None
 
 
-def _knowledge_embedding_access_mode_for_context(context: AgentToolContext) -> KnowledgeEmbeddingAccessMode:
+def _knowledge_embedding_access_mode_for_context(
+    context: AgentToolContext,
+) -> KnowledgeEmbeddingAccessMode:
     return KnowledgeEmbeddingAccessMode.BEST_EFFORT
 
 
@@ -401,7 +440,9 @@ def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
         raise ValueError(f"Repository checkout missing at {repo_dir}")
 
 
-def allowed_tools_for_stage(stage: str, *, worker_platform: str | None = None) -> set[str]:
+def allowed_tools_for_stage(
+    stage: str, *, worker_platform: str | None = None
+) -> set[str]:
     normalized_platform = _normalize_worker_platform(worker_platform)
     tools = set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
     if normalized_platform is None:
@@ -429,7 +470,9 @@ def native_model_tools_for_stage(
     if not _runtime_supports_native_codex_tools(runtime_command):
         return set()
     normalized_stage = str(stage or "").strip().lower()
-    return allowed_tools_for_stage(normalized_stage, worker_platform=worker_platform) & set(_NATIVE_CODEX_TOOL_NAMES)
+    return allowed_tools_for_stage(
+        normalized_stage, worker_platform=worker_platform
+    ) & set(_NATIVE_CODEX_TOOL_NAMES)
 
 
 def governed_allowed_tools_for_stage(
@@ -439,7 +482,9 @@ def governed_allowed_tools_for_stage(
     worker_platform: str | None = None,
 ) -> set[str]:
     _ = runtime_command
-    return allowed_tools_for_stage(stage, worker_platform=worker_platform) - set(_NATIVE_CODEX_TOOL_NAMES)
+    return allowed_tools_for_stage(stage, worker_platform=worker_platform) - set(
+        _NATIVE_CODEX_TOOL_NAMES
+    )
 
 
 def list_implemented_tools() -> list[dict[str, object]]:
@@ -455,7 +500,9 @@ def list_implemented_tools() -> list[dict[str, object]]:
             {
                 "tool_name": tool_name,
                 "category": category or "other",
-                "description": TOOL_DESCRIPTIONS.get(tool_name, "Implemented governed tool."),
+                "description": TOOL_DESCRIPTIONS.get(
+                    tool_name, "Implemented governed tool."
+                ),
                 "args_schema": TOOL_ARGUMENT_SCHEMAS.get(tool_name, {}),
                 "stages": tool_stage_membership[tool_name],
                 "platforms": sorted(_tool_platforms(tool_name)),
@@ -464,7 +511,9 @@ def list_implemented_tools() -> list[dict[str, object]]:
     return tools
 
 
-def tool_catalog_for_stage(stage: str, *, worker_platform: str | None = None) -> list[dict[str, object]]:
+def tool_catalog_for_stage(
+    stage: str, *, worker_platform: str | None = None
+) -> list[dict[str, object]]:
     normalized_stage = str(stage or "").strip().lower()
     if not normalized_stage:
         return []
@@ -472,7 +521,8 @@ def tool_catalog_for_stage(stage: str, *, worker_platform: str | None = None) ->
     return [
         tool
         for tool in list_implemented_tools()
-        if normalized_stage in tool.get("stages", []) and str(tool.get("tool_name") or "") in allowed
+        if normalized_stage in tool.get("stages", [])
+        and str(tool.get("tool_name") or "") in allowed
     ]
 
 
@@ -581,7 +631,9 @@ def execute_agent_tool(
         worker_platform=getattr(context, "worker_platform", None),
     )
     if tool_name not in allowed:
-        raise PermissionError(f"Tool '{tool_name}' is not allowed in stage '{context.stage}'")
+        raise PermissionError(
+            f"Tool '{tool_name}' is not allowed in stage '{context.stage}'"
+        )
     if tool_name in _NATIVE_CODEX_TOOL_NAMES:
         raise PermissionError(
             f"Tool '{tool_name}' is a native runtime tool and must not be executed through the governed tool bridge"
@@ -591,7 +643,9 @@ def execute_agent_tool(
     if tool_name == "repo.read":
         return _tool_repo_read(context=context, args=args)
     if tool_name == "repo.exec_bootstrap":
-        return _tool_repo_exec_bootstrap(session=session, settings=settings, context=context, args=args)
+        return _tool_repo_exec_bootstrap(
+            session=session, settings=settings, context=context, args=args
+        )
     if tool_name.startswith("project."):
         return _execute_project_tool(
             session=session,
@@ -617,7 +671,9 @@ def execute_agent_tool(
             args=args,
         )
     if tool_name.startswith("decision."):
-        return _execute_decision_tool(session=session, context=context, tool_name=tool_name, args=args)
+        return _execute_decision_tool(
+            session=session, context=context, tool_name=tool_name, args=args
+        )
     if tool_name.startswith("knowledge."):
         return _execute_knowledge_tool(
             session=session,
@@ -627,9 +683,21 @@ def execute_agent_tool(
             args=args,
         )
     if tool_name.startswith("jira."):
-        return _execute_jira_tool(session=session, settings=settings, context=context, tool_name=tool_name, args=args)
+        return _execute_jira_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
     if tool_name.startswith("github."):
-        return _execute_github_tool(session=session, settings=settings, context=context, tool_name=tool_name, args=args)
+        return _execute_github_tool(
+            session=session,
+            settings=settings,
+            context=context,
+            tool_name=tool_name,
+            args=args,
+        )
 
     raise ValueError(f"Unknown tool '{tool_name}'")
 
@@ -660,11 +728,16 @@ def _resolve_context(
     if project is None:
         project = (
             session.query(Project)
-            .filter(Project.tenant_id == tenant.tenant_id, Project.project_id == f"{tenant.tenant_id}-default")
+            .filter(
+                Project.tenant_id == tenant.tenant_id,
+                Project.project_id == f"{tenant.tenant_id}-default",
+            )
             .first()
         )
     if project is None:
-        raise ValueError(f"No project mapping available for tenant '{tenant.tenant_id}'")
+        raise ValueError(
+            f"No project mapping available for tenant '{tenant.tenant_id}'"
+        )
 
     checkout_root = project_checkout_root_dir(
         base_dir=settings.project_repo_checkout_base_dir,
@@ -706,7 +779,9 @@ def _resolve_context(
     )
 
 
-def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+def _tool_repo_read(
+    *, context: AgentToolContext, args: dict[str, Any]
+) -> dict[str, Any]:  # noqa: ANN401
     command = str(args.get("command") or "").strip()
     if not command:
         raise ValueError("repo.read requires 'command'")
@@ -716,7 +791,9 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
         command=command,
         checkout_root=getattr(context, "checkout_root", context.repo_dir),
     )
-    working_dir = context.checkout_root if context.stage == "repo_setup" else context.repo_dir
+    working_dir = (
+        context.checkout_root if context.stage == "repo_setup" else context.repo_dir
+    )
     process = subprocess.run(  # noqa: S603
         ["/bin/sh", "-lc", command],
         cwd=str(working_dir),
@@ -770,11 +847,15 @@ def _tool_repo_exec_bootstrap(
         try:
             candidate.relative_to(checkout_root)
         except ValueError as exc:
-            raise PermissionError("repo.exec_bootstrap cwd must stay within the checkout root") from exc
+            raise PermissionError(
+                "repo.exec_bootstrap cwd must stay within the checkout root"
+            ) from exc
         if not candidate.exists():
             raise ValueError(f"repo.exec_bootstrap cwd does not exist: {candidate}")
         cwd = candidate
-    token = _github_installation_token_for_context(session=session, settings=settings, context=context)
+    token = _github_installation_token_for_context(
+        session=session, settings=settings, context=context
+    )
     process = subprocess.run(  # noqa: S603
         ["/bin/sh", "-lc", command],
         cwd=str(cwd),
@@ -829,9 +910,13 @@ def _tool_output_overflow(*, stdout: str, stderr: str) -> dict[str, object] | No
     }
 
 
-def _enforce_repo_command_for_stage(*, stage: str, command: str, checkout_root: Path | None = None) -> None:
+def _enforce_repo_command_for_stage(
+    *, stage: str, command: str, checkout_root: Path | None = None
+) -> None:
     if _READ_ONLY_SHELL_OPERATOR_PATTERN.search(command):
-        raise PermissionError("repo.read only allows a single command (no shell operators)")
+        raise PermissionError(
+            "repo.read only allows a single command (no shell operators)"
+        )
     try:
         tokens = shlex.split(command)
     except ValueError as exc:
@@ -843,8 +928,12 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str, checkout_root: 
     executable = tokens[0]
     if normalized_stage == "dev":
         if executable == "git" and len(tokens) >= 2:
-            subcommand_index = _git_subcommand_index(tokens=tokens, checkout_root=checkout_root)
-            subcommand = tokens[subcommand_index] if subcommand_index is not None else ""
+            subcommand_index = _git_subcommand_index(
+                tokens=tokens, checkout_root=checkout_root
+            )
+            subcommand = (
+                tokens[subcommand_index] if subcommand_index is not None else ""
+            )
             if subcommand in _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS:
                 raise PermissionError(
                     "repo.read does not allow 'git push' in dev; use github.push_branch"
@@ -852,9 +941,13 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str, checkout_root: 
         return
 
     if executable == "git":
-        subcommand_index = _git_subcommand_index(tokens=tokens, checkout_root=checkout_root)
+        subcommand_index = _git_subcommand_index(
+            tokens=tokens, checkout_root=checkout_root
+        )
         if subcommand_index is None:
-            raise PermissionError("repo.read git command must include a read-only subcommand")
+            raise PermissionError(
+                "repo.read git command must include a read-only subcommand"
+            )
         subcommand = tokens[subcommand_index]
         if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
             raise PermissionError(
@@ -862,7 +955,9 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str, checkout_root: 
             )
         blocked_options = _READ_ONLY_GIT_BLOCKED_OPTIONS.get(subcommand, set())
         if blocked_options:
-            used_blocked_options = blocked_options.intersection(tokens[subcommand_index + 1 :])
+            used_blocked_options = blocked_options.intersection(
+                tokens[subcommand_index + 1 :]
+            )
             if used_blocked_options:
                 blocked = sorted(used_blocked_options)[0]
                 raise PermissionError(
@@ -876,30 +971,46 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str, checkout_root: 
         )
 
 
-def _git_subcommand_index(*, tokens: list[str], checkout_root: Path | None) -> int | None:
+def _git_subcommand_index(
+    *, tokens: list[str], checkout_root: Path | None
+) -> int | None:
     index = 1
     while index < len(tokens):
         token = tokens[index]
         if token == "-C":
             if index + 1 >= len(tokens):
-                raise PermissionError("repo.read git -C requires a checkout-root-relative path")
-            _require_git_c_path_inside_checkout(path_value=tokens[index + 1], checkout_root=checkout_root)
+                raise PermissionError(
+                    "repo.read git -C requires a checkout-root-relative path"
+                )
+            _require_git_c_path_inside_checkout(
+                path_value=tokens[index + 1], checkout_root=checkout_root
+            )
             index += 2
             continue
         if token.startswith("-"):
-            raise PermissionError(f"repo.read does not allow git global option '{token}'")
+            raise PermissionError(
+                f"repo.read does not allow git global option '{token}'"
+            )
         return index
     return None
 
 
-def _require_git_c_path_inside_checkout(*, path_value: str, checkout_root: Path | None) -> None:
+def _require_git_c_path_inside_checkout(
+    *, path_value: str, checkout_root: Path | None
+) -> None:
     if checkout_root is None:
         raise PermissionError("repo.read git -C requires checkout root context")
     root = Path(checkout_root).resolve(strict=False)
     raw_path = Path(path_value)
-    candidate = raw_path.resolve(strict=False) if raw_path.is_absolute() else (root / raw_path).resolve(strict=False)
+    candidate = (
+        raw_path.resolve(strict=False)
+        if raw_path.is_absolute()
+        else (root / raw_path).resolve(strict=False)
+    )
     if not candidate.is_relative_to(root):
-        raise PermissionError("repo.read git -C path must stay inside the project checkout root")
+        raise PermissionError(
+            "repo.read git -C path must stay inside the project checkout root"
+        )
 
 
 def _execute_jira_tool(
@@ -910,14 +1021,18 @@ def _execute_jira_tool(
     tool_name: str,
     args: dict[str, Any],  # noqa: ANN401
 ) -> dict[str, Any]:
-    connection_id = tenant_jira_config_text(tenant=context.tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=context.tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         raise ValueError("Tenant Atlassian connection is not configured")
     connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         raise ValueError(f"Jira connection '{connection_id}' not found")
 
-    client = atlassian_oauth_client(session=session, settings=settings, tenant_id=context.tenant.tenant_id)
+    client = atlassian_oauth_client(
+        session=session, settings=settings, tenant_id=context.tenant.tenant_id
+    )
     access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
@@ -993,25 +1108,43 @@ def _execute_decision_tool(
         )
     ).scalar_one_or_none()
     if case is None:
-        return {"issue_key": issue_key, "case": None, "active_cycle": None, "answers": [], "recent_evidence": []}
-    cycle = session.get(DecisionCycle, case.active_cycle_id) if case.active_cycle_id else None
-    answers = session.execute(
-        select(DecisionAnswer)
-        .where(
-            DecisionAnswer.tenant_id == context.tenant.tenant_id,
-            DecisionAnswer.issue_key == issue_key,
+        return {
+            "issue_key": issue_key,
+            "case": None,
+            "active_cycle": None,
+            "answers": [],
+            "recent_evidence": [],
+        }
+    cycle = (
+        session.get(DecisionCycle, case.active_cycle_id)
+        if case.active_cycle_id
+        else None
+    )
+    answers = (
+        session.execute(
+            select(DecisionAnswer)
+            .where(
+                DecisionAnswer.tenant_id == context.tenant.tenant_id,
+                DecisionAnswer.issue_key == issue_key,
+            )
+            .order_by(DecisionAnswer.updated_at.desc())
         )
-        .order_by(DecisionAnswer.updated_at.desc())
-    ).scalars().all()
-    recent_evidence = session.execute(
-        select(DecisionEvidence)
-        .where(
-            DecisionEvidence.tenant_id == context.tenant.tenant_id,
-            DecisionEvidence.issue_key == issue_key,
+        .scalars()
+        .all()
+    )
+    recent_evidence = (
+        session.execute(
+            select(DecisionEvidence)
+            .where(
+                DecisionEvidence.tenant_id == context.tenant.tenant_id,
+                DecisionEvidence.issue_key == issue_key,
+            )
+            .order_by(DecisionEvidence.created_at.desc())
+            .limit(8)
         )
-        .order_by(DecisionEvidence.created_at.desc())
-        .limit(8)
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {
         "issue_key": issue_key,
         "case": {
@@ -1020,7 +1153,9 @@ def _execute_decision_tool(
             "classification": case.classification,
             "blocked_reason": case.blocked_reason,
             "active_cycle_id": case.active_cycle_id,
-            "metadata": case.metadata_json if isinstance(case.metadata_json, dict) else {},
+            "metadata": case.metadata_json
+            if isinstance(case.metadata_json, dict)
+            else {},
         },
         "active_cycle": (
             {
@@ -1030,7 +1165,9 @@ def _execute_decision_tool(
                 "reason": cycle.reason,
                 "questions": cycle.question_set_json,
                 "unresolved_question_ids": cycle.unresolved_question_ids_json,
-                "metadata": cycle.metadata_json if isinstance(cycle.metadata_json, dict) else {},
+                "metadata": cycle.metadata_json
+                if isinstance(cycle.metadata_json, dict)
+                else {},
             }
             if cycle is not None
             else None
@@ -1046,7 +1183,9 @@ def _execute_decision_tool(
                     if isinstance(answer.metadata_json, dict)
                     else ""
                 ),
-                "updated_at": answer.updated_at.isoformat() if answer.updated_at else None,
+                "updated_at": answer.updated_at.isoformat()
+                if answer.updated_at
+                else None,
             }
             for answer in answers
         ],
@@ -1058,7 +1197,9 @@ def _execute_decision_tool(
                 "raw_text": evidence.raw_text,
                 "question_ids": evidence.question_ids_json,
                 "normalized_answers": evidence.normalized_answers_json,
-                "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
+                "created_at": evidence.created_at.isoformat()
+                if evidence.created_at
+                else None,
             }
             for evidence in recent_evidence
         ],
@@ -1110,6 +1251,7 @@ def _execute_knowledge_tool(
         "citations": payload.citations,
     }
 
+
 def _execute_project_tool(
     *,
     session: Session,
@@ -1151,7 +1293,9 @@ def _execute_project_tool(
             session=session,
             project=context.project,
             tenant_id=context.tenant.tenant_id,
-            encryption_key=str(getattr(settings, "secrets_encryption_key", "") or "").strip(),
+            encryption_key=str(
+                getattr(settings, "secrets_encryption_key", "") or ""
+            ).strip(),
             keys=normalized_keys,
         )
         return {
@@ -1176,7 +1320,9 @@ def _execute_project_tool(
         if isinstance(raw_required_bindings, str):
             required_bindings = [raw_required_bindings]
         elif isinstance(raw_required_bindings, list):
-            required_bindings = [str(item or "").strip() for item in raw_required_bindings]
+            required_bindings = [
+                str(item or "").strip() for item in raw_required_bindings
+            ]
         else:
             required_bindings = []
         if not kind:
@@ -1196,7 +1342,9 @@ def _execute_project_tool(
                 kind=kind,
                 label=label,
                 reason=reason,
-                suggested_config=suggested_config if isinstance(suggested_config, dict) else {},
+                suggested_config=suggested_config
+                if isinstance(suggested_config, dict)
+                else {},
                 required_bindings=tuple(required_bindings),
             ),
         )
@@ -1226,7 +1374,9 @@ def _execute_exec_tool(
         raise ValueError("exec.run_install requires non-empty 'install_id'")
     runtime_input = args.get("runtime_input")
     if runtime_input is not None and not isinstance(runtime_input, dict):
-        raise ValueError("exec.run_install runtime_input must be a JSON object when provided")
+        raise ValueError(
+            "exec.run_install runtime_input must be a JSON object when provided"
+        )
     install = get_project_install(session=session, install_id=install_id)
     if install is None:
         raise ValueError(f"Install '{install_id}' was not found")
@@ -1264,10 +1414,14 @@ def _execute_run_tool(
     expected_reply_format = str(args.get("expected_reply_format") or "").strip() or None
     instructions = str(args.get("instructions") or "").strip() or None
     expires_in_minutes_raw = args.get("expires_in_minutes")
-    expires_in_minutes = int(expires_in_minutes_raw) if expires_in_minutes_raw is not None else None
+    expires_in_minutes = (
+        int(expires_in_minutes_raw) if expires_in_minutes_raw is not None else None
+    )
     request_context = args.get("request_context")
     if request_context is not None and not isinstance(request_context, dict):
-        raise ValueError("run.request_human_input request_context must be a JSON object when provided")
+        raise ValueError(
+            "run.request_human_input request_context must be a JSON object when provided"
+        )
     request = create_human_input_request(
         session=session,
         settings=settings,
@@ -1323,7 +1477,9 @@ def _execute_github_tool(
         ),
     )
     repo_full_name = _repo_full_name(github_repository)
-    canonical_run_branch = _resolve_canonical_run_branch(session=session, context=context)
+    canonical_run_branch = _resolve_canonical_run_branch(
+        session=session, context=context
+    )
     configured_base_branch = _default_project_base_branch(project=context.project)
 
     if tool_name == "github.create_branch":
@@ -1349,7 +1505,9 @@ def _execute_github_tool(
         return {"branch_name": branch_name}
 
     if tool_name == "github.commit_all":
-        message = str(args.get("message") or f"{context.issue_key}: automated changes").strip()
+        message = str(
+            args.get("message") or f"{context.issue_key}: automated changes"
+        ).strip()
         _run_git(context.repo_dir, ["add", "-A"])
         _run_git(context.repo_dir, ["commit", "-m", message])
         sha = _run_git(context.repo_dir, ["rev-parse", "HEAD"]).strip()
@@ -1362,7 +1520,9 @@ def _execute_github_tool(
             branch_name = canonical_run_branch
             push_ref = f"HEAD:{branch_name}"
         if not branch_name:
-            branch_name = _run_git(context.repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+            branch_name = _run_git(
+                context.repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]
+            ).strip()
         if not push_ref:
             push_ref = branch_name
         installation_token = github_client.get_installation_token()
@@ -1389,12 +1549,18 @@ def _execute_github_tool(
                 "head_branch": branch_name,
             },
         )
-        return {"branch_name": branch_name, "commit_sha": pushed_sha, "artifact_id": artifact.artifact_id}
+        return {
+            "branch_name": branch_name,
+            "commit_sha": pushed_sha,
+            "artifact_id": artifact.artifact_id,
+        }
 
     if tool_name == "github.open_pr":
         title = str(args.get("title") or f"{context.issue_key}: update").strip()
         head_branch = str(args.get("head_branch") or "").strip()
-        base_branch = str(args.get("base_branch") or configured_base_branch or "").strip()
+        base_branch = str(
+            args.get("base_branch") or configured_base_branch or ""
+        ).strip()
         if not base_branch:
             base_branch = _resolve_remote_default_branch(
                 context.repo_dir,
@@ -1405,8 +1571,12 @@ def _execute_github_tool(
             tenant_policy=context.tenant.policy_config,
             project_overrides=context.project.policy_overrides,
         )
-        draft = bool(args.get("draft")) or bool(effective_policy.get("qa_demo_recording_enabled"))
-        remediation_pr_number = _extract_remediation_pr_number_from_run(getattr(context, "run", None))
+        draft = bool(args.get("draft")) or bool(
+            effective_policy.get("qa_demo_recording_enabled")
+        )
+        remediation_pr_number = _extract_remediation_pr_number_from_run(
+            getattr(context, "run", None)
+        )
         if remediation_pr_number is not None:
             try:
                 detail = github_client.get_pull_request_details(
@@ -1420,7 +1590,9 @@ def _execute_github_tool(
         if canonical_run_branch:
             head_branch = canonical_run_branch
         elif not head_branch:
-            head_branch = _run_git(context.repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
+            head_branch = _run_git(
+                context.repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]
+            ).strip()
         existing_pr = github_client.find_open_pull_request(
             repo_full_name=repo_full_name,
             head_branch=head_branch,
@@ -1488,7 +1660,9 @@ def _execute_github_tool(
             pr_number=pr_number,
         )
         return {
-            "files": [{"filename": item.filename, "patch": item.patch} for item in items],
+            "files": [
+                {"filename": item.filename, "patch": item.patch} for item in items
+            ],
         }
 
     if tool_name == "github.list_pr_reviews":
@@ -1515,7 +1689,9 @@ def _execute_github_tool(
     if tool_name == "github.list_pr_review_comments":
         pr_number = int(args.get("pr_number") or 0)
         if pr_number <= 0:
-            raise ValueError("github.list_pr_review_comments requires numeric 'pr_number'")
+            raise ValueError(
+                "github.list_pr_review_comments requires numeric 'pr_number'"
+            )
         items = github_client.list_pull_request_review_comments(
             repo_full_name=repo_full_name,
             pr_number=pr_number,
@@ -1537,7 +1713,9 @@ def _execute_github_tool(
     if tool_name == "github.list_pr_issue_comments":
         pr_number = int(args.get("pr_number") or 0)
         if pr_number <= 0:
-            raise ValueError("github.list_pr_issue_comments requires numeric 'pr_number'")
+            raise ValueError(
+                "github.list_pr_issue_comments requires numeric 'pr_number'"
+            )
         items = github_client.list_pull_request_issue_comments(
             repo_full_name=repo_full_name,
             pr_number=pr_number,
@@ -1561,7 +1739,11 @@ def _execute_github_tool(
         items = github_client.list_check_suites(repo_full_name=repo_full_name, ref=ref)
         return {
             "checks": [
-                {"name": item.name, "status": item.status, "conclusion": item.conclusion}
+                {
+                    "name": item.name,
+                    "status": item.status,
+                    "conclusion": item.conclusion,
+                }
                 for item in items
             ]
         }
@@ -1581,7 +1763,9 @@ def _repo_full_name(repository_url: str) -> str:
 
 
 def _git_auth_env(token: str) -> dict[str, str]:
-    credential = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+    credential = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode(
+        "ascii"
+    )
     return {
         **os.environ,
         "GIT_TERMINAL_PROMPT": "0",
@@ -1591,7 +1775,9 @@ def _git_auth_env(token: str) -> dict[str, str]:
     }
 
 
-def _github_installation_token_for_context(*, session: Session, settings, context: AgentToolContext) -> str:
+def _github_installation_token_for_context(
+    *, session: Session, settings, context: AgentToolContext
+) -> str:
     github_config = context.tenant.github_config or {}
     github_client = github_client_from_tenant_config(
         github_config,
@@ -1622,7 +1808,11 @@ def _run_git(repo_dir: Path, args: list[str], *, token: str | None = None) -> st
         env=env,
     )
     if process.returncode != 0:
-        raise RuntimeError(process.stderr.strip() or process.stdout.strip() or f"git {' '.join(args)} failed")
+        raise RuntimeError(
+            process.stderr.strip()
+            or process.stdout.strip()
+            or f"git {' '.join(args)} failed"
+        )
     return process.stdout
 
 
@@ -1649,11 +1839,15 @@ def _normalize_branch_name(value: object) -> str | None:
 def _default_project_base_branch(*, project: Project) -> str | None:
     environment_raw = getattr(project, "environment", {})
     environment = environment_raw if isinstance(environment_raw, dict) else {}
-    configured = environment.get("default_branch") if isinstance(environment, dict) else None
+    configured = (
+        environment.get("default_branch") if isinstance(environment, dict) else None
+    )
     return _normalize_branch_name(configured)
 
 
-def _resolve_canonical_run_branch(*, session: Session, context: AgentToolContext) -> str | None:
+def _resolve_canonical_run_branch(
+    *, session: Session, context: AgentToolContext
+) -> str | None:
     run = getattr(context, "run", None)
     if run is None:
         return None
@@ -1678,12 +1872,17 @@ def _resolve_canonical_run_branch(*, session: Session, context: AgentToolContext
     return branch_name
 
 
-def _sync_local_base_branch_to_origin(repo_dir: Path, *, base_branch: str, token: str) -> None:
+def _sync_local_base_branch_to_origin(
+    repo_dir: Path, *, base_branch: str, token: str
+) -> None:
     normalized_base_branch = str(base_branch).strip()
     if not normalized_base_branch:
         raise ValueError("Base branch is required")
     _run_git(repo_dir, ["fetch", "origin", normalized_base_branch], token=token)
-    _run_git(repo_dir, ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"])
+    _run_git(
+        repo_dir,
+        ["checkout", "-B", normalized_base_branch, f"origin/{normalized_base_branch}"],
+    )
 
 
 def _extract_trigger_context_from_run(run: object):
@@ -1710,8 +1909,15 @@ def _extract_remediation_pr_number_from_run(run: object) -> int | None:
     return trigger_context.pr_number
 
 
-def print_tool_event(*, stage: str, tool_name: str, args: dict[str, Any], outcome: str) -> None:  # noqa: ANN401
-    safe_args = {key: ("[REDACTED]" if "token" in key.lower() or "secret" in key.lower() else value) for key, value in args.items()}
+def print_tool_event(
+    *, stage: str, tool_name: str, args: dict[str, Any], outcome: str
+) -> None:  # noqa: ANN401
+    safe_args = {
+        key: (
+            "[REDACTED]" if "token" in key.lower() or "secret" in key.lower() else value
+        )
+        for key, value in args.items()
+    }
     print(
         json.dumps(
             {

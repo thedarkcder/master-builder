@@ -20,7 +20,12 @@ depends_on = None
 def upgrade() -> None:
     with op.batch_alter_table("projects", schema=None) as batch_op:
         batch_op.add_column(
-            sa.Column("policy_overrides", sa.JSON(), nullable=False, server_default=sa.text("'{}'"))
+            sa.Column(
+                "policy_overrides",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            )
         )
 
 

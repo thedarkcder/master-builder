@@ -65,7 +65,9 @@ class VoiceTranscriptionTests(unittest.TestCase):
             voice_transcription_openai_api_key="test-key",
             voice_transcription_model="gpt-4o-mini-transcribe",
         )
-        with patch("orchestrator.core.voice.transcription.urlopen", side_effect=_fake_urlopen):
+        with patch(
+            "orchestrator.core.voice.transcription.urlopen", side_effect=_fake_urlopen
+        ):
             text = transcribe_audio_bytes(
                 settings=settings,
                 audio_bytes=b"audio-bytes",
@@ -83,7 +85,10 @@ class VoiceTranscriptionTests(unittest.TestCase):
             voice_stt_provider="openai",
             voice_transcription_openai_api_key="test-key",
         )
-        with patch("orchestrator.core.voice.transcription.urlopen", return_value=_FakeResponse(b"not-json")):
+        with patch(
+            "orchestrator.core.voice.transcription.urlopen",
+            return_value=_FakeResponse(b"not-json"),
+        ):
             with self.assertRaisesRegex(VoiceTranscriptionError, "invalid JSON"):
                 transcribe_audio_bytes(
                     settings=settings,
@@ -129,8 +134,14 @@ class VoiceTranscriptionTests(unittest.TestCase):
         )
         model = _Model()
         with (
-            patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=model),
-            patch("orchestrator.core.voice.transcription._decode_audio_to_float32_mono", return_value=[0.0, 1.0]),
+            patch(
+                "orchestrator.core.voice.transcription._get_whisper_model",
+                return_value=model,
+            ),
+            patch(
+                "orchestrator.core.voice.transcription._decode_audio_to_float32_mono",
+                return_value=[0.0, 1.0],
+            ),
         ):
             text = transcribe_audio_bytes(
                 settings=settings,
@@ -146,11 +157,16 @@ class VoiceTranscriptionTests(unittest.TestCase):
             voice_stt_provider="whisper",
             voice_transcription_model="small",
         )
-        with patch("orchestrator.core.voice.transcription._get_whisper_model", return_value=object()) as model_mock:
+        with patch(
+            "orchestrator.core.voice.transcription._get_whisper_model",
+            return_value=object(),
+        ) as model_mock:
             ensure_transcription_provider_ready(settings=settings)
         model_mock.assert_called_once_with(settings=settings, allow_download=False)
 
-    def test_ensure_transcription_provider_ready_surfaces_whisper_model_failure(self) -> None:
+    def test_ensure_transcription_provider_ready_surfaces_whisper_model_failure(
+        self,
+    ) -> None:
         settings = Settings(
             voice_stt_provider="whisper",
             voice_transcription_model="base",

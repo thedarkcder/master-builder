@@ -26,7 +26,9 @@ def _has_table(table_name: str) -> bool:
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -49,8 +51,12 @@ def upgrade() -> None:
             sa.Column("last_error", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("publication_id"),
             sa.UniqueConstraint(
                 "tenant_id",
@@ -77,7 +83,9 @@ def upgrade() -> None:
             ["project_id"],
             unique=False,
         )
-    if not _has_index("pr_review_publications", "ix_pr_review_publications_repo_full_name"):
+    if not _has_index(
+        "pr_review_publications", "ix_pr_review_publications_repo_full_name"
+    ):
         op.create_index(
             "ix_pr_review_publications_repo_full_name",
             "pr_review_publications",
@@ -98,7 +106,9 @@ def upgrade() -> None:
             ["head_sha"],
             unique=False,
         )
-    if not _has_index("pr_review_publications", "ix_pr_review_publications_review_kind"):
+    if not _has_index(
+        "pr_review_publications", "ix_pr_review_publications_review_kind"
+    ):
         op.create_index(
             "ix_pr_review_publications_review_kind",
             "pr_review_publications",
@@ -112,21 +122,27 @@ def upgrade() -> None:
             ["status"],
             unique=False,
         )
-    if not _has_index("pr_review_publications", "ix_pr_review_publications_owner_request_id"):
+    if not _has_index(
+        "pr_review_publications", "ix_pr_review_publications_owner_request_id"
+    ):
         op.create_index(
             "ix_pr_review_publications_owner_request_id",
             "pr_review_publications",
             ["owner_request_id"],
             unique=False,
         )
-    if not _has_index("pr_review_publications", "ix_pr_review_publications_lease_expires_at"):
+    if not _has_index(
+        "pr_review_publications", "ix_pr_review_publications_lease_expires_at"
+    ):
         op.create_index(
             "ix_pr_review_publications_lease_expires_at",
             "pr_review_publications",
             ["lease_expires_at"],
             unique=False,
         )
-    if not _has_index("pr_review_publications", "ix_pr_review_publications_published_at"):
+    if not _has_index(
+        "pr_review_publications", "ix_pr_review_publications_published_at"
+    ):
         op.create_index(
             "ix_pr_review_publications_published_at",
             "pr_review_publications",
@@ -136,14 +152,36 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_pr_review_publications_published_at", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_lease_expires_at", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_owner_request_id", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_status", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_review_kind", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_head_sha", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_pr_number", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_repo_full_name", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_project_id", table_name="pr_review_publications")
-    op.drop_index("ix_pr_review_publications_tenant_id", table_name="pr_review_publications")
+    op.drop_index(
+        "ix_pr_review_publications_published_at", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_lease_expires_at",
+        table_name="pr_review_publications",
+    )
+    op.drop_index(
+        "ix_pr_review_publications_owner_request_id",
+        table_name="pr_review_publications",
+    )
+    op.drop_index(
+        "ix_pr_review_publications_status", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_review_kind", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_head_sha", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_pr_number", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_repo_full_name", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_project_id", table_name="pr_review_publications"
+    )
+    op.drop_index(
+        "ix_pr_review_publications_tenant_id", table_name="pr_review_publications"
+    )
     op.drop_table("pr_review_publications")

@@ -31,15 +31,30 @@ def test_prod_compose_exposes_qa_demo_storage_to_run_and_review_workers() -> Non
     services = payload["services"]
 
     run_environment = services["run-worker"]["environment"]
-    assert run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT:-}"
-    assert run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:-}"
-    assert run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:-}"
-    assert run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-}"
+    assert (
+        run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT"]
+        == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT:-}"
+    )
+    assert (
+        run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY"]
+        == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:-}"
+    )
+    assert (
+        run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY"]
+        == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:-}"
+    )
+    assert (
+        run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET"]
+        == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-}"
+    )
     assert (
         run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL"]
         == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-}"
     )
-    assert run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-true}"
+    assert (
+        run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE"]
+        == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-true}"
+    )
     assert (
         run_environment["ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS"]
         == "${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"
@@ -52,7 +67,10 @@ def test_prod_compose_exposes_qa_demo_storage_to_run_and_review_workers() -> Non
         run_environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS"]
         == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS:-10}"
     )
-    assert run_environment["ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
+    assert (
+        run_environment["ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND"]
+        == "${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
+    )
     assert (
         run_environment["ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND"]
         == "${ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND:-}"

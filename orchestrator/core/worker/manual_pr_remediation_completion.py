@@ -10,7 +10,9 @@ from orchestrator.core.communications import (
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.core.workflow.execution_snapshot import load_github_pr_remediation_context_from_plan
+from orchestrator.core.workflow.execution_snapshot import (
+    load_github_pr_remediation_context_from_plan,
+)
 from orchestrator.tools.github_app import github_client_from_tenant_config
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
@@ -43,7 +45,9 @@ def publish_manual_pr_remediation_completion(
     github_config_raw = getattr(tenant, "github_config", {})
     github_config = github_config_raw if isinstance(github_config_raw, dict) else {}
     if not github_config:
-        raise RuntimeError("Manual PR remediation completion requires tenant GitHub configuration")
+        raise RuntimeError(
+            "Manual PR remediation completion requires tenant GitHub configuration"
+        )
 
     try:
         github_client = github_client_from_tenant_config(
@@ -93,7 +97,9 @@ def build_manual_pr_remediation_completion_actions(
     issue_url: str | None,
     terminal_status: str | None = None,
 ) -> tuple[TransportAction, ...]:  # noqa: ANN001
-    remediation_context = load_github_pr_remediation_context_from_plan(getattr(run, "plan", None))
+    remediation_context = load_github_pr_remediation_context_from_plan(
+        getattr(run, "plan", None)
+    )
     if remediation_context is None:
         return ()
     manual_fix_request = remediation_context.manual_fix_request
@@ -114,7 +120,14 @@ def build_manual_pr_remediation_completion_actions(
     requested_by = manual_fix_request.requested_by
     instruction_text = manual_fix_request.instruction_text
     reason = _completion_reason(run=run, workflow_result=workflow_result)
-    pr_url = str(getattr(run, "pr_url", None) or getattr(workflow_result, "pr_url", None) or "").strip() or None
+    pr_url = (
+        str(
+            getattr(run, "pr_url", None)
+            or getattr(workflow_result, "pr_url", None)
+            or ""
+        ).strip()
+        or None
+    )
     change_summary = _change_summary(workflow_result=workflow_result)
 
     common_kwargs = dict(

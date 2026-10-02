@@ -6,14 +6,14 @@
   "content": "",
   "author": {
     "id": "u-1",
-    "username": "example-user",
+    "username": "example-workspace-user",
     "discriminator": "0",
     "bot": false
   },
   "member": {
     "user": {
       "id": "u-1",
-      "username": "example-user"
+      "username": "example-workspace-user"
     },
     "roles": [],
     "permissions": "0"

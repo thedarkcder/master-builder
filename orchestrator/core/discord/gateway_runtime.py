@@ -77,7 +77,11 @@ def _run_gateway_leader_loop(*, settings: Settings) -> None:
     signal.signal(signal.SIGINT, lambda _sig, _frame: _request_stop())
     signal.signal(signal.SIGTERM, lambda _sig, _frame: _request_stop())
 
-    logger.info("discord_gateway_runtime_started lock_key=%s poll_seconds=%s", lock_key, poll_seconds)
+    logger.info(
+        "discord_gateway_runtime_started lock_key=%s poll_seconds=%s",
+        lock_key,
+        poll_seconds,
+    )
     while not stop_event.is_set():
         try:
             with psycopg.connect(dsn, autocommit=True) as conn:

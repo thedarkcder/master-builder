@@ -20,22 +20,36 @@ depends_on = None
 def _has_column(table_name: str, column_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
     if not _has_column("runs", "orchestrated_session_id"):
         with op.batch_alter_table("runs", recreate="auto") as batch_op:
-            batch_op.add_column(sa.Column("orchestrated_session_id", sa.String(length=64), nullable=True))
+            batch_op.add_column(
+                sa.Column(
+                    "orchestrated_session_id", sa.String(length=64), nullable=True
+                )
+            )
 
     if not _has_index("runs", "ix_runs_orchestrated_session_id"):
-        op.create_index("ix_runs_orchestrated_session_id", "runs", ["orchestrated_session_id"], unique=False)
+        op.create_index(
+            "ix_runs_orchestrated_session_id",
+            "runs",
+            ["orchestrated_session_id"],
+            unique=False,
+        )
 
 
 def downgrade() -> None:

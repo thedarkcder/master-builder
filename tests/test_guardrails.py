@@ -26,10 +26,10 @@ class GuardrailPolicyTests(unittest.TestCase):
 
     def test_sensitive_text_is_redacted(self) -> None:
         redacted = redact_sensitive_text(
-            'run_id=123e4567-e89b-12d3-a456-426614174000 '
+            "run_id=123e4567-e89b-12d3-a456-426614174000 "
             'Authorization: Bearer abc123 token=secret-value {"api_key":"xyz"} '
-            'password: hunter2 email=user@example.com '
-            '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----'
+            "password: hunter2 email=user@example.com "
+            "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----"
         )
         self.assertNotIn("abc123", redacted)
         self.assertNotIn("secret-value", redacted)

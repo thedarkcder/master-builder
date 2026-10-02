@@ -22,7 +22,10 @@ ACTIVE_ATTEMPT_STATUSES = "'running', 'waiting_for_input'"
 def _index_exists(index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index["name"] == index_name for index in inspector.get_indexes("workflow_operation_attempts"))
+    return any(
+        index["name"] == index_name
+        for index in inspector.get_indexes("workflow_operation_attempts")
+    )
 
 
 def upgrade() -> None:
@@ -64,4 +67,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Single active workflow operation attempt enforcement cannot be downgraded")
+    raise RuntimeError(
+        "Single active workflow operation attempt enforcement cannot be downgraded"
+    )

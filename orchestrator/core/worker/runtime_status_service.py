@@ -12,7 +12,11 @@ from orchestrator.core.config import Settings
 from orchestrator.core.runtime.requirements import normalize_runtime_kinds
 from orchestrator.core.worker.capabilities import parse_worker_capabilities_diagnostics
 from orchestrator.core.worker.capability_normalization import WorkerCapability
-from orchestrator.storage.models import Run, WorkerRuntimeAuthRequest, WorkerRuntimeState
+from orchestrator.storage.models import (
+    Run,
+    WorkerRuntimeAuthRequest,
+    WorkerRuntimeState,
+)
 
 ACTIVE_RUN_STATUSES = {"queued", "dispatching", "running"}
 WORKER_RUNTIME_HEARTBEAT_STALE_SECONDS = 120
@@ -68,19 +72,28 @@ def runtime_kind_label(value: str) -> str:
         return "Chat CLI"
     if normalized == "claude_cli":
         return "Claude CLI"
-    return " ".join(part.capitalize() for part in normalized.replace("-", "_").split("_") if part)
+    return " ".join(
+        part.capitalize() for part in normalized.replace("-", "_").split("_") if part
+    )
 
 
 def _worker_row_capabilities(row: WorkerRuntimeState) -> list[str]:
-    capabilities, _invalid = parse_worker_capabilities_diagnostics(row.capabilities_json)
-    return [_capability_label(item.value) for item in sorted(capabilities, key=lambda item: item.value)]
+    capabilities, _invalid = parse_worker_capabilities_diagnostics(
+        row.capabilities_json
+    )
+    return [
+        _capability_label(item.value)
+        for item in sorted(capabilities, key=lambda item: item.value)
+    ]
 
 
 def _worker_row_last_seen(row: WorkerRuntimeState) -> datetime | None:
     return _coerce_aware(row.last_heartbeat_at) or _coerce_aware(row.updated_at)
 
 
-def _runtime_dependencies_payload(row: WorkerRuntimeState) -> dict[str, dict[str, object]]:
+def _runtime_dependencies_payload(
+    row: WorkerRuntimeState,
+) -> dict[str, dict[str, object]]:
     raw_value = getattr(row, "runtime_dependencies_json", None)
     if not isinstance(raw_value, dict):
         return {}
@@ -99,7 +112,9 @@ def _is_worker_row_fresh(*, row: WorkerRuntimeState, now: datetime) -> bool:
     last_seen = _worker_row_last_seen(row)
     if last_seen is None:
         return False
-    return last_seen >= (now - timedelta(seconds=WORKER_RUNTIME_HEARTBEAT_STALE_SECONDS))
+    return last_seen >= (
+        now - timedelta(seconds=WORKER_RUNTIME_HEARTBEAT_STALE_SECONDS)
+    )
 
 
 def _worker_instance_status(
@@ -114,7 +129,10 @@ def _worker_instance_status(
     if not _is_worker_row_fresh(row=row, now=now):
         return "stale", "Last heartbeat is outside the worker freshness window."
     if state == "degraded":
-        return "degraded", "Worker is online but blocked by a startup/runtime dependency."
+        return (
+            "degraded",
+            "Worker is online but blocked by a startup/runtime dependency.",
+        )
     if active_run_count > 0 or state == "busy":
         run_label = "run" if active_run_count == 1 else "runs"
         return "busy", f"Processing {active_run_count} active {run_label}."
@@ -131,7 +149,9 @@ def _worker_identity_key(row: WorkerRuntimeState) -> tuple[str, str]:
     return str(row.service_instance_id or "").strip(), worker_mode
 
 
-def _visible_worker_rows(*, rows: list[WorkerRuntimeState], now: datetime) -> list[WorkerRuntimeState]:
+def _visible_worker_rows(
+    *, rows: list[WorkerRuntimeState], now: datetime
+) -> list[WorkerRuntimeState]:
     selected: dict[tuple[str, str], WorkerRuntimeState] = {}
     for row in rows:
         identity_key = _worker_identity_key(row)
@@ -146,14 +166,15 @@ def _visible_worker_rows(*, rows: list[WorkerRuntimeState], now: datetime) -> li
         if row_fresh and not current_fresh:
             selected[identity_key] = row
             continue
-        if row_fresh == current_fresh and (row_last_seen or datetime.min.replace(tzinfo=timezone.utc)) > (
-            current_last_seen or datetime.min.replace(tzinfo=timezone.utc)
-        ):
+        if row_fresh == current_fresh and (
+            row_last_seen or datetime.min.replace(tzinfo=timezone.utc)
+        ) > (current_last_seen or datetime.min.replace(tzinfo=timezone.utc)):
             selected[identity_key] = row
     return sorted(
         selected.values(),
         key=lambda row: (
-            str(row.agent_id or "").strip() or str(row.service_instance_id or "").strip(),
+            str(row.agent_id or "").strip()
+            or str(row.service_instance_id or "").strip(),
             str(row.worker_mode or "").strip(),
             str(row.service_instance_id or "").strip(),
         ),
@@ -186,22 +207,36 @@ def _worker_capabilities(
             }
         )
     if not capability_ids:
-        capability_ids.update({capability.value for capability in configured_capabilities})
+        capability_ids.update(
+            {capability.value for capability in configured_capabilities}
+        )
     return [_capability_label(item) for item in sorted(capability_ids)]
 
 
-def _service_runtime_dependencies(*, instances: list[WorkerInstanceStatusSnapshot]) -> dict[str, dict[str, object]]:
-    preferred_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
+def _service_runtime_dependencies(
+    *, instances: list[WorkerInstanceStatusSnapshot]
+) -> dict[str, dict[str, object]]:
+    preferred_instances = [
+        instance
+        for instance in instances
+        if instance.status not in {"stale", "stopped"}
+    ]
     candidate_instances = preferred_instances or instances
-    grouped: dict[str, list[tuple[int, WorkerInstanceStatusSnapshot, dict[str, object]]]] = {}
+    grouped: dict[
+        str, list[tuple[int, WorkerInstanceStatusSnapshot, dict[str, object]]]
+    ] = {}
     for instance in candidate_instances:
-        for runtime_kind, raw_dependency in (instance.runtime_dependencies or {}).items():
+        for runtime_kind, raw_dependency in (
+            instance.runtime_dependencies or {}
+        ).items():
             runtime_kind_key = str(runtime_kind or "").strip().lower()
             if not runtime_kind_key or not isinstance(raw_dependency, dict):
                 continue
             dependency = dict(raw_dependency)
             severity = _runtime_dependency_severity(dependency.get("state"))
-            grouped.setdefault(runtime_kind_key, []).append((severity, instance, dependency))
+            grouped.setdefault(runtime_kind_key, []).append(
+                (severity, instance, dependency)
+            )
     payload: dict[str, dict[str, object]] = {}
     for runtime_kind, candidates in sorted(grouped.items()):
         blocked_candidates = [candidate for candidate in candidates if candidate[0] > 0]
@@ -215,7 +250,10 @@ def _service_runtime_dependencies(*, instances: list[WorkerInstanceStatusSnapsho
         )
         entry = dict(dependency)
         entry["login_service_instance_id"] = instance.instance_id
-        states = {str(candidate[2].get("state") or "").strip().lower() for candidate in candidates}
+        states = {
+            str(candidate[2].get("state") or "").strip().lower()
+            for candidate in candidates
+        }
         if len(states) > 1 and str(entry.get("state") or "").strip().lower() != "ready":
             entry["summary"] = (
                 f"{runtime_kind_label(runtime_kind)} authentication differs across worker instances. "
@@ -245,7 +283,15 @@ def build_worker_service_status(
             .group_by(Run.worker_service_instance_id)
         ).all()
     )
-    rows = session.execute(select(WorkerRuntimeState).order_by(WorkerRuntimeState.service_instance_id.asc())).scalars().all()
+    rows = (
+        session.execute(
+            select(WorkerRuntimeState).order_by(
+                WorkerRuntimeState.service_instance_id.asc()
+            )
+        )
+        .scalars()
+        .all()
+    )
     visible_rows = _visible_worker_rows(rows=rows, now=now)
     instances: list[WorkerInstanceStatusSnapshot] = []
     for row in visible_rows:
@@ -272,16 +318,35 @@ def build_worker_service_status(
             )
         )
 
-    configured_capabilities, invalid_configured_tokens = parse_worker_capabilities_diagnostics(
-        getattr(settings, "worker_capabilities", None)
+    configured_capabilities, invalid_configured_tokens = (
+        parse_worker_capabilities_diagnostics(
+            getattr(settings, "worker_capabilities", None)
+        )
     )
-    capabilities = _worker_capabilities(instances=instances, configured_capabilities=configured_capabilities)
+    capabilities = _worker_capabilities(
+        instances=instances, configured_capabilities=configured_capabilities
+    )
     runtime_dependencies = _service_runtime_dependencies(instances=instances)
-    fresh_instances = [instance for instance in instances if instance.status not in {"stale", "stopped"}]
+    fresh_instances = [
+        instance
+        for instance in instances
+        if instance.status not in {"stale", "stopped"}
+    ]
     stale_instances = [instance for instance in instances if instance.status == "stale"]
-    degraded_instances = [instance for instance in fresh_instances if instance.status == "degraded"]
-    busy_instances = [instance for instance in fresh_instances if instance.status == "busy"]
-    latest_heartbeat = max((instance.updated_at for instance in instances if instance.updated_at is not None), default=None)
+    degraded_instances = [
+        instance for instance in fresh_instances if instance.status == "degraded"
+    ]
+    busy_instances = [
+        instance for instance in fresh_instances if instance.status == "busy"
+    ]
+    latest_heartbeat = max(
+        (
+            instance.updated_at
+            for instance in instances
+            if instance.updated_at is not None
+        ),
+        default=None,
+    )
     if fresh_instances:
         if stale_instances or degraded_instances:
             service_status = "degraded"
@@ -353,30 +418,47 @@ def start_worker_runtime_login_request(
     normalized_service_instance_id = str(service_instance_id or "").strip()
     normalized_runtime_kind = str(runtime_kind or "").strip().lower()
     if not normalized_service_instance_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="service_instance_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="service_instance_id is required",
+        )
     runtime_kinds = normalize_runtime_kinds((normalized_runtime_kind,))
     if not runtime_kinds:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="runtime_kind is invalid")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="runtime_kind is invalid"
+        )
     normalized_runtime_kind = runtime_kinds[0]
     worker_row = session.get(WorkerRuntimeState, normalized_service_instance_id)
     if worker_row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker instance was not found")
-    registered_runtime_kinds = set(normalize_runtime_kinds(getattr(worker_row, "runtime_kinds_json", None)))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Worker instance was not found",
+        )
+    registered_runtime_kinds = set(
+        normalize_runtime_kinds(getattr(worker_row, "runtime_kinds_json", None))
+    )
     if normalized_runtime_kind not in registered_runtime_kinds:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Worker instance is not registered for runtime '{normalized_runtime_kind}'",
         )
     now = now_fn()
-    open_requests = session.execute(
-        select(WorkerRuntimeAuthRequest)
-        .where(
-            WorkerRuntimeAuthRequest.service_instance_id == normalized_service_instance_id,
-            WorkerRuntimeAuthRequest.runtime_kind == normalized_runtime_kind,
-            WorkerRuntimeAuthRequest.status.in_(tuple(sorted(OPEN_WORKER_RUNTIME_AUTH_REQUEST_STATUSES))),
+    open_requests = (
+        session.execute(
+            select(WorkerRuntimeAuthRequest)
+            .where(
+                WorkerRuntimeAuthRequest.service_instance_id
+                == normalized_service_instance_id,
+                WorkerRuntimeAuthRequest.runtime_kind == normalized_runtime_kind,
+                WorkerRuntimeAuthRequest.status.in_(
+                    tuple(sorted(OPEN_WORKER_RUNTIME_AUTH_REQUEST_STATUSES))
+                ),
+            )
+            .order_by(WorkerRuntimeAuthRequest.requested_at.desc())
         )
-        .order_by(WorkerRuntimeAuthRequest.requested_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for request in open_requests:
         request.status = "cancelled"
         request.completed_at = now
@@ -407,8 +489,13 @@ def get_worker_runtime_login_request(
 ) -> WorkerRuntimeAuthRequest:
     normalized_request_id = str(request_id or "").strip()
     if not normalized_request_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="request_id is required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="request_id is required"
+        )
     auth_request = session.get(WorkerRuntimeAuthRequest, normalized_request_id)
     if auth_request is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker runtime auth request was not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Worker runtime auth request was not found",
+        )
     return auth_request

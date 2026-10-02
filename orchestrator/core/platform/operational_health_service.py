@@ -7,7 +7,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision.types import JiraConfigKey, jira_config_text, jira_config_project_keys, tenant_jira_ready_statuses
+from orchestrator.core.decision.types import (
+    JiraConfigKey,
+    jira_config_text,
+    jira_config_project_keys,
+    tenant_jira_ready_statuses,
+)
 from orchestrator.core.webhooks.health import webhook_health_tracker
 from orchestrator.storage.models import Project, Run, Tenant
 
@@ -66,10 +71,18 @@ def _is_recent_timestamp(raw: str | None, *, within_hours: int) -> bool:
 def tenant_integration_snapshot(*, tenant: Tenant) -> TenantIntegrationSnapshot:
     jira_config = dict(tenant.jira_config or {})
     github_config = dict(tenant.github_config or {})
-    atlassian_connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
-    github_installation_id = str(github_config.get("installation_id") or "").strip() or None
-    jira_webhook_last_received_at = str(jira_config.get("webhook_last_received_at") or "").strip() or None
-    jira_webhook_last_error = str(jira_config.get("webhook_last_error") or "").strip() or None
+    atlassian_connection_id = jira_config_text(
+        jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID
+    )
+    github_installation_id = (
+        str(github_config.get("installation_id") or "").strip() or None
+    )
+    jira_webhook_last_received_at = (
+        str(jira_config.get("webhook_last_received_at") or "").strip() or None
+    )
+    jira_webhook_last_error = (
+        str(jira_config.get("webhook_last_error") or "").strip() or None
+    )
     return TenantIntegrationSnapshot(
         jira_connected=bool(atlassian_connection_id),
         github_connected=bool(github_installation_id),
@@ -80,7 +93,8 @@ def tenant_integration_snapshot(*, tenant: Tenant) -> TenantIntegrationSnapshot:
         atlassian_connection_id=atlassian_connection_id,
         github_installation_id=github_installation_id,
         jira_project_keys=list(jira_config_project_keys(jira_config=jira_config)),
-        jira_ready_statuses=list(tenant_jira_ready_statuses(tenant)) or ["Ready for Agent"],
+        jira_ready_statuses=list(tenant_jira_ready_statuses(tenant))
+        or ["Ready for Agent"],
         jira_webhook_last_received_at=jira_webhook_last_received_at,
         jira_webhook_last_error=jira_webhook_last_error,
     )
@@ -93,7 +107,9 @@ def load_tenant_operational_health(
 ) -> TenantOperationalHealthSnapshot:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     return _tenant_operational_health_for_tenant(session=session, tenant=tenant)
 
 
@@ -106,7 +122,10 @@ def list_enabled_tenant_operational_health(
     if tenant_id:
         query = query.where(Tenant.tenant_id == tenant_id)
     tenants = session.execute(query.order_by(Tenant.tenant_id.asc())).scalars().all()
-    return [_tenant_operational_health_for_tenant(session=session, tenant=tenant) for tenant in tenants]
+    return [
+        _tenant_operational_health_for_tenant(session=session, tenant=tenant)
+        for tenant in tenants
+    ]
 
 
 def _tenant_operational_health_for_tenant(
@@ -126,7 +145,9 @@ def _tenant_operational_health_for_tenant(
         select(
             func.count(Run.run_id),
             func.coalesce(func.sum(case((Run.status == "failed", 1), else_=0)), 0),
-            func.coalesce(func.sum(case((Run.status.in_(ACTIVE_RUN_STATUSES), 1), else_=0)), 0),
+            func.coalesce(
+                func.sum(case((Run.status.in_(ACTIVE_RUN_STATUSES), 1), else_=0)), 0
+            ),
         ).where(Run.tenant_id == tenant.tenant_id)
     ).one()
     total_runs = int(total_runs or 0)
@@ -146,7 +167,11 @@ def _tenant_operational_health_for_tenant(
             Run.finished_at >= Run.started_at,
         )
     ).scalar_one()
-    average_duration = 0.0 if average_duration_value is None else round(float(average_duration_value), 3)
+    average_duration = (
+        0.0
+        if average_duration_value is None
+        else round(float(average_duration_value), 3)
+    )
     webhook_rollup = webhook_health_tracker.rollup(tenant_id=tenant.tenant_id)
     integrations = tenant_integration_snapshot(tenant=tenant)
     return TenantOperationalHealthSnapshot(

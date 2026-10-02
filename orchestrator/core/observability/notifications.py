@@ -11,7 +11,10 @@ except Exception:  # pragma: no cover - import failure is surfaced at runtime.
     psycopg = None
 
 from orchestrator.core.config import get_settings
-from orchestrator.storage.run_queue_events import is_postgres_database_url, postgres_dsn_from_database_url
+from orchestrator.storage.run_queue_events import (
+    is_postgres_database_url,
+    postgres_dsn_from_database_url,
+)
 
 PRODUCT_EVENT_NOTIFY_CHANNEL = "product_event_stream"
 
@@ -28,7 +31,9 @@ _listener_stop = threading.Event()
 def _postgres_dsn() -> str:
     database_url = str(get_settings().database_url or "").strip()
     if not is_postgres_database_url(database_url):
-        raise RuntimeError("Product event streaming requires a PostgreSQL database URL for LISTEN/NOTIFY")
+        raise RuntimeError(
+            "Product event streaming requires a PostgreSQL database URL for LISTEN/NOTIFY"
+        )
     return postgres_dsn_from_database_url(database_url)
 
 
@@ -143,5 +148,7 @@ def wait_for_product_event_notification(*, marker: int, timeout_seconds: float) 
     _ensure_listener_thread()
     with _listener_condition:
         if _listener_generation <= marker:
-            _listener_condition.wait_for(lambda: _listener_generation > marker, timeout=timeout_seconds)
+            _listener_condition.wait_for(
+                lambda: _listener_generation > marker, timeout=timeout_seconds
+            )
         return _listener_generation

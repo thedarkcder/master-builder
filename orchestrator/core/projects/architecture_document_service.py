@@ -9,11 +9,23 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
-from orchestrator.core.knowledge.base import create_knowledge_asset, replace_knowledge_asset_text
-from orchestrator.storage.models import ArchitectureDocument, KnowledgeAsset, Project, Tenant
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
+from orchestrator.core.knowledge.base import (
+    create_knowledge_asset,
+    replace_knowledge_asset_text,
+)
+from orchestrator.storage.models import (
+    ArchitectureDocument,
+    KnowledgeAsset,
+    Project,
+    Tenant,
+)
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
-from orchestrator.tools.atlassian_oauth_confluence_service import confluence_storage_template
+from orchestrator.tools.atlassian_oauth_confluence_service import (
+    confluence_storage_template,
+)
 
 ARCHITECTURE_DOC_PROVIDER_INTERNAL = "internal"
 ARCHITECTURE_DOC_PROVIDER_CONFLUENCE = "confluence"
@@ -22,7 +34,9 @@ ARCHITECTURE_DOC_STATUS_READY = "ready"
 ARCHITECTURE_DOC_STATUS_SUPERSEDED = "superseded"
 ARCHITECTURE_REQUIRED_LABEL = "architecture-required"
 ARCHITECTURE_DOC_SOURCE_TYPE = "architecture_document"
-CONFLUENCE_REQUIRED_SCOPES = frozenset({"read:space:confluence", "write:page:confluence"})
+CONFLUENCE_REQUIRED_SCOPES = frozenset(
+    {"read:space:confluence", "write:page:confluence"}
+)
 
 
 @dataclass(frozen=True)
@@ -40,7 +54,9 @@ class ArchitectureDocumentLink:
     url: str
 
 
-def architecture_required_for_issue(*, issue_labels: list[str] | tuple[str, ...]) -> bool:
+def architecture_required_for_issue(
+    *, issue_labels: list[str] | tuple[str, ...]
+) -> bool:
     normalized = {str(label or "").strip().casefold() for label in issue_labels}
     return ARCHITECTURE_REQUIRED_LABEL in normalized
 
@@ -48,7 +64,10 @@ def architecture_required_for_issue(*, issue_labels: list[str] | tuple[str, ...]
 def architecture_docs_provider_for_project(*, project: Project) -> str | None:
     config = dict(getattr(project, "architecture_docs_config", {}) or {})
     provider = str(config.get("provider") or "").strip().lower()
-    if provider in {ARCHITECTURE_DOC_PROVIDER_INTERNAL, ARCHITECTURE_DOC_PROVIDER_CONFLUENCE}:
+    if provider in {
+        ARCHITECTURE_DOC_PROVIDER_INTERNAL,
+        ARCHITECTURE_DOC_PROVIDER_CONFLUENCE,
+    }:
         return provider
     return None
 
@@ -58,18 +77,26 @@ def _default_document_title(*, parent_issue_key: str, issue_summary: str) -> str
     return f"{parent_issue_key}: {normalized_summary[:220]}"
 
 
-def _internal_document_url(*, admin_ui_base_url: str, tenant_id: str, project_id: str, document_id: str) -> str:
+def _internal_document_url(
+    *, admin_ui_base_url: str, tenant_id: str, project_id: str, document_id: str
+) -> str:
     base = str(admin_ui_base_url or "").strip().rstrip("/")
     if not base:
-        raise ValueError("admin_ui_base_url is required for internal architecture documents")
+        raise ValueError(
+            "admin_ui_base_url is required for internal architecture documents"
+        )
     return (
         f"{base}/{quote(tenant_id, safe='')}/projects/{quote(project_id, safe='')}"
         f"/architecture?documentId={quote(document_id, safe='')}"
     )
 
 
-def _internal_document_template(*, title: str, parent_issue_key: str, issue_summary: str) -> str:
-    normalized_summary = str(issue_summary or "").strip() or "Add the parent epic summary here."
+def _internal_document_template(
+    *, title: str, parent_issue_key: str, issue_summary: str
+) -> str:
+    normalized_summary = (
+        str(issue_summary or "").strip() or "Add the parent epic summary here."
+    )
     return "\n".join(
         [
             f"# {title}",
@@ -113,14 +140,18 @@ def _confluence_config_for_project(*, project: Project) -> tuple[str, str | None
 def _tenant_for_project_or_404(*, session: Session, project: Project) -> Tenant:
     tenant = session.get(Tenant, project.tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found for project")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found for project"
+        )
     return tenant
 
 
 def _tenant_by_id_or_404(*, session: Session, tenant_id: str) -> Tenant:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     return tenant
 
 
@@ -207,8 +238,14 @@ class ArchitectureDocumentService:
         tenant = _tenant_for_project_or_404(session=session, project=project)
         space_key, parent_page_id = _confluence_config_for_project(project=project)
         settings = self._settings_factory()
-        oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
-        granted_scopes = {str(scope or "").strip() for scope in getattr(oauth.connection, "scopes", []) if str(scope or "").strip()}
+        oauth = tenant_atlassian_oauth_context(
+            session=session, tenant=tenant, settings=settings
+        )
+        granted_scopes = {
+            str(scope or "").strip()
+            for scope in getattr(oauth.connection, "scopes", [])
+            if str(scope or "").strip()
+        }
         missing_scopes = sorted(CONFLUENCE_REQUIRED_SCOPES - granted_scopes)
         if missing_scopes:
             raise HTTPException(
@@ -286,14 +323,19 @@ class ArchitectureDocumentService:
         normalized_parent_issue_key = str(parent_issue_key or "").strip().upper()
         if not normalized_parent_issue_key:
             return None
-        return session.execute(
-            select(ArchitectureDocument).where(
-                ArchitectureDocument.tenant_id == tenant_id,
-                ArchitectureDocument.project_id == project_id,
-                ArchitectureDocument.parent_issue_key == normalized_parent_issue_key,
-                ArchitectureDocument.is_active.is_(True),
+        return (
+            session.execute(
+                select(ArchitectureDocument).where(
+                    ArchitectureDocument.tenant_id == tenant_id,
+                    ArchitectureDocument.project_id == project_id,
+                    ArchitectureDocument.parent_issue_key
+                    == normalized_parent_issue_key,
+                    ArchitectureDocument.is_active.is_(True),
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
 
     def ensure_document_for_issue(
         self,
@@ -340,7 +382,10 @@ class ArchitectureDocumentService:
                 issue_summary=issue_summary,
                 actor=actor,
             )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Unsupported architecture document provider '{provider}'")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Unsupported architecture document provider '{provider}'",
+        )
 
     def resolve_gate(
         self,
@@ -353,7 +398,9 @@ class ArchitectureDocumentService:
         actor: str | None,
     ) -> ArchitectureDocumentGate:
         if not architecture_required_for_issue(issue_labels=issue_labels):
-            return ArchitectureDocumentGate(required=False, provider=None, document=None, ready=True)
+            return ArchitectureDocumentGate(
+                required=False, provider=None, document=None, ready=True
+            )
         provider = architecture_docs_provider_for_project(project=project)
         if provider is None:
             return ArchitectureDocumentGate(
@@ -396,7 +443,9 @@ class ArchitectureDocumentService:
                     "Mark it ready before planning can continue."
                 ),
             )
-        return ArchitectureDocumentGate(required=True, provider=provider, document=document, ready=True)
+        return ArchitectureDocumentGate(
+            required=True, provider=provider, document=document, ready=True
+        )
 
     def require_document_link(
         self,
@@ -422,7 +471,8 @@ class ArchitectureDocumentService:
         if document is None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=gate.block_reason or "Architecture document link is required before planning can continue",
+                detail=gate.block_reason
+                or "Architecture document link is required before planning can continue",
             )
         normalized_url = str(document.canonical_url or "").strip()
         if not normalized_url:
@@ -446,7 +496,10 @@ class ArchitectureDocumentService:
     ) -> ArchitectureDocument:
         provider = architecture_docs_provider_for_project(project=project)
         if provider is None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project architecture document provider is not configured")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Project architecture document provider is not configured",
+            )
         existing = self.get_active_document(
             session=session,
             tenant_id=project.tenant_id,
@@ -454,7 +507,10 @@ class ArchitectureDocumentService:
             parent_issue_key=parent_issue_key,
         )
         if existing is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An active architecture document already exists for this epic")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active architecture document already exists for this epic",
+            )
         if provider == ARCHITECTURE_DOC_PROVIDER_INTERNAL:
             if str(canonical_url or "").strip() or str(provider_ref or "").strip():
                 raise HTTPException(
@@ -483,7 +539,10 @@ class ArchitectureDocumentService:
                 actor=actor,
                 title=title,
             )
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Unsupported architecture document provider '{provider}'")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Unsupported architecture document provider '{provider}'",
+        )
 
     def get_document_for_project(
         self,
@@ -494,8 +553,15 @@ class ArchitectureDocumentService:
         document_id: str,
     ) -> ArchitectureDocument:
         document = session.get(ArchitectureDocument, document_id)
-        if document is None or document.tenant_id != tenant_id or document.project_id != project_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Architecture document not found")
+        if (
+            document is None
+            or document.tenant_id != tenant_id
+            or document.project_id != project_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Architecture document not found",
+            )
         return document
 
     def list_documents_for_project(
@@ -513,8 +579,14 @@ class ArchitectureDocumentService:
         )
         normalized_parent_issue_key = str(parent_issue_key or "").strip().upper()
         if normalized_parent_issue_key:
-            stmt = stmt.where(ArchitectureDocument.parent_issue_key == normalized_parent_issue_key)
-        return session.execute(stmt.order_by(ArchitectureDocument.created_at.desc())).scalars().all()
+            stmt = stmt.where(
+                ArchitectureDocument.parent_issue_key == normalized_parent_issue_key
+            )
+        return (
+            session.execute(stmt.order_by(ArchitectureDocument.created_at.desc()))
+            .scalars()
+            .all()
+        )
 
     def update_document(
         self,
@@ -530,20 +602,32 @@ class ArchitectureDocumentService:
     ) -> ArchitectureDocument:
         normalized_title = str(title or "").strip()
         if not normalized_title:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Architecture document title is required")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Architecture document title is required",
+            )
         normalized_status = str(status_value or "").strip().lower()
         if normalized_status not in {
             ARCHITECTURE_DOC_STATUS_DRAFT,
             ARCHITECTURE_DOC_STATUS_READY,
             ARCHITECTURE_DOC_STATUS_SUPERSEDED,
         }:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid architecture document status")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid architecture document status",
+            )
         if document.provider == ARCHITECTURE_DOC_PROVIDER_INTERNAL:
             normalized_content = str(content_markdown or "").strip()
             if not normalized_content:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Internal architecture documents require markdown content")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Internal architecture documents require markdown content",
+                )
             if not document.knowledge_asset_id:
-                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Internal architecture document is missing its knowledge asset")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Internal architecture document is missing its knowledge asset",
+                )
             replace_knowledge_asset_text(
                 session=session,
                 tenant_id=document.tenant_id,
@@ -556,7 +640,9 @@ class ArchitectureDocumentService:
                     "parent_issue_key": document.parent_issue_key,
                     "provider": document.provider,
                 },
-                status="ready" if normalized_status == ARCHITECTURE_DOC_STATUS_READY else "pending_review",
+                status="ready"
+                if normalized_status == ARCHITECTURE_DOC_STATUS_READY
+                else "pending_review",
                 commit=False,
             )
         else:
@@ -578,8 +664,14 @@ class ArchitectureDocumentService:
                 )
             tenant = _tenant_by_id_or_404(session=session, tenant_id=document.tenant_id)
             settings = self._settings_factory()
-            oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
-            granted_scopes = {str(scope or "").strip() for scope in getattr(oauth.connection, "scopes", []) if str(scope or "").strip()}
+            oauth = tenant_atlassian_oauth_context(
+                session=session, tenant=tenant, settings=settings
+            )
+            granted_scopes = {
+                str(scope or "").strip()
+                for scope in getattr(oauth.connection, "scopes", [])
+                if str(scope or "").strip()
+            }
             missing_scopes = sorted({"write:page:confluence"} - granted_scopes)
             if missing_scopes:
                 raise HTTPException(
@@ -613,10 +705,18 @@ class ArchitectureDocumentService:
         session.refresh(document)
         return document
 
-    def document_content(self, *, session: Session, document: ArchitectureDocument) -> str | None:
-        if document.provider != ARCHITECTURE_DOC_PROVIDER_INTERNAL or not document.knowledge_asset_id:
+    def document_content(
+        self, *, session: Session, document: ArchitectureDocument
+    ) -> str | None:
+        if (
+            document.provider != ARCHITECTURE_DOC_PROVIDER_INTERNAL
+            or not document.knowledge_asset_id
+        ):
             return None
         knowledge_asset = session.get(KnowledgeAsset, document.knowledge_asset_id)
         if knowledge_asset is None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Internal architecture document is missing its knowledge asset")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Internal architecture document is missing its knowledge asset",
+            )
         return str(knowledge_asset.text_content or "")

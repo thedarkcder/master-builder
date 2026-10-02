@@ -32,7 +32,9 @@ def parse_worker_capability(value: object) -> WorkerCapability | None:
     return None
 
 
-def parse_worker_capabilities_with_diagnostics(raw_value: WorkerCapabilitiesInput) -> WorkerCapabilityParseResult:
+def parse_worker_capabilities_with_diagnostics(
+    raw_value: WorkerCapabilitiesInput,
+) -> WorkerCapabilityParseResult:
     tokens: list[str] = []
     if isinstance(raw_value, str):
         tokens = [item.strip() for item in raw_value.split(",")]
@@ -59,7 +61,9 @@ def parse_worker_capabilities_with_diagnostics(raw_value: WorkerCapabilitiesInpu
     )
 
 
-def parse_worker_capabilities_or_raise(raw_value: WorkerCapabilitiesInput, *, source: str) -> set[WorkerCapability]:
+def parse_worker_capabilities_or_raise(
+    raw_value: WorkerCapabilitiesInput, *, source: str
+) -> set[WorkerCapability]:
     parsed = parse_worker_capabilities_with_diagnostics(raw_value)
     if parsed.invalid_tokens:
         invalid = ", ".join(parsed.invalid_tokens)

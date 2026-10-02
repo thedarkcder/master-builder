@@ -85,7 +85,9 @@ def test_project_workflow_for_run_started_sets_running_and_started_at() -> None:
     assert workflow.started_at == timestamp
 
 
-def test_project_workflow_for_run_terminal_maps_blocked_run_to_failed_workflow() -> None:
+def test_project_workflow_for_run_terminal_maps_blocked_run_to_failed_workflow() -> (
+    None
+):
     workflow = _workflow()
     finished_at = _now()
     run = _run(status="blocked", last_error="content_limit")

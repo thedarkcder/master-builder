@@ -44,19 +44,25 @@ class LiveVoiceTransportClientTests(unittest.TestCase):
             )
         client.close_session(session_id="sess-1", reason="room_removed")
 
-        frames = [line for line in client._stdin.getvalue().splitlines() if line.strip()]
+        frames = [
+            line for line in client._stdin.getvalue().splitlines() if line.strip()
+        ]
         self.assertEqual(len(frames), 3)
 
         open_frame = _decode_frame(frames[0])
         self.assertEqual(open_frame["type"], "open_session")
         self.assertEqual(open_frame["session_id"], "sess-1")
         self.assertEqual(open_frame["token"], "bot-token")
-        self.assertEqual(open_frame["rooms"], [{"guild_id": "guild-1", "channel_id": "voice-1"}])
+        self.assertEqual(
+            open_frame["rooms"], [{"guild_id": "guild-1", "channel_id": "voice-1"}]
+        )
 
         play_frame = _decode_frame(frames[1])
         self.assertEqual(play_frame["type"], "play_audio")
         self.assertEqual(play_frame["session_id"], "sess-1")
-        self.assertEqual(play_frame["room"], {"guild_id": "guild-1", "channel_id": "voice-1"})
+        self.assertEqual(
+            play_frame["room"], {"guild_id": "guild-1", "channel_id": "voice-1"}
+        )
         self.assertEqual(
             play_frame["opus_frames_base64"],
             [
@@ -85,7 +91,9 @@ class LiveVoiceTransportClientTests(unittest.TestCase):
         frame = _decode_frame(client._stdin.getvalue().strip())
         self.assertEqual(frame["type"], "stop_audio")
         self.assertEqual(frame["session_id"], "sess-1")
-        self.assertEqual(frame["room"], {"guild_id": "guild-1", "channel_id": "voice-1"})
+        self.assertEqual(
+            frame["room"], {"guild_id": "guild-1", "channel_id": "voice-1"}
+        )
 
     def test_transport_client_reopens_same_session_after_process_exit(self) -> None:
         events: list[dict] = []
@@ -132,10 +140,14 @@ class LiveVoiceTransportClientTests(unittest.TestCase):
             discord_live_voice_transport_startup_timeout_seconds=12,
         )
 
-        client = build_live_voice_transport_client(settings=settings, bot_token="bot-token")
+        client = build_live_voice_transport_client(
+            settings=settings, bot_token="bot-token"
+        )
 
         self.assertIsInstance(client, GoJsonLinesLiveVoiceTransportClient)
-        self.assertEqual(client.command[:2], ("/usr/local/bin/live-voice-transport", "--flag"))
+        self.assertEqual(
+            client.command[:2], ("/usr/local/bin/live-voice-transport", "--flag")
+        )
 
     def test_start_waits_for_transport_ready(self) -> None:
         client = GoJsonLinesLiveVoiceTransportClient(
@@ -185,10 +197,14 @@ class LiveVoiceTransportClientTests(unittest.TestCase):
             def sync_session(self, *, session_id: str, bot_token: str, rooms) -> None:  # noqa: ANN001
                 pass
 
-            def close_session(self, *, session_id: str | None = None, reason: str = "") -> None:
+            def close_session(
+                self, *, session_id: str | None = None, reason: str = ""
+            ) -> None:
                 pass
 
-            def play_audio(self, *, binding, audio_bytes, content_type, metadata=None) -> None:  # noqa: ANN001
+            def play_audio(
+                self, *, binding, audio_bytes, content_type, metadata=None
+            ) -> None:  # noqa: ANN001
                 pass
 
             def stop_audio(self, *, binding) -> None:  # noqa: ANN001

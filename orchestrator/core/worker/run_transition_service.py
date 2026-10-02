@@ -5,8 +5,12 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.workflow.execution_lifecycle import apply_execution_for_new_attempt
-from orchestrator.core.workflow.operation_service import fail_active_workflow_operation_attempts_for_run
+from orchestrator.core.workflow.execution_lifecycle import (
+    apply_execution_for_new_attempt,
+)
+from orchestrator.core.workflow.operation_service import (
+    fail_active_workflow_operation_attempts_for_run,
+)
 from orchestrator.storage.models import Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
@@ -28,7 +32,9 @@ class RunOwnership:
         owner = str(expected_worker_service_instance_id or "").strip()
         claim_id = str(expected_claim_id or "").strip()
         if not owner or not claim_id:
-            raise RuntimeError("Worker-owned run transition requires worker_service_instance_id and claim_id")
+            raise RuntimeError(
+                "Worker-owned run transition requires worker_service_instance_id and claim_id"
+            )
         return cls(worker_service_instance_id=owner, claim_id=claim_id)
 
 
@@ -51,7 +57,10 @@ class WorkerRunTransitionService:
             )
         current_owner = str(run.worker_service_instance_id or "").strip()
         current_claim_id = str(run.claim_id or "").strip()
-        if current_owner != ownership.worker_service_instance_id or current_claim_id != ownership.claim_id:
+        if (
+            current_owner != ownership.worker_service_instance_id
+            or current_claim_id != ownership.claim_id
+        ):
             raise RuntimeError(
                 f"Run ownership mismatch for {action}: run {run.run_id} owner={current_owner} claim_id={current_claim_id}"
             )
@@ -87,7 +96,9 @@ class WorkerRunTransitionService:
         apply_execution_for_new_attempt(
             session=self._session,
             run=run,
-            latest_checkpoint_id=getattr(self._workflow_for_run(run=run), "latest_checkpoint_id", None),
+            latest_checkpoint_id=getattr(
+                self._workflow_for_run(run=run), "latest_checkpoint_id", None
+            ),
             now=now,
         )
         notify_run_enqueued(

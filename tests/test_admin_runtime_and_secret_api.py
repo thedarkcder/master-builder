@@ -26,7 +26,10 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             [item["id"] for item in body["models"]],
             ["gpt-5.4", "gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex"],
         )
-        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
+        self.assertEqual(
+            [item["id"] for item in body["reasoning_efforts"]],
+            ["medium", "low", "high"],
+        )
 
     def test_list_openai_models_includes_gpt_5_5_without_changing_default(self) -> None:
         response = self.client.get(
@@ -42,7 +45,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             ["gpt-5.4", "gpt-5.5", "gpt-4.1"],
         )
 
-    def test_list_codex_models_for_engineering_profile_uses_profile_runtime(self) -> None:
+    def test_list_codex_models_for_engineering_profile_uses_profile_runtime(
+        self,
+    ) -> None:
         self.client.post(
             "/api/admin/agent-runtime-profiles",
             json={
@@ -92,7 +97,10 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["runtime_kind"], "lm_studio")
-        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
+        self.assertEqual(
+            [item["id"] for item in body["reasoning_efforts"]],
+            ["medium", "low", "high"],
+        )
 
     def test_admin_login_issues_bearer_token(self) -> None:
         login_response = self.client.post(
@@ -131,7 +139,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(put_response.status_code, 200)
-        self.assertEqual(put_response.json()["secret_ref"], "platform/secret/github-webhook")
+        self.assertEqual(
+            put_response.json()["secret_ref"], "platform/secret/github-webhook"
+        )
         self.assertEqual(put_response.json()["source"], "managed")
 
         list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
@@ -149,7 +159,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertEqual(resolve_response.json()["source"], "managed")
 
     def test_agent_runtime_routes_default_response(self) -> None:
-        response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
+        response = self.client.get(
+            "/api/admin/agent-runtimes", auth=("admin", "secret")
+        )
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["role_routing"], {})
@@ -162,18 +174,30 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertIn("workflow.standup_voice_brief", body["available_selectors"])
         self.assertIn("workflow.retro_voice_brief", body["available_selectors"])
         self.assertIn("pm_conversation_fast", body["available_profiles"])
-        self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
-        self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
-        self.assertEqual(body["effective_defaults"]["selector_routing"]["discord.voice_room_pm"], "pm_conversation")
+        self.assertEqual(
+            body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default"
+        )
+        self.assertEqual(
+            body["effective_defaults"]["name_routing"]["workflow_dev_default"],
+            "engineering_execution_default",
+        )
+        self.assertEqual(
+            body["effective_defaults"]["selector_routing"]["discord.voice_room_pm"],
+            "pm_conversation",
+        )
 
     def test_agent_runtime_tools_catalog_response(self) -> None:
-        response = self.client.get("/api/admin/agent-runtime-tools", auth=("admin", "secret"))
+        response = self.client.get(
+            "/api/admin/agent-runtime-tools", auth=("admin", "secret")
+        )
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertIn("available_stages", body)
         self.assertIn("tools", body)
         self.assertIn("pm", body["available_stages"])
-        repo_read = next(item for item in body["tools"] if item["tool_name"] == "repo.read")
+        repo_read = next(
+            item for item in body["tools"] if item["tool_name"] == "repo.read"
+        )
         self.assertEqual(repo_read["category"], "repo")
         self.assertIn("dev", repo_read["stages"])
         self.assertIn("pm", repo_read["stages"])
@@ -197,11 +221,17 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(create_response.status_code, 200)
-        self.assertEqual(create_response.json()["profile_name"], "openai_engineering_fast")
+        self.assertEqual(
+            create_response.json()["profile_name"], "openai_engineering_fast"
+        )
         self.assertEqual(create_response.json()["runtime_kind"], "openai")
-        self.assertEqual(create_response.json()["base_url"], "https://api.openai.com/v1")
+        self.assertEqual(
+            create_response.json()["base_url"], "https://api.openai.com/v1"
+        )
 
-        list_response = self.client.get("/api/admin/agent-runtime-profiles", auth=("admin", "secret"))
+        list_response = self.client.get(
+            "/api/admin/agent-runtime-profiles", auth=("admin", "secret")
+        )
         self.assertEqual(list_response.status_code, 200)
         self.assertIn("openai_engineering_fast", list_response.json()["profiles"])
 
@@ -283,7 +313,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             "/api/admin/agent-runtimes",
             json={
                 "role_routing": {"pm": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "engineering_execution_deep"},
+                "name_routing": {
+                    "workflow_review_default": "engineering_execution_deep"
+                },
                 "selector_routing": {
                     "discord.voice_room_pm": "pm_conversation_fast",
                     "workflow.standup_voice_brief": "general_planning_default",
@@ -295,15 +327,33 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertEqual(put_response.status_code, 200)
         body = put_response.json()
         self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-        self.assertEqual(body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-        self.assertEqual(body["selector_routing"]["workflow.standup_voice_brief"], "general_planning_default")
-        self.assertEqual(body["selector_routing"]["workflow.retro_voice_brief"], "general_planning_default")
+        self.assertEqual(
+            body["name_routing"]["workflow_review_default"],
+            "engineering_execution_deep",
+        )
+        self.assertEqual(
+            body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast"
+        )
+        self.assertEqual(
+            body["selector_routing"]["workflow.standup_voice_brief"],
+            "general_planning_default",
+        )
+        self.assertEqual(
+            body["selector_routing"]["workflow.retro_voice_brief"],
+            "general_planning_default",
+        )
 
-        get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
+        get_response = self.client.get(
+            "/api/admin/agent-runtimes", auth=("admin", "secret")
+        )
         self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(get_response.json()["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
+        self.assertEqual(
+            get_response.json()["role_routing"]["pm"], "pm_conversation_fast"
+        )
+        self.assertEqual(
+            get_response.json()["selector_routing"]["discord.voice_room_pm"],
+            "pm_conversation_fast",
+        )
         self.assertEqual(
             get_response.json()["selector_routing"]["workflow.standup_voice_brief"],
             "general_planning_default",
@@ -317,9 +367,17 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         with session_factory() as session:
             row = session.get(PlatformSetting, "agent_runtime_routing")
             self.assertIsNotNone(row)
-            self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
-            self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-            self.assertEqual(row.value_json["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
+            self.assertEqual(
+                row.value_json["role_routing"]["pm"], "pm_conversation_fast"
+            )
+            self.assertEqual(
+                row.value_json["name_routing"]["workflow_review_default"],
+                "engineering_execution_deep",
+            )
+            self.assertEqual(
+                row.value_json["selector_routing"]["discord.voice_room_pm"],
+                "pm_conversation_fast",
+            )
             self.assertEqual(
                 row.value_json["selector_routing"]["workflow.standup_voice_brief"],
                 "general_planning_default",
@@ -329,7 +387,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
                 "general_planning_default",
             )
 
-        reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
+        reset_response = self.client.post(
+            "/api/admin/agent-runtimes/reset", auth=("admin", "secret")
+        )
         self.assertEqual(reset_response.status_code, 200)
         self.assertEqual(reset_response.json()["role_routing"], {})
         self.assertEqual(reset_response.json()["name_routing"], {})
@@ -362,7 +422,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         response = self.client.put(
             "/api/admin/agent-runtimes",
             json={
-                "selector_routing": {"discord.voice_room_router": "general_planning_default"},
+                "selector_routing": {
+                    "discord.voice_room_router": "general_planning_default"
+                },
             },
             auth=("admin", "secret"),
         )
@@ -371,7 +433,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             response.json()["selector_routing"]["discord.voice_entry_router"],
             "general_planning_default",
         )
-        self.assertNotIn("discord.voice_room_router", response.json()["selector_routing"])
+        self.assertNotIn(
+            "discord.voice_room_router", response.json()["selector_routing"]
+        )
 
     def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
         create_response = self.client.post(
@@ -392,13 +456,17 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
 
-        platform_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
+        platform_response = self.client.get(
+            "/api/admin/secrets", auth=("admin", "secret")
+        )
         self.assertEqual(platform_response.status_code, 200)
         platform_refs = {item["secret_ref"] for item in platform_response.json()}
         self.assertIn("platform/DISCORD_BOT_TOKEN", platform_refs)
         self.assertNotIn("tenant/tenant-a/DISCORD_BOT_TOKEN", platform_refs)
 
-        tenant_response = self.client.get("/api/admin/tenants/tenant-a/secrets", auth=("admin", "secret"))
+        tenant_response = self.client.get(
+            "/api/admin/tenants/tenant-a/secrets", auth=("admin", "secret")
+        )
         self.assertEqual(tenant_response.status_code, 200)
         tenant_refs = {item["secret_ref"] for item in tenant_response.json()}
         self.assertIn("tenant/tenant-a/DISCORD_BOT_TOKEN", tenant_refs)
@@ -410,7 +478,9 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
+        self.assertIn(
+            "Platform secrets must use platform/* refs", response.json()["detail"]
+        )
 
     def test_platform_secret_resolve_rejects_tenant_scoped_secret_ref(self) -> None:
         response = self.client.post(
@@ -419,10 +489,14 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
+        self.assertIn(
+            "Platform secrets must use platform/* refs", response.json()["detail"]
+        )
 
     def test_tenant_secret_endpoints_require_existing_tenant(self) -> None:
-        list_response = self.client.get("/api/admin/tenants/missing/secrets", auth=("admin", "secret"))
+        list_response = self.client.get(
+            "/api/admin/tenants/missing/secrets", auth=("admin", "secret")
+        )
         self.assertEqual(list_response.status_code, 404)
         self.assertIn("Tenant not found", list_response.json()["detail"])
 
@@ -460,7 +534,10 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Tenant secret key must not include a scope prefix", response.json()["detail"])
+        self.assertIn(
+            "Tenant secret key must not include a scope prefix",
+            response.json()["detail"],
+        )
 
     def test_managed_secret_delete(self) -> None:
         put_response = self.client.put(

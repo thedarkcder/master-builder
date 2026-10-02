@@ -74,9 +74,20 @@ from orchestrator.core.webhooks.job_queue import (
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
-from orchestrator.storage.models import DeploymentHostCommand, Project, ProjectApp, ProjectAppAnalysisRun, ProjectDeploymentRelease, Tenant
+from orchestrator.storage.models import (
+    DeploymentHostCommand,
+    Project,
+    ProjectApp,
+    ProjectAppAnalysisRun,
+    ProjectDeploymentRelease,
+    Tenant,
+)
 from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
-from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
+from orchestrator.tools.coolify_api import (
+    CoolifyApiClient,
+    CoolifyApiConfig,
+    CoolifyApiError,
+)
 from orchestrator.tools.discord_api import DiscordApiError
 from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
@@ -96,6 +107,7 @@ _DATABASE_RESOURCE_KINDS = {
 }
 _SERVICE_RESOURCE_KINDS = {"one_click_service", "object_storage", "s3", "minio_s3"}
 _UNSUPPORTED_RESOURCE_KINDS: set[str] = set()
+
 
 class AdminProjectService:
     def __init__(
@@ -119,10 +131,16 @@ class AdminProjectService:
         self._normalize_project_key = normalize_project_key
         self._normalize_project_policy_overrides = normalize_project_policy_overrides
         self._normalize_string_map = normalize_string_map
-        self._normalize_project_architecture_docs_config = normalize_project_architecture_docs_config
+        self._normalize_project_architecture_docs_config = (
+            normalize_project_architecture_docs_config
+        )
         self._normalize_project_discord_config = normalize_project_discord_config
-        self._with_preserved_discord_system_fields = with_preserved_discord_system_fields
-        self._resolve_project_discord_channel_binding = resolve_project_discord_channel_binding
+        self._with_preserved_discord_system_fields = (
+            with_preserved_discord_system_fields
+        )
+        self._resolve_project_discord_channel_binding = (
+            resolve_project_discord_channel_binding
+        )
         self._sync_tenant_jira_project_keys = sync_tenant_jira_project_keys
         self._ensure_project_repository_checkout = ensure_project_repository_checkout
         self._resolve_project_run_board_id = resolve_project_run_board_id
@@ -153,7 +171,9 @@ class AdminProjectService:
     ) -> bool:  # noqa: ANN001
         if is_archived:
             return False
-        existing_channel_id = str((discord_config or {}).get("channel_id") or "").strip()
+        existing_channel_id = str(
+            (discord_config or {}).get("channel_id") or ""
+        ).strip()
         if existing_channel_id:
             return False
         if force_bind:
@@ -161,10 +181,14 @@ class AdminProjectService:
         tenant_discord_config = dict(getattr(tenant, "discord_config", None) or {})
         return bool(str(tenant_discord_config.get("guild_id") or "").strip())
 
-    def _project_secret_ref(self, *, tenant_id: str, project_id: str, secret_key: str) -> str:
+    def _project_secret_ref(
+        self, *, tenant_id: str, project_id: str, secret_key: str
+    ) -> str:
         normalized_key = normalize_secret_ref(secret_key)
         if normalized_key.startswith(("platform/", "tenant/", "project/")):
-            raise ValueError("Project secret variable names must not include a scope prefix")
+            raise ValueError(
+                "Project secret variable names must not include a scope prefix"
+            )
         return f"project/{tenant_id}/{project_id}/{normalized_key}"
 
     def _materialize_project_secret_refs(
@@ -199,7 +223,9 @@ class AdminProjectService:
                 if normalized_candidate == managed_ref:
                     materialized[variable_name] = managed_ref
                     continue
-                if normalized_candidate.startswith(("platform/", "tenant/", "project/")):
+                if normalized_candidate.startswith(
+                    ("platform/", "tenant/", "project/")
+                ):
                     materialized[variable_name] = normalized_candidate
                     continue
                 if "/" not in normalized_candidate and ":" not in normalized_candidate:
@@ -219,13 +245,19 @@ class AdminProjectService:
     def _project_and_tenant_or_404(self, *, session, tenant_id: str, project_id: str):  # noqa: ANN001
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         return project, tenant
 
-    def _commit_project_update(self, *, session, project: Project, tenant: Tenant) -> object:  # noqa: ANN001
+    def _commit_project_update(
+        self, *, session, project: Project, tenant: Tenant
+    ) -> object:  # noqa: ANN001
         self._sync_tenant_jira_project_keys(session, tenant=tenant)
         tenant.updated_at = project.updated_at
         try:
@@ -242,20 +274,41 @@ class AdminProjectService:
     def list_projects(self, *, session, tenant_id: str) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
 
-        projects = session.execute(
-            select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at)
-        ).scalars().all()
-        return [self._project_to_schema(project, tenant_policy=tenant.policy_config) for project in projects]
+        projects = (
+            session.execute(
+                select(Project)
+                .where(Project.tenant_id == tenant_id)
+                .order_by(Project.created_at)
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            self._project_to_schema(project, tenant_policy=tenant.policy_config)
+            for project in projects
+        ]
 
-    def list_project_navigation(self, *, session, tenant_id: str) -> list[ProjectNavigationRead]:
+    def list_project_navigation(
+        self, *, session, tenant_id: str
+    ) -> list[ProjectNavigationRead]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
 
         rows = session.execute(
-            select(Project.project_id, Project.tenant_id, Project.name, Project.jira_project_key, Project.is_archived)
+            select(
+                Project.project_id,
+                Project.tenant_id,
+                Project.name,
+                Project.jira_project_key,
+                Project.is_archived,
+            )
             .where(Project.tenant_id == tenant_id)
             .order_by(Project.name)
         ).all()
@@ -273,16 +326,22 @@ class AdminProjectService:
     def get_project(self, *, session, tenant_id: str, project_id: str) -> object:
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
 
     def create_project(self, *, session, tenant_id: str, payload) -> object:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
 
         normalized_name = payload.name.strip()
         normalized_repo = self._normalize_project_repo(payload.github_repository)
@@ -294,14 +353,22 @@ class AdminProjectService:
             )
 
         now = datetime.now(timezone.utc)
-        normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        normalized_policy_overrides = self._normalize_project_policy_overrides(
+            payload.policy_overrides
+        )
 
         try:
-            normalized_architecture_docs_config = self._normalize_project_architecture_docs_config(
-                self._optional_payload_dict(getattr(payload, "architecture_docs", None))
+            normalized_architecture_docs_config = (
+                self._normalize_project_architecture_docs_config(
+                    self._optional_payload_dict(
+                        getattr(payload, "architecture_docs", None)
+                    )
+                )
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
 
         settings = self._settings_factory()
         project = Project(
@@ -330,10 +397,14 @@ class AdminProjectService:
                 tenant_id=tenant_id,
                 project_id=project.project_id,
                 raw_secret_refs=payload.secret_refs,
-                encryption_key=str(getattr(settings, "secrets_encryption_key", "") or "").strip(),
+                encryption_key=str(
+                    getattr(settings, "secrets_encryption_key", "") or ""
+                ).strip(),
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
         normalized_discord = self._normalize_project_discord_config(
             self._optional_payload_dict(getattr(payload, "discord", None))
         )
@@ -388,13 +459,19 @@ class AdminProjectService:
         session.refresh(project)
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
 
-    def get_project_deployment_policy(self, *, session, tenant_id: str, project_id: str) -> object:
+    def get_project_deployment_policy(
+        self, *, session, tenant_id: str, project_id: str
+    ) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         return project_deployment_policy_to_schema(project)
 
     def update_project_deployment_policy(
@@ -407,10 +484,14 @@ class AdminProjectService:
     ) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         project.deployment_config = normalize_project_deployment_policy(payload)
         project.updated_at = datetime.now(timezone.utc)
         session.commit()
@@ -428,10 +509,14 @@ class AdminProjectService:
     ) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         if not payload.enabled:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -449,7 +534,9 @@ class AdminProjectService:
                 tenant_id=tenant_id,
                 project_id=project_id,
                 project_name=str(project.name or project_id),
-                execution_key=project_deployment_setup_execution_key(tenant_id=tenant_id, project_id=project_id),
+                execution_key=project_deployment_setup_execution_key(
+                    tenant_id=tenant_id, project_id=project_id
+                ),
                 production_branch=str(policy.production_branch or ""),
                 requested_by_user_id=requested_by_user_id,
             )
@@ -464,16 +551,26 @@ class AdminProjectService:
             policy=policy,
         )
 
-    def get_project_app_deployment_config(self, *, session, tenant_id: str, project_id: str, app_id: str) -> object:
+    def get_project_app_deployment_config(
+        self, *, session, tenant_id: str, project_id: str, app_id: str
+    ) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
+        app = get_project_app(
+            session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+        )
         if app is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+            )
         return project_deployment_config_to_schema(app)
 
     def update_project_app_deployment_config(
@@ -487,13 +584,21 @@ class AdminProjectService:
     ) -> object:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
+        app = get_project_app(
+            session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+        )
         if app is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+            )
         normalized_config = normalize_project_deployment_config(payload)
         app.deployment_config = normalized_config
         app.updated_at = datetime.now(timezone.utc)
@@ -561,7 +666,9 @@ class AdminProjectService:
         app_id: str,
         release_id: str,
     ) -> object:
-        from orchestrator.api.admin.deployment_release_service import get_project_deployment_release_logs
+        from orchestrator.api.admin.deployment_release_service import (
+            get_project_deployment_release_logs,
+        )
 
         return get_project_deployment_release_logs(
             session=session,
@@ -601,14 +708,24 @@ class AdminProjectService:
     ) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         if limit is not None and limit < 1:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="limit must be greater than 0")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="limit must be greater than 0",
+            )
         if offset < 0:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="offset must be greater than or equal to 0")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="offset must be greater than or equal to 0",
+            )
         query = (
             select(ProjectApp)
             .where(
@@ -636,13 +753,19 @@ class AdminProjectService:
             for app in apps
         ]
 
-    def create_project_app(self, *, session, tenant_id: str, project_id: str, payload: ProjectAppCreate) -> object:  # noqa: ANN001
+    def create_project_app(
+        self, *, session, tenant_id: str, project_id: str, payload: ProjectAppCreate
+    ) -> object:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
 
         now = datetime.now(timezone.utc)
         app = ProjectApp(
@@ -662,7 +785,9 @@ class AdminProjectService:
             start_command=payload.start_command,
             env_schema_json=dict(payload.env_schema_json or {}),
             secret_schema_json=dict(payload.secret_schema_json or {}),
-            deployment_config=normalize_project_deployment_config(payload.deployment_config),
+            deployment_config=normalize_project_deployment_config(
+                payload.deployment_config
+            ),
             status="draft",
             created_at=now,
             updated_at=now,
@@ -688,16 +813,26 @@ class AdminProjectService:
             ),
         )
 
-    def get_project_app(self, *, session, tenant_id: str, project_id: str, app_id: str) -> object:
+    def get_project_app(
+        self, *, session, tenant_id: str, project_id: str, app_id: str
+    ) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
+        app = get_project_app(
+            session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+        )
         if app is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+            )
         _require_project_level_deployment(app)
         return _project_app_to_schema(app)
 
@@ -712,16 +847,28 @@ class AdminProjectService:
     ) -> object:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
+        app = get_project_app(
+            session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+        )
         if app is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+            )
 
         updates = payload.model_dump(exclude_none=True)
-        if app.source_path == "." and "source_path" in updates and updates["source_path"] != ".":
+        if (
+            app.source_path == "."
+            and "source_path" in updates
+            and updates["source_path"] != "."
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The default app source_path must remain '.'",
@@ -729,7 +876,9 @@ class AdminProjectService:
         deployment_config_payload = payload.deployment_config
         if deployment_config_payload is not None:
             updates.pop("deployment_config", None)
-            app.deployment_config = normalize_project_deployment_config(deployment_config_payload)
+            app.deployment_config = normalize_project_deployment_config(
+                deployment_config_payload
+            )
         if "name" in updates:
             updates["name"] = str(updates["name"]).strip()
         for field_name, value in updates.items():
@@ -747,16 +896,26 @@ class AdminProjectService:
         session.refresh(app)
         return _project_app_to_schema(app)
 
-    def delete_project_app(self, *, session, tenant_id: str, project_id: str, app_id: str) -> None:  # noqa: ANN001
+    def delete_project_app(
+        self, *, session, tenant_id: str, project_id: str, app_id: str
+    ) -> None:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
+        app = get_project_app(
+            session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+        )
         if app is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+            )
 
         active_release = session.execute(
             select(ProjectDeploymentRelease.release_id)
@@ -764,7 +923,9 @@ class AdminProjectService:
                 ProjectDeploymentRelease.tenant_id == tenant_id,
                 ProjectDeploymentRelease.project_id == project_id,
                 ProjectDeploymentRelease.app_id == app_id,
-                ProjectDeploymentRelease.status.in_(("queued", "provisioning", "deploying")),
+                ProjectDeploymentRelease.status.in_(
+                    ("queued", "provisioning", "deploying")
+                ),
             )
             .limit(1)
         ).scalar_one_or_none()
@@ -794,21 +955,31 @@ class AdminProjectService:
         session.delete(app)
         session.commit()
 
-    def list_project_app_analysis_runs(self, *, session, tenant_id: str, project_id: str) -> list[object]:
+    def list_project_app_analysis_runs(
+        self, *, session, tenant_id: str, project_id: str
+    ) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        runs = session.execute(
-            select(ProjectAppAnalysisRun)
-            .where(
-                ProjectAppAnalysisRun.tenant_id == tenant_id,
-                ProjectAppAnalysisRun.project_id == project_id,
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
             )
-            .order_by(ProjectAppAnalysisRun.created_at.desc())
-        ).scalars().all()
+        runs = (
+            session.execute(
+                select(ProjectAppAnalysisRun)
+                .where(
+                    ProjectAppAnalysisRun.tenant_id == tenant_id,
+                    ProjectAppAnalysisRun.project_id == project_id,
+                )
+                .order_by(ProjectAppAnalysisRun.created_at.desc())
+            )
+            .scalars()
+            .all()
+        )
         return [_project_app_analysis_run_to_schema(run) for run in runs]
 
     def get_project_app_analysis_run(
@@ -821,13 +992,20 @@ class AdminProjectService:
     ) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         run = session.get(ProjectAppAnalysisRun, run_id)
         if run is None or run.tenant_id != tenant_id or run.project_id != project_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app analysis run not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Project app analysis run not found",
+            )
         return _project_app_analysis_run_to_schema(run)
 
     def start_project_app_analysis_run(
@@ -841,10 +1019,14 @@ class AdminProjectService:
     ) -> object:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            )
         try:
             self._ensure_project_repository_checkout(
                 session=session,
@@ -860,7 +1042,9 @@ class AdminProjectService:
         settings = self._settings_factory()
         checkout_path = str(
             project_repo_dir(
-                base_dir=str(getattr(settings, "project_repo_checkout_base_dir", "") or ""),
+                base_dir=str(
+                    getattr(settings, "project_repo_checkout_base_dir", "") or ""
+                ),
                 tenant_id=tenant_id,
                 project_id=project_id,
             )
@@ -899,7 +1083,9 @@ class AdminProjectService:
                     "analysis_run_id": run.run_id,
                     "checkout_path": checkout_path,
                     "analysis_source": "manual_analyze",
-                    "planner_version": _normalize_optional_string(payload.planner_version),
+                    "planner_version": _normalize_optional_string(
+                        payload.planner_version
+                    ),
                 },
                 context_json={
                     "analysis_run_id": run.run_id,
@@ -925,16 +1111,28 @@ class AdminProjectService:
     def get_tenant_deployments_overview(self, *, session, tenant_id: str) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-        projects = session.execute(
-            select(Project).where(Project.tenant_id == tenant_id).order_by(Project.name.asc())
-        ).scalars().all()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
+        projects = (
+            session.execute(
+                select(Project)
+                .where(Project.tenant_id == tenant_id)
+                .order_by(Project.name.asc())
+            )
+            .scalars()
+            .all()
+        )
         project_names = {project.project_id: project.name for project in projects}
-        apps = session.execute(
-            select(ProjectApp)
-            .where(ProjectApp.tenant_id == tenant_id)
-            .order_by(ProjectApp.updated_at.desc(), ProjectApp.created_at.desc())
-        ).scalars().all()
+        apps = (
+            session.execute(
+                select(ProjectApp)
+                .where(ProjectApp.tenant_id == tenant_id)
+                .order_by(ProjectApp.updated_at.desc(), ProjectApp.created_at.desc())
+            )
+            .scalars()
+            .all()
+        )
 
         app_rows: list[TenantDeploymentsOverviewAppRead] = []
         failure_rows: list[TenantDeploymentsOverviewFailureRead] = []
@@ -963,12 +1161,18 @@ class AdminProjectService:
                 app_id=app.app_id,
                 include_legacy_default_release=app.source_path == ".",
             )
-            last_release_status = _normalize_optional_string(getattr(latest_release, "status", None))
-            last_error = _normalize_optional_string(getattr(latest_release, "last_error", None))
+            last_release_status = _normalize_optional_string(
+                getattr(latest_release, "status", None)
+            )
+            last_error = _normalize_optional_string(
+                getattr(latest_release, "last_error", None)
+            )
             status_value = str(app.status or "").strip().lower()
             status_count_key = status_to_count_key.get(status_value)
             if status_count_key is not None:
-                summary_counts[status_count_key] = summary_counts.get(status_count_key, 0) + 1
+                summary_counts[status_count_key] = (
+                    summary_counts.get(status_count_key, 0) + 1
+                )
             project_name = project_names.get(app.project_id, app.project_id)
             app_rows.append(
                 TenantDeploymentsOverviewAppRead(
@@ -1008,7 +1212,9 @@ class AdminProjectService:
                     )
                 )
 
-        failure_rows = sorted(failure_rows, key=lambda row: row.updated_at, reverse=True)[:10]
+        failure_rows = sorted(
+            failure_rows, key=lambda row: row.updated_at, reverse=True
+        )[:10]
         return TenantDeploymentsOverviewRead(
             summary=TenantDeploymentsOverviewSummaryRead(
                 total_apps=len(app_rows),
@@ -1177,9 +1383,12 @@ class AdminProjectService:
             restore_run_id=restore_run_id,
         )
 
-
-    def update_project_configuration(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    def update_project_configuration(
+        self, *, session, tenant_id: str, project_id: str, payload
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
         normalized_name = payload.name.strip()
         normalized_repo = self._normalize_project_repo(payload.github_repository)
         normalized_jira_key = self._normalize_project_key(payload.jira_project_key)
@@ -1189,13 +1398,21 @@ class AdminProjectService:
                 detail="Project name, repository, and Jira key are required",
             )
         try:
-            normalized_architecture_docs_config = self._normalize_project_architecture_docs_config(
-                self._optional_payload_dict(getattr(payload, "architecture_docs", None))
+            normalized_architecture_docs_config = (
+                self._normalize_project_architecture_docs_config(
+                    self._optional_payload_dict(
+                        getattr(payload, "architecture_docs", None)
+                    )
+                )
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
 
-        jira_key_changed = str(project.jira_project_key or "").strip().upper() != normalized_jira_key
+        jira_key_changed = (
+            str(project.jira_project_key or "").strip().upper() != normalized_jira_key
+        )
         project.name = normalized_name
         project.github_repository = normalized_repo
         project.jira_project_key = normalized_jira_key
@@ -1205,27 +1422,47 @@ class AdminProjectService:
             policy_overrides.pop("run_board_id", None)
             project.policy_overrides = policy_overrides
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
 
-    def update_project_policy(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-        normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+    def update_project_policy(
+        self, *, session, tenant_id: str, project_id: str, payload
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
+        normalized_policy_overrides = self._normalize_project_policy_overrides(
+            payload.policy_overrides
+        )
         _assert_qa_demo_policy_can_create_preview_release(
             policy_overrides=normalized_policy_overrides,
             project=project,
         )
         project.policy_overrides = normalized_policy_overrides
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
 
-    def update_project_environment(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    def update_project_environment(
+        self, *, session, tenant_id: str, project_id: str, payload
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
         project.environment = self._normalize_string_map(payload.environment)
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
 
-    def update_project_secret_refs(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    def update_project_secret_refs(
+        self, *, session, tenant_id: str, project_id: str, payload
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
         settings = self._settings_factory()
         try:
             project.secret_refs = self._materialize_project_secret_refs(
@@ -1233,15 +1470,25 @@ class AdminProjectService:
                 tenant_id=tenant_id,
                 project_id=project.project_id,
                 raw_secret_refs=payload.secret_refs,
-                encryption_key=str(getattr(settings, "secrets_encryption_key", "") or "").strip(),
+                encryption_key=str(
+                    getattr(settings, "secrets_encryption_key", "") or ""
+                ).strip(),
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
 
-    def update_project_discord(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    def update_project_discord(
+        self, *, session, tenant_id: str, project_id: str, payload
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
         settings = self._settings_factory()
         normalized_discord = self._with_preserved_discord_system_fields(
             existing=dict(project.discord_config or {}),
@@ -1270,16 +1517,28 @@ class AdminProjectService:
                 ) from exc
         project.discord_config = normalized_discord
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
 
-    def update_project_archive_state(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    def update_project_archive_state(
+        self, *, session, tenant_id: str, project_id: str, payload
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
         project.is_archived = bool(payload.is_archived)
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
 
-    def resolve_project_jira_run_board(self, *, session, tenant_id: str, project_id: str) -> object:  # noqa: ANN001
-        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    def resolve_project_jira_run_board(
+        self, *, session, tenant_id: str, project_id: str
+    ) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
         normalized_jira_key = self._normalize_project_key(project.jira_project_key)
         try:
             run_board_id = self._resolve_project_run_board_id(
@@ -1302,7 +1561,10 @@ class AdminProjectService:
         policy_overrides["run_board_id"] = run_board_id
         project.policy_overrides = policy_overrides
         project.updated_at = datetime.now(timezone.utc)
-        return self._commit_project_update(session=session, project=project, tenant=tenant)
+        return self._commit_project_update(
+            session=session, project=project, tenant=tenant
+        )
+
 
 def _coerce_dict(value: object) -> dict[str, object]:
     if isinstance(value, dict):
@@ -1315,7 +1577,9 @@ def _normalize_optional_string(value: object) -> str | None:
     return normalized or None
 
 
-def _assert_qa_demo_policy_can_create_preview_release(*, policy_overrides: dict, project: Project) -> None:
+def _assert_qa_demo_policy_can_create_preview_release(
+    *, policy_overrides: dict, project: Project
+) -> None:
     if not bool((policy_overrides or {}).get("qa_demo_recording_enabled")):
         return
     deployment_policy = project_deployment_policy_to_schema(project)
@@ -1327,7 +1591,9 @@ def _assert_qa_demo_policy_can_create_preview_release(*, policy_overrides: dict,
     )
 
 
-def _project_app_to_schema(app: ProjectApp, *, latest_release: ProjectDeploymentRelease | None = None) -> ProjectAppRead:
+def _project_app_to_schema(
+    app: ProjectApp, *, latest_release: ProjectDeploymentRelease | None = None
+) -> ProjectAppRead:
     return ProjectAppRead(
         app_id=app.app_id,
         tenant_id=app.tenant_id,
@@ -1347,20 +1613,34 @@ def _project_app_to_schema(app: ProjectApp, *, latest_release: ProjectDeployment
         secret_schema_json=_coerce_dict(app.secret_schema_json),
         deployment_config=project_deployment_config_to_schema(app),
         status=app.status,
-        latest_release_id=latest_release.release_id if latest_release is not None else None,
-        latest_release_status=latest_release.status if latest_release is not None else None,
+        latest_release_id=latest_release.release_id
+        if latest_release is not None
+        else None,
+        latest_release_status=latest_release.status
+        if latest_release is not None
+        else None,
         latest_release_name=(
-            f"{latest_release.git_ref} @ {latest_release.commit_sha[:8]}" if latest_release is not None else None
+            f"{latest_release.git_ref} @ {latest_release.commit_sha[:8]}"
+            if latest_release is not None
+            else None
         ),
-        latest_release_git_ref=latest_release.git_ref if latest_release is not None else None,
-        latest_release_commit_sha=latest_release.commit_sha if latest_release is not None else None,
-        last_error=_normalize_optional_string(latest_release.last_error) if latest_release is not None else None,
+        latest_release_git_ref=latest_release.git_ref
+        if latest_release is not None
+        else None,
+        latest_release_commit_sha=latest_release.commit_sha
+        if latest_release is not None
+        else None,
+        last_error=_normalize_optional_string(latest_release.last_error)
+        if latest_release is not None
+        else None,
         created_at=app.created_at,
         updated_at=app.updated_at,
     )
 
 
-def _project_app_analysis_run_to_schema(run: ProjectAppAnalysisRun) -> ProjectAppAnalysisRunRead:
+def _project_app_analysis_run_to_schema(
+    run: ProjectAppAnalysisRun,
+) -> ProjectAppAnalysisRunRead:
     return ProjectAppAnalysisRunRead(
         run_id=run.run_id,
         tenant_id=run.tenant_id,
@@ -1450,11 +1730,16 @@ def _latest_deployment_release(
         query = query.where(ProjectDeploymentRelease.app_id.is_(None))
     elif include_legacy_default_release:
         query = query.where(
-            (ProjectDeploymentRelease.app_id == normalized_app_id) | ProjectDeploymentRelease.app_id.is_(None)
+            (ProjectDeploymentRelease.app_id == normalized_app_id)
+            | ProjectDeploymentRelease.app_id.is_(None)
         )
     else:
         query = query.where(ProjectDeploymentRelease.app_id == normalized_app_id)
-    return session.execute(query.order_by(ProjectDeploymentRelease.created_at.desc())).scalars().first()
+    return (
+        session.execute(query.order_by(ProjectDeploymentRelease.created_at.desc()))
+        .scalars()
+        .first()
+    )
 
 
 def _latest_application_uuid(release: ProjectDeploymentRelease | None) -> str | None:
@@ -1489,7 +1774,9 @@ def _build_internal_coolify_client(
     if tenant_plane.state not in _ACTIVE_DEPLOYMENT_PLANE_STATES:
         return None, "Tenant deployment plane is not active"
 
-    api_token_ref = _normalize_optional_string((tenant_plane.secret_refs or {}).get("coolify_api_token"))
+    api_token_ref = _normalize_optional_string(
+        (tenant_plane.secret_refs or {}).get("coolify_api_token")
+    )
     if api_token_ref is None:
         return None, "Tenant deployment plane is missing coolify_api_token secret ref"
     settings = get_settings()
@@ -1506,7 +1793,9 @@ def _build_internal_coolify_client(
         api_base_url = _coolify_api_base_url(tenant_plane=tenant_plane)
     except HTTPException as exc:
         return None, str(exc.detail)
-    return CoolifyApiClient(CoolifyApiConfig(base_url=api_base_url, bearer_token=api_token)), None
+    return CoolifyApiClient(
+        CoolifyApiConfig(base_url=api_base_url, bearer_token=api_token)
+    ), None
 
 
 def _deployment_context(
@@ -1515,20 +1804,37 @@ def _deployment_context(
     tenant_id: str,
     project_id: str,
     app_id: str | None = None,
-) -> tuple[Tenant, Project, ProjectApp, TenantDeploymentPlaneRead, ProjectDeploymentConfigRead, ProjectDeploymentRelease | None]:
+) -> tuple[
+    Tenant,
+    Project,
+    ProjectApp,
+    TenantDeploymentPlaneRead,
+    ProjectDeploymentConfigRead,
+    ProjectDeploymentRelease | None,
+]:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     selected_app = (
-        get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+        get_project_app(
+            session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+        )
         if _normalize_optional_string(app_id) is not None
-        else get_project_default_app(session=session, tenant_id=tenant_id, project_id=project_id)
+        else get_project_default_app(
+            session=session, tenant_id=tenant_id, project_id=project_id
+        )
     )
     if selected_app is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+        )
     _require_project_level_deployment(selected_app)
     return (
         tenant,
@@ -1545,11 +1851,20 @@ def _deployment_context(
         ),
     )
 
-def _selected_items_by_key(items: list[object], selected_keys: list[str]) -> list[object]:
+
+def _selected_items_by_key(
+    items: list[object], selected_keys: list[str]
+) -> list[object]:
     if not selected_keys:
         return list(items)
-    selected = {str(key).strip().lower() for key in selected_keys if str(key or "").strip()}
-    return [item for item in items if str(getattr(item, "key", "")).strip().lower() in selected]
+    selected = {
+        str(key).strip().lower() for key in selected_keys if str(key or "").strip()
+    }
+    return [
+        item
+        for item in items
+        if str(getattr(item, "key", "")).strip().lower() in selected
+    ]
 
 
 def _merge_item_config(item: object, updates: dict[str, object]) -> None:
@@ -1564,10 +1879,20 @@ def _resource_database_type(resource: ProjectDeploymentResourceWrite) -> str | N
         return kind
     if kind == "cache":
         config = _coerce_dict(resource.config)
-        return _normalize_optional_string(config.get("database_type") or config.get("coolify_database_type")) or "redis"
+        return (
+            _normalize_optional_string(
+                config.get("database_type") or config.get("coolify_database_type")
+            )
+            or "redis"
+        )
     if kind == "database":
         config = _coerce_dict(resource.config)
-        return _normalize_optional_string(config.get("database_type") or config.get("coolify_database_type")) or "postgres"
+        return (
+            _normalize_optional_string(
+                config.get("database_type") or config.get("coolify_database_type")
+            )
+            or "postgres"
+        )
     return None
 
 
@@ -1585,8 +1910,12 @@ def _build_database_payload(
     payload: dict[str, object] = {
         "server_uuid": _normalize_optional_string(tenant_plane.coolify_server_uuid),
         "project_uuid": _normalize_optional_string(tenant_plane.coolify_project_uuid),
-        "environment_name": _normalize_optional_string(tenant_plane.coolify_environment_name or project_deployment.environment_name),
-        "destination_uuid": _normalize_optional_string(tenant_plane.coolify_destination_uuid),
+        "environment_name": _normalize_optional_string(
+            tenant_plane.coolify_environment_name or project_deployment.environment_name
+        ),
+        "destination_uuid": _normalize_optional_string(
+            tenant_plane.coolify_destination_uuid
+        ),
         "instant_deploy": True,
         "name": _normalize_optional_string(resource.name) or resource.key,
         "description": _normalize_optional_string(config.get("description"))
@@ -1654,7 +1983,9 @@ def _build_database_payload(
     return _compact_payload(payload)
 
 
-def _build_storage_payload(volume: ProjectDeploymentVolumeWrite) -> dict[str, object] | None:
+def _build_storage_payload(
+    volume: ProjectDeploymentVolumeWrite,
+) -> dict[str, object] | None:
     config = _coerce_dict(volume.config)
     mount_path = _normalize_optional_string(config.get("mount_path"))
     if mount_path is None:
@@ -1678,8 +2009,14 @@ def _build_service_payload(
     resource: ProjectDeploymentResourceWrite,
 ) -> dict[str, object] | None:
     config = _coerce_dict(resource.config)
-    service_type = _normalize_optional_string(config.get("service_type") or config.get("type"))
-    if service_type is None and str(resource.kind or "").strip().lower() in {"object_storage", "s3", "minio_s3"}:
+    service_type = _normalize_optional_string(
+        config.get("service_type") or config.get("type")
+    )
+    if service_type is None and str(resource.kind or "").strip().lower() in {
+        "object_storage",
+        "s3",
+        "minio_s3",
+    }:
         service_type = "minio"
     if service_type is None:
         return None
@@ -1688,7 +2025,9 @@ def _build_service_payload(
         "name": _normalize_optional_string(resource.name) or resource.key,
         "server_uuid": _normalize_optional_string(tenant_plane.coolify_server_uuid),
         "project_uuid": _normalize_optional_string(tenant_plane.coolify_project_uuid),
-        "environment_name": _normalize_optional_string(tenant_plane.coolify_environment_name or project_deployment.environment_name),
+        "environment_name": _normalize_optional_string(
+            tenant_plane.coolify_environment_name or project_deployment.environment_name
+        ),
         "instant_deploy": True,
     }
     destination_uuid = _normalize_optional_string(tenant_plane.coolify_destination_uuid)
@@ -1780,13 +2119,17 @@ def apply_project_deployment_resources(
     payload: ProjectDeploymentResourceApplyRequest,
     app_id: str | None = None,
 ) -> ProjectDeploymentOperationRead:  # noqa: ANN001
-    tenant, project, project_app, tenant_plane, project_deployment, latest_release = _deployment_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        app_id=app_id,
+    tenant, project, project_app, tenant_plane, project_deployment, latest_release = (
+        _deployment_context(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+        )
     )
-    selected_resources = _selected_items_by_key(list(project_deployment.resources), payload.resource_keys)
+    selected_resources = _selected_items_by_key(
+        list(project_deployment.resources), payload.resource_keys
+    )
     client, client_error = _build_internal_coolify_client(
         session=session,
         tenant=tenant,
@@ -1831,11 +2174,17 @@ def apply_project_deployment_resources(
                     resource=resource,
                     database_type=database_type,
                 )
-                existing_uuid = _normalize_optional_string(_coerce_dict(resource.config).get("coolify_uuid"))
+                existing_uuid = _normalize_optional_string(
+                    _coerce_dict(resource.config).get("coolify_uuid")
+                )
                 if existing_uuid is None:
-                    provider_uuid = client.create_database(database_type=database_type, payload=payload_data)
+                    provider_uuid = client.create_database(
+                        database_type=database_type, payload=payload_data
+                    )
                 else:
-                    client.update_database(database_uuid=existing_uuid, payload=payload_data)
+                    client.update_database(
+                        database_uuid=existing_uuid, payload=payload_data
+                    )
                     provider_uuid = existing_uuid
                 _merge_item_config(
                     resource,
@@ -1892,17 +2241,23 @@ def apply_project_deployment_resources(
                 )
                 continue
             try:
-                existing_uuid = _normalize_optional_string(_coerce_dict(resource.config).get("coolify_uuid"))
+                existing_uuid = _normalize_optional_string(
+                    _coerce_dict(resource.config).get("coolify_uuid")
+                )
                 if existing_uuid is None:
                     provider_uuid = client.create_service(payload=payload_data)
                 else:
-                    client.update_service(service_uuid=existing_uuid, payload=payload_data)
+                    client.update_service(
+                        service_uuid=existing_uuid, payload=payload_data
+                    )
                     provider_uuid = existing_uuid
                 _merge_item_config(
                     resource,
                     {
                         "coolify_uuid": provider_uuid,
-                        "coolify_service_type": _normalize_optional_string(payload_data.get("type")),
+                        "coolify_service_type": _normalize_optional_string(
+                            payload_data.get("type")
+                        ),
                     },
                 )
                 updated = True
@@ -1965,13 +2320,17 @@ def apply_project_deployment_volumes(
     payload: ProjectDeploymentVolumeApplyRequest,
     app_id: str | None = None,
 ) -> ProjectDeploymentOperationRead:  # noqa: ANN001
-    tenant, project, project_app, tenant_plane, project_deployment, latest_release = _deployment_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        app_id=app_id,
+    tenant, project, project_app, tenant_plane, project_deployment, latest_release = (
+        _deployment_context(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+        )
     )
-    selected_volumes = _selected_items_by_key(list(project_deployment.volumes), payload.volume_keys)
+    selected_volumes = _selected_items_by_key(
+        list(project_deployment.volumes), payload.volume_keys
+    )
     client, client_error = _build_internal_coolify_client(
         session=session,
         tenant=tenant,
@@ -2014,7 +2373,9 @@ def apply_project_deployment_volumes(
             )
             continue
         try:
-            existing_uuid = _normalize_optional_string(_coerce_dict(volume.config).get("coolify_uuid"))
+            existing_uuid = _normalize_optional_string(
+                _coerce_dict(volume.config).get("coolify_uuid")
+            )
             if existing_uuid is None:
                 provider_uuid = client.create_application_storage(
                     application_uuid=application_uuid,
@@ -2086,13 +2447,17 @@ def apply_project_deployment_domains(
     payload: ProjectDeploymentDomainApplyRequest,
     app_id: str | None = None,
 ) -> ProjectDeploymentOperationRead:  # noqa: ANN001
-    tenant, project, project_app, tenant_plane, project_deployment, latest_release = _deployment_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        app_id=app_id,
+    tenant, project, project_app, tenant_plane, project_deployment, latest_release = (
+        _deployment_context(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+        )
     )
-    selected_domains = _selected_items_by_key(list(project_deployment.domains), payload.domain_keys)
+    selected_domains = _selected_items_by_key(
+        list(project_deployment.domains), payload.domain_keys
+    )
     client, client_error = _build_internal_coolify_client(
         session=session,
         tenant=tenant,
@@ -2148,7 +2513,9 @@ def apply_project_deployment_domains(
         )
 
     domains_value = ",".join(
-        f"{domain.host}{domain.path or ''}" for domain in selected_domains if _normalize_optional_string(domain.host)
+        f"{domain.host}{domain.path or ''}"
+        for domain in selected_domains
+        if _normalize_optional_string(domain.host)
     )
     force_https_enabled = any(bool(domain.tls_enabled) for domain in selected_domains)
     try:
@@ -2222,13 +2589,17 @@ def apply_project_deployment_backups(
     payload: ProjectDeploymentBackupApplyRequest,
     app_id: str | None = None,
 ) -> ProjectDeploymentOperationRead:  # noqa: ANN001
-    tenant, project, project_app, tenant_plane, project_deployment, latest_release = _deployment_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        app_id=app_id,
+    tenant, project, project_app, tenant_plane, project_deployment, latest_release = (
+        _deployment_context(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+        )
     )
-    selected_backups = _selected_items_by_key(list(project_deployment.backup_policies), payload.backup_keys)
+    selected_backups = _selected_items_by_key(
+        list(project_deployment.backup_policies), payload.backup_keys
+    )
     client, client_error = _build_internal_coolify_client(
         session=session,
         tenant=tenant,
@@ -2237,7 +2608,9 @@ def apply_project_deployment_backups(
     )
     updated = False
     items: list[ProjectDeploymentOperationItemRead] = []
-    resource_by_key = {resource.key: resource for resource in project_deployment.resources}
+    resource_by_key = {
+        resource.key: resource for resource in project_deployment.resources
+    }
     for backup_policy in selected_backups:
         resource = resource_by_key.get(backup_policy.resource_key)
         if resource is None:
@@ -2271,7 +2644,9 @@ def apply_project_deployment_backups(
                 )
             )
             continue
-        database_uuid = _normalize_optional_string(_coerce_dict(resource.config).get("coolify_uuid"))
+        database_uuid = _normalize_optional_string(
+            _coerce_dict(resource.config).get("coolify_uuid")
+        )
         if database_uuid is None:
             items.append(
                 _item_result(
@@ -2288,9 +2663,13 @@ def apply_project_deployment_backups(
                 project_deployment=project_deployment,
                 backup_policy=backup_policy,
             )
-            existing_backup_uuid = _normalize_optional_string(_coerce_dict(backup_policy.config).get("coolify_backup_uuid"))
+            existing_backup_uuid = _normalize_optional_string(
+                _coerce_dict(backup_policy.config).get("coolify_backup_uuid")
+            )
             if existing_backup_uuid is None:
-                backup_uuid = client.create_database_backup(database_uuid=database_uuid, payload=payload_data)
+                backup_uuid = client.create_database_backup(
+                    database_uuid=database_uuid, payload=payload_data
+                )
             else:
                 client.update_database_backup(
                     database_uuid=database_uuid,
@@ -2313,7 +2692,10 @@ def apply_project_deployment_backups(
                     kind="backup",
                     status="applied",
                     provider_uuid=backup_uuid,
-                    details={"database_uuid": database_uuid, "database_type": database_type},
+                    details={
+                        "database_uuid": database_uuid,
+                        "database_type": database_type,
+                    },
                 )
             )
         except CoolifyApiError as exc:
@@ -2354,13 +2736,17 @@ def trigger_project_deployment_backups(
     payload: ProjectDeploymentBackupTriggerRequest,
     app_id: str | None = None,
 ) -> ProjectDeploymentOperationRead:  # noqa: ANN001
-    tenant, project, project_app, tenant_plane, project_deployment, latest_release = _deployment_context(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        app_id=app_id,
+    tenant, project, project_app, tenant_plane, project_deployment, latest_release = (
+        _deployment_context(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            app_id=app_id,
+        )
     )
-    selected_backups = _selected_items_by_key(list(project_deployment.backup_policies), payload.backup_keys)
+    selected_backups = _selected_items_by_key(
+        list(project_deployment.backup_policies), payload.backup_keys
+    )
     client, client_error = _build_internal_coolify_client(
         session=session,
         tenant=tenant,
@@ -2368,7 +2754,9 @@ def trigger_project_deployment_backups(
         project=project,
     )
     items: list[ProjectDeploymentOperationItemRead] = []
-    resource_by_key = {resource.key: resource for resource in project_deployment.resources}
+    resource_by_key = {
+        resource.key: resource for resource in project_deployment.resources
+    }
     for backup_policy in selected_backups:
         resource = resource_by_key.get(backup_policy.resource_key)
         if resource is None:
@@ -2402,8 +2790,12 @@ def trigger_project_deployment_backups(
                 )
             )
             continue
-        database_uuid = _normalize_optional_string(_coerce_dict(resource.config).get("coolify_uuid"))
-        backup_uuid = _normalize_optional_string(_coerce_dict(backup_policy.config).get("coolify_backup_uuid"))
+        database_uuid = _normalize_optional_string(
+            _coerce_dict(resource.config).get("coolify_uuid")
+        )
+        backup_uuid = _normalize_optional_string(
+            _coerce_dict(backup_policy.config).get("coolify_backup_uuid")
+        )
         if database_uuid is None or backup_uuid is None:
             items.append(
                 _item_result(
@@ -2415,7 +2807,9 @@ def trigger_project_deployment_backups(
             )
             continue
         try:
-            client.trigger_database_backup(database_uuid=database_uuid, backup_uuid=backup_uuid)
+            client.trigger_database_backup(
+                database_uuid=database_uuid, backup_uuid=backup_uuid
+            )
             _merge_item_config(
                 backup_policy,
                 {
@@ -2428,7 +2822,10 @@ def trigger_project_deployment_backups(
                     kind="backup",
                     status="applied",
                     provider_uuid=backup_uuid,
-                    details={"database_uuid": database_uuid, "database_type": database_type},
+                    details={
+                        "database_uuid": database_uuid,
+                        "database_type": database_type,
+                    },
                 )
             )
         except CoolifyApiError as exc:

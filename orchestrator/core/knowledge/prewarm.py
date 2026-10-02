@@ -11,7 +11,9 @@ class KnowledgeDependencyPrewarmResult:
     embedding_model: str
 
 
-def prewarm_knowledge_dependencies(*, settings: Settings) -> KnowledgeDependencyPrewarmResult:
+def prewarm_knowledge_dependencies(
+    *, settings: Settings
+) -> KnowledgeDependencyPrewarmResult:
     _ = settings
     try:
         embedding_model = ensure_knowledge_embedding_model_ready(local_files_only=True)

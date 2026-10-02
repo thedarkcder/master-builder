@@ -8,14 +8,22 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, ProjectAutomation, Tenant
-from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
+from orchestrator.tools.github_app import (
+    GitHubApiError,
+    github_client_from_tenant_config,
+)
 
 
 @dataclass(frozen=True)
@@ -42,7 +50,9 @@ def _normalize_persona_id(value: object) -> str:
     return ""
 
 
-def _normalize_persona_segments(payload: dict[str, Any]) -> tuple[PersonaBriefingSegment, ...]:
+def _normalize_persona_segments(
+    payload: dict[str, Any],
+) -> tuple[PersonaBriefingSegment, ...]:
     raw_segments = payload.get("persona_segments")
     if not isinstance(raw_segments, list):
         return ()
@@ -73,8 +83,12 @@ def _persona_label(persona_id: str) -> str:
     return labels.get(persona_id, persona_id.title())
 
 
-def _build_transcript_from_segments(segments: tuple[PersonaBriefingSegment, ...]) -> str:
-    lines = [f"{_persona_label(segment.persona_id)}: {segment.text}" for segment in segments]
+def _build_transcript_from_segments(
+    segments: tuple[PersonaBriefingSegment, ...],
+) -> str:
+    lines = [
+        f"{_persona_label(segment.persona_id)}: {segment.text}" for segment in segments
+    ]
     return "\n".join(lines)
 
 
@@ -127,7 +141,9 @@ def _collect_jira_facts(
     window_start_at: datetime,
     window_end_at: datetime,
 ) -> dict[str, Any]:
-    oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
+    oauth = tenant_atlassian_oauth_context(
+        session=session, tenant=tenant, settings=settings
+    )
     jql = (
         f'project = "{project.jira_project_key}" '
         f'AND updated >= "{_format_jql_timestamp(window_start_at)}" '
@@ -143,7 +159,10 @@ def _collect_jira_facts(
     return {
         "jql": jql,
         "issue_count": len(issues),
-        "issues": [{"key": issue.key, "summary": issue.summary, "status": issue.status} for issue in issues],
+        "issues": [
+            {"key": issue.key, "summary": issue.summary, "status": issue.status}
+            for issue in issues
+        ],
     }
 
 
@@ -175,7 +194,9 @@ def _collect_github_facts(
                 encryption_key=settings.secrets_encryption_key,
             ),
         )
-        prs = client.list_pull_requests(repo_full_name=repo_full_name, state="all", limit=50)
+        prs = client.list_pull_requests(
+            repo_full_name=repo_full_name, state="all", limit=50
+        )
     except Exception:
         return {"repo": repo_full_name, "pull_request_count": 0, "prs_in_window": []}
     start = _to_utc(window_start_at)
@@ -189,7 +210,9 @@ def _collect_github_facts(
         if not any((created_at, updated_at, closed_at, merged_at)):
             continue
         reviews = []
-        for review in client.list_pull_request_reviews(repo_full_name=repo_full_name, pr_number=pr.number):
+        for review in client.list_pull_request_reviews(
+            repo_full_name=repo_full_name, pr_number=pr.number
+        ):
             submitted_at = _in_window(value=review.submitted_at, start=start, end=end)
             if submitted_at is None:
                 continue
@@ -202,7 +225,9 @@ def _collect_github_facts(
                 }
             )
         review_comments = []
-        for comment in client.list_pull_request_review_comments(repo_full_name=repo_full_name, pr_number=pr.number):
+        for comment in client.list_pull_request_review_comments(
+            repo_full_name=repo_full_name, pr_number=pr.number
+        ):
             created = _in_window(value=comment.created_at, start=start, end=end)
             if created is None:
                 continue
@@ -217,7 +242,9 @@ def _collect_github_facts(
                 }
             )
         issue_comments = []
-        for comment in client.list_pull_request_issue_comments(repo_full_name=repo_full_name, pr_number=pr.number):
+        for comment in client.list_pull_request_issue_comments(
+            repo_full_name=repo_full_name, pr_number=pr.number
+        ):
             created = _in_window(value=comment.created_at, start=start, end=end)
             if created is None:
                 continue
@@ -228,7 +255,17 @@ def _collect_github_facts(
                     "user_login": comment.user_login,
                 }
             )
-        if not any((created_at, updated_at, closed_at, merged_at, reviews, review_comments, issue_comments)):
+        if not any(
+            (
+                created_at,
+                updated_at,
+                closed_at,
+                merged_at,
+                reviews,
+                review_comments,
+                issue_comments,
+            )
+        ):
             continue
         in_window.append(
             {
@@ -236,8 +273,12 @@ def _collect_github_facts(
                 "title": pr.title,
                 "state": pr.state,
                 "url": pr.html_url,
-                "created_at": created_at.isoformat() if created_at is not None else None,
-                "updated_at": updated_at.isoformat() if updated_at is not None else None,
+                "created_at": created_at.isoformat()
+                if created_at is not None
+                else None,
+                "updated_at": updated_at.isoformat()
+                if updated_at is not None
+                else None,
                 "closed_at": closed_at.isoformat() if closed_at is not None else None,
                 "merged_at": merged_at.isoformat() if merged_at is not None else None,
                 "review_count": len(reviews),
@@ -372,5 +413,7 @@ def safe_build_project_automation_briefing(
                 "window_start_at": _to_utc(window_start_at).isoformat(),
                 "window_end_at": _to_utc(window_end_at).isoformat(),
             },
-            persona_segments=(PersonaBriefingSegment(persona_id="pm", text=fallback_transcript),),
+            persona_segments=(
+                PersonaBriefingSegment(persona_id="pm", text=fallback_transcript),
+            ),
         )

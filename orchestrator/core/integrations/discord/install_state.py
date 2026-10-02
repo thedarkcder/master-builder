@@ -47,14 +47,20 @@ def create_discord_install_state_token(
         "return_to": return_to,
         "installer_user_id": installer_user_id.strip() if installer_user_id else None,
     }
-    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
+        "utf-8"
+    )
     payload_token = _b64url_encode(payload_bytes)
-    signature = hmac.new(secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256).digest()
+    signature = hmac.new(
+        secret.encode("utf-8"), payload_token.encode("ascii"), hashlib.sha256
+    ).digest()
     signature_token = _b64url_encode(signature)
     return f"{payload_token}.{signature_token}"
 
 
-def parse_discord_install_state_token(*, token: str, secret: str, now: datetime | None = None) -> DiscordInstallState:
+def parse_discord_install_state_token(
+    *, token: str, secret: str, now: datetime | None = None
+) -> DiscordInstallState:
     if not token:
         raise ValueError("state token is required")
     if not secret:
@@ -88,7 +94,9 @@ def parse_discord_install_state_token(*, token: str, secret: str, now: datetime 
         raise ValueError("invalid state token exp")
     if return_to not in {"edit", "wizard"}:
         raise ValueError("invalid state token return_to")
-    if installer_user_id is not None and (not isinstance(installer_user_id, str) or not installer_user_id.strip()):
+    if installer_user_id is not None and (
+        not isinstance(installer_user_id, str) or not installer_user_id.strip()
+    ):
         raise ValueError("invalid state token installer_user_id")
 
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -99,5 +107,7 @@ def parse_discord_install_state_token(*, token: str, secret: str, now: datetime 
         tenant_id=tenant_id.strip(),
         exp=exp,
         return_to=return_to,
-        installer_user_id=installer_user_id.strip() if isinstance(installer_user_id, str) else None,
+        installer_user_id=installer_user_id.strip()
+        if isinstance(installer_user_id, str)
+        else None,
     )

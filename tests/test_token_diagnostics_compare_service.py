@@ -5,7 +5,9 @@ from tempfile import TemporaryDirectory
 
 from cryptography.fernet import Fernet
 
-from orchestrator.api.admin.token_diagnostics_compare_service import get_token_stage_diagnostics_compare
+from orchestrator.api.admin.token_diagnostics_compare_service import (
+    get_token_stage_diagnostics_compare,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -19,7 +21,9 @@ class TokenDiagnosticsCompareServiceTests(unittest.TestCase):
         self.temp_dir = TemporaryDirectory()
         self.database_url = f"sqlite:///{self.temp_dir.name}/token_diag_compare.db"
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
         get_settings.cache_clear()
         reset_db_engine_cache()
         run_migrations(database_url=self.database_url)
@@ -169,8 +173,12 @@ class TokenDiagnosticsCompareServiceTests(unittest.TestCase):
         self.assertEqual(len(payload.projects), 2)
         self.assertEqual(payload.projects[0].project_id, "project-1")
         self.assertEqual(payload.projects[1].project_id, "project-2")
-        self.assertTrue(any(stage.stage == "test" for stage in payload.projects[0].stages))
-        self.assertTrue(any(stage.stage == "test" for stage in payload.projects[1].stages))
+        self.assertTrue(
+            any(stage.stage == "test" for stage in payload.projects[0].stages)
+        )
+        self.assertTrue(
+            any(stage.stage == "test" for stage in payload.projects[1].stages)
+        )
 
 
 if __name__ == "__main__":

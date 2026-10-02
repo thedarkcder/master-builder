@@ -21,14 +21,26 @@ from orchestrator.core.communications.command_pipeline import (
 class CommandExecutionDependencies:
     get_tenant: Callable[[Session, str], Any]
     parse_ingress_source: Callable[[str], Any]
-    resolve_discord_command: Callable[[Any, str, str | None, bool], tuple[str, str, list[str]]]
+    resolve_discord_command: Callable[
+        [Any, str, str | None, bool], tuple[str, str, list[str]]
+    ]
     assert_channel_scope: Callable[[Session, Any, str | None], None]
-    assert_sensitive_command_permission: Callable[[Session, Any, str, str, str | None], None]
+    assert_sensitive_command_permission: Callable[
+        [Session, Any, str, str, str | None], None
+    ]
     resolve_scope: Callable[[Session, Any, str | None], CommandScope]
-    enrich_scope: Callable[[Session, Any, str, tuple[str, ...], Any, CommandScope], CommandScope]
-    rewrite_raw_command: Callable[[Session, Any, DiscordCommandRequest, CommandIngressPolicy], str]
-    allow_sensitive_command_bypass: Callable[[Session, Any, str, tuple[str, ...], Any], bool]
-    build_handler_registry: Callable[[CommandExecutionContext], dict[str, tuple[Callable, ...]]]
+    enrich_scope: Callable[
+        [Session, Any, str, tuple[str, ...], Any, CommandScope], CommandScope
+    ]
+    rewrite_raw_command: Callable[
+        [Session, Any, DiscordCommandRequest, CommandIngressPolicy], str
+    ]
+    allow_sensitive_command_bypass: Callable[
+        [Session, Any, str, tuple[str, ...], Any], bool
+    ]
+    build_handler_registry: Callable[
+        [CommandExecutionContext], dict[str, tuple[Callable, ...]]
+    ]
 
 
 def execute_tenant_command(
@@ -43,16 +55,25 @@ def execute_tenant_command(
 ) -> DiscordCommandResponse:
     tenant = deps.get_tenant(session, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown tenant"
+        )
     if not tenant.is_enabled:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant is disabled")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Tenant is disabled"
+        )
 
     try:
         normalized_ingress_source = deps.parse_ingress_source(ingress_source)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
-    if str(getattr(normalized_ingress_source, "value", normalized_ingress_source)) == "discord":
+    if (
+        str(getattr(normalized_ingress_source, "value", normalized_ingress_source))
+        == "discord"
+    ):
         deps.assert_channel_scope(session, tenant, payload.channel_id)
 
     policy = resolve_command_ingress_policy(normalized_ingress_source)
@@ -79,7 +100,9 @@ def execute_tenant_command(
         )
 
     normalized_user_id = payload.user_id.strip()
-    normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
+    normalized_channel_id = (
+        payload.channel_id.strip() if payload.channel_id else "__dm__"
+    )
     command_scope = deps.resolve_scope(session, tenant, payload.channel_id)
     command_scope = deps.enrich_scope(
         session,
@@ -111,4 +134,6 @@ def execute_tenant_command(
     try:
         return dispatch_registered_command(context=context, registry=handler_registry)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc

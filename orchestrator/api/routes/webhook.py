@@ -11,6 +11,8 @@ from orchestrator.api.webhooks.contracts import (
     post_jira_comment as _post_jira_comment,
 )
 from orchestrator.api.webhooks.jira_ingress import ingest_jira_webhook_event
+from orchestrator.api.webhooks.payload_utils import read_json_payload
+from orchestrator.core.deployment_runtime import authorize_coolify_deployment_webhook
 from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
     WebhookJobEnqueueRequest,
@@ -54,7 +56,10 @@ async def ingest_jira_webhook(
         raise
 
 
-@router.post("/deployments/coolify/webhook/{tenant_id}/{project_id}/{token}", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/deployments/coolify/webhook/{tenant_id}/{project_id}/{token}",
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def ingest_coolify_deployment_webhook(
     tenant_id: str,
     project_id: str,
@@ -62,13 +67,16 @@ async def ingest_coolify_deployment_webhook(
     request: Request,
     session: Session = Depends(get_session),
 ) -> dict:
-    try:
-        payload = await request.json()
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload")
+    authorize_coolify_deployment_webhook(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        webhook_token=token,
+    )
     request_id = request.headers.get("X-Request-Id") or str(uuid4())
+    payload, _ = await read_json_payload(
+        request, request_id=request_id, source="coolify"
+    )
     subject_key = f"coolify_deployment:{tenant_id}:{project_id}"
     enqueue_result = enqueue_webhook_job(
         session,
@@ -79,7 +87,12 @@ async def ingest_coolify_deployment_webhook(
             project_id=project_id,
             subject_key=subject_key,
             dedupe_key=request_id,
-            event_type=str(payload.get("event_type") or payload.get("event") or payload.get("status") or "").strip()
+            event_type=str(
+                payload.get("event_type")
+                or payload.get("event")
+                or payload.get("status")
+                or ""
+            ).strip()
             or None,
             payload_json=dict(payload),
             context_json={"webhook_token": token},

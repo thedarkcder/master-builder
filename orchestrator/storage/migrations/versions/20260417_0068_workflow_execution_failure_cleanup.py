@@ -21,7 +21,10 @@ def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_table(table_name: str) -> bool:
@@ -62,13 +65,23 @@ def downgrade() -> None:
     bind = op.get_bind()
     if not _has_column("workflow_executions", "blocked_reason"):
         if bind.dialect.name != "sqlite":
-            op.add_column("workflow_executions", sa.Column("blocked_reason", sa.Text(), nullable=True))
+            op.add_column(
+                "workflow_executions",
+                sa.Column("blocked_reason", sa.Text(), nullable=True),
+            )
         else:
             with op.batch_alter_table("workflow_executions") as batch_op:
-                batch_op.add_column(sa.Column("blocked_reason", sa.Text(), nullable=True))
+                batch_op.add_column(
+                    sa.Column("blocked_reason", sa.Text(), nullable=True)
+                )
     if not _has_column("workflow_operations", "blocker_id"):
         if bind.dialect.name != "sqlite":
-            op.add_column("workflow_operations", sa.Column("blocker_id", sa.String(length=64), nullable=True))
+            op.add_column(
+                "workflow_operations",
+                sa.Column("blocker_id", sa.String(length=64), nullable=True),
+            )
         else:
             with op.batch_alter_table("workflow_operations") as batch_op:
-                batch_op.add_column(sa.Column("blocker_id", sa.String(length=64), nullable=True))
+                batch_op.add_column(
+                    sa.Column("blocker_id", sa.String(length=64), nullable=True)
+                )

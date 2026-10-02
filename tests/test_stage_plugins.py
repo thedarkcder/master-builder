@@ -30,7 +30,9 @@ class StagePluginsTests(unittest.TestCase):
                 "stage_status": planned.stage_status,
                 "stage_artifacts": planned.stage_artifacts,
                 "stage_open_questions": list(planned.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in planned.stage_feedback_log],
+                "stage_feedback_log": [
+                    dict(item) for item in planned.stage_feedback_log
+                ],
                 "stage_tool_outputs": [],
                 "stage_ready_for_implementation": planned.stage_ready_for_implementation,
             },
@@ -99,7 +101,9 @@ class StagePluginsTests(unittest.TestCase):
                 "stage_status": planned.stage_status,
                 "stage_artifacts": dict(planned.stage_artifacts),
                 "stage_open_questions": list(planned.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in planned.stage_feedback_log],
+                "stage_feedback_log": [
+                    dict(item) for item in planned.stage_feedback_log
+                ],
                 "stage_tool_outputs": [],
                 "stage_ready_for_implementation": planned.stage_ready_for_implementation,
             },
@@ -122,7 +126,9 @@ class StagePluginsTests(unittest.TestCase):
                 "stage_status": planned.stage_status,
                 "stage_artifacts": dict(planned.stage_artifacts),
                 "stage_open_questions": list(planned.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in planned.stage_feedback_log],
+                "stage_feedback_log": [
+                    dict(item) for item in planned.stage_feedback_log
+                ],
                 "stage_tool_outputs": [],
                 "stage_ready_for_implementation": planned.stage_ready_for_implementation,
             },
@@ -165,7 +171,9 @@ class StagePluginsTests(unittest.TestCase):
                 "stage_status": planned.stage_status,
                 "stage_artifacts": dict(planned.stage_artifacts),
                 "stage_open_questions": list(planned.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in planned.stage_feedback_log],
+                "stage_feedback_log": [
+                    dict(item) for item in planned.stage_feedback_log
+                ],
                 "stage_tool_outputs": [],
                 "stage_ready_for_implementation": planned.stage_ready_for_implementation,
             },
@@ -190,7 +198,9 @@ class StagePluginsTests(unittest.TestCase):
                 "stage_status": planned.stage_status,
                 "stage_artifacts": dict(planned.stage_artifacts),
                 "stage_open_questions": list(planned.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in planned.stage_feedback_log],
+                "stage_feedback_log": [
+                    dict(item) for item in planned.stage_feedback_log
+                ],
                 "stage_tool_outputs": [],
                 "stage_ready_for_implementation": planned.stage_ready_for_implementation,
             },
@@ -205,7 +215,9 @@ class StagePluginsTests(unittest.TestCase):
                 "stage_status": revision_requested.stage_status,
                 "stage_artifacts": dict(revision_requested.stage_artifacts),
                 "stage_open_questions": list(revision_requested.stage_open_questions),
-                "stage_feedback_log": [dict(item) for item in revision_requested.stage_feedback_log],
+                "stage_feedback_log": [
+                    dict(item) for item in revision_requested.stage_feedback_log
+                ],
                 "stage_tool_outputs": [],
                 "stage_ready_for_implementation": revision_requested.stage_ready_for_implementation,
             },
@@ -218,7 +230,9 @@ class StagePluginsTests(unittest.TestCase):
             },
         )
         self.assertEqual(replanned.stage_status, "stage_review_pending")
-        self.assertEqual(replanned.stage_artifacts.get("design_brief"), "Updated design direction")
+        self.assertEqual(
+            replanned.stage_artifacts.get("design_brief"), "Updated design direction"
+        )
         self.assertEqual(
             replanned.stage_artifacts.get("design_direction"),
             "Use a dark palette and a short proof-led headline.",
@@ -228,7 +242,9 @@ class StagePluginsTests(unittest.TestCase):
             replanned.stage_artifacts.get("artifact_version"),
             planned.stage_artifacts.get("artifact_version"),
         )
-        self.assertEqual(replanned.message, "Updated direction ready for another review pass.")
+        self.assertEqual(
+            replanned.message, "Updated direction ready for another review pass."
+        )
 
 
 if __name__ == "__main__":

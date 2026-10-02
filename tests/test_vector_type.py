@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from orchestrator.storage.vector_type import _PostgresVectorType, VectorJSONCompat, normalize_vector_values, vector_literal
+from orchestrator.storage.vector_type import (
+    _PostgresVectorType,
+    VectorJSONCompat,
+    normalize_vector_values,
+    vector_literal,
+)
 
 
 def test_normalize_vector_values_accepts_pgvector_literal() -> None:

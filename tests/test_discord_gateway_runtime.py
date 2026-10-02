@@ -76,10 +76,17 @@ class DiscordGatewayRuntimeTests(unittest.TestCase):
             sentry_release="dev-local",
         )
         with (
-            patch("orchestrator.core.discord.gateway_runtime.get_settings", return_value=settings),
+            patch(
+                "orchestrator.core.discord.gateway_runtime.get_settings",
+                return_value=settings,
+            ),
             patch("orchestrator.core.discord.gateway_runtime.configure_logging"),
-            patch("orchestrator.core.discord.gateway_runtime.register_discord_command_executor") as register_mock,
-            patch("orchestrator.core.discord.gateway_runtime._run_gateway_leader_loop") as run_loop_mock,
+            patch(
+                "orchestrator.core.discord.gateway_runtime.register_discord_command_executor"
+            ) as register_mock,
+            patch(
+                "orchestrator.core.discord.gateway_runtime._run_gateway_leader_loop"
+            ) as run_loop_mock,
         ):
             from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 
@@ -123,16 +130,34 @@ class DiscordGatewayRuntimeTests(unittest.TestCase):
         fake_event = _FakeEvent()
 
         with (
-            patch("orchestrator.core.discord.gateway_runtime.is_postgres_database_url", return_value=True),
-            patch("orchestrator.core.discord.gateway_runtime.postgres_dsn_from_database_url", return_value="dsn"),
+            patch(
+                "orchestrator.core.discord.gateway_runtime.is_postgres_database_url",
+                return_value=True,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_runtime.postgres_dsn_from_database_url",
+                return_value="dsn",
+            ),
             patch(
                 "orchestrator.core.discord.gateway_runtime.psycopg",
                 SimpleNamespace(connect=lambda *a, **k: _ConnectionContext(fake_conn)),
             ),
-            patch("orchestrator.core.discord.gateway_runtime.DiscordGatewayListener", return_value=listener),
-            patch("orchestrator.core.discord.gateway_runtime._try_acquire_leader_lock", side_effect=[False, True]),
-            patch("orchestrator.core.discord.gateway_runtime._leader_lock_healthcheck", side_effect=[True, RuntimeError("lost")]),
-            patch("orchestrator.core.discord.gateway_runtime.threading.Event", return_value=fake_event),
+            patch(
+                "orchestrator.core.discord.gateway_runtime.DiscordGatewayListener",
+                return_value=listener,
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_runtime._try_acquire_leader_lock",
+                side_effect=[False, True],
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_runtime._leader_lock_healthcheck",
+                side_effect=[True, RuntimeError("lost")],
+            ),
+            patch(
+                "orchestrator.core.discord.gateway_runtime.threading.Event",
+                return_value=fake_event,
+            ),
             patch("orchestrator.core.discord.gateway_runtime.signal.signal"),
         ):
             _run_gateway_leader_loop(settings=settings)

@@ -29,23 +29,37 @@ def project_execution_metrics(
 ) -> ProjectExecutionMetricsRead:  # noqa: ANN001
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-    runs = session.execute(
-        select(Run).where(
-            Run.tenant_id == tenant_id,
-            Run.project_id == project_id,
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
-    ).scalars().all()
+
+    runs = (
+        session.execute(
+            select(Run).where(
+                Run.tenant_id == tenant_id,
+                Run.project_id == project_id,
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     started = sum(1 for run in runs if run.started_at is not None)
-    completed = sum(1 for run in runs if run.status in {"succeeded", "failed", "blocked", "cancelled"})
+    completed = sum(
+        1
+        for run in runs
+        if run.status in {"succeeded", "failed", "blocked", "cancelled"}
+    )
     failed = sum(1 for run in runs if run.status == "failed")
     blocked = sum(1 for run in runs if run.status == "blocked")
     queue_runs = [run for run in runs if run.status == "queued"]
     queue_length = len(queue_runs)
 
-    terminal = [run for run in runs if run.status in {"succeeded", "failed", "blocked", "cancelled"}]
+    terminal = [
+        run
+        for run in runs
+        if run.status in {"succeeded", "failed", "blocked", "cancelled"}
+    ]
     success_rate = 0.0
     if terminal:
         succeeded = sum(1 for run in terminal if run.status == "succeeded")
@@ -82,7 +96,9 @@ def project_execution_metrics(
         queue_times.append(max(0.0, (now - created_at).total_seconds()))
         if created_at <= stale_cutoff:
             stale_queued += 1
-    avg_queue_time = 0.0 if not queue_times else round(sum(queue_times) / len(queue_times), 3)
+    avg_queue_time = (
+        0.0 if not queue_times else round(sum(queue_times) / len(queue_times), 3)
+    )
 
     sla_breaches = sum(1 for duration in durations if duration > max(1, sla_seconds))
 

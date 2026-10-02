@@ -26,7 +26,10 @@ def resolve_stage_spi_enabled(
     pid = str(project_id or "").strip() or None
     if session is not None and pid and tid:
         project = session.get(Project, pid)
-        if project is not None and str(getattr(project, "tenant_id", "") or "").strip() == tid:
+        if (
+            project is not None
+            and str(getattr(project, "tenant_id", "") or "").strip() == tid
+        ):
             overrides = project.policy_overrides or {}
             if isinstance(overrides, dict) and "stage_spi_enabled" in overrides:
                 return bool(overrides.get("stage_spi_enabled"))

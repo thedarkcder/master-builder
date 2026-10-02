@@ -30,8 +30,12 @@ def normalize_binding_names(keys: list[str] | tuple[str, ...] | set[str]) -> lis
 
 
 def _project_binding_maps(project: Project) -> tuple[dict[str, str], dict[str, str]]:
-    environment_map = project.environment if isinstance(project.environment, dict) else {}
-    secret_ref_map = project.secret_refs if isinstance(project.secret_refs, dict) else {}
+    environment_map = (
+        project.environment if isinstance(project.environment, dict) else {}
+    )
+    secret_ref_map = (
+        project.secret_refs if isinstance(project.secret_refs, dict) else {}
+    )
     return (
         {
             str(key).strip(): str(value or "")
@@ -83,7 +87,11 @@ def check_project_bindings(
     statuses: list[BindingStatus] = []
     for key in normalized_keys:
         if key in environment_map:
-            statuses.append(BindingStatus(key=key, present=bool(environment_map[key]), source="environment"))
+            statuses.append(
+                BindingStatus(
+                    key=key, present=bool(environment_map[key]), source="environment"
+                )
+            )
             continue
         secret_ref = secret_ref_map.get(key)
         if not secret_ref:
@@ -96,7 +104,11 @@ def check_project_bindings(
             encryption_key=encryption_key,
             secret_ref=secret_ref,
         )
-        statuses.append(BindingStatus(key=key, present=resolved_value is not None, source="secret_ref"))
+        statuses.append(
+            BindingStatus(
+                key=key, present=resolved_value is not None, source="secret_ref"
+            )
+        )
     return statuses
 
 
@@ -117,7 +129,9 @@ def resolve_project_binding_values(
             continue
         secret_ref = secret_ref_map.get(key)
         if not secret_ref:
-            raise ValueError(f"Binding '{key}' is not configured for project '{project.project_id}'")
+            raise ValueError(
+                f"Binding '{key}' is not configured for project '{project.project_id}'"
+            )
         resolved_value = _resolve_project_secret_ref(
             session=session,
             tenant_id=tenant_id,
@@ -126,6 +140,8 @@ def resolve_project_binding_values(
             secret_ref=secret_ref,
         )
         if resolved_value is None:
-            raise ValueError(f"Binding '{key}' could not be resolved from secret ref '{secret_ref}'")
+            raise ValueError(
+                f"Binding '{key}' could not be resolved from secret ref '{secret_ref}'"
+            )
         values[key] = resolved_value
     return values

@@ -8,33 +8,51 @@ from unittest.mock import patch
 from sqlalchemy import select
 
 from orchestrator.api.admin.runs.logging_stream_service import stream_run_events_ndjson
-from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import (
+    record_agent_lifecycle_event,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.observability.repository import (
     configure_product_event_repository_for_tests,
     reset_product_event_repository_for_tests,
 )
-from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION
-from orchestrator.core.worker.execution_service import process_claimed_run_with_dependencies
+from orchestrator.core.workflow.type_catalog import (
+    ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+)
+from orchestrator.core.worker.execution_service import (
+    process_claimed_run_with_dependencies,
+)
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    Project,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 from orchestrator.storage.models import Run
 from orchestrator.temporal.activities.run_execution import (
     _WorkflowOperationAttemptHeartbeatController,
     execute_claimed_run_activity,
     resume_human_input_activity,
 )
-from orchestrator.temporal.payloads import DevelopmentTeamRunWorkflowInput, HumanInputResumeInput
+from orchestrator.temporal.payloads import (
+    DevelopmentTeamRunWorkflowInput,
+    HumanInputResumeInput,
+)
 from tests.test_support.admin_api_harness import AdminApiTestHarness
-from tests.test_support.jira_parent_workflow_boundary import JiraParentWorkflowBoundaryHarness
+from tests.test_support.jira_parent_workflow_boundary import (
+    JiraParentWorkflowBoundaryHarness,
+)
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 from tests.test_support.product_events import RecordingProductEventRepository
 from tests.workflow_test_support import add_human_input_request, add_workflow_attempt
 
 
 class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
-    def test_jira_webhook_creates_workflow_attempt_telemetry_and_jira_projection(self) -> None:
+    def test_jira_webhook_creates_workflow_attempt_telemetry_and_jira_projection(
+        self,
+    ) -> None:
         boundary = JiraParentWorkflowBoundaryHarness(
             tenant_id="tenant-webhook",
             issue_key="TP-997",
@@ -48,7 +66,9 @@ class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
         )
         payload["webhookEvent"] = "jira:issue_created"
         payload["issue"]["fields"]["summary"] = "Runtime architecture boundary"
-        payload["issue"]["fields"]["description"] = "Create durable workflow boundary coverage for parent planning."
+        payload["issue"]["fields"]["description"] = (
+            "Create durable workflow boundary coverage for parent planning."
+        )
 
         with boundary.installed():
             response = self.client.post(
@@ -70,7 +90,9 @@ class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
             operations = {
                 operation.operation_type: operation
                 for operation in session.execute(
-                    select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow.workflow_id
+                    )
                 ).scalars()
             }
             for operation_type in (
@@ -80,18 +102,25 @@ class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
                 "jira_child_fanout",
             ):
                 self.assertIn(operation_type, operations)
-                attempts = session.execute(
-                    select(WorkflowOperationAttempt).where(
-                        WorkflowOperationAttempt.operation_id == operations[operation_type].operation_id
+                attempts = (
+                    session.execute(
+                        select(WorkflowOperationAttempt).where(
+                            WorkflowOperationAttempt.operation_id
+                            == operations[operation_type].operation_id
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 self.assertEqual(len(attempts), 1)
                 self.assertEqual(attempts[0].status, "completed")
 
         self.assertEqual(boundary.jira.created_issue_keys, ["TP-998"])
         self.assertTrue(boundary.jira.updated_parent_labels)
         self.assertEqual(boundary.jira.updated_parent_labels[-1], ["pm-parent"])
-        self.assertEqual([issue_key for issue_key, _comment in boundary.jira.comments], ["TP-997"])
+        self.assertEqual(
+            [issue_key for issue_key, _comment in boundary.jira.comments], ["TP-997"]
+        )
         self.assertTrue(boundary.telemetry.contains_kind("runtime_log"))
         self.assertTrue(boundary.telemetry.contains_kind("stage_request"))
         self.assertTrue(boundary.telemetry.contains_kind("jira_child_upsert_request"))
@@ -99,7 +128,9 @@ class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
 
 
 class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
-    def test_run_temporal_activity_records_attempt_and_streams_to_log_pane_contract(self) -> None:
+    def test_run_temporal_activity_records_attempt_and_streams_to_log_pane_contract(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",
@@ -144,14 +175,21 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         def _process_claimed_run(*, session, selection, **_kwargs):  # noqa: ANN001, ANN003
             self.assertIs(selection.claimed_run.run, selection.run)
             self.assertEqual(selection.claimed_run.claim_id, claim_id)
-            self.assertEqual(selection.claimed_run.worker_service_instance_id, "worker:test")
-            self.assertEqual(selection.claimed_run.project.project_id, "tenant-a-default")
-            self.assertEqual(selection.claimed_run.effective_policy["max_dev_test_review_loops"], 1)
+            self.assertEqual(
+                selection.claimed_run.worker_service_instance_id, "worker:test"
+            )
+            self.assertEqual(
+                selection.claimed_run.project.project_id, "tenant-a-default"
+            )
+            self.assertEqual(
+                selection.claimed_run.effective_policy["max_dev_test_review_loops"], 1
+            )
             run = selection.run
             operation = session.execute(
                 select(WorkflowOperation).where(
                     WorkflowOperation.workflow_id == workflow_id,
-                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                    WorkflowOperation.operation_type
+                    == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
                 )
             ).scalar_one()
             attempt = session.execute(
@@ -213,11 +251,17 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             stack.enter_context(
                 patch(
                     "orchestrator.core.worker.execution_service.build_workflow_runtime",
-                    return_value=type("_Runtime", (), {"start_execution": lambda self, **kwargs: kwargs["run"]})(),
+                    return_value=type(
+                        "_Runtime",
+                        (),
+                        {"start_execution": lambda self, **kwargs: kwargs["run"]},
+                    )(),
                 )
             )
             stack.enter_context(
-                patch("orchestrator.temporal.workflow_engine.notify_temporal_run_result")
+                patch(
+                    "orchestrator.temporal.workflow_engine.notify_temporal_run_result"
+                )
             )
             with session_factory() as session:
                 result = process_claimed_run_with_dependencies(
@@ -231,14 +275,20 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
                 operation = session.execute(
                     select(WorkflowOperation).where(
                         WorkflowOperation.workflow_id == workflow_id,
-                        WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                        WorkflowOperation.operation_type
+                        == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
                     )
                 ).scalar_one()
-                attempts = session.execute(
-                    select(WorkflowOperationAttempt).where(
-                        WorkflowOperationAttempt.operation_id == operation.operation_id
+                attempts = (
+                    session.execute(
+                        select(WorkflowOperationAttempt).where(
+                            WorkflowOperationAttempt.operation_id
+                            == operation.operation_id
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 stream = stream_run_events_ndjson(
                     session=session,
                     run_id=run_id,
@@ -253,9 +303,16 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertEqual({row.get("run_id") for row in rows}, {run_id})
         self.assertTrue(any(row.get("event_type") == "TASK_STARTED" for row in rows))
         self.assertTrue(any(row.get("event_kind") == "runtime_log" for row in rows))
-        self.assertTrue(any(row.get("message") == "temporal activity emitted run log" for row in rows))
+        self.assertTrue(
+            any(
+                row.get("message") == "temporal activity emitted run log"
+                for row in rows
+            )
+        )
 
-    def test_temporal_backed_worker_requeue_marks_operation_retrying_not_completed(self) -> None:
+    def test_temporal_backed_worker_requeue_marks_operation_retrying_not_completed(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",
@@ -321,11 +378,17 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             stack.enter_context(
                 patch(
                     "orchestrator.core.worker.execution_service.build_workflow_runtime",
-                    return_value=type("_Runtime", (), {"start_execution": lambda self, **kwargs: kwargs["run"]})(),
+                    return_value=type(
+                        "_Runtime",
+                        (),
+                        {"start_execution": lambda self, **kwargs: kwargs["run"]},
+                    )(),
                 )
             )
             notify_mock = stack.enter_context(
-                patch("orchestrator.temporal.workflow_engine.notify_temporal_run_result")
+                patch(
+                    "orchestrator.temporal.workflow_engine.notify_temporal_run_result"
+                )
             )
             with session_factory() as session:
                 result = process_claimed_run_with_dependencies(
@@ -341,14 +404,20 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
                 operation = session.execute(
                     select(WorkflowOperation).where(
                         WorkflowOperation.workflow_id == workflow_id,
-                        WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                        WorkflowOperation.operation_type
+                        == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
                     )
                 ).scalar_one()
-                attempts = session.execute(
-                    select(WorkflowOperationAttempt).where(
-                        WorkflowOperationAttempt.operation_id == operation.operation_id
+                attempts = (
+                    session.execute(
+                        select(WorkflowOperationAttempt).where(
+                            WorkflowOperationAttempt.operation_id
+                            == operation.operation_id
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
 
         self.assertEqual(result.status, "queued")
         self.assertEqual(workflow.status, "running")
@@ -357,7 +426,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertEqual(attempts[0].status, "retrying")
         notify_mock.assert_called_once()
 
-    def test_temporal_notification_failure_fails_operation_before_completion(self) -> None:
+    def test_temporal_notification_failure_does_not_override_persisted_run_outcome(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",
@@ -372,15 +443,18 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
 
         with session_factory() as session:
-            project = session.get(Project, "tenant-a-default")
+            project = session.execute(
+                select(Project).where(Project.tenant_id == "tenant-a")
+            ).scalar_one()
             assert project is not None
+            project_id = project.project_id
             project.policy_overrides = {"max_dev_test_review_loops": 1}
             add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
                 run_id=run_id,
                 tenant_id="tenant-a",
-                project_id="tenant-a-default",
+                project_id=project_id,
                 issue_key="TP-617",
                 issue_summary="Temporal notify failure boundary",
                 issue_description="Prove Temporal update failure cannot leave operation completed.",
@@ -421,7 +495,11 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             stack.enter_context(
                 patch(
                     "orchestrator.core.worker.execution_service.build_workflow_runtime",
-                    return_value=type("_Runtime", (), {"start_execution": lambda self, **kwargs: kwargs["run"]})(),
+                    return_value=type(
+                        "_Runtime",
+                        (),
+                        {"start_execution": lambda self, **kwargs: kwargs["run"]},
+                    )(),
                 )
             )
             stack.enter_context(
@@ -431,13 +509,12 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
                 )
             )
             with session_factory() as session:
-                with self.assertRaisesRegex(RuntimeError, "Temporal update failed"):
-                    process_claimed_run_with_dependencies(
-                        session=session,
-                        runner=object(),
-                        run_id=run_id,
-                        claim_id=claim_id,
-                    )
+                result = process_claimed_run_with_dependencies(
+                    session=session,
+                    runner=object(),
+                    run_id=run_id,
+                    claim_id=claim_id,
+                )
 
             with session_factory() as session:
                 workflow = session.get(WorkflowExecution, workflow_id)
@@ -445,19 +522,26 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
                 operation = session.execute(
                     select(WorkflowOperation).where(
                         WorkflowOperation.workflow_id == workflow_id,
-                        WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                        WorkflowOperation.operation_type
+                        == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
                     )
                 ).scalar_one()
-                attempts = session.execute(
-                    select(WorkflowOperationAttempt).where(
-                        WorkflowOperationAttempt.operation_id == operation.operation_id
+                attempts = (
+                    session.execute(
+                        select(WorkflowOperationAttempt).where(
+                            WorkflowOperationAttempt.operation_id
+                            == operation.operation_id
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
 
-        self.assertEqual(workflow.status, "failed")
-        self.assertEqual(operation.status, "failed")
+        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(workflow.status, "completed")
+        self.assertEqual(operation.status, "completed")
         self.assertEqual(len(attempts), 1)
-        self.assertEqual(attempts[0].status, "failed")
+        self.assertEqual(attempts[0].status, "completed")
 
     def test_run_temporal_activity_failure_terminalizes_dispatching_run(self) -> None:
         self._insert_jira_connection()
@@ -522,7 +606,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertEqual(run.status, "dispatching")
         self.assertEqual(run.claim_id, claim_id)
 
-    def test_run_temporal_activity_returns_terminal_run_without_reexecuting(self) -> None:
+    def test_run_temporal_activity_returns_terminal_run_without_reexecuting(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",
@@ -577,12 +663,17 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.last_error, "already failed")
         with session_factory() as session:
-            operations = session.execute(
-                select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == workflow_id,
-                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow_id,
+                        WorkflowOperation.operation_type
+                        == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             self.assertEqual(operations, [])
 
     def test_run_temporal_activity_marks_operation_failed_when_run_blocks(self) -> None:
@@ -643,7 +734,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
 
         self.assertEqual(workflow.status, "running")
 
-    def test_run_temporal_activity_reclaims_queued_retry_and_does_not_reuse_old_work_unit(self) -> None:
+    def test_run_temporal_activity_reclaims_queued_retry_and_does_not_reuse_old_work_unit(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",
@@ -700,18 +793,25 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         second_result = execute_claimed_run_activity(payload)
 
         with session_factory() as session:
-            operations = session.execute(
-                select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == workflow_id,
-                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+            operations = (
+                session.execute(
+                    select(WorkflowOperation).where(
+                        WorkflowOperation.workflow_id == workflow_id,
+                        WorkflowOperation.operation_type
+                        == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
 
         self.assertEqual(first_result.status, "dispatching")
         self.assertEqual(second_result.status, "dispatching")
         self.assertEqual(operations, [])
 
-    def test_resume_temporal_activity_processes_existing_temporal_claimed_resume_run(self) -> None:
+    def test_resume_temporal_activity_processes_existing_temporal_claimed_resume_run(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",
@@ -791,7 +891,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             )
             session.commit()
 
-        result = resume_human_input_activity(HumanInputResumeInput(request_id=request_id))
+        result = resume_human_input_activity(
+            HumanInputResumeInput(request_id=request_id)
+        )
 
         self.assertEqual(result.run_id, resume_run_id)
         self.assertEqual(result.status, "dispatching")
@@ -806,7 +908,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             self.assertEqual(operation.run_id, resume_run_id)
             self.assertEqual(operation.status, "completed")
 
-    def test_operation_attempt_heartbeat_controller_touches_active_attempt(self) -> None:
+    def test_operation_attempt_heartbeat_controller_touches_active_attempt(
+        self,
+    ) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
             "/api/admin/tenants",

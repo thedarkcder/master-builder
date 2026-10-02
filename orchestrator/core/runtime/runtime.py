@@ -28,7 +28,9 @@ from orchestrator.core.config import Settings
 from orchestrator.core.runtime.runtime_home import prepare_runtime_home
 from orchestrator.core.platform.secret_service import platform_secret_service
 
-_JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
+_JSON_BLOCK_PATTERN = re.compile(
+    r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE
+)
 _ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _STDERR_ERROR_MARKERS = ("error", "failed", "fatal", "exception", "traceback")
 _UUID_PATTERN = re.compile(
@@ -51,7 +53,9 @@ class CodexRuntimeError(RuntimeError):
         return base or super().__str__()
 
 
-def _openai_compatible_base_url_for_local_server(*, base_url: str, runtime_kind: str) -> str:
+def _openai_compatible_base_url_for_local_server(
+    *, base_url: str, runtime_kind: str
+) -> str:
     """Ensure LM Studio / llama.cpp bases include /v1 before /chat/completions."""
     u = str(base_url or "").strip().rstrip("/")
     if not u:
@@ -139,7 +143,9 @@ def codex_login_status(
     settings: Settings,
     working_dir: str | None,
 ) -> tuple[bool | None, str]:
-    command_cwd, env = build_cli_command_env(settings=settings, working_dir=working_dir, runtime_kind="codex_cli")
+    command_cwd, env = build_cli_command_env(
+        settings=settings, working_dir=working_dir, runtime_kind="codex_cli"
+    )
     completed = subprocess.run(  # noqa: S603
         [codex_command, "login", "status"],
         capture_output=True,
@@ -149,7 +155,9 @@ def codex_login_status(
         check=False,
     )
     combined_output = "\n".join(
-        part for part in (_strip_ansi(completed.stdout), _strip_ansi(completed.stderr)) if part.strip()
+        part
+        for part in (_strip_ansi(completed.stdout), _strip_ansi(completed.stderr))
+        if part.strip()
     ).strip()
     if completed.returncode == 0:
         return True, combined_output
@@ -171,7 +179,9 @@ class _HttpConversationStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, _HttpConversationSession] = {}
 
-    def load(self, *, session_id: str, runtime_kind: str) -> _HttpConversationSession | None:
+    def load(
+        self, *, session_id: str, runtime_kind: str
+    ) -> _HttpConversationSession | None:
         normalized_session_id = str(session_id or "").strip()
         normalized_runtime_kind = str(runtime_kind or "").strip().lower()
         if not normalized_session_id or not normalized_runtime_kind:
@@ -259,7 +269,9 @@ class CodexRuntime:
                         on_session_id,
                     ).strip()
                 except TypeError:
-                    output = self._request(system_prompt, user_prompt, working_dir, on_log_line).strip()  # type: ignore[misc]
+                    output = self._request(
+                        system_prompt, user_prompt, working_dir, on_log_line
+                    ).strip()  # type: ignore[misc]
         if not output:
             raise CodexRuntimeError("Codex runtime returned an empty response")
         return output
@@ -292,16 +304,13 @@ class CodexRuntime:
             payload = _extract_json_payload(output)
         except CodexRuntimeError as exc:
             preview = _shorten_preview(output, max_len=12000)
-            raise CodexRuntimeError(
-                f"{exc}", payload_preview=preview
-            ) from exc
+            raise CodexRuntimeError(f"{exc}", payload_preview=preview) from exc
         if not isinstance(payload, dict):
             raise CodexRuntimeError(
                 "Codex runtime did not return a JSON object",
                 payload_preview=_shorten_preview(output, max_len=12000),
             )
         return payload
-
 
 
 def _extract_json_payload(content: str) -> object:
@@ -332,7 +341,9 @@ def _extract_json_payload(content: str) -> object:
         try:
             return json.loads(code_match.group(1))
         except json.JSONDecodeError as exc:
-            raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {exc}") from exc
+            raise CodexRuntimeError(
+                f"Invalid JSON payload from Codex runtime: {exc}"
+            ) from exc
 
     start = stripped.find("{")
     end = stripped.rfind("}")
@@ -350,7 +361,11 @@ def _extract_json_payload(content: str) -> object:
                 continue
             if isinstance(parsed, dict):
                 parsed_objects.append(parsed)
-            if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+            if (
+                isinstance(parsed, list)
+                and len(parsed) == 1
+                and isinstance(parsed[0], dict)
+            ):
                 parsed_objects.append(parsed[0])
         if parsed_objects:
             return parsed_objects[-1]
@@ -366,11 +381,17 @@ def _extract_json_payload(content: str) -> object:
                 continue
             if isinstance(parsed_line, dict):
                 parsed_line_objects.append(parsed_line)
-            if isinstance(parsed_line, list) and len(parsed_line) == 1 and isinstance(parsed_line[0], dict):
+            if (
+                isinstance(parsed_line, list)
+                and len(parsed_line) == 1
+                and isinstance(parsed_line[0], dict)
+            ):
                 parsed_line_objects.append(parsed_line[0])
         if parsed_line_objects:
             return parsed_line_objects[-1]
-        raise CodexRuntimeError(f"Invalid JSON payload from Codex runtime: {last_line_error}") from last_line_error
+        raise CodexRuntimeError(
+            f"Invalid JSON payload from Codex runtime: {last_line_error}"
+        ) from last_line_error
 
     raise CodexRuntimeError("Codex runtime response did not include JSON")
 
@@ -397,9 +418,13 @@ def _codex_runtime_invocation_timeout_seconds(settings: Settings) -> float:
     try:
         timeout_seconds = float(settings.codex_runtime_invocation_timeout_seconds)
     except (TypeError, ValueError) as exc:
-        raise CodexRuntimeError("codex_runtime_invocation_timeout_seconds must be a number") from exc
+        raise CodexRuntimeError(
+            "codex_runtime_invocation_timeout_seconds must be a number"
+        ) from exc
     if timeout_seconds <= 0:
-        raise CodexRuntimeError("codex_runtime_invocation_timeout_seconds must be greater than zero")
+        raise CodexRuntimeError(
+            "codex_runtime_invocation_timeout_seconds must be greater than zero"
+        )
     return timeout_seconds
 
 
@@ -546,6 +571,7 @@ def _coerce_token_count(value: object) -> int | None:
         return candidate if candidate >= 0 else None
     return None
 
+
 def normalize_runtime_token_usage(payload: dict[str, object]) -> dict[str, int] | None:
     prompt_tokens = _coerce_token_count(payload.get("prompt_tokens"))
     completion_tokens = _coerce_token_count(payload.get("completion_tokens"))
@@ -557,7 +583,11 @@ def normalize_runtime_token_usage(payload: dict[str, object]) -> dict[str, int] 
         completion_tokens = _coerce_token_count(payload.get("output_tokens"))
     if cached_input_tokens is None:
         cached_input_tokens = _coerce_token_count(payload.get("cache_read_tokens"))
-    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+    if (
+        total_tokens is None
+        and prompt_tokens is not None
+        and completion_tokens is not None
+    ):
         total_tokens = prompt_tokens + completion_tokens
     if prompt_tokens is None and completion_tokens is None and total_tokens is None:
         return None
@@ -569,7 +599,11 @@ def normalize_runtime_token_usage(payload: dict[str, object]) -> dict[str, int] 
     if total_tokens is not None:
         usage["total_tokens"] = total_tokens
     if cached_input_tokens is not None:
-        usage["cached_input_tokens"] = min(cached_input_tokens, prompt_tokens) if prompt_tokens is not None else cached_input_tokens
+        usage["cached_input_tokens"] = (
+            min(cached_input_tokens, prompt_tokens)
+            if prompt_tokens is not None
+            else cached_input_tokens
+        )
     return usage
 
 
@@ -596,7 +630,9 @@ def _extract_usage_from_json_stdout(lines: list[str]) -> dict[str, int] | None:
                     else:
                         best_total = best_usage.get("total_tokens")
                         usage_total = usage.get("total_tokens")
-                        if usage_total is not None and (best_total is None or usage_total >= best_total):
+                        if usage_total is not None and (
+                            best_total is None or usage_total >= best_total
+                        ):
                             best_usage = usage
                         elif best_total is None and len(usage) >= len(best_usage):
                             best_usage = usage
@@ -667,7 +703,9 @@ def _build_codex_subprocess_env(
     xdg_config_home = subprocess_home / ".config"
     codex_home.mkdir(parents=True, exist_ok=True)
     xdg_config_home.mkdir(parents=True, exist_ok=True)
-    _prepare_native_tool_shims(subprocess_home=subprocess_home, env=env, working_dir=working_dir)
+    _prepare_native_tool_shims(
+        subprocess_home=subprocess_home, env=env, working_dir=working_dir
+    )
     if not str(env.get("HOME") or "").strip():
         env["HOME"] = str(subprocess_home)
     env["CODEX_HOME"] = str(codex_home)
@@ -676,14 +714,18 @@ def _build_codex_subprocess_env(
         env["ORCHESTRATOR_EXECUTION_REPO_DIR"] = str(working_dir)
     tool_database_url = _resolve_codex_tool_database_url(
         database_url=str(getattr(settings, "database_url", "") or "").strip(),
-        tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
+        tool_database_url=str(
+            getattr(settings, "codex_tool_database_url", "") or ""
+        ).strip(),
     )
     if tool_database_url:
         env["ORCHESTRATOR_DATABASE_URL"] = tool_database_url
     return env
 
 
-def _prepare_native_tool_shims(*, subprocess_home: Path, env: dict[str, str], working_dir: str | None) -> None:
+def _prepare_native_tool_shims(
+    *, subprocess_home: Path, env: dict[str, str], working_dir: str | None
+) -> None:
     lock_dir = subprocess_home / ".native-tool-locks"
     shim_dir = subprocess_home / ".tool-shims"
     lock_dir.mkdir(parents=True, exist_ok=True)
@@ -790,7 +832,9 @@ def build_codex_runtime(
     default_profiles = default_execution_profiles(
         default_codex_cli_command=settings.codex_cli_command,
         default_codex_reasoning_effort=settings.codex_reasoning_effort,
-        default_codex_supported_models=getattr(settings, "codex_supported_models", None),
+        default_codex_supported_models=getattr(
+            settings, "codex_supported_models", None
+        ),
         default_chat_cli_command=getattr(settings, "chat_cli_command", ""),
         default_chat_reasoning_effort=getattr(settings, "chat_reasoning_effort", None),
         default_claude_cli_command=getattr(settings, "claude_cli_command", ""),
@@ -818,7 +862,9 @@ def build_runtime_for_execution_profile(
         api_key = None
         if profile.api_key_secret_ref:
             if session is None:
-                raise CodexRuntimeError("Session is required to resolve runtime API credentials")
+                raise CodexRuntimeError(
+                    "Session is required to resolve runtime API credentials"
+                )
             api_key = platform_secret_service.get(
                 session=session,
                 secret_ref=profile.api_key_secret_ref,
@@ -836,13 +882,18 @@ def build_runtime_for_execution_profile(
             request_override=request_override,
             default_model_override=str(profile.model or "").strip(),
             default_reasoning_effort_override=(
-                str(profile.reasoning_effort or "").strip().lower() or settings.codex_reasoning_effort
+                str(profile.reasoning_effort or "").strip().lower()
+                or settings.codex_reasoning_effort
             ),
         )
-    normalized_cli_command = str(profile.cli_command or "").strip() or settings.codex_cli_command
+    normalized_cli_command = (
+        str(profile.cli_command or "").strip() or settings.codex_cli_command
+    )
     normalized_model = str(profile.model or "").strip()
     if not normalized_model:
-        raise CodexRuntimeError(f"Execution profile '{profile.profile_name}' is missing a model")
+        raise CodexRuntimeError(
+            f"Execution profile '{profile.profile_name}' is missing a model"
+        )
     normalized_reasoning_effort = (
         str(profile.reasoning_effort or "").strip().lower()
         or settings.codex_reasoning_effort
@@ -957,9 +1008,13 @@ def build_http_runtime(
     normalized_runtime_kind = str(runtime_kind or "").strip().lower()
     normalized_model = str(default_model_override or "").strip()
     if not normalized_model:
-        raise CodexRuntimeError(f"Runtime kind '{normalized_runtime_kind}' requires an explicit model")
+        raise CodexRuntimeError(
+            f"Runtime kind '{normalized_runtime_kind}' requires an explicit model"
+        )
     normalized_reasoning_effort = (
-        str(default_reasoning_effort_override or settings.codex_reasoning_effort or "").strip().lower()
+        str(default_reasoning_effort_override or settings.codex_reasoning_effort or "")
+        .strip()
+        .lower()
         or settings.codex_reasoning_effort
     )
     normalized_base_url = str(base_url or "").strip()
@@ -968,7 +1023,9 @@ def build_http_runtime(
     elif normalized_runtime_kind == "claude":
         normalized_base_url = normalized_base_url or "https://api.anthropic.com"
     if not normalized_base_url:
-        raise CodexRuntimeError(f"Base URL is required for runtime kind '{normalized_runtime_kind}'")
+        raise CodexRuntimeError(
+            f"Base URL is required for runtime kind '{normalized_runtime_kind}'"
+        )
     chat_completions_base = _openai_compatible_base_url_for_local_server(
         base_url=normalized_base_url,
         runtime_kind=normalized_runtime_kind,
@@ -986,8 +1043,13 @@ def build_http_runtime(
         model_override: str | None,
     ) -> str:
         _ = working_dir
-        resolved_model = str(model_override or normalized_model).strip() or normalized_model
-        resolved_reasoning_effort = str(reasoning_effort or normalized_reasoning_effort).strip().lower() or normalized_reasoning_effort
+        resolved_model = (
+            str(model_override or normalized_model).strip() or normalized_model
+        )
+        resolved_reasoning_effort = (
+            str(reasoning_effort or normalized_reasoning_effort).strip().lower()
+            or normalized_reasoning_effort
+        )
         session = _ensure_http_conversation_session(
             runtime_kind=normalized_runtime_kind,
             system_prompt=system_prompt,
@@ -1054,7 +1116,9 @@ def build_http_runtime(
             session.messages.append({"role": "assistant", "content": response_text})
             _HTTP_CONVERSATION_STORE.save(session)
             return response_text
-        raise CodexRuntimeError(f"Unsupported HTTP runtime kind '{normalized_runtime_kind}'")
+        raise CodexRuntimeError(
+            f"Unsupported HTTP runtime kind '{normalized_runtime_kind}'"
+        )
 
     return CodexRuntime(
         model=normalized_model,
@@ -1125,6 +1189,7 @@ def build_cli_runtime(
 ) -> CodexRuntime:
     _ = session
     if request_override is not None:
+
         def _request_with_override(
             system_prompt: str,
             user_prompt: str,
@@ -1155,13 +1220,16 @@ def build_cli_runtime(
             _request=_request_with_override,
         )
 
-    codex_command = str(cli_command_override or settings.codex_cli_command or "").strip()
+    codex_command = str(
+        cli_command_override or settings.codex_cli_command or ""
+    ).strip()
     if not codex_command:
         raise CodexRuntimeError("Codex CLI command is not configured")
     if shutil.which(codex_command) is None:
         raise CodexRuntimeError(
             f"Codex CLI command '{codex_command}' was not found in PATH"
         )
+
     def _request(
         system_prompt: str,
         user_prompt: str,
@@ -1184,14 +1252,23 @@ def build_cli_runtime(
         subprocess_env = _build_codex_subprocess_env(
             settings=settings,
             working_dir=command_cwd,
-            runtime_kind=str(runtime_kind_override or "codex_cli").strip().lower() or "codex_cli",
+            runtime_kind=str(runtime_kind_override or "codex_cli").strip().lower()
+            or "codex_cli",
         )
-        stderr_log_mode = _normalize_stderr_log_mode(getattr(settings, "codex_stderr_log_mode", "all"))
+        stderr_log_mode = _normalize_stderr_log_mode(
+            getattr(settings, "codex_stderr_log_mode", "all")
+        )
         invocation_timeout_seconds = _codex_runtime_invocation_timeout_seconds(settings)
-        normalized_reasoning_effort = str(reasoning_effort or settings.codex_reasoning_effort).strip().lower()
+        normalized_reasoning_effort = (
+            str(reasoning_effort or settings.codex_reasoning_effort).strip().lower()
+        )
         if normalized_reasoning_effort not in {"low", "medium", "high"}:
             normalized_reasoning_effort = (
-                str(default_reasoning_effort_override or settings.codex_reasoning_effort).strip().lower()
+                str(
+                    default_reasoning_effort_override or settings.codex_reasoning_effort
+                )
+                .strip()
+                .lower()
                 or settings.codex_reasoning_effort
             )
         normalized_resume_session_id = str(resume_session_id or "").strip()
@@ -1202,23 +1279,26 @@ def build_cli_runtime(
         session_callback_invoked = False
         command: list[str]
         normalized_sandbox_mode = str(settings.codex_sandbox_mode or "").strip().lower()
-        with tempfile.NamedTemporaryFile(mode="w+", encoding="utf-8", suffix=".txt") as output_file:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", encoding="utf-8", suffix=".txt"
+        ) as output_file:
             if normalized_resume_session_id:
-                command = [
-                    codex_command,
-                    "exec",
-                    "resume",
-                    normalized_resume_session_id,
-                    "--disable",
-                    "apps",
-                    "--disable",
-                    "plugins",
-                    "--skip-git-repo-check",
-                ]
+                command = [codex_command, "exec"]
                 if normalized_sandbox_mode == "danger-full-access":
                     command.append("--dangerously-bypass-approvals-and-sandbox")
-                elif normalized_sandbox_mode == "workspace-write":
-                    command.append("--full-auto")
+                else:
+                    command.extend(["--sandbox", settings.codex_sandbox_mode])
+                command.extend(
+                    [
+                        "resume",
+                        normalized_resume_session_id,
+                        "--disable",
+                        "apps",
+                        "--disable",
+                        "plugins",
+                        "--skip-git-repo-check",
+                    ]
+                )
                 command.extend(
                     [
                         "-c",
@@ -1285,7 +1365,11 @@ def build_cli_runtime(
                 for line in iter(pipe.readline, ""):
                     collector.append(line)
                     _mark_activity()
-                    if stream_name == "stdout" and on_session_id is not None and not session_callback_invoked:
+                    if (
+                        stream_name == "stdout"
+                        and on_session_id is not None
+                        and not session_callback_invoked
+                    ):
                         discovered_session_id = _extract_session_id_from_json_line(line)
                         if discovered_session_id:
                             on_session_id(discovered_session_id)
@@ -1322,7 +1406,11 @@ def build_cli_runtime(
             )
             report_interval_seconds = max(
                 15,
-                int(getattr(settings, "codex_hang_detection_report_interval_seconds", 120)),
+                int(
+                    getattr(
+                        settings, "codex_hang_detection_report_interval_seconds", 120
+                    )
+                ),
             )
             suspected_hung = False
             next_idle_report_at_monotonic: float | None = None
@@ -1331,7 +1419,9 @@ def build_cli_runtime(
                     returncode = process.wait(timeout=1.0)
                     break
                 except subprocess.TimeoutExpired:
-                    elapsed_seconds = max(0.0, time.monotonic() - invocation_started_monotonic)
+                    elapsed_seconds = max(
+                        0.0, time.monotonic() - invocation_started_monotonic
+                    )
                     if elapsed_seconds >= invocation_timeout_seconds:
                         if on_log_line is not None:
                             on_log_line(
@@ -1358,7 +1448,9 @@ def build_cli_runtime(
                         continue
                     if not suspected_hung:
                         suspected_hung = True
-                        next_idle_report_at_monotonic = time.monotonic() + report_interval_seconds
+                        next_idle_report_at_monotonic = (
+                            time.monotonic() + report_interval_seconds
+                        )
                         if on_log_line is not None:
                             on_log_line(
                                 "system",
@@ -1372,7 +1464,9 @@ def build_cli_runtime(
                         next_idle_report_at_monotonic is not None
                         and time.monotonic() >= next_idle_report_at_monotonic
                     ):
-                        next_idle_report_at_monotonic = time.monotonic() + report_interval_seconds
+                        next_idle_report_at_monotonic = (
+                            time.monotonic() + report_interval_seconds
+                        )
                         if on_log_line is not None:
                             on_log_line(
                                 "system",
@@ -1387,7 +1481,9 @@ def build_cli_runtime(
             process_stderr = "".join(stderr_lines)
             if returncode != 0:
                 stderr = (process_stderr or "").strip()
-                structured_error = _extract_terminal_error_from_json_stdout(stdout_lines)
+                structured_error = _extract_terminal_error_from_json_stdout(
+                    stdout_lines
+                )
                 error_message = structured_error or stderr or "no stderr"
                 login_status, _ = codex_login_status(
                     codex_command=codex_command,

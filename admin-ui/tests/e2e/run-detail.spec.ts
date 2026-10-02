@@ -267,10 +267,10 @@ test("renders QA demo evidence links when the QA checkpoint is present", async (
 test("links to the current preview when a succeeded run already has one", async ({ page }) => {
   const run = makeRun({
     run_id: "faedabdf-8433-4a65-a8ea-ca956314fa19",
-    tenant_id: "bsktpay-2",
-    project_id: "bsktpay-2-default",
+    tenant_id: "example-tenant-2",
+    project_id: "example-tenant-2-default",
     issue_key: "AP-293",
-    issue_summary: "Add Equifax production credit bureau provider contract",
+    issue_summary: "Example provider integration",
     status: "succeeded",
     branch: "feature/AP-293",
     finished_at: "2026-05-29T18:43:07Z",
@@ -278,13 +278,13 @@ test("links to the current preview when a succeeded run already has one", async 
   const app = makeProjectAppRecord({
     app_id: "app-1",
     tenant_id: run.tenant_id,
-    project_id: run.project_id ?? "bsktpay-2-default",
+    project_id: run.project_id ?? "example-tenant-2-default",
     name: "align",
   });
   const previewRelease = {
     release_id: "preview-release-1",
     tenant_id: run.tenant_id,
-    project_id: run.project_id ?? "bsktpay-2-default",
+    project_id: run.project_id ?? "example-tenant-2-default",
     app_id: app.app_id,
     provider: "internal_coolify",
     release_kind: "run_preview" as const,
@@ -293,11 +293,11 @@ test("links to the current preview when a succeeded run already has one", async 
     source_strategy: "docker_compose",
     git_ref: "mb/deploy/align/feature-ap-293",
     commit_sha: "abcdef1234567890",
-    release_name: "AP-293: Add Equifax production credit bureau provider contract",
+    release_name: "AP-293: Example provider integration",
     source_run_id: run.run_id,
     source_issue_key: "AP-293",
-    source_issue_summary: "Add Equifax production credit bureau provider contract",
-    source_issue_url: "https://example.atlassian.net/browse/AP-293",
+    source_issue_summary: "Example provider integration",
+    source_issue_url: "https://example-tenant.atlassian.net/browse/AP-293",
     pr_number: null,
     requested_by_user_id: null,
     deployment_snapshot: {},
@@ -307,7 +307,7 @@ test("links to the current preview when a succeeded run already has one", async 
         service_key: "admin-website",
         service_name: "Admin Website",
         service_kind: "website" as const,
-        url: "http://admin.preview.align.192-168-0-118.sslip.io:8088",
+        url: "http://admin.preview.align.192-0-2-10.sslip.io:8088",
         url_kind: "generated" as const,
         status: "active" as const,
       },
@@ -334,13 +334,13 @@ test("links to the current preview when a succeeded run already has one", async 
   await page.goto(`/runs/${run.run_id}`);
 
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
-  await expect(page.getByTestId("run-title")).toHaveText("Add Equifax production credit bureau provider contract");
+  await expect(page.getByTestId("run-title")).toHaveText("Example provider integration");
   await expect(page.getByTestId("run-id")).toContainText(`Run ID ${run.run_id}`);
   await expect(page.getByRole("button", { name: "Generate preview" })).toHaveCount(0);
   const previewLink = page.getByRole("link", { name: "Open preview" });
   await expect(previewLink).toHaveAttribute(
     "href",
-    "/bsktpay-2/projects/bsktpay-2-default/deployments/app-1?release=preview-release-1",
+    "/example-tenant-2/projects/example-tenant-2-default/deployments/app-1?release=preview-release-1",
   );
   expect(previewPostCount).toBe(0);
 });
@@ -348,10 +348,10 @@ test("links to the current preview when a succeeded run already has one", async 
 test("links to the preview release page even when service URL is not active", async ({ page }) => {
   const run = makeRun({
     run_id: "faedabdf-8433-4a65-a8ea-ca956314fa19",
-    tenant_id: "bsktpay-2",
-    project_id: "bsktpay-2-default",
+    tenant_id: "example-tenant-2",
+    project_id: "example-tenant-2-default",
     issue_key: "AP-293",
-    issue_summary: "Add Equifax production credit bureau provider contract",
+    issue_summary: "Example provider integration",
     status: "succeeded",
     branch: "feature/AP-293",
     finished_at: "2026-05-29T18:43:07Z",
@@ -359,13 +359,13 @@ test("links to the preview release page even when service URL is not active", as
   const app = makeProjectAppRecord({
     app_id: "app-1",
     tenant_id: run.tenant_id,
-    project_id: run.project_id ?? "bsktpay-2-default",
+    project_id: run.project_id ?? "example-tenant-2-default",
     name: "align",
   });
   const previewRelease = {
     release_id: "preview-release-1",
     tenant_id: run.tenant_id,
-    project_id: run.project_id ?? "bsktpay-2-default",
+    project_id: run.project_id ?? "example-tenant-2-default",
     app_id: app.app_id,
     provider: "internal_coolify",
     release_kind: "run_preview" as const,
@@ -374,11 +374,11 @@ test("links to the preview release page even when service URL is not active", as
     source_strategy: "docker_compose",
     git_ref: "mb/deploy/align/feature-ap-293",
     commit_sha: "abcdef1234567890",
-    release_name: "AP-293: Add Equifax production credit bureau provider contract",
+    release_name: "AP-293: Example provider integration",
     source_run_id: run.run_id,
     source_issue_key: "AP-293",
-    source_issue_summary: "Add Equifax production credit bureau provider contract",
-    source_issue_url: "https://example.atlassian.net/browse/AP-293",
+    source_issue_summary: "Example provider integration",
+    source_issue_url: "https://example-tenant.atlassian.net/browse/AP-293",
     pr_number: null,
     requested_by_user_id: null,
     deployment_snapshot: {},
@@ -405,7 +405,7 @@ test("links to the preview release page even when service URL is not active", as
   const previewLink = page.getByRole("link", { name: "Open preview" });
   await expect(previewLink).toHaveAttribute(
     "href",
-    "/bsktpay-2/projects/bsktpay-2-default/deployments/app-1?release=preview-release-1",
+    "/example-tenant-2/projects/example-tenant-2-default/deployments/app-1?release=preview-release-1",
   );
   await expect(page.getByRole("button", { name: "Generate preview" })).toHaveCount(0);
 });

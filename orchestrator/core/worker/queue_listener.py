@@ -10,7 +10,10 @@ MAX_RECONNECT_DELAY_SECONDS = 8.0
 
 def _reconnect_delay_seconds(*, attempt: int) -> float:
     bounded_attempt = max(1, int(attempt))
-    return min(MAX_RECONNECT_DELAY_SECONDS, RECONNECT_DELAY_SECONDS * (2 ** (bounded_attempt - 1)))
+    return min(
+        MAX_RECONNECT_DELAY_SECONDS,
+        RECONNECT_DELAY_SECONDS * (2 ** (bounded_attempt - 1)),
+    )
 
 
 class RunQueueNotificationBridge:
@@ -53,7 +56,9 @@ class RunQueueNotificationBridge:
                 try:
                     self._conn.close()
                 except Exception as exc:
-                    self._logger.exception("worker_queue_listener_close_failed error=%s", exc)
+                    self._logger.exception(
+                        "worker_queue_listener_close_failed error=%s", exc
+                    )
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
@@ -65,7 +70,9 @@ class RunQueueNotificationBridge:
 
     def _run_once(self, *, reconnect_attempt: int = 1) -> bool:
         if self._psycopg is None:
-            self._logger.error("worker_queue_listener_unavailable reason=missing_psycopg")
+            self._logger.error(
+                "worker_queue_listener_unavailable reason=missing_psycopg"
+            )
             self._loop.call_soon_threadsafe(self._wake_event.set)
             return True
         try:
@@ -84,7 +91,9 @@ class RunQueueNotificationBridge:
             if not self._stop_event.is_set():
                 self._logger.exception("worker_queue_listener_failed error=%s", exc)
                 # Dependency reconnect backoff, not workflow synchronization.
-                self._stop_event.wait(_reconnect_delay_seconds(attempt=reconnect_attempt))
+                self._stop_event.wait(
+                    _reconnect_delay_seconds(attempt=reconnect_attempt)
+                )
             return False
         finally:
             with self._conn_lock:

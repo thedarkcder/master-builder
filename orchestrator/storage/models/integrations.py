@@ -37,6 +37,12 @@ class AtlassianOAuthConnection(Base):
     scopes: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     refresh_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    access_token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    access_token_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )

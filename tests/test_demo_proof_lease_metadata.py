@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from orchestrator.core.deployment_previews import _delivery_metadata_with_demo_proof_lease
+from orchestrator.core.deployment_previews import (
+    _delivery_metadata_with_demo_proof_lease,
+)
 
 
 def test_demo_proof_lease_metadata_includes_durable_lease_id() -> None:
@@ -14,4 +16,6 @@ def test_demo_proof_lease_metadata_includes_durable_lease_id() -> None:
     )
 
     lease = metadata["demo_proof_lease"]
-    assert lease["lease_id"] == "demo-proof-lease:run:run-1:" + "a" * 40 + ":" + "a" * 40
+    assert (
+        lease["lease_id"] == "demo-proof-lease:run:run-1:" + "a" * 40 + ":" + "a" * 40
+    )

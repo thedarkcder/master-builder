@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from orchestrator.api.admin.workflows.transcript_service import build_workflow_step_transcript
+from orchestrator.api.admin.workflows.transcript_service import (
+    build_workflow_step_transcript,
+)
 from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.schemas import WorkflowObservabilityEventRead
 from orchestrator.core.observability.events import ProductEvent
@@ -50,7 +52,9 @@ def _audit_event(
 
 class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="workflow-transcript")
+        self.database_url = self._prepare_test_database(
+            name_prefix="workflow-transcript"
+        )
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
@@ -184,20 +188,40 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         rendered_attempt = transcript.attempts[0]
         assert rendered_attempt.attempt_id == "attempt-7"
         assert rendered_attempt.attempt_number == 7
-        assert rendered_attempt.failure_message.startswith("Answer the product clarification")
-        assert rendered_attempt.recommended_next_action == "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout."
+        assert rendered_attempt.failure_message.startswith(
+            "Answer the product clarification"
+        )
+        assert (
+            rendered_attempt.recommended_next_action
+            == "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout."
+        )
         assert [section.kind for section in rendered_attempt.sections] == [
             "prompts",
             "tool_calls",
             "external_requests",
             "outcome",
         ]
-        assert rendered_attempt.sections[0].entries[0].payload["user_prompt"] == "Create or refresh engineering child tickets."
-        assert rendered_attempt.sections[1].entries[0].payload["tool_name"] == "jira.search"
-        assert rendered_attempt.sections[2].entries[0].payload["summary"] == "Create tenant assurance boundary"
-        assert rendered_attempt.sections[3].entries[0].message.startswith("Answer the product clarification")
+        assert (
+            rendered_attempt.sections[0].entries[0].payload["user_prompt"]
+            == "Create or refresh engineering child tickets."
+        )
+        assert (
+            rendered_attempt.sections[1].entries[0].payload["tool_name"]
+            == "jira.search"
+        )
+        assert (
+            rendered_attempt.sections[2].entries[0].payload["summary"]
+            == "Create tenant assurance boundary"
+        )
+        assert (
+            rendered_attempt.sections[3]
+            .entries[0]
+            .message.startswith("Answer the product clarification")
+        )
 
-    def test_build_workflow_step_transcript_does_not_fallback_to_attempt_state_for_telemetry(self) -> None:
+    def test_build_workflow_step_transcript_does_not_fallback_to_attempt_state_for_telemetry(
+        self,
+    ) -> None:
         now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -272,7 +296,9 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         assert transcript.source == "telemetry"
         assert transcript.attempts == []
 
-    def test_build_workflow_step_transcript_ignores_telemetry_without_persisted_attempt(self) -> None:
+    def test_build_workflow_step_transcript_ignores_telemetry_without_persisted_attempt(
+        self,
+    ) -> None:
         now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -386,7 +412,9 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
         assert transcript.source == "telemetry"
         assert transcript.attempts == []
 
-    def test_build_workflow_step_transcript_prefers_persisted_attempt_when_attempt_number_matches(self) -> None:
+    def test_build_workflow_step_transcript_prefers_persisted_attempt_when_attempt_number_matches(
+        self,
+    ) -> None:
         now = datetime(2026, 4, 21, 12, 0, 0, tzinfo=timezone.utc)
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
@@ -481,6 +509,11 @@ class WorkflowTranscriptServiceTests(SqliteTemplateDbTestCase):
 
         assert [item.attempt_number for item in transcript.attempts] == [10]
         assert transcript.attempts[0].attempt_id == "attempt-10"
-        assert [section.kind for section in transcript.attempts[0].sections] == ["runtime"]
-        assert transcript.attempts[0].sections[0].entries[0].message == "Live runtime line."
+        assert [section.kind for section in transcript.attempts[0].sections] == [
+            "runtime"
+        ]
+        assert (
+            transcript.attempts[0].sections[0].entries[0].message
+            == "Live runtime line."
+        )
         assert transcript.attempts[0].sections[0].entries[0].title == "runtime log"

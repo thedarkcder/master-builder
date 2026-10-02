@@ -26,10 +26,21 @@ from orchestrator.core.worker.run_lifecycle import (
 )
 from orchestrator.core.workflow.checkpoints import upsert_workflow_checkpoint
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.core.workflow.runner import QaRecording, QaResult, QaScenario, WorkflowResult, WorkflowStageCheckpoint
+from orchestrator.core.workflow.runner import (
+    QaRecording,
+    QaResult,
+    QaScenario,
+    WorkflowResult,
+    WorkflowStageCheckpoint,
+)
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    Run,
+    Tenant,
+    WorkflowCheckpoint,
+    WorkflowExecution,
+)
 
 
 class RunLifecycleTests(unittest.TestCase):
@@ -95,13 +106,23 @@ class RunLifecycleTests(unittest.TestCase):
             )
             session.commit()
 
-    def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.query(WorkflowExecution).filter_by(
-            tenant_id="tenant-runs",
-            source_system="jira",
-            source_ref=issue_key,
-            dedupe_scope=dedupe_scope,
-        ).one_or_none()
+    def _get_workflow(
+        self,
+        session,
+        *,
+        issue_key: str,
+        dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+    ):
+        return (
+            session.query(WorkflowExecution)
+            .filter_by(
+                tenant_id="tenant-runs",
+                source_system="jira",
+                source_ref=issue_key,
+                dedupe_scope=dedupe_scope,
+            )
+            .one_or_none()
+        )
 
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
@@ -162,7 +183,9 @@ class RunLifecycleTests(unittest.TestCase):
             assert workflow is not None
             assert remediation_workflow is not None
             self.assertEqual(workflow.active_run_id, issue_run.run.run_id)
-            self.assertEqual(remediation_workflow.active_run_id, remediation_run.run.run_id)
+            self.assertEqual(
+                remediation_workflow.active_run_id, remediation_run.run.run_id
+            )
 
     def test_enqueue_deduplicates_delivery_identifier(self) -> None:
         with self.session_factory() as session:
@@ -355,7 +378,9 @@ class RunLifecycleTests(unittest.TestCase):
     def test_enqueue_applies_bootstrap_before_queue_notification(self) -> None:
         observed: dict[str, object] = {}
 
-        def capture_notification(session, *, tenant_id: str, project_id: str | None, run_id: str):  # noqa: ANN001
+        def capture_notification(
+            session, *, tenant_id: str, project_id: str | None, run_id: str
+        ):  # noqa: ANN001
             observed["tenant_id"] = tenant_id
             observed["project_id"] = project_id
             observed["run_id"] = run_id
@@ -368,7 +393,10 @@ class RunLifecycleTests(unittest.TestCase):
             observed["entry_checkpoint_id"] = staged_run.entry_checkpoint_id
 
         with self.session_factory() as session:
-            with patch("orchestrator.core.runs.service.notify_run_enqueued", side_effect=capture_notification):
+            with patch(
+                "orchestrator.core.runs.service.notify_run_enqueued",
+                side_effect=capture_notification,
+            ):
                 result = enqueue_run(
                     session,
                     tenant_id="tenant-runs",
@@ -514,7 +542,9 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertEqual(result.run.parent_run_id, enqueue.run.run_id)
         self.assertEqual(result.run.entry_mode, "resume")
 
-    def test_persist_stage_checkpoint_writes_qa_execution_checkpoint_and_projects_pr_url(self) -> None:
+    def test_persist_stage_checkpoint_writes_qa_execution_checkpoint_and_projects_pr_url(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             enqueue = enqueue_run(
                 session,
@@ -568,10 +598,14 @@ class RunLifecycleTests(unittest.TestCase):
 
             workflow = self._get_workflow(session, issue_key="TP-915")
             assert workflow is not None
-            checkpoint = session.query(WorkflowCheckpoint).filter_by(
-                run_id=running.run_id,
-                checkpoint_kind="execution",
-            ).one()
+            checkpoint = (
+                session.query(WorkflowCheckpoint)
+                .filter_by(
+                    run_id=running.run_id,
+                    checkpoint_kind="execution",
+                )
+                .one()
+            )
 
             self.assertEqual(checkpoint.stage, "qa")
             self.assertEqual(workflow.latest_checkpoint_id, checkpoint.checkpoint_id)
@@ -643,7 +677,9 @@ class RunLifecycleTests(unittest.TestCase):
             )
             session.commit()
 
-            checkpoint = latest_resumable_checkpoint(session=session, workflow_id=workflow.workflow_id)
+            checkpoint = latest_resumable_checkpoint(
+                session=session, workflow_id=workflow.workflow_id
+            )
 
             assert checkpoint is not None
             self.assertEqual(checkpoint.run_id, first.run.run_id)
@@ -695,19 +731,27 @@ class RunLifecycleTests(unittest.TestCase):
 
             workflow = self._get_workflow(session, issue_key="TP-918")
             assert workflow is not None
-            checkpoint = session.query(WorkflowCheckpoint).filter_by(
-                run_id=running.run_id,
-                checkpoint_kind="execution",
-            ).one()
+            checkpoint = (
+                session.query(WorkflowCheckpoint)
+                .filter_by(
+                    run_id=running.run_id,
+                    checkpoint_kind="execution",
+                )
+                .one()
+            )
             self.assertEqual(requeued.pr_url, "https://github.com/example/repo/pull/18")
             self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/18")
             self.assertEqual(checkpoint.stage, "qa")
             self.assertEqual(
-                requeued.plan["context"]["execution_context"]["qa_demo_waiting_release_id"],
+                requeued.plan["context"]["execution_context"][
+                    "qa_demo_waiting_release_id"
+                ],
                 "release-preview-18",
             )
 
-    def test_finalize_workflow_result_preserves_existing_pr_url_when_result_omits_it(self) -> None:
+    def test_finalize_workflow_result_preserves_existing_pr_url_when_result_omits_it(
+        self,
+    ) -> None:
         with self.session_factory() as session:
             enqueue = enqueue_run(
                 session,
@@ -742,5 +786,7 @@ class RunLifecycleTests(unittest.TestCase):
             assert workflow is not None
 
             self.assertEqual(finalized.status, RUN_STATUS_SUCCEEDED)
-            self.assertEqual(finalized.pr_url, "https://github.com/example/repo/pull/16")
+            self.assertEqual(
+                finalized.pr_url, "https://github.com/example/repo/pull/16"
+            )
             self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/16")

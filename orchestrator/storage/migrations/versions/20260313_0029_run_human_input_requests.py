@@ -28,7 +28,9 @@ def _has_table(table_name: str) -> bool:
 def _has_index(table_name: str, index_name: str) -> bool:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
@@ -36,7 +38,10 @@ def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(bind)
     if table_name not in inspector.get_table_names():
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -63,7 +68,12 @@ def upgrade() -> None:
             sa.Column("instructions", sa.Text(), nullable=True),
             sa.Column("expected_reply_format", sa.Text(), nullable=True),
             sa.Column("status", sa.String(length=32), nullable=False),
-            sa.Column("request_context_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+            sa.Column(
+                "request_context_json",
+                sa.JSON(),
+                nullable=False,
+                server_default=sa.text("'{}'"),
+            ),
             sa.Column("thread_channel_id", sa.String(length=64), nullable=True),
             sa.Column("thread_message_id", sa.String(length=64), nullable=True),
             sa.Column("answer_encrypted", sa.Text(), nullable=True),
@@ -72,10 +82,18 @@ def upgrade() -> None:
             sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(["source_run_id"], ["runs.run_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["resumed_run_id"], ["runs.run_id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
+            sa.ForeignKeyConstraint(
+                ["source_run_id"], ["runs.run_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["resumed_run_id"], ["runs.run_id"], ondelete="SET NULL"
+            ),
             sa.PrimaryKeyConstraint("request_id"),
         )
 
@@ -91,10 +109,13 @@ def upgrade() -> None:
         ("ix_run_human_input_requests_expires_at", ["expires_at"]),
         ("ix_run_human_input_requests_created_at", ["created_at"]),
     ):
-        if all(_has_column("run_human_input_requests", column_name) for column_name in columns) and not _has_index(
-            "run_human_input_requests", index_name
-        ):
-            op.create_index(index_name, "run_human_input_requests", columns, unique=False)
+        if all(
+            _has_column("run_human_input_requests", column_name)
+            for column_name in columns
+        ) and not _has_index("run_human_input_requests", index_name):
+            op.create_index(
+                index_name, "run_human_input_requests", columns, unique=False
+            )
 
 
 def downgrade() -> None:

@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 
-revision = '20260507_0109'
-down_revision = '20260507_0108'
+revision = "20260507_0109"
+down_revision = "20260507_0108"
 branch_labels = None
 depends_on = None
 
@@ -35,14 +35,19 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _index_exists(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def _loads_json(value: object) -> dict:
@@ -77,23 +82,49 @@ def _create_project_apps_table() -> None:
         sa.Column("exposed_port", sa.Integer(), nullable=True),
         sa.Column("healthcheck", sa.Text(), nullable=True),
         sa.Column("start_command", sa.Text(), nullable=True),
-        sa.Column("env_schema_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("secret_schema_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("deployment_config", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'draft'")),
+        sa.Column(
+            "env_schema_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")
+        ),
+        sa.Column(
+            "secret_schema_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
+        sa.Column(
+            "deployment_config",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'{}'"),
+        ),
+        sa.Column(
+            "status",
+            sa.String(length=32),
+            nullable=False,
+            server_default=sa.text("'draft'"),
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("app_id"),
-        sa.UniqueConstraint("project_id", "source_path", name="uq_project_apps_project_source_path"),
+        sa.UniqueConstraint(
+            "project_id", "source_path", name="uq_project_apps_project_source_path"
+        ),
         sa.UniqueConstraint("project_id", "slug", name="uq_project_apps_project_slug"),
     )
     for index_name, columns in (
         ("ix_project_apps_tenant_id", ["tenant_id"]),
         ("ix_project_apps_project_id", ["project_id"]),
         ("ix_project_apps_status", ["status"]),
-        ("ix_project_apps_tenant_project_created_at", ["tenant_id", "project_id", "created_at"]),
+        (
+            "ix_project_apps_tenant_project_created_at",
+            ["tenant_id", "project_id", "created_at"],
+        ),
         ("ix_project_apps_project_status", ["project_id", "status"]),
         ("ix_project_apps_tenant_status", ["tenant_id", "status"]),
     ):
@@ -109,33 +140,53 @@ def _create_project_app_analysis_runs_table() -> None:
         sa.Column("run_id", sa.String(length=64), nullable=False),
         sa.Column("tenant_id", sa.String(length=128), nullable=False),
         sa.Column("project_id", sa.String(length=128), nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default=sa.text("'queued'")),
+        sa.Column(
+            "status",
+            sa.String(length=32),
+            nullable=False,
+            server_default=sa.text("'queued'"),
+        ),
         sa.Column("planner_version", sa.String(length=64), nullable=True),
-        sa.Column("request_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
-        sa.Column("result_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "request_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")
+        ),
+        sa.Column(
+            "result_payload", sa.JSON(), nullable=False, server_default=sa.text("'{}'")
+        ),
         sa.Column("error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("run_id"),
     )
     for index_name, columns in (
         ("ix_project_app_analysis_runs_tenant_id", ["tenant_id"]),
         ("ix_project_app_analysis_runs_project_id", ["project_id"]),
         ("ix_project_app_analysis_runs_status", ["status"]),
-        ("ix_project_app_analysis_runs_tenant_project_created_at", ["tenant_id", "project_id", "created_at"]),
+        (
+            "ix_project_app_analysis_runs_tenant_project_created_at",
+            ["tenant_id", "project_id", "created_at"],
+        ),
         ("ix_project_app_analysis_runs_project_status", ["project_id", "status"]),
         ("ix_project_app_analysis_runs_tenant_status", ["tenant_id", "status"]),
     ):
         if not _index_exists("project_app_analysis_runs", index_name):
-            op.create_index(index_name, "project_app_analysis_runs", columns, unique=False)
+            op.create_index(
+                index_name, "project_app_analysis_runs", columns, unique=False
+            )
 
 
 def _add_release_app_id_column() -> None:
-    if not _table_exists("project_deployment_releases") or _column_exists("project_deployment_releases", "app_id"):
+    if not _table_exists("project_deployment_releases") or _column_exists(
+        "project_deployment_releases", "app_id"
+    ):
         return
     with op.batch_alter_table("project_deployment_releases", schema=None) as batch_op:
         batch_op.add_column(sa.Column("app_id", sa.String(length=128), nullable=True))
@@ -163,14 +214,18 @@ def _add_release_app_index() -> None:
 
 def _backfill_default_apps_and_release_app_ids() -> None:
     bind = op.get_bind()
-    project_rows = bind.execute(
-        text(
-            """
+    project_rows = (
+        bind.execute(
+            text(
+                """
             SELECT project_id, tenant_id, name, deployment_config, created_at, updated_at
             FROM projects
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     existing_default_apps = {
         str(row.get("project_id") or "").strip(): str(row.get("app_id") or "").strip()
         for row in bind.execute(
@@ -181,8 +236,11 @@ def _backfill_default_apps_and_release_app_ids() -> None:
                 WHERE source_path = '.'
                 """
             )
-        ).mappings().all()
-        if str(row.get("project_id") or "").strip() and str(row.get("app_id") or "").strip()
+        )
+        .mappings()
+        .all()
+        if str(row.get("project_id") or "").strip()
+        and str(row.get("app_id") or "").strip()
     }
     project_default_app_ids: dict[str, str] = dict(existing_default_apps)
     for row in project_rows:
@@ -250,22 +308,28 @@ def _backfill_default_apps_and_release_app_ids() -> None:
                 "name": str(row.get("name") or project_id).strip() or project_id,
                 "env_schema_json": json.dumps({}, sort_keys=True),
                 "secret_schema_json": json.dumps({}, sort_keys=True),
-                "deployment_config": json.dumps(_loads_json(row.get("deployment_config")), sort_keys=True),
+                "deployment_config": json.dumps(
+                    _loads_json(row.get("deployment_config")), sort_keys=True
+                ),
                 "created_at": row.get("created_at") or now,
                 "updated_at": row.get("updated_at") or now,
             },
         )
         project_default_app_ids[project_id] = app_id
 
-    for row in bind.execute(
-        text(
-            """
+    for row in (
+        bind.execute(
+            text(
+                """
             SELECT release_id, project_id
             FROM project_deployment_releases
             WHERE app_id IS NULL
             """
+            )
         )
-    ).mappings().all():
+        .mappings()
+        .all()
+    ):
         release_id = str(row.get("release_id") or "").strip()
         project_id = str(row.get("project_id") or "").strip()
         app_id = project_default_app_ids.get(project_id)
@@ -292,11 +356,22 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    if _table_exists("project_deployment_releases") and _index_exists("project_deployment_releases", "ix_project_deployment_releases_app_id"):
-        op.drop_index("ix_project_deployment_releases_app_id", table_name="project_deployment_releases")
-    if _table_exists("project_deployment_releases") and _column_exists("project_deployment_releases", "app_id"):
-        with op.batch_alter_table("project_deployment_releases", schema=None) as batch_op:
-            batch_op.drop_constraint("fk_project_deployment_releases_app_id_project_apps", type_="foreignkey")
+    if _table_exists("project_deployment_releases") and _index_exists(
+        "project_deployment_releases", "ix_project_deployment_releases_app_id"
+    ):
+        op.drop_index(
+            "ix_project_deployment_releases_app_id",
+            table_name="project_deployment_releases",
+        )
+    if _table_exists("project_deployment_releases") and _column_exists(
+        "project_deployment_releases", "app_id"
+    ):
+        with op.batch_alter_table(
+            "project_deployment_releases", schema=None
+        ) as batch_op:
+            batch_op.drop_constraint(
+                "fk_project_deployment_releases_app_id_project_apps", type_="foreignkey"
+            )
             batch_op.drop_column("app_id")
 
     for table_name, index_names in (

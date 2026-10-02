@@ -45,11 +45,15 @@ def test_post_discord_message_content_posts_each_chunk() -> None:
     client = _FakeDiscordClient()
     content = "x" * (DISCORD_MESSAGE_CONTENT_LIMIT + 10)
 
-    responses = post_discord_message_content(client=client, channel_id="thread-1", content=content)  # type: ignore[arg-type]
+    responses = post_discord_message_content(
+        client=client, channel_id="thread-1", content=content
+    )  # type: ignore[arg-type]
 
     assert responses == [{"id": "message-1"}, {"id": "message-2"}]
     assert [channel_id for channel_id, _ in client.messages] == ["thread-1", "thread-1"]
-    assert all(len(message) <= DISCORD_MESSAGE_CONTENT_LIMIT for _, message in client.messages)
+    assert all(
+        len(message) <= DISCORD_MESSAGE_CONTENT_LIMIT for _, message in client.messages
+    )
 
 
 def test_chunk_discord_message_content_rejects_empty_content() -> None:

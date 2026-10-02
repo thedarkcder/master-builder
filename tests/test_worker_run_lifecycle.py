@@ -23,7 +23,9 @@ from orchestrator.core.worker.run_lifecycle import (
 )
 from orchestrator.core.worker.stage_event_types import WorkerStageEvent
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
-from orchestrator.core.workflow.operation_service import start_workflow_operation_attempt
+from orchestrator.core.workflow.operation_service import (
+    start_workflow_operation_attempt,
+)
 from orchestrator.core.workflow.operation_service import upsert_workflow_operation
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -33,7 +35,13 @@ from orchestrator.core.workflow.runner import (
     WorkflowStageCheckpoint,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    Project,
+    Run,
+    Tenant,
+    WorkflowCheckpoint,
+    WorkflowExecution,
+)
 from orchestrator.storage.models import WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_workflow_attempt
@@ -42,7 +50,9 @@ from tests.workflow_test_support import add_workflow_attempt
 class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
     @classmethod
     def bootstrap_template_database(cls) -> None:
-        session_factory = create_session_factory(database_url=cls._template_database_url)
+        session_factory = create_session_factory(
+            database_url=cls._template_database_url
+        )
         now = datetime.now(timezone.utc)
         with session_factory() as session:
             session.add(
@@ -114,13 +124,23 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
         reset_db_engine_cache()
 
-    def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.query(WorkflowExecution).filter_by(
-            tenant_id="tenant-a",
-            source_system="jira",
-            source_ref=issue_key,
-            dedupe_scope=dedupe_scope,
-        ).one_or_none()
+    def _get_workflow(
+        self,
+        session,
+        *,
+        issue_key: str,
+        dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+    ):
+        return (
+            session.query(WorkflowExecution)
+            .filter_by(
+                tenant_id="tenant-a",
+                source_system="jira",
+                source_ref=issue_key,
+                dedupe_scope=dedupe_scope,
+            )
+            .one_or_none()
+        )
 
     @staticmethod
     def _canonical_plan(
@@ -133,7 +153,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
         if execution_context:
             snapshot.context.execution_context = dict(execution_context)
         if live_stage_updates:
-            snapshot.events.live_stage_updates = [dict(item) for item in live_stage_updates]
+            snapshot.events.live_stage_updates = [
+                dict(item) for item in live_stage_updates
+            ]
         return snapshot.dump()
 
     @staticmethod
@@ -156,7 +178,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
         ).to_payload()
 
     @staticmethod
-    def _claim_running_run(run, *, owner: str = "node-a:1234", claim_id: str = "claim-1") -> None:  # noqa: ANN001
+    def _claim_running_run(
+        run, *, owner: str = "node-a:1234", claim_id: str = "claim-1"
+    ) -> None:  # noqa: ANN001
         run.worker_service_instance_id = owner
         run.claim_id = claim_id
 
@@ -345,7 +369,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             assert workflow is not None
             self.assertEqual(workflow.status, "failed")
 
-    def test_persist_stage_checkpoint_merges_artifacts_and_survives_finalization(self) -> None:
+    def test_persist_stage_checkpoint_merges_artifacts_and_survives_finalization(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -359,7 +385,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 repo_url="https://github.com/example/a",
                 plan=self._canonical_plan(
                     trigger_context={"source": "manual"},
-                    live_stage_updates=[{"stage": "lock_acquired", "recorded_at": now.isoformat()}],
+                    live_stage_updates=[
+                        {"stage": "lock_acquired", "recorded_at": now.isoformat()}
+                    ],
                 ),
                 workflow_status="running",
                 run_status="running",
@@ -382,7 +410,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     attempt=1,
                     status="completed",
                     summary="PM completed",
-                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
+                    plan=PmPlan(
+                        plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]
+                    ),
                 ),
                 execution_context={
                     "execution_branch": "run/ta-205/run-checkpoint",
@@ -392,8 +422,12 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 expected_claim_id="claim-1",
             )
 
-            self.assertEqual(run.plan["context"]["trigger_context"], {"source": "manual"})
-            self.assertEqual(run.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan"])
+            self.assertEqual(
+                run.plan["context"]["trigger_context"], {"source": "manual"}
+            )
+            self.assertEqual(
+                run.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan"]
+            )
             self.assertEqual(run.plan["stages"]["pm"]["status"], "completed")
             self.assertEqual(
                 run.plan["context"]["execution_context"]["execution_branch"],
@@ -403,14 +437,18 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 run.plan["context"]["execution_context"]["integration_branch"],
                 "feature/TA-205",
             )
-            self.assertEqual(run.plan["events"]["live_stage_updates"][0]["stage"], "lock_acquired")
+            self.assertEqual(
+                run.plan["events"]["live_stage_updates"][0]["stage"], "lock_acquired"
+            )
 
             finalized = finalize_workflow_result(
                 session,
                 run=run,
                 workflow_result=WorkflowResult(
                     outcome="success",
-                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]),
+                    plan=PmPlan(
+                        plan_steps=["plan"], acceptance_criteria=["ac"], risks=[]
+                    ),
                     pr_url=None,
                     summary=["done"],
                     test_guidance=["pytest -q"],
@@ -429,9 +467,13 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
 
             self.assertEqual(finalized.status, "succeeded")
             self.assertEqual(finalized.plan["stages"]["pm"]["status"], "completed")
-            self.assertEqual(finalized.plan["context"]["trigger_context"], {"source": "manual"})
+            self.assertEqual(
+                finalized.plan["context"]["trigger_context"], {"source": "manual"}
+            )
 
-    def test_persist_execution_checkpoint_without_pushed_artifact_is_not_reusable(self) -> None:
+    def test_persist_execution_checkpoint_without_pushed_artifact_is_not_reusable(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -473,15 +515,23 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 expected_claim_id="claim-1",
             )
 
-            self.assertEqual(persisted_without_artifact.plan["stages"]["dev"]["status"], "completed")
+            self.assertEqual(
+                persisted_without_artifact.plan["stages"]["dev"]["status"], "completed"
+            )
             self.assertFalse(
-                persisted_without_artifact.plan["context"]["execution_context"]["execution_checkpoint_reusable"]
+                persisted_without_artifact.plan["context"]["execution_context"][
+                    "execution_checkpoint_reusable"
+                ]
             )
             self.assertIn(
                 "not reusable until the execution branch is pushed",
-                persisted_without_artifact.plan["context"]["execution_context"]["execution_checkpoint_reusable_reason"],
+                persisted_without_artifact.plan["context"]["execution_context"][
+                    "execution_checkpoint_reusable_reason"
+                ],
             )
-            self.assertIsNone(session.get(WorkflowCheckpoint, "run-dev-artifact-execution"))
+            self.assertIsNone(
+                session.get(WorkflowCheckpoint, "run-dev-artifact-execution")
+            )
 
             record_pushed_execution_artifact(
                 session,
@@ -501,7 +551,11 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
 
             self.assertEqual(persisted.plan["stages"]["dev"]["status"], "completed")
-            self.assertTrue(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
+            self.assertTrue(
+                persisted.plan["context"]["execution_context"][
+                    "execution_checkpoint_reusable"
+                ]
+            )
             self.assertNotIn(
                 "execution_checkpoint_reusable_reason",
                 persisted.plan["context"]["execution_context"],
@@ -509,7 +563,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             checkpoint = session.get(WorkflowCheckpoint, "run-dev-artifact-execution")
             self.assertIsNotNone(checkpoint)
 
-    def test_persist_execution_checkpoint_bootstraps_published_start_point_artifact(self) -> None:
+    def test_persist_execution_checkpoint_bootstraps_published_start_point_artifact(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -561,8 +617,14 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     expected_claim_id="claim-1",
                 )
 
-            self.assertTrue(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
-            checkpoint = session.get(WorkflowCheckpoint, "run-published-start-point-execution")
+            self.assertTrue(
+                persisted.plan["context"]["execution_context"][
+                    "execution_checkpoint_reusable"
+                ]
+            )
+            checkpoint = session.get(
+                WorkflowCheckpoint, "run-published-start-point-execution"
+            )
             self.assertIsNotNone(checkpoint)
             artifact = latest_pushed_execution_artifact_for_run(
                 session=session,
@@ -572,7 +634,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             self.assertEqual(artifact.branch, "feature/TA-207")
             self.assertEqual(artifact.commit_sha, "b" * 40)
 
-    def test_persist_execution_checkpoint_does_not_bootstrap_when_head_diverged_from_start_point(self) -> None:
+    def test_persist_execution_checkpoint_does_not_bootstrap_when_head_diverged_from_start_point(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -624,8 +688,14 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     expected_claim_id="claim-1",
                 )
 
-            self.assertFalse(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
-            self.assertIsNone(session.get(WorkflowCheckpoint, "run-diverged-start-point-execution"))
+            self.assertFalse(
+                persisted.plan["context"]["execution_context"][
+                    "execution_checkpoint_reusable"
+                ]
+            )
+            self.assertIsNone(
+                session.get(WorkflowCheckpoint, "run-diverged-start-point-execution")
+            )
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)
@@ -808,7 +878,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     expected_claim_id="claim-1",
                 )
 
-    def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
+    def test_requeue_workflow_result_for_capability_notifies_queue_listener(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -824,7 +896,10 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 run_status="running",
                 last_error="old error",
                 plan=self._canonical_plan(
-                    trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+                    trigger_context={
+                        "source": "github_pr_review_feedback",
+                        "pr_number": 6,
+                    }
                 ),
                 created_at=now,
                 started_at=now,
@@ -858,7 +933,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 ),
             )
 
-            with patch("orchestrator.core.worker.run_transition_service.notify_run_enqueued") as notify_mock:
+            with patch(
+                "orchestrator.core.worker.run_transition_service.notify_run_enqueued"
+            ) as notify_mock:
                 requeued = requeue_workflow_result_for_capability(
                     session,
                     run=run,
@@ -884,7 +961,10 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             self.assertIsNone(requeued.worker_service_instance_id)
             self.assertEqual(requeued.required_worker_capability, "macos")
             self.assertEqual(requeued.plan["workflow"]["requeue_target"], "macos")
-            self.assertEqual(requeued.plan["context"]["execution_context"]["required_worker_label"], "macos")
+            self.assertEqual(
+                requeued.plan["context"]["execution_context"]["required_worker_label"],
+                "macos",
+            )
             self.assertEqual(
                 requeued.plan["context"]["trigger_context"],
                 {"source": "github_pr_review_feedback", "pr_number": 6},
@@ -899,7 +979,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             assert workflow is not None
             self.assertEqual(workflow.status, "queued")
 
-    def test_requeue_workflow_result_for_stale_snapshot_notifies_queue_listener(self) -> None:
+    def test_requeue_workflow_result_for_stale_snapshot_notifies_queue_listener(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -917,7 +999,10 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 run_status="running",
                 last_error="old error",
                 plan=self._canonical_plan(
-                    trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
+                    trigger_context={
+                        "source": "github_pr_review_feedback",
+                        "pr_number": 6,
+                    }
                 ),
                 created_at=now,
                 started_at=now,
@@ -944,7 +1029,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 diagnostics=None,
             )
 
-            with patch("orchestrator.core.worker.run_transition_service.notify_run_enqueued") as notify_mock:
+            with patch(
+                "orchestrator.core.worker.run_transition_service.notify_run_enqueued"
+            ) as notify_mock:
                 requeued = requeue_workflow_result_for_stale_snapshot(
                     session,
                     run=run,
@@ -968,10 +1055,14 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             self.assertIsNone(requeued.finished_at)
             self.assertIsNone(requeued.pr_url)
             self.assertIsNone(requeued.worker_service_instance_id)
-            self.assertTrue(requeued.plan["context"]["execution_context"]["stale_branch_snapshot"])
+            self.assertTrue(
+                requeued.plan["context"]["execution_context"]["stale_branch_snapshot"]
+            )
             self.assertEqual(requeued.plan["workflow"]["outcome"], "requeue")
             self.assertIsNone(requeued.plan["workflow"]["requeue_target"])
-            self.assertIn("Branch snapshot stale", requeued.plan["workflow"]["requeue_reason"])
+            self.assertIn(
+                "Branch snapshot stale", requeued.plan["workflow"]["requeue_reason"]
+            )
             self.assertIsNotNone(ExecutionSnapshot.load(requeued.plan))
             self.assertEqual(
                 requeued.plan["context"]["trigger_context"],
@@ -987,7 +1078,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             assert workflow is not None
             self.assertEqual(workflow.status, "queued")
 
-    def test_requeue_workflow_result_closes_active_operation_attempt_before_retry(self) -> None:
+    def test_requeue_workflow_result_closes_active_operation_attempt_before_retry(
+        self,
+    ) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -1017,7 +1110,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 idempotency_key=f"run:{run.run_id}:runtime_invocation",
                 run_id=run.run_id,
             )
-            active_attempt = start_workflow_operation_attempt(session, operation=operation)
+            active_attempt = start_workflow_operation_attempt(
+                session, operation=operation
+            )
             session.commit()
 
             requeue_workflow_result_for_stale_snapshot(
@@ -1039,10 +1134,16 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 mark_stale_snapshot=False,
             )
             session.refresh(operation)
-            closed_attempt = session.get(WorkflowOperationAttempt, active_attempt.attempt_id)
+            closed_attempt = session.get(
+                WorkflowOperationAttempt, active_attempt.attempt_id
+            )
 
             assert closed_attempt is not None
             self.assertEqual(closed_attempt.status, "failed")
             self.assertEqual(closed_attempt.error_category, "run_attempt_reset")
-            retry_attempt = start_workflow_operation_attempt(session, operation=operation)
-            self.assertEqual(retry_attempt.attempt_number, active_attempt.attempt_number + 1)
+            retry_attempt = start_workflow_operation_attempt(
+                session, operation=operation
+            )
+            self.assertEqual(
+                retry_attempt.attempt_number, active_attempt.attempt_number + 1
+            )

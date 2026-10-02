@@ -10,13 +10,19 @@ from orchestrator.api.webhooks.github_event_classifier import (
     empty_github_review_summary,
     resolve_github_policy_state,
 )
-from orchestrator.api.webhooks.github_staging_admission import plan_staging_admission_actions
-from orchestrator.api.webhooks.github_manual_fix_planner import plan_manual_fix_reaction_actions
+from orchestrator.api.webhooks.github_staging_admission import (
+    plan_staging_admission_actions,
+)
+from orchestrator.api.webhooks.github_manual_fix_planner import (
+    plan_manual_fix_reaction_actions,
+)
 from orchestrator.api.webhooks.github_review_planner import plan_pull_request_targets
 from orchestrator.api.webhooks.github_webhook_context import (
     GitHubWebhookPreparedRuntime,
 )
-from orchestrator.api.webhooks.pr_remediation_service import enqueue_pr_remediation_if_needed
+from orchestrator.api.webhooks.pr_remediation_service import (
+    enqueue_pr_remediation_if_needed,
+)
 from orchestrator.core.communications import (
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -118,7 +124,9 @@ async def build_github_webhook_ingress_result(
         payload=payload,
         repo_full_name=repo_full_name,
     )
-    if trigger_state.ignored_reason is not None and not bool(getattr(staging_admission_plan, "actions", ())):
+    if trigger_state.ignored_reason is not None and not bool(
+        getattr(staging_admission_plan, "actions", ())
+    ):
         logger.info(
             "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=%s sender=%s",
             request_id,
@@ -271,7 +279,9 @@ async def build_github_webhook_ingress_result(
     )
 
 
-def _http_json_result(*, status_code: int, content: dict, extra_actions: tuple = ()) -> IngressResult:
+def _http_json_result(
+    *, status_code: int, content: dict, extra_actions: tuple = ()
+) -> IngressResult:
     return IngressResult(
         actions=(
             *extra_actions,

@@ -44,7 +44,9 @@ def test_cli_exposes_deployment_reconciler_command() -> None:
 
 
 def test_cli_dispatches_deployment_reconciler_command() -> None:
-    with patch("orchestrator.core.deployment_runtime.run_deployment_reconciler") as run_reconciler:
+    with patch(
+        "orchestrator.core.deployment_runtime.run_deployment_reconciler"
+    ) as run_reconciler:
         assert main(["deployment-reconciler"]) == 0
 
     run_reconciler.assert_called_once_with()

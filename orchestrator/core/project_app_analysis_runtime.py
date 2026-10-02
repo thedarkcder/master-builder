@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.project_app_planner import (
     ProjectAppAnalysisResult,
@@ -40,7 +43,9 @@ def _candidate_prompt_json(candidate) -> dict[str, object]:  # noqa: ANN001
         "secret_schema_json": candidate.secret_schema_json,
         "analysis_source": candidate.analysis_source,
         "needs_generated_files": candidate.needs_generated_files,
-        "services": [dict(service) for service in getattr(candidate, "services_json", ())],
+        "services": [
+            dict(service) for service in getattr(candidate, "services_json", ())
+        ],
         "resources": [dict(resource) for resource in candidate.resources_json],
         "volumes": [dict(volume) for volume in getattr(candidate, "volumes_json", ())],
     }
@@ -123,7 +128,9 @@ def run_project_app_analysis(
         analysis_source=analysis_source,
         planner_version=planner_version,
         pre_scan_count=len(pre_scan_candidates),
-        runtime_count=len(runtime_payload.get("apps", [])) if isinstance(runtime_payload.get("apps"), list) else 0,
+        runtime_count=len(runtime_payload.get("apps", []))
+        if isinstance(runtime_payload.get("apps"), list)
+        else 0,
         normalized_count=len(normalized_apps),
         raw_planner_result_json=dict(runtime_payload),
     )

@@ -9,7 +9,17 @@ from orchestrator.core.communications.command_pipeline import CommandScope
 from orchestrator.storage.models import Project, Tenant
 
 DM_SCOPE_SENTINEL_CHANNEL_IDS = {"__dm__", "__dm", "dm"}
-PROJECT_SCOPED_COMMANDS = {"ask", "pm", "bug", "gap", "issues", "run", "retry", "reply", "link"}
+PROJECT_SCOPED_COMMANDS = {
+    "ask",
+    "pm",
+    "bug",
+    "gap",
+    "issues",
+    "run",
+    "retry",
+    "reply",
+    "link",
+}
 _ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 
 
@@ -50,18 +60,26 @@ def resolve_command_scope(
 
 
 def _tenant_active_projects(*, session, tenant_id: str) -> list[Project]:  # noqa: ANN001
-    return session.execute(
-        select(Project)
-        .where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
+    return (
+        session.execute(
+            select(Project)
+            .where(
+                Project.tenant_id == tenant_id,
+                Project.is_archived.is_(False),
+            )
+            .order_by(Project.created_at)
         )
-        .order_by(Project.created_at)
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
-def _resolve_single_project_for_scope(*, session, tenant: Tenant, scope: CommandScope) -> Project | None:  # noqa: ANN001
-    normalized_scope_keys = {str(value).strip().upper() for value in scope.project_keys if str(value).strip()}
+def _resolve_single_project_for_scope(
+    *, session, tenant: Tenant, scope: CommandScope
+) -> Project | None:  # noqa: ANN001
+    normalized_scope_keys = {
+        str(value).strip().upper() for value in scope.project_keys if str(value).strip()
+    }
     if len(normalized_scope_keys) != 1:
         return None
     target_project_key = next(iter(normalized_scope_keys))
@@ -89,7 +107,9 @@ def _candidate_issue_key_for_command(
         if first_token.startswith("@"):
             candidate = first_token[1:].strip().upper()
             return candidate if _ISSUE_KEY_PATTERN.match(candidate) else None
-    if command_name == "bug" and isinstance(getattr(payload, "command_params", None), dict):
+    if command_name == "bug" and isinstance(
+        getattr(payload, "command_params", None), dict
+    ):
         candidate = str(payload.command_params.get("issue_key") or "").strip().upper()
         return candidate if _ISSUE_KEY_PATTERN.match(candidate) else None
     return None
@@ -128,7 +148,9 @@ def enrich_command_scope(
                 channel_id=current_scope.channel_id,
             )
 
-    project = _resolve_single_project_for_scope(session=session, tenant=tenant, scope=current_scope)
+    project = _resolve_single_project_for_scope(
+        session=session, tenant=tenant, scope=current_scope
+    )
     if project is not None:
         return CommandScope(
             project_id=project.project_id,

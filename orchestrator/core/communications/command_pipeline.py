@@ -61,8 +61,7 @@ class CommandExecutionContext:
 
 
 class CommandHandler(Protocol):
-    def __call__(self, context: CommandExecutionContext) -> Any | None:
-        ...
+    def __call__(self, context: CommandExecutionContext) -> Any | None: ...
 
 
 def dispatch_registered_command(
@@ -79,4 +78,6 @@ def dispatch_registered_command(
         if response is not None:
             return response
 
-    raise ValueError(f"No handler produced a response for command: {context.command_name}")
+    raise ValueError(
+        f"No handler produced a response for command: {context.command_name}"
+    )

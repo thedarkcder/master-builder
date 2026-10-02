@@ -14,7 +14,9 @@ from orchestrator.core.observability.events import (
     list_product_events,
     list_product_events_after_sequence,
 )
-from orchestrator.core.observability.observability_stream import record_observability_stream_event
+from orchestrator.core.observability.observability_stream import (
+    record_observability_stream_event,
+)
 from orchestrator.storage.models import RunTokenUsage
 
 EVENT_KIND_RUNTIME_LOG = "runtime_log"
@@ -107,7 +109,11 @@ def _event_type(payload: dict[str, object]) -> str:
 
 
 def _has_token_fields(payload: dict[str, object]) -> bool:
-    return any(value is not None for field in _TOKEN_VALUE_FIELDS if (value := payload.get(field)) is not None)
+    return any(
+        value is not None
+        for field in _TOKEN_VALUE_FIELDS
+        if (value := payload.get(field)) is not None
+    )
 
 
 def _lookup_usage_payload(
@@ -132,7 +138,9 @@ def _lookup_usage_payload(
     return None, candidates
 
 
-def _first_string_value(candidates: list[dict[str, object]], keys: tuple[str, ...]) -> str | None:
+def _first_string_value(
+    candidates: list[dict[str, object]], keys: tuple[str, ...]
+) -> str | None:
     for key in keys:
         for candidate in candidates:
             value = candidate.get(key)
@@ -144,7 +152,9 @@ def _first_string_value(candidates: list[dict[str, object]], keys: tuple[str, ..
     return None
 
 
-def _first_int_value(candidates: list[dict[str, object]], keys: tuple[str, ...]) -> int | None:
+def _first_int_value(
+    candidates: list[dict[str, object]], keys: tuple[str, ...]
+) -> int | None:
     for key in keys:
         for candidate in candidates:
             value = candidate.get(key)
@@ -169,13 +179,23 @@ def extract_turn_completed_usage(message: str) -> ParsedTurnUsage | None:
         return None
 
     normalized_input = _coerce_non_negative_int(usage_payload.get("input_tokens"))
-    normalized_cached = _coerce_non_negative_int(usage_payload.get("cached_input_tokens"))
+    normalized_cached = _coerce_non_negative_int(
+        usage_payload.get("cached_input_tokens")
+    )
     normalized_output = _coerce_non_negative_int(usage_payload.get("output_tokens"))
-    if normalized_input is None and normalized_output is None and normalized_cached is None:
+    if (
+        normalized_input is None
+        and normalized_output is None
+        and normalized_cached is None
+    ):
         normalized_input = _coerce_non_negative_int(usage_payload.get("prompt_tokens"))
-        normalized_output = _coerce_non_negative_int(usage_payload.get("completion_tokens"))
+        normalized_output = _coerce_non_negative_int(
+            usage_payload.get("completion_tokens")
+        )
         if normalized_cached is None:
-            normalized_cached = _coerce_non_negative_int(usage_payload.get("cache_read_tokens"))
+            normalized_cached = _coerce_non_negative_int(
+                usage_payload.get("cache_read_tokens")
+            )
     if normalized_input is None and normalized_output is None:
         return None
     if normalized_cached is None:
@@ -192,15 +212,23 @@ def extract_turn_completed_usage(message: str) -> ParsedTurnUsage | None:
             truncated = None
 
     return ParsedTurnUsage(
-        turn_id=_first_string_value(lookup_candidates, ("turn_id", "turn", "turn_id_str", "invocation_id")),
+        turn_id=_first_string_value(
+            lookup_candidates, ("turn_id", "turn", "turn_id_str", "invocation_id")
+        ),
         input_tokens=normalized_input or 0,
         cached_input_tokens=normalized_cached,
         output_tokens=normalized_output or 0,
-        runtime_ms=_first_int_value(lookup_candidates, ("runtime_ms", "duration_ms", "elapsed_ms")),
+        runtime_ms=_first_int_value(
+            lookup_candidates, ("runtime_ms", "duration_ms", "elapsed_ms")
+        ),
         model=_first_string_value(lookup_candidates, ("model", "model_name")),
         command=_first_string_value(lookup_candidates, ("command", "command_name")),
-        artifact_path=_first_string_value(lookup_candidates, ("artifact_path", "artifact", "artifact_file")),
-        output_chars=_first_int_value(lookup_candidates, ("output_chars", "output_length", "output_char_count")),
+        artifact_path=_first_string_value(
+            lookup_candidates, ("artifact_path", "artifact", "artifact_file")
+        ),
+        output_chars=_first_int_value(
+            lookup_candidates, ("output_chars", "output_length", "output_char_count")
+        ),
         truncated=truncated,
     )
 
@@ -239,7 +267,9 @@ def normalize_logging_pane_event(
     normalized_stream = str(stream or "").strip().lower() or "stdout"
     if normalized_stream not in {"stdout", "stderr", "system"}:
         raise ValueError(f"Unsupported logging pane stream: {normalized_stream}")
-    message_text = redact_sensitive_text(str(message or "").strip())[:MAX_LOG_MESSAGE_CHARS]
+    message_text = redact_sensitive_text(str(message or "").strip())[
+        :MAX_LOG_MESSAGE_CHARS
+    ]
     if not message_text:
         raise ValueError("Logging pane event requires message")
     return LoggingPaneEvent(
@@ -276,7 +306,9 @@ def _event_payload(event: LoggingPaneEvent) -> dict[str, object]:
     }
 
 
-def _materialize_token_usage_from_event(*, session: Session, event: LoggingPaneEvent) -> bool:
+def _materialize_token_usage_from_event(
+    *, session: Session, event: LoggingPaneEvent
+) -> bool:
     if not event.run_id or event.stage not in _TOKEN_STAGES:
         return False
     parsed = extract_turn_completed_usage(event.message)
@@ -321,7 +353,9 @@ def _materialize_token_usage_from_event(*, session: Session, event: LoggingPaneE
     return True
 
 
-def materialize_token_usage_from_observability_event(*, session: Session, row: ProductEvent) -> bool:
+def materialize_token_usage_from_observability_event(
+    *, session: Session, row: ProductEvent
+) -> bool:
     payload = dict(row.payload_json or {})
     if row.event_kind != EVENT_KIND_RUNTIME_LOG:
         return False
@@ -339,7 +373,9 @@ def materialize_token_usage_from_observability_event(*, session: Session, row: P
         command=_require_text(payload.get("command"), "command"),
         working_dir=str(payload.get("working_dir") or "").strip() or None,
         stage=_require_text(payload.get("stage"), "stage"),
-        attempt=payload.get("attempt") if isinstance(payload.get("attempt"), int) else None,
+        attempt=payload.get("attempt")
+        if isinstance(payload.get("attempt"), int)
+        else None,
         stream=_require_text(payload.get("stream"), "stream"),
         message=row.message,
         recorded_at=row.recorded_at,
@@ -409,28 +445,54 @@ def emit_logging_pane_event(
     return row
 
 
-def emit_logging_pane_events_batch(*, session: Session, events: Iterable[dict[str, object]]) -> int:
+def emit_logging_pane_events_batch(
+    *, session: Session, events: Iterable[dict[str, object]]
+) -> int:
     persisted = 0
     for event in events:
         emit_logging_pane_event(
             session=session,
             tenant_id=str(event.get("tenant_id") or ""),
-            project_id=event.get("project_id") if isinstance(event.get("project_id"), str) else None,
-            workflow_id=event.get("workflow_id") if isinstance(event.get("workflow_id"), str) else None,
-            operation_id=event.get("operation_id") if isinstance(event.get("operation_id"), str) else None,
-            attempt_id=event.get("attempt_id") if isinstance(event.get("attempt_id"), str) else None,
-            run_id=event.get("run_id") if isinstance(event.get("run_id"), str) else None,
-            issue_key=event.get("issue_key") if isinstance(event.get("issue_key"), str) else None,
+            project_id=event.get("project_id")
+            if isinstance(event.get("project_id"), str)
+            else None,
+            workflow_id=event.get("workflow_id")
+            if isinstance(event.get("workflow_id"), str)
+            else None,
+            operation_id=event.get("operation_id")
+            if isinstance(event.get("operation_id"), str)
+            else None,
+            attempt_id=event.get("attempt_id")
+            if isinstance(event.get("attempt_id"), str)
+            else None,
+            run_id=event.get("run_id")
+            if isinstance(event.get("run_id"), str)
+            else None,
+            issue_key=event.get("issue_key")
+            if isinstance(event.get("issue_key"), str)
+            else None,
             agent_id=str(event.get("agent_id") or ""),
-            invocation_id=event.get("invocation_id") if isinstance(event.get("invocation_id"), str) else None,
-            channel=event.get("channel") if isinstance(event.get("channel"), str) else None,
-            command=event.get("command") if isinstance(event.get("command"), str) else None,
-            working_dir=event.get("working_dir") if isinstance(event.get("working_dir"), str) else None,
+            invocation_id=event.get("invocation_id")
+            if isinstance(event.get("invocation_id"), str)
+            else None,
+            channel=event.get("channel")
+            if isinstance(event.get("channel"), str)
+            else None,
+            command=event.get("command")
+            if isinstance(event.get("command"), str)
+            else None,
+            working_dir=event.get("working_dir")
+            if isinstance(event.get("working_dir"), str)
+            else None,
             stage=str(event.get("stage") or ""),
-            attempt=event.get("attempt") if isinstance(event.get("attempt"), int) else None,
+            attempt=event.get("attempt")
+            if isinstance(event.get("attempt"), int)
+            else None,
             stream=str(event.get("stream") or ""),
             message=str(event.get("message") or ""),
-            recorded_at=event.get("recorded_at") if isinstance(event.get("recorded_at"), datetime) else None,
+            recorded_at=event.get("recorded_at")
+            if isinstance(event.get("recorded_at"), datetime)
+            else None,
         )
         persisted += 1
     return persisted
@@ -483,7 +545,9 @@ def logging_pane_event_to_read_schema(row: ProductEvent, schema_cls):  # noqa: A
         command=str(payload.get("command") or "").strip() or None,
         working_dir=str(payload.get("working_dir") or "").strip() or None,
         stage=str(payload.get("stage") or "").strip(),
-        attempt=payload.get("attempt") if isinstance(payload.get("attempt"), int) else None,
+        attempt=payload.get("attempt")
+        if isinstance(payload.get("attempt"), int)
+        else None,
         stream=str(payload.get("stream") or "").strip(),
         message=row.message,
         recorded_at=row.recorded_at,
@@ -502,7 +566,10 @@ def list_run_logging_pane_events(
     del session
     rows = list_product_events(
         event_class="execution_log",
-        filters={"run_id": str(run_id or "").strip(), "event_kind": EVENT_KIND_RUNTIME_LOG},
+        filters={
+            "run_id": str(run_id or "").strip(),
+            "event_kind": EVENT_KIND_RUNTIME_LOG,
+        },
         before=EventCursor(
             recorded_at=before_recorded_at,
             event_sequence=_event_sequence_from_id(before_event_id),
@@ -552,39 +619,49 @@ def encode_logging_pane_stream_row(row: ProductEvent) -> str | None:
         agent_id = str(payload.get("agent_id") or "").strip()
         if not event_type or not row.run_id or not agent_id:
             return None
-        return json.dumps(
-            {
-                "event_type": event_type,
-                "run_id": row.run_id,
-                "issue_key": row.issue_key,
-                "project_id": row.project_id,
-                "agent_id": agent_id,
-                "recorded_at": row.recorded_at.isoformat(),
-            },
-            separators=(",", ":"),
-        ) + "\n"
+        return (
+            json.dumps(
+                {
+                    "event_type": event_type,
+                    "run_id": row.run_id,
+                    "issue_key": row.issue_key,
+                    "project_id": row.project_id,
+                    "agent_id": agent_id,
+                    "recorded_at": row.recorded_at.isoformat(),
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
     if row.event_kind == EVENT_KIND_RUNTIME_LOG:
-        return json.dumps(
-            {
-                "event_kind": EVENT_KIND_RUNTIME_LOG,
-                "event_id": str(row.event_sequence),
-                "event_sequence": row.event_sequence,
-                "invocation_id": str(payload.get("invocation_id") or "").strip() or None,
-                "channel": str(payload.get("channel") or "").strip() or None,
-                "command": str(payload.get("command") or "").strip() or None,
-                "working_dir": str(payload.get("working_dir") or "").strip() or None,
-                "run_id": row.run_id,
-                "issue_key": row.issue_key,
-                "project_id": row.project_id,
-                "agent_id": str(payload.get("agent_id") or "").strip() or None,
-                "stage": str(payload.get("stage") or "").strip() or None,
-                "attempt": payload.get("attempt") if isinstance(payload.get("attempt"), int) else None,
-                "stream": str(payload.get("stream") or "").strip() or None,
-                "message": row.message,
-                "recorded_at": row.recorded_at.isoformat(),
-            },
-            separators=(",", ":"),
-        ) + "\n"
+        return (
+            json.dumps(
+                {
+                    "event_kind": EVENT_KIND_RUNTIME_LOG,
+                    "event_id": str(row.event_sequence),
+                    "event_sequence": row.event_sequence,
+                    "invocation_id": str(payload.get("invocation_id") or "").strip()
+                    or None,
+                    "channel": str(payload.get("channel") or "").strip() or None,
+                    "command": str(payload.get("command") or "").strip() or None,
+                    "working_dir": str(payload.get("working_dir") or "").strip()
+                    or None,
+                    "run_id": row.run_id,
+                    "issue_key": row.issue_key,
+                    "project_id": row.project_id,
+                    "agent_id": str(payload.get("agent_id") or "").strip() or None,
+                    "stage": str(payload.get("stage") or "").strip() or None,
+                    "attempt": payload.get("attempt")
+                    if isinstance(payload.get("attempt"), int)
+                    else None,
+                    "stream": str(payload.get("stream") or "").strip() or None,
+                    "message": row.message,
+                    "recorded_at": row.recorded_at.isoformat(),
+                },
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
     return None
 
 
@@ -594,17 +671,23 @@ def build_run_logging_stream_snapshot_query(
     run_id: str,
     initial_event_limit: int,
     initial_log_limit: int,
-    ) -> list[ProductEvent]:
+) -> list[ProductEvent]:
     del session
     lifecycle_rows = list_product_events(
         event_class="execution_log",
-        filters={"run_id": str(run_id or "").strip(), "event_kind": EVENT_KIND_AGENT_LIFECYCLE},
+        filters={
+            "run_id": str(run_id or "").strip(),
+            "event_kind": EVENT_KIND_AGENT_LIFECYCLE,
+        },
         limit=max(1, min(initial_event_limit, 500)),
         newest_first=True,
     )
     log_rows = list_product_events(
         event_class="execution_log",
-        filters={"run_id": str(run_id or "").strip(), "event_kind": EVENT_KIND_RUNTIME_LOG},
+        filters={
+            "run_id": str(run_id or "").strip(),
+            "event_kind": EVENT_KIND_RUNTIME_LOG,
+        },
         limit=max(1, min(initial_log_limit, 1000)),
         newest_first=True,
     )

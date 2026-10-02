@@ -19,11 +19,15 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         session.get.return_value = tenant
 
         base = {
-            "get_settings": MagicMock(return_value=SimpleNamespace(secrets_encryption_key="k")),
+            "get_settings": MagicMock(
+                return_value=SimpleNamespace(secrets_encryption_key="k")
+            ),
             "_read_json_payload": AsyncMock(return_value=(payload, b"{}")),
             "_extract_webhook_token": MagicMock(return_value="token"),
             "resolve_scoped_secret_ref": MagicMock(return_value="token"),
-            "_resolve_discord_command_subject_key": MagicMock(return_value="discord_channel:example:c1"),
+            "_resolve_discord_command_subject_key": MagicMock(
+                return_value="discord_channel:example-workspace:c1"
+            ),
             "enqueue_webhook_job": MagicMock(
                 return_value=SimpleNamespace(
                     created=True,
@@ -35,7 +39,9 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         base.update(overrides)
 
         with patch.multiple("orchestrator.api.routes.webhook_discord", **base):
-            response = await ingest_discord_webhook("example", request=request, session=session)
+            response = await ingest_discord_webhook(
+                "example-workspace", request=request, session=session
+            )
         return response, session, base
 
     async def test_unknown_tenant(self) -> None:
@@ -44,27 +50,45 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
     async def test_tenant_disabled(self) -> None:
-        response, _, _ = await self._call(payload={}, tenant=SimpleNamespace(is_enabled=False, discord_config={}))
+        response, _, _ = await self._call(
+            payload={}, tenant=SimpleNamespace(is_enabled=False, discord_config={})
+        )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"tenant_disabled", response.body)
 
     async def test_secret_authentication_paths(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={"command_secret_ref": "ref"})
+        tenant = SimpleNamespace(
+            is_enabled=True, discord_config={"command_secret_ref": "ref"}
+        )
 
         with self.assertRaises(HTTPException) as exc_ctx:
-            await self._call(payload={"user_id": "u", "command": "!ask"}, tenant=tenant, resolve_scoped_secret_ref=MagicMock(return_value=""))
+            await self._call(
+                payload={"user_id": "u", "command": "!ask"},
+                tenant=tenant,
+                resolve_scoped_secret_ref=MagicMock(return_value=""),
+            )
         self.assertEqual(exc_ctx.exception.status_code, 500)
 
         with self.assertRaises(HTTPException) as exc_ctx:
-            await self._call(payload={"user_id": "u", "command": "!ask"}, tenant=tenant, _extract_webhook_token=MagicMock(return_value=None))
+            await self._call(
+                payload={"user_id": "u", "command": "!ask"},
+                tenant=tenant,
+                _extract_webhook_token=MagicMock(return_value=None),
+            )
         self.assertEqual(exc_ctx.exception.status_code, 401)
 
         with self.assertRaises(HTTPException) as exc_ctx:
-            await self._call(payload={"user_id": "u", "command": "!ask"}, tenant=tenant, _extract_webhook_token=MagicMock(return_value="wrong"))
+            await self._call(
+                payload={"user_id": "u", "command": "!ask"},
+                tenant=tenant,
+                _extract_webhook_token=MagicMock(return_value="wrong"),
+            )
         self.assertEqual(exc_ctx.exception.status_code, 401)
 
     async def test_payload_validation(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        tenant = SimpleNamespace(
+            is_enabled=True, discord_config={"command_secret_ref": "ref"}
+        )
 
         with self.assertRaises(HTTPException) as exc_ctx:
             await self._call(payload={"command": "!ask"}, tenant=tenant)
@@ -75,13 +99,22 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(exc_ctx.exception.status_code, 400)
 
         with self.assertRaises(HTTPException) as exc_ctx:
-            await self._call(payload={"user_id": "u", "command": "!ask", "channel_id": 1}, tenant=tenant)
+            await self._call(
+                payload={"user_id": "u", "command": "!ask", "channel_id": 1},
+                tenant=tenant,
+            )
         self.assertEqual(exc_ctx.exception.status_code, 400)
 
     async def test_success_enqueues_webhook_job(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+        tenant = SimpleNamespace(
+            is_enabled=True, discord_config={"command_secret_ref": "ref"}
+        )
         response, session, patched = await self._call(
-            payload={"user_id": "  user1 ", "command": " !ask status ", "channel_id": " c1 "},
+            payload={
+                "user_id": "  user1 ",
+                "command": " !ask status ",
+                "channel_id": " c1 ",
+            },
             tenant=tenant,
         )
         self.assertEqual(response.status_code, 200)
@@ -90,7 +123,7 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         patched["enqueue_webhook_job"].assert_called_once()
         request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
         self.assertEqual(request.transport, "discord_webhook")
-        self.assertEqual(request.subject_key, "discord_channel:example:c1")
+        self.assertEqual(request.subject_key, "discord_channel:example-workspace:c1")
         self.assertEqual(request.payload_json["command"], "!ask status")
         self.assertEqual(request.payload_json["channel_id"], "c1")
         self.assertEqual(request.payload_json["user_id"], "user1")
@@ -98,15 +131,21 @@ class DiscordWebhookRouteTests(unittest.IsolatedAsyncioTestCase):
         patched["notify_webhook_job_enqueued"].assert_called_once()
         session.commit.assert_called_once()
 
-    async def test_command_subject_key_uses_channel_scope_even_when_followup_exists(self) -> None:
-        tenant = SimpleNamespace(is_enabled=True, discord_config={})
+    async def test_command_subject_key_uses_channel_scope_even_when_followup_exists(
+        self,
+    ) -> None:
+        tenant = SimpleNamespace(
+            is_enabled=True, discord_config={"command_secret_ref": "ref"}
+        )
         _, _, patched = await self._call(
             payload={"user_id": "user1", "command": "!reply", "channel_id": "c1"},
             tenant=tenant,
-            _resolve_discord_command_subject_key=MagicMock(return_value="discord_channel:example:c1"),
+            _resolve_discord_command_subject_key=MagicMock(
+                return_value="discord_channel:example-workspace:c1"
+            ),
         )
         request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
-        self.assertEqual(request.subject_key, "discord_channel:example:c1")
+        self.assertEqual(request.subject_key, "discord_channel:example-workspace:c1")
 
 
 if __name__ == "__main__":

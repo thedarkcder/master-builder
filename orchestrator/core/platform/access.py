@@ -76,5 +76,9 @@ def compute_permission_snapshot(
     if PERMISSION_TECHNICAL_ACCESS not in merged:
         effective_mode = MODE_NON_TECHNICAL
     else:
-        effective_mode = requested_mode if requested_mode in VALID_MODE_KEYS else MODE_TECHNICAL
-    return TenantPermissionSnapshot(permission_keys=tuple(sorted(merged)), effective_mode=effective_mode)
+        effective_mode = (
+            requested_mode if requested_mode in VALID_MODE_KEYS else MODE_TECHNICAL
+        )
+    return TenantPermissionSnapshot(
+        permission_keys=tuple(sorted(merged)), effective_mode=effective_mode
+    )

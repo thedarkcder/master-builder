@@ -4,7 +4,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin import integration_dependencies as deps
-from orchestrator.api.admin.jira_webhook_helpers import jira_webhook_callback_url, parse_managed_webhook_ids
+from orchestrator.api.admin.jira_webhook_helpers import (
+    jira_webhook_callback_url,
+    parse_managed_webhook_ids,
+)
 from orchestrator.api.admin.jira_webhook_response_helpers import (
     build_jira_webhook_diagnostics as build_jira_webhook_diagnostics_impl,
 )
@@ -21,7 +24,10 @@ from orchestrator.storage.models import Tenant
 router = APIRouter(prefix="/api/admin", tags=["admin", "atlassian-webhooks"])
 
 
-@router.get("/tenants/{tenant_id}/atlassian/jira/webhooks/diagnostics", response_model=JiraWebhookDiagnosticsRead)
+@router.get(
+    "/tenants/{tenant_id}/atlassian/jira/webhooks/diagnostics",
+    response_model=JiraWebhookDiagnosticsRead,
+)
 def get_jira_webhook_diagnostics(
     tenant_id: str,
     within_minutes: int = Query(default=60, ge=1, le=1440),
@@ -40,7 +46,10 @@ def get_jira_webhook_diagnostics(
     )
 
 
-@router.post("/tenants/{tenant_id}/atlassian/jira/webhooks/provision", response_model=JiraWebhookActionResult)
+@router.post(
+    "/tenants/{tenant_id}/atlassian/jira/webhooks/provision",
+    response_model=JiraWebhookActionResult,
+)
 def provision_tenant_jira_webhook(
     tenant_id: str,
     _: str = Depends(require_admin),
@@ -56,7 +65,10 @@ def provision_tenant_jira_webhook(
     )
 
 
-@router.post("/tenants/{tenant_id}/atlassian/jira/webhooks/reset", response_model=JiraWebhookActionResult)
+@router.post(
+    "/tenants/{tenant_id}/atlassian/jira/webhooks/reset",
+    response_model=JiraWebhookActionResult,
+)
 def reset_tenant_jira_webhook(
     tenant_id: str,
     _: str = Depends(require_admin),

@@ -6,11 +6,25 @@ from types import SimpleNamespace
 import pytest
 
 from orchestrator.core.observability.audit import record_audit_event
-from orchestrator.core.observability.observability_stream import record_observability_stream_event
-from orchestrator.core.observability.repository import configure_product_event_repository_for_tests, event_from_json
-from orchestrator.core.observability.events import list_product_events, reset_event_store_for_tests
-from orchestrator.core.runtime.invocation import AgentInvocationContext, _emit_invocation_event, invoke_runtime_json
-from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.observability.observability_stream import (
+    record_observability_stream_event,
+)
+from orchestrator.core.observability.repository import (
+    configure_product_event_repository_for_tests,
+    event_from_json,
+)
+from orchestrator.core.observability.events import (
+    list_product_events,
+    reset_event_store_for_tests,
+)
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    _emit_invocation_event,
+    invoke_runtime_json,
+)
+from orchestrator.core.workflow.operation_service import (
+    WorkflowOperationAttemptAlreadyRunningError,
+)
 from orchestrator.core.workflow.step_runner import start_workflow_step_attempt
 from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
@@ -24,9 +38,16 @@ from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.test_support.product_events import RecordingProductEventRepository
 
 
+class FailingProductEventRepository(RecordingProductEventRepository):
+    def insert_event(self, row):  # noqa: ANN001
+        raise TimeoutError("timed out")
+
+
 class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
     def setUp(self) -> None:
-        self.database_url = self._prepare_test_database(name_prefix="operation-observability-contracts")
+        self.database_url = self._prepare_test_database(
+            name_prefix="operation-observability-contracts"
+        )
 
     def tearDown(self) -> None:
         reset_event_store_for_tests()
@@ -74,10 +95,14 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                     payload={},
                 )
 
-    def test_run_scoped_runtime_invocation_event_is_persisted_without_operation(self) -> None:
+    def test_run_scoped_runtime_invocation_event_is_persisted_without_operation(
+        self,
+    ) -> None:
         session_factory = create_session_factory(self.database_url)
         with session_factory() as session:
-            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            workflow_type = get_workflow_type(
+                session, workflow_type_key="parent_planning"
+            )
             assert workflow_type is not None
             projection = ensure_workflow_execution(
                 session=session,
@@ -86,7 +111,9 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                 project_id="tenant-a-default",
                 execution=WorkflowExecutionReference(
                     key="MAB-900",
-                    source=WorkflowSourceReference(source_system="jira", source_ref="MAB-900"),
+                    source=WorkflowSourceReference(
+                        source_system="jira", source_ref="MAB-900"
+                    ),
                 ),
                 display_name="Run scoped telemetry",
                 description="Runtime invocation without workflow operation",
@@ -131,7 +158,9 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setattr(
                 "orchestrator.core.runtime.invocation.get_settings",
-                lambda: SimpleNamespace(database_url=self.database_url, agent_id="agent-test"),
+                lambda: SimpleNamespace(
+                    database_url=self.database_url, agent_id="agent-test"
+                ),
             )
             configure_product_event_repository_for_tests(repository)
             _emit_invocation_event(
@@ -146,7 +175,11 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                     invocation_id="inv-run-scoped",
                 ),
                 event_kind="stage_request",
-                payload={"message": "Submitted runtime request.", "system_prompt": "system", "user_prompt": "user"},
+                payload={
+                    "message": "Submitted runtime request.",
+                    "system_prompt": "system",
+                    "user_prompt": "user",
+                },
             )
 
         assert repository.inserted
@@ -164,13 +197,17 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
             command = "test-runtime"
 
             def run_json(self, **kwargs):  # noqa: ANN003
-                kwargs["on_log_line"]("stdout", "runtime line attached to uncommitted attempt")
+                kwargs["on_log_line"](
+                    "stdout", "runtime line attached to uncommitted attempt"
+                )
                 return {"ok": True}
 
         with pytest.MonkeyPatch.context() as monkeypatch:
             monkeypatch.setattr(
                 "orchestrator.core.runtime.invocation.get_settings",
-                lambda: SimpleNamespace(database_url=self.database_url, agent_id="agent-test"),
+                lambda: SimpleNamespace(
+                    database_url=self.database_url, agent_id="agent-test"
+                ),
             )
             configure_product_event_repository_for_tests(repository)
             with session_factory() as session:
@@ -207,7 +244,9 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                         ),
                     ]
                 )
-                workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+                workflow_type = get_workflow_type(
+                    session, workflow_type_key="parent_planning"
+                )
                 projection = ensure_workflow_execution(
                     session=session,
                     workflow_type=workflow_type,
@@ -215,14 +254,20 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                     project_id="project-runtime",
                     execution=WorkflowExecutionReference(
                         key="MAB-901",
-                        source=WorkflowSourceReference(source_system="jira", source_ref="MAB-901"),
+                        source=WorkflowSourceReference(
+                            source_system="jira", source_ref="MAB-901"
+                        ),
                     ),
                     display_name="Operation runtime telemetry",
                     description="Runtime invocation with operation attempt",
                 )
-                step = start_workflow_step_attempt(lifecycle=projection, operation_type="backlog_planning")
+                step = start_workflow_step_attempt(
+                    lifecycle=projection, operation_type="backlog_planning"
+                )
                 with session_factory() as observer_session:
-                    committed_attempt = observer_session.get(WorkflowOperationAttempt, step.attempt_id)
+                    committed_attempt = observer_session.get(
+                        WorkflowOperationAttempt, step.attempt_id
+                    )
                     assert committed_attempt is not None
                     assert committed_attempt.status == "running"
 
@@ -248,16 +293,97 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                 )
 
         assert payload == {"ok": True}
-        assert any(row.message == "runtime line attached to uncommitted attempt" for row in repository.inserted)
-        runtime_line = next(row for row in repository.inserted if row.message == "runtime line attached to uncommitted attempt")
+        assert any(
+            row.message == "runtime line attached to uncommitted attempt"
+            for row in repository.inserted
+        )
+        runtime_line = next(
+            row
+            for row in repository.inserted
+            if row.message == "runtime line attached to uncommitted attempt"
+        )
         assert runtime_line.operation_id == step.operation_id
         assert runtime_line.attempt_id == step.attempt_id
+
+    def test_operation_attempt_start_survives_downstream_observability_timeout(
+        self,
+    ) -> None:
+        session_factory = create_session_factory(self.database_url)
+
+        with pytest.MonkeyPatch.context():
+            configure_product_event_repository_for_tests(
+                FailingProductEventRepository()
+            )
+            with session_factory() as session:
+                now = datetime.now(timezone.utc)
+                session.add_all(
+                    [
+                        Tenant(
+                            tenant_id="tenant-observability-timeout",
+                            name="Tenant Observability Timeout",
+                            is_enabled=True,
+                            jira_config={},
+                            github_config={},
+                            repos_config={},
+                            policy_config={},
+                            discord_config={},
+                            experience_config={},
+                            setup_state={},
+                            created_at=now,
+                            updated_at=now,
+                        ),
+                        Project(
+                            project_id="project-observability-timeout",
+                            tenant_id="tenant-observability-timeout",
+                            name="Project Observability Timeout",
+                            github_repository="example/project-observability-timeout",
+                            jira_project_key="MAB",
+                            policy_overrides={},
+                            environment={},
+                            secret_refs={},
+                            discord_config=None,
+                            is_archived=False,
+                            created_at=now,
+                            updated_at=now,
+                        ),
+                    ]
+                )
+                workflow_type = get_workflow_type(
+                    session, workflow_type_key="parent_planning"
+                )
+                projection = ensure_workflow_execution(
+                    session=session,
+                    workflow_type=workflow_type,
+                    tenant_id="tenant-observability-timeout",
+                    project_id="project-observability-timeout",
+                    execution=WorkflowExecutionReference(
+                        key="MAB-903",
+                        source=WorkflowSourceReference(
+                            source_system="jira", source_ref="MAB-903"
+                        ),
+                    ),
+                    display_name="Observability timeout",
+                    description="Operation attempts persist when ClickHouse times out",
+                )
+                step = start_workflow_step_attempt(
+                    lifecycle=projection, operation_type="backlog_planning"
+                )
+                session.commit()
+
+            with session_factory() as observer_session:
+                committed_attempt = observer_session.get(
+                    WorkflowOperationAttempt, step.attempt_id
+                )
+                assert committed_attempt is not None
+                assert committed_attempt.status == "running"
 
     def test_workflow_step_attempt_rejects_existing_waiting_attempt(self) -> None:
         session_factory = create_session_factory(self.database_url)
 
         with pytest.MonkeyPatch.context():
-            configure_product_event_repository_for_tests(RecordingProductEventRepository())
+            configure_product_event_repository_for_tests(
+                RecordingProductEventRepository()
+            )
             with session_factory() as session:
                 now = datetime.now(timezone.utc)
                 session.add_all(
@@ -292,7 +418,9 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                         ),
                     ]
                 )
-                workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+                workflow_type = get_workflow_type(
+                    session, workflow_type_key="parent_planning"
+                )
                 projection = ensure_workflow_execution(
                     session=session,
                     workflow_type=workflow_type,
@@ -300,19 +428,28 @@ class OperationObservabilityContractTests(SqliteTemplateDbTestCase):
                     project_id="project-waiting-attempt",
                     execution=WorkflowExecutionReference(
                         key="MAB-902",
-                        source=WorkflowSourceReference(source_system="jira", source_ref="MAB-902"),
+                        source=WorkflowSourceReference(
+                            source_system="jira", source_ref="MAB-902"
+                        ),
                     ),
                     display_name="Waiting attempt",
                     description="Reject duplicate active attempts",
                 )
-                step = start_workflow_step_attempt(lifecycle=projection, operation_type="backlog_planning")
+                step = start_workflow_step_attempt(
+                    lifecycle=projection, operation_type="backlog_planning"
+                )
                 attempt = session.get(WorkflowOperationAttempt, step.attempt_id)
                 assert attempt is not None
                 attempt.status = "waiting_for_input"
                 session.commit()
 
-                with pytest.raises(WorkflowOperationAttemptAlreadyRunningError, match="already has active attempt"):
-                    start_workflow_step_attempt(lifecycle=projection, operation_type="backlog_planning")
+                with pytest.raises(
+                    WorkflowOperationAttemptAlreadyRunningError,
+                    match="already has active attempt",
+                ):
+                    start_workflow_step_attempt(
+                        lifecycle=projection, operation_type="backlog_planning"
+                    )
 
     def test_clickhouse_naive_timestamp_is_returned_as_utc_aware_iso(self) -> None:
         repository = RecordingProductEventRepository(

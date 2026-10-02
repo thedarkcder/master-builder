@@ -3,12 +3,16 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from orchestrator.core.runtime.agent_runtime_resolver import _resolve_agent_execution_profiles
+from orchestrator.core.runtime.agent_runtime_resolver import (
+    _resolve_agent_execution_profiles,
+)
 from orchestrator.core.config import Settings
 
 
 class AgentRuntimeResolverTests(unittest.TestCase):
-    def test_default_engineering_profile_does_not_depend_on_global_codex_model_setting(self) -> None:
+    def test_default_engineering_profile_does_not_depend_on_global_codex_model_setting(
+        self,
+    ) -> None:
         settings = SimpleNamespace(
             codex_cli_command="codex",
             codex_reasoning_effort="high",
@@ -33,7 +37,9 @@ class AgentRuntimeResolverTests(unittest.TestCase):
         self.assertEqual(profile.model, "gpt-5.4")
         self.assertEqual(profile.reasoning_effort, "high")
 
-    def test_platform_general_planning_profile_preserves_custom_model_for_retro_selector(self) -> None:
+    def test_platform_general_planning_profile_preserves_custom_model_for_retro_selector(
+        self,
+    ) -> None:
         settings = Settings(
             codex_reasoning_effort="high",
         )
@@ -61,7 +67,9 @@ class AgentRuntimeResolverTests(unittest.TestCase):
         self.assertEqual(profile.model, "openai/gpt-oss-20b")
         self.assertEqual(profile.reasoning_effort, "high")
 
-    def test_platform_general_planning_profile_preserves_custom_model_for_standup_selector(self) -> None:
+    def test_platform_general_planning_profile_preserves_custom_model_for_standup_selector(
+        self,
+    ) -> None:
         settings = Settings(
             codex_reasoning_effort="high",
         )

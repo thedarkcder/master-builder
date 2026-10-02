@@ -10,13 +10,24 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision.types import DecisionClassification, DecisionQuestionKind
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
-from orchestrator.core.runtime.payload_models import InteractionAction, InteractionResponse
+from orchestrator.core.decision.types import (
+    DecisionClassification,
+    DecisionQuestionKind,
+)
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
+from orchestrator.core.runtime.payload_models import (
+    InteractionAction,
+    InteractionResponse,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.decision.state_repository import existing_case_for_issue
-from orchestrator.core.decision.question_state import unresolved_question_ids_for_question_set
+from orchestrator.core.decision.question_state import (
+    unresolved_question_ids_for_question_set,
+)
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
@@ -72,33 +83,45 @@ def active_case_and_cycle_for_issue(
 
 
 def list_cycle_answers(*, session: Session, cycle_id: str) -> list[DecisionAnswer]:
-    return session.execute(
-        select(DecisionAnswer)
-        .where(DecisionAnswer.cycle_id == cycle_id)
-        .order_by(DecisionAnswer.created_at.asc())
-    ).scalars().all()
+    return (
+        session.execute(
+            select(DecisionAnswer)
+            .where(DecisionAnswer.cycle_id == cycle_id)
+            .order_by(DecisionAnswer.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
 
 
 def accepted_cycle_answers(*, session: Session, cycle_id: str) -> list[DecisionAnswer]:
-    return session.execute(
-        select(DecisionAnswer)
-        .where(
-            DecisionAnswer.cycle_id == cycle_id,
-            DecisionAnswer.status == "accepted",
+    return (
+        session.execute(
+            select(DecisionAnswer)
+            .where(
+                DecisionAnswer.cycle_id == cycle_id,
+                DecisionAnswer.status == "accepted",
+            )
+            .order_by(DecisionAnswer.accepted_at.asc(), DecisionAnswer.created_at.asc())
         )
-        .order_by(DecisionAnswer.accepted_at.asc(), DecisionAnswer.created_at.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def recorded_cycle_answers(*, session: Session, cycle_id: str) -> list[DecisionAnswer]:
-    return session.execute(
-        select(DecisionAnswer)
-        .where(
-            DecisionAnswer.cycle_id == cycle_id,
-            DecisionAnswer.status.in_(("answered", "accepted")),
+    return (
+        session.execute(
+            select(DecisionAnswer)
+            .where(
+                DecisionAnswer.cycle_id == cycle_id,
+                DecisionAnswer.status.in_(("answered", "accepted")),
+            )
+            .order_by(DecisionAnswer.created_at.asc())
         )
-        .order_by(DecisionAnswer.created_at.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
 
 def latest_recorded_answers_for_issue(
@@ -107,15 +130,21 @@ def latest_recorded_answers_for_issue(
     tenant_id: str,
     issue_key: str,
 ) -> list[DecisionAnswer]:
-    rows = session.execute(
-        select(DecisionAnswer)
-        .where(
-            DecisionAnswer.tenant_id == tenant_id,
-            DecisionAnswer.issue_key == issue_key,
-            DecisionAnswer.status.in_(("answered", "accepted")),
+    rows = (
+        session.execute(
+            select(DecisionAnswer)
+            .where(
+                DecisionAnswer.tenant_id == tenant_id,
+                DecisionAnswer.issue_key == issue_key,
+                DecisionAnswer.status.in_(("answered", "accepted")),
+            )
+            .order_by(
+                DecisionAnswer.updated_at.desc(), DecisionAnswer.created_at.desc()
+            )
         )
-        .order_by(DecisionAnswer.updated_at.desc(), DecisionAnswer.created_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     latest_by_question_id: dict[str, DecisionAnswer] = {}
     for answer in rows:
         question_id = str(answer.question_id or "").strip()
@@ -125,13 +154,18 @@ def latest_recorded_answers_for_issue(
     return sorted(
         latest_by_question_id.values(),
         key=lambda answer: (
-            answer.accepted_at or answer.answered_at or answer.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            answer.accepted_at
+            or answer.answered_at
+            or answer.created_at
+            or datetime.min.replace(tzinfo=timezone.utc),
             str(answer.question_id or "").strip(),
         ),
     )
 
 
-def serialize_recorded_answers_for_policy(answers: list[DecisionAnswer]) -> list[dict[str, str]]:
+def serialize_recorded_answers_for_policy(
+    answers: list[DecisionAnswer],
+) -> list[dict[str, str]]:
     serialized: list[dict[str, str]] = []
     for answer in answers:
         status = str(answer.status or "").strip()
@@ -141,7 +175,8 @@ def serialize_recorded_answers_for_policy(answers: list[DecisionAnswer]) -> list
         serialized.append(
             {
                 "question_id": str(answer.question_id or "").strip(),
-                "question_kind": str(answer.question_kind or "").strip() or "decision_gate",
+                "question_kind": str(answer.question_kind or "").strip()
+                or "decision_gate",
                 "question_text": str(answer.question_text or "").strip(),
                 "status": status,
                 "answer": value,
@@ -159,11 +194,17 @@ def accepted_question_ids_for_cycle(*, session: Session, cycle_id: str) -> set[s
 
 
 def frozen_question_ids_for_cycle(*, cycle: DecisionCycle) -> list[str]:
-    return unresolved_question_ids_for_question_set(question_set=cycle.question_set_json)
+    return unresolved_question_ids_for_question_set(
+        question_set=cycle.question_set_json
+    )
 
 
-def unresolved_question_ids_for_cycle(*, session: Session, cycle: DecisionCycle) -> tuple[str, ...]:
-    accepted_ids = accepted_question_ids_for_cycle(session=session, cycle_id=cycle.cycle_id)
+def unresolved_question_ids_for_cycle(
+    *, session: Session, cycle: DecisionCycle
+) -> tuple[str, ...]:
+    accepted_ids = accepted_question_ids_for_cycle(
+        session=session, cycle_id=cycle.cycle_id
+    )
     return tuple(
         question_id
         for question_id in frozen_question_ids_for_cycle(cycle=cycle)
@@ -202,7 +243,9 @@ def _reply_dedupe_key(
 ) -> str:
     if source_ref:
         return f"{source_transport}:{cycle_id}:{source_ref}"
-    digest = hashlib.sha256(reply_text.encode("utf-8", errors="ignore")).hexdigest()[:24]
+    digest = hashlib.sha256(reply_text.encode("utf-8", errors="ignore")).hexdigest()[
+        :24
+    ]
     return f"{source_transport}:{cycle_id}:text:{digest}"
 
 
@@ -288,31 +331,45 @@ def interpret_decision_reply(
         ),
     )
     try:
-        interaction = InteractionResponse.from_payload(payload, context="Decision reply interaction")
+        interaction = InteractionResponse.from_payload(
+            payload, context="Decision reply interaction"
+        )
         _validate_decision_reply_actions(interaction.actions)
         return interaction
     except RuntimeError as exc:
-        raise CodexRuntimeError(f"Decision reply interpretation returned invalid payload: {exc}") from exc
+        raise CodexRuntimeError(
+            f"Decision reply interpretation returned invalid payload: {exc}"
+        ) from exc
 
 
 def _validate_decision_reply_actions(actions: tuple[InteractionAction, ...]) -> None:
     allowed_action_types = {"capture_decision_answer", "recheck_gate"}
     for action in actions:
         if action.type not in allowed_action_types:
-            raise RuntimeError(f"Decision reply returned unsupported action type {action.type!r}")
+            raise RuntimeError(
+                f"Decision reply returned unsupported action type {action.type!r}"
+            )
         if action.type == "recheck_gate":
             if action.payload:
-                raise RuntimeError("Decision reply recheck_gate action payload must be empty")
+                raise RuntimeError(
+                    "Decision reply recheck_gate action payload must be empty"
+                )
             continue
         question_id = str(action.payload.get("question_id") or "").strip()
         status = str(action.payload.get("status") or "").strip().lower()
         answer = str(action.payload.get("answer") or "").strip()
         if not question_id:
-            raise RuntimeError("Decision reply capture_decision_answer action missing question_id")
+            raise RuntimeError(
+                "Decision reply capture_decision_answer action missing question_id"
+            )
         if status not in {"answered", "accepted"}:
-            raise RuntimeError("Decision reply capture_decision_answer action has invalid status")
+            raise RuntimeError(
+                "Decision reply capture_decision_answer action has invalid status"
+            )
         if not answer:
-            raise RuntimeError("Decision reply capture_decision_answer action missing answer")
+            raise RuntimeError(
+                "Decision reply capture_decision_answer action missing answer"
+            )
 
 
 def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
@@ -338,7 +395,11 @@ def _resolved_decision_answer_status(
 ) -> str:
     _ = question_id, question_kind, question_text, answer_text
     normalized_status = str(requested_status or "").strip().lower()
-    return normalized_status if normalized_status in {"answered", "accepted"} else "answered"
+    return (
+        normalized_status
+        if normalized_status in {"answered", "accepted"}
+        else "answered"
+    )
 
 
 def _feedback_for_cycle_questions(
@@ -368,7 +429,11 @@ def _feedback_for_cycle_questions(
         answer = answer_lookup.get(question_id)
         metadata = dict(answer.metadata_json or {}) if answer is not None else {}
         note = str(metadata.get("notes") or "").strip()
-        status = str(answer.status or "").strip().lower() if answer is not None else item_status or "open"
+        status = (
+            str(answer.status or "").strip().lower()
+            if answer is not None
+            else item_status or "open"
+        )
         if status == "accepted":
             continue
         row: dict[str, str] = {
@@ -381,14 +446,18 @@ def _feedback_for_cycle_questions(
         detail = str(item.get("detail") or "").strip() if isinstance(item, dict) else ""
         if detail and not note:
             row["note"] = detail
-        answer_text = str(answer.normalized_answer or "").strip() if answer is not None else ""
+        answer_text = (
+            str(answer.normalized_answer or "").strip() if answer is not None else ""
+        )
         if answer_text:
             row["answer"] = answer_text
         feedback.append(row)
     return tuple(feedback)
 
 
-def unresolved_question_feedback_for_cycle(*, session: Session, cycle_id: str) -> tuple[dict[str, str], ...]:
+def unresolved_question_feedback_for_cycle(
+    *, session: Session, cycle_id: str
+) -> tuple[dict[str, str], ...]:
     cycle = session.get(DecisionCycle, cycle_id)
     if cycle is None:
         return ()
@@ -476,9 +545,16 @@ def sync_cycle_answers_from_planner(
             "notes": detail or None,
         }
         if latest_evidence is not None:
-            evidence_ids = [str(value).strip() for value in existing.evidence_ids_json if str(value).strip()]
+            evidence_ids = [
+                str(value).strip()
+                for value in existing.evidence_ids_json
+                if str(value).strip()
+            ]
             if latest_evidence.evidence_id not in evidence_ids:
-                existing.evidence_ids_json = [*evidence_ids, latest_evidence.evidence_id]
+                existing.evidence_ids_json = [
+                    *evidence_ids,
+                    latest_evidence.evidence_id,
+                ]
             existing.source_transport = latest_evidence.source_transport
             existing.source_ref = latest_evidence.source_ref
 
@@ -577,14 +653,22 @@ def capture_decision_reply(
         tenant=tenant,
         project=project,
         issue_key=issue_key,
-        issue_summary=str(case.metadata_json.get("issue_summary") or "") if isinstance(case.metadata_json, dict) else "",
-        issue_description=str(case.metadata_json.get("issue_description") or "") if isinstance(case.metadata_json, dict) else "",
+        issue_summary=str(case.metadata_json.get("issue_summary") or "")
+        if isinstance(case.metadata_json, dict)
+        else "",
+        issue_description=str(case.metadata_json.get("issue_description") or "")
+        if isinstance(case.metadata_json, dict)
+        else "",
         cycle=cycle,
         reply_text=reply_text,
         existing_answers=existing_answers,
     )
     _validate_decision_reply_actions(interpretation.actions)
-    capture_actions = [action for action in interpretation.actions if action.type == "capture_decision_answer"]
+    capture_actions = [
+        action
+        for action in interpretation.actions
+        if action.type == "capture_decision_answer"
+    ]
     if not capture_actions:
         raise ValueError("Decision reply interaction has no answer evidence to capture")
     matches = [
@@ -661,7 +745,11 @@ def capture_decision_reply(
             **dict(answer.metadata_json or {}),
             "notes": notes or None,
         }
-        evidence_ids = [str(value).strip() for value in answer.evidence_ids_json if str(value).strip()]
+        evidence_ids = [
+            str(value).strip()
+            for value in answer.evidence_ids_json
+            if str(value).strip()
+        ]
         if evidence.evidence_id not in evidence_ids:
             answer.evidence_ids_json = [*evidence_ids, evidence.evidence_id]
         answer.source_transport = source_transport
@@ -720,5 +808,7 @@ def capture_decision_reply(
         answered_question_ids=tuple(sorted(set(answered_question_ids))),
         evidence_id=evidence.evidence_id,
         effect_ids=tuple({comment_effect_id, *kb_effect_ids}),
-        unresolved_question_feedback=_feedback_for_cycle_questions(cycle=cycle, answers=updated_answers),
+        unresolved_question_feedback=_feedback_for_cycle_questions(
+            cycle=cycle, answers=updated_answers
+        ),
     )

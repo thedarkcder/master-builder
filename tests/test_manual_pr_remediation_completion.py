@@ -57,7 +57,9 @@ def test_build_manual_completion_actions_for_review_comment() -> None:
             }
         ),
     )
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/org/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/org/repo"
+    )
 
     actions = build_manual_pr_remediation_completion_actions(
         project=project,
@@ -96,7 +98,9 @@ def test_build_manual_completion_actions_for_issue_comment() -> None:
             }
         ),
     )
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/org/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/org/repo"
+    )
 
     actions = build_manual_pr_remediation_completion_actions(
         project=project,
@@ -122,12 +126,21 @@ def test_build_manual_completion_actions_skips_legacy_plan_shape() -> None:
         plan={
             "trigger_context": {
                 "pr_number": 10,
-                "manual_fix_request": {"requested_by": "alice", "instruction_text": "fix this"},
-                "requested_comment": {"type": "review_comment", "id": 9001, "url": "https://github.com/comment"},
+                "manual_fix_request": {
+                    "requested_by": "alice",
+                    "instruction_text": "fix this",
+                },
+                "requested_comment": {
+                    "type": "review_comment",
+                    "id": 9001,
+                    "url": "https://github.com/comment",
+                },
             }
         },
     )
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/org/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/org/repo"
+    )
 
     actions = build_manual_pr_remediation_completion_actions(
         project=project,
@@ -141,7 +154,9 @@ def test_build_manual_completion_actions_skips_legacy_plan_shape() -> None:
 
 def test_publish_manual_completion_noops_when_remediation_context_missing() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={"mode": "github_app"})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/org/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/org/repo"
+    )
     run = SimpleNamespace(
         tenant_id="tenant-1",
         issue_key="GP-10",
@@ -171,7 +186,9 @@ def test_publish_manual_completion_noops_when_remediation_context_missing() -> N
 
 def test_publish_manual_completion_raises_when_github_config_missing() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/org/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/org/repo"
+    )
     run = SimpleNamespace(
         tenant_id="tenant-1",
         issue_key="GP-10",
@@ -182,8 +199,15 @@ def test_publish_manual_completion_raises_when_github_config_missing() -> None:
         plan=_plan_with_trigger_context(
             {
                 "pr_number": 10,
-                "manual_fix_request": {"requested_by": "alice", "instruction_text": "fix this"},
-                "requested_comment": {"type": "review_comment", "id": 9001, "url": "https://github.com/comment"},
+                "manual_fix_request": {
+                    "requested_by": "alice",
+                    "instruction_text": "fix this",
+                },
+                "requested_comment": {
+                    "type": "review_comment",
+                    "id": 9001,
+                    "url": "https://github.com/comment",
+                },
             }
         ),
     )
@@ -211,7 +235,9 @@ def test_publish_manual_completion_raises_when_github_config_missing() -> None:
 
 def test_publish_manual_completion_raises_when_transport_execution_fails() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={"mode": "github_app"})
-    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/org/repo")
+    project = SimpleNamespace(
+        project_id="project-1", github_repository="https://github.com/org/repo"
+    )
     run = SimpleNamespace(
         tenant_id="tenant-1",
         issue_key="GP-10",
@@ -222,8 +248,15 @@ def test_publish_manual_completion_raises_when_transport_execution_fails() -> No
         plan=_plan_with_trigger_context(
             {
                 "pr_number": 10,
-                "manual_fix_request": {"requested_by": "alice", "instruction_text": "fix this"},
-                "requested_comment": {"type": "review_comment", "id": 9001, "url": "https://github.com/comment"},
+                "manual_fix_request": {
+                    "requested_by": "alice",
+                    "instruction_text": "fix this",
+                },
+                "requested_comment": {
+                    "type": "review_comment",
+                    "id": 9001,
+                    "url": "https://github.com/comment",
+                },
             }
         ),
     )

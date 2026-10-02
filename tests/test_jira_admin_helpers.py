@@ -18,13 +18,15 @@ from orchestrator.api.schemas import JiraWebhookActionResult
 class JiraWebhookHelpersTests(unittest.TestCase):
     def test_default_ready_jql_and_filter(self) -> None:
         ready_jql = jira_webhook_helpers.default_ready_jql(
-            project_keys=["MAB", "example"],
+            project_keys=["MAB", "DEMO"],
             ready_statuses=["Ready", "Todo"],
         )
-        self.assertIn('project in ("MAB", "example")', ready_jql)
+        self.assertIn('project in ("MAB", "DEMO")', ready_jql)
 
-        filter_jql = jira_webhook_helpers.jira_webhook_filter_jql({"project_keys": ["MAB", " example "]})
-        self.assertEqual(filter_jql, 'project in ("MAB", "example") ORDER BY updated DESC')
+        filter_jql = jira_webhook_helpers.jira_webhook_filter_jql(
+            {"project_keys": ["MAB", " DEMO "]}
+        )
+        self.assertEqual(filter_jql, 'project in ("MAB", "DEMO") ORDER BY updated DESC')
 
         with self.assertRaises(ValueError):
             jira_webhook_helpers.jira_webhook_filter_jql({"project_keys": []})
@@ -35,27 +37,37 @@ class JiraWebhookHelpersTests(unittest.TestCase):
         self.assertIsNone(jira_webhook_helpers.parse_jira_webhook_id(""))
         self.assertIsNone(jira_webhook_helpers.parse_jira_webhook_id("abc"))
         self.assertEqual(
-            jira_webhook_helpers.parse_managed_webhook_ids({"managed_webhook_ids": ["1", "x", 2, ""]}),
+            jira_webhook_helpers.parse_managed_webhook_ids(
+                {"managed_webhook_ids": ["1", "x", 2, ""]}
+            ),
             [1, 2],
         )
 
     def test_error_helpers(self) -> None:
         limit_exc = Exception("Maximum of 5 webhooks is allowed per app per user")
         self.assertTrue(jira_webhook_helpers.is_jira_webhook_limit_error(limit_exc))
-        single_url_exc = Exception("Only a single URL per user is allowed to be registered via REST API")
-        self.assertTrue(jira_webhook_helpers.is_jira_webhook_single_url_error(single_url_exc))
+        single_url_exc = Exception(
+            "Only a single URL per user is allowed to be registered via REST API"
+        )
+        self.assertTrue(
+            jira_webhook_helpers.is_jira_webhook_single_url_error(single_url_exc)
+        )
 
         conflict = Exception("The currently used URL: https://example.com/hook)")
         self.assertEqual(
             jira_webhook_helpers.extract_jira_webhook_conflict_url(conflict),
             "https://example.com/hook",
         )
-        self.assertIsNone(jira_webhook_helpers.extract_jira_webhook_conflict_url(Exception("no url")))
+        self.assertIsNone(
+            jira_webhook_helpers.extract_jira_webhook_conflict_url(Exception("no url"))
+        )
 
     def test_callback_url(self) -> None:
         settings = SimpleNamespace(public_api_base_url="https://api.example.com/")
         self.assertEqual(
-            jira_webhook_helpers.jira_webhook_callback_url(settings=settings, tenant_id="route/25"),
+            jira_webhook_helpers.jira_webhook_callback_url(
+                settings=settings, tenant_id="route/25"
+            ),
             "https://api.example.com/jira/webhook/route%2F25",
         )
 
@@ -70,13 +82,19 @@ class JiraWebhookResponseHelpersTests(unittest.TestCase):
         )
         self.assertEqual(
             jira_webhook_response_helpers.jira_webhook_action_status_code(
-                JiraWebhookActionResult(ok=False, action="x", details="Atlassian connection is not linked")
+                JiraWebhookActionResult(
+                    ok=False, action="x", details="Atlassian connection is not linked"
+                )
             ),
             400,
         )
         self.assertEqual(
             jira_webhook_response_helpers.jira_webhook_action_status_code(
-                JiraWebhookActionResult(ok=False, action="x", details="Configured Atlassian connection was not found")
+                JiraWebhookActionResult(
+                    ok=False,
+                    action="x",
+                    details="Configured Atlassian connection was not found",
+                )
             ),
             400,
         )
@@ -91,7 +109,7 @@ class JiraWebhookResponseHelpersTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         recent = (now - timedelta(minutes=5)).isoformat()
         diagnostics = jira_webhook_response_helpers.build_jira_webhook_diagnostics(
-            tenant_id="example",
+            tenant_id="example-workspace",
             within_minutes=10,
             jira_config={
                 "connection_id": "conn-1",
@@ -108,7 +126,7 @@ class JiraWebhookResponseHelpersTests(unittest.TestCase):
         self.assertEqual(diagnostics.managed_webhook_ids, [1, 2])
 
         stale = jira_webhook_response_helpers.build_jira_webhook_diagnostics(
-            tenant_id="example",
+            tenant_id="example-workspace",
             within_minutes=1,
             jira_config={"webhook_last_received_at": "invalid"},
             settings=SimpleNamespace(),
@@ -128,15 +146,22 @@ class AtlassianOAuthHelpersTests(unittest.TestCase):
             return_value="value",
         ) as resolve_secret_mock:
             self.assertEqual(
-                atlassian_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings, tenant_id="t"),
+                atlassian_oauth_helpers.resolve_secret_ref(
+                    session, ref_name="ref", settings=settings, tenant_id="t"
+                ),
                 "value",
             )
         resolve_secret_mock.assert_called_once()
         self.assertEqual(resolve_secret_mock.call_args.kwargs["secret_ref"], "ref")
 
-        with patch("orchestrator.api.admin.atlassian_oauth_helpers.resolve_platform_secret_ref", return_value=""):
+        with patch(
+            "orchestrator.api.admin.atlassian_oauth_helpers.resolve_platform_secret_ref",
+            return_value="",
+        ):
             with self.assertRaises(ValueError):
-                atlassian_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings)
+                atlassian_oauth_helpers.resolve_secret_ref(
+                    session, ref_name="ref", settings=settings
+                )
 
     def test_atlassian_oauth_client(self) -> None:
         session = MagicMock()
@@ -150,14 +175,22 @@ class AtlassianOAuthHelpersTests(unittest.TestCase):
                 "orchestrator.api.admin.atlassian_oauth_helpers.resolve_secret_ref",
                 side_effect=["cid", "csecret"],
             ),
-            patch("orchestrator.api.admin.atlassian_oauth_helpers.AtlassianOAuthClient", return_value=MagicMock()) as client_cls,
+            patch(
+                "orchestrator.api.admin.atlassian_oauth_helpers.AtlassianOAuthClient",
+                return_value=MagicMock(),
+            ) as client_cls,
         ):
-            client = atlassian_oauth_helpers.atlassian_oauth_client(session=session, settings=settings, tenant_id="t")
+            client = atlassian_oauth_helpers.atlassian_oauth_client(
+                session=session, settings=settings, tenant_id="t"
+            )
 
         config = client_cls.call_args.args[0]
         self.assertEqual(config.client_id, "cid")
         self.assertEqual(config.client_secret, "csecret")
-        self.assertEqual(config.redirect_uri, "https://api.example.com/api/admin/atlassian/connect/callback")
+        self.assertEqual(
+            config.redirect_uri,
+            "https://api.example.com/api/admin/atlassian/connect/callback",
+        )
         self.assertIsNotNone(client)
 
     def test_refresh_tokens_paths(self) -> None:
@@ -173,7 +206,10 @@ class AtlassianOAuthHelpersTests(unittest.TestCase):
             updated_at=now,
         )
 
-        with patch("orchestrator.api.admin.atlassian_oauth_helpers.decrypt_value", return_value="current-token"):
+        with patch(
+            "orchestrator.api.admin.atlassian_oauth_helpers.decrypt_value",
+            return_value="current-token",
+        ):
             token = atlassian_oauth_helpers.refresh_atlassian_connection_tokens(
                 session,
                 connection=connection,
@@ -197,14 +233,20 @@ class AtlassianOAuthHelpersTests(unittest.TestCase):
         client = MagicMock()
         client.refresh_tokens.return_value = token_set
         with (
-            patch("orchestrator.api.admin.atlassian_oauth_helpers.decrypt_value", return_value="refresh"),
-            patch("orchestrator.api.admin.atlassian_oauth_helpers.encrypt_value", side_effect=["enc-new-access", "enc-new-refresh"]),
+            patch(
+                "orchestrator.api.admin.atlassian_oauth_helpers.decrypt_value",
+                return_value="refresh",
+            ),
+            patch(
+                "orchestrator.api.admin.atlassian_oauth_helpers.encrypt_value",
+                side_effect=["enc-new-access", "enc-new-refresh"],
+            ),
         ):
             token = atlassian_oauth_helpers.refresh_atlassian_connection_tokens(
                 session,
                 connection=expired_connection,
                 settings=settings,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 atlassian_oauth_client_fn=MagicMock(return_value=client),
             )
 
@@ -218,7 +260,7 @@ class AtlassianOAuthHelpersTests(unittest.TestCase):
 class JiraWebhookDeleteTests(unittest.TestCase):
     def test_delete_webhooks_paths(self) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace(tenant_id="example", jira_config={})
+        tenant = SimpleNamespace(tenant_id="example-workspace", jira_config={})
 
         ok, details, ids = jira_webhook_delete.delete_jira_webhooks(
             session=session,
@@ -248,7 +290,10 @@ class JiraWebhookDeleteTests(unittest.TestCase):
 
     def test_delete_webhooks_success_and_error(self) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace(tenant_id="example", jira_config={"connection_id": "conn-1", "managed_webhook_ids": [1]})
+        tenant = SimpleNamespace(
+            tenant_id="example-workspace",
+            jira_config={"connection_id": "conn-1", "managed_webhook_ids": [1]},
+        )
         connection = SimpleNamespace(cloud_id="cloud")
         session.get.return_value = connection
 
@@ -281,12 +326,14 @@ class JiraWebhookDeleteTests(unittest.TestCase):
 
 
 class JiraWebhookProvisionTests(unittest.TestCase):
-    def test_replace_existing_cleans_up_stale_webhooks_after_successful_registration(self) -> None:
+    def test_replace_existing_cleans_up_stale_webhooks_after_successful_registration(
+        self,
+    ) -> None:
         session = MagicMock()
         connection = SimpleNamespace(cloud_id="cloud-1")
         session.get.return_value = connection
         tenant = SimpleNamespace(
-            tenant_id="example",
+            tenant_id="example-workspace",
             jira_config={"connection_id": "conn-1", "managed_webhook_ids": [101, 102]},
             updated_at=None,
         )
@@ -304,10 +351,14 @@ class JiraWebhookProvisionTests(unittest.TestCase):
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
             refresh_atlassian_connection_tokens_fn=MagicMock(return_value="token"),
             atlassian_oauth_client_fn=MagicMock(return_value=client),
-            jira_webhook_callback_url_fn=MagicMock(return_value="https://api.example.com/jira/webhook/example"),
+            jira_webhook_callback_url_fn=MagicMock(
+                return_value="https://api.example.com/jira/webhook/example-workspace"
+            ),
             jira_webhook_filter_jql_fn=MagicMock(return_value='project in ("MAB")'),
             is_jira_webhook_limit_error_fn=MagicMock(return_value=False),
-            cleanup_unmanaged_jira_webhooks_for_connection_fn=MagicMock(return_value=(0, "noop")),
+            cleanup_unmanaged_jira_webhooks_for_connection_fn=MagicMock(
+                return_value=(0, "noop")
+            ),
             parse_jira_webhook_id_fn=jira_webhook_helpers.parse_jira_webhook_id,
             remove_managed_webhook_id_from_tenants_fn=MagicMock(return_value=0),
             is_jira_webhook_single_url_error_fn=MagicMock(return_value=False),
@@ -326,12 +377,14 @@ class JiraWebhookProvisionTests(unittest.TestCase):
         )
         session.commit.assert_called_once()
 
-    def test_replace_existing_keeps_new_registration_when_stale_cleanup_fails(self) -> None:
+    def test_replace_existing_keeps_new_registration_when_stale_cleanup_fails(
+        self,
+    ) -> None:
         session = MagicMock()
         connection = SimpleNamespace(cloud_id="cloud-1")
         session.get.return_value = connection
         tenant = SimpleNamespace(
-            tenant_id="example",
+            tenant_id="example-workspace",
             jira_config={"connection_id": "conn-1", "managed_webhook_ids": [101]},
             updated_at=None,
         )
@@ -350,10 +403,14 @@ class JiraWebhookProvisionTests(unittest.TestCase):
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
             refresh_atlassian_connection_tokens_fn=MagicMock(return_value="token"),
             atlassian_oauth_client_fn=MagicMock(return_value=client),
-            jira_webhook_callback_url_fn=MagicMock(return_value="https://api.example.com/jira/webhook/example"),
+            jira_webhook_callback_url_fn=MagicMock(
+                return_value="https://api.example.com/jira/webhook/example-workspace"
+            ),
             jira_webhook_filter_jql_fn=MagicMock(return_value='project in ("MAB")'),
             is_jira_webhook_limit_error_fn=MagicMock(return_value=False),
-            cleanup_unmanaged_jira_webhooks_for_connection_fn=MagicMock(return_value=(0, "noop")),
+            cleanup_unmanaged_jira_webhooks_for_connection_fn=MagicMock(
+                return_value=(0, "noop")
+            ),
             parse_jira_webhook_id_fn=jira_webhook_helpers.parse_jira_webhook_id,
             remove_managed_webhook_id_from_tenants_fn=MagicMock(return_value=0),
             is_jira_webhook_single_url_error_fn=MagicMock(return_value=False),
@@ -363,7 +420,10 @@ class JiraWebhookProvisionTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.webhook_ids, [300])
-        self.assertIn("Registered new webhook(s) but could not delete 1 previous managed webhook(s)", result.details)
+        self.assertIn(
+            "Registered new webhook(s) but could not delete 1 previous managed webhook(s)",
+            result.details,
+        )
         self.assertEqual(tenant.jira_config["managed_webhook_ids"], [300])
         session.commit.assert_called_once()
 

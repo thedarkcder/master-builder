@@ -22,10 +22,14 @@ def _table_exists(table_name: str) -> bool:
 
 def _index_exists(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
-def _create_index_if_missing(index_name: str, table_name: str, columns: list[str], *, unique: bool = False) -> None:
+def _create_index_if_missing(
+    index_name: str, table_name: str, columns: list[str], *, unique: bool = False
+) -> None:
     if _table_exists(table_name) and not _index_exists(table_name, index_name):
         op.create_index(index_name, table_name, columns, unique=unique)
 
@@ -48,7 +52,12 @@ def upgrade() -> None:
             sa.Column("question_id", sa.String(length=128), nullable=False),
             sa.Column("question_kind", sa.String(length=32), nullable=False),
             sa.Column("question_text", sa.Text(), nullable=False),
-            sa.Column("status", sa.String(length=16), nullable=False, server_default=sa.text("'open'")),
+            sa.Column(
+                "status",
+                sa.String(length=16),
+                nullable=False,
+                server_default=sa.text("'open'"),
+            ),
             sa.Column("normalized_answer", sa.Text(), nullable=True),
             sa.Column("source_transport", sa.String(length=32), nullable=True),
             sa.Column("source_ref", sa.String(length=255), nullable=True),
@@ -58,26 +67,62 @@ def upgrade() -> None:
             sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["case_id"], ["decision_cases.case_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["cycle_id"], ["decision_cycles.cycle_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["case_id"], ["decision_cases.case_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["cycle_id"], ["decision_cycles.cycle_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("answer_id"),
-            sa.UniqueConstraint("cycle_id", "question_id", name="uq_decision_answers_cycle_question"),
+            sa.UniqueConstraint(
+                "cycle_id", "question_id", name="uq_decision_answers_cycle_question"
+            ),
         )
-    _create_index_if_missing("ix_decision_answers_case_id", "decision_answers", ["case_id"])
-    _create_index_if_missing("ix_decision_answers_cycle_id", "decision_answers", ["cycle_id"])
-    _create_index_if_missing("ix_decision_answers_tenant_id", "decision_answers", ["tenant_id"])
-    _create_index_if_missing("ix_decision_answers_project_id", "decision_answers", ["project_id"])
-    _create_index_if_missing("ix_decision_answers_issue_key", "decision_answers", ["issue_key"])
-    _create_index_if_missing("ix_decision_answers_question_id", "decision_answers", ["question_id"])
-    _create_index_if_missing("ix_decision_answers_question_kind", "decision_answers", ["question_kind"])
-    _create_index_if_missing("ix_decision_answers_status", "decision_answers", ["status"])
-    _create_index_if_missing("ix_decision_answers_source_transport", "decision_answers", ["source_transport"])
-    _create_index_if_missing("ix_decision_answers_source_ref", "decision_answers", ["source_ref"])
-    _create_index_if_missing("ix_decision_answers_answered_at", "decision_answers", ["answered_at"])
-    _create_index_if_missing("ix_decision_answers_accepted_at", "decision_answers", ["accepted_at"])
-    _create_index_if_missing("ix_decision_answers_updated_at", "decision_answers", ["updated_at"])
+    _create_index_if_missing(
+        "ix_decision_answers_case_id", "decision_answers", ["case_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_cycle_id", "decision_answers", ["cycle_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_tenant_id", "decision_answers", ["tenant_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_project_id", "decision_answers", ["project_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_issue_key", "decision_answers", ["issue_key"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_question_id", "decision_answers", ["question_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_question_kind", "decision_answers", ["question_kind"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_status", "decision_answers", ["status"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_source_transport", "decision_answers", ["source_transport"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_source_ref", "decision_answers", ["source_ref"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_answered_at", "decision_answers", ["answered_at"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_accepted_at", "decision_answers", ["accepted_at"]
+    )
+    _create_index_if_missing(
+        "ix_decision_answers_updated_at", "decision_answers", ["updated_at"]
+    )
 
     if not _table_exists("decision_evidence"):
         op.create_table(
@@ -97,23 +142,55 @@ def upgrade() -> None:
             sa.Column("normalized_answers_json", sa.JSON(), nullable=False),
             sa.Column("metadata_json", sa.JSON(), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["case_id"], ["decision_cases.case_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["cycle_id"], ["decision_cycles.cycle_id"], ondelete="CASCADE"),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["case_id"], ["decision_cases.case_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["cycle_id"], ["decision_cycles.cycle_id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("evidence_id"),
-            sa.UniqueConstraint("cycle_id", "dedupe_key", name="uq_decision_evidence_cycle_dedupe"),
+            sa.UniqueConstraint(
+                "cycle_id", "dedupe_key", name="uq_decision_evidence_cycle_dedupe"
+            ),
         )
-    _create_index_if_missing("ix_decision_evidence_dedupe_key", "decision_evidence", ["dedupe_key"])
-    _create_index_if_missing("ix_decision_evidence_case_id", "decision_evidence", ["case_id"])
-    _create_index_if_missing("ix_decision_evidence_cycle_id", "decision_evidence", ["cycle_id"])
-    _create_index_if_missing("ix_decision_evidence_tenant_id", "decision_evidence", ["tenant_id"])
-    _create_index_if_missing("ix_decision_evidence_project_id", "decision_evidence", ["project_id"])
-    _create_index_if_missing("ix_decision_evidence_issue_key", "decision_evidence", ["issue_key"])
-    _create_index_if_missing("ix_decision_evidence_source_transport", "decision_evidence", ["source_transport"])
-    _create_index_if_missing("ix_decision_evidence_source_ref", "decision_evidence", ["source_ref"])
-    _create_index_if_missing("ix_decision_evidence_actor_ref", "decision_evidence", ["actor_ref"])
-    _create_index_if_missing("ix_decision_evidence_created_at", "decision_evidence", ["created_at"])
+    _create_index_if_missing(
+        "ix_decision_evidence_dedupe_key", "decision_evidence", ["dedupe_key"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_case_id", "decision_evidence", ["case_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_cycle_id", "decision_evidence", ["cycle_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_tenant_id", "decision_evidence", ["tenant_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_project_id", "decision_evidence", ["project_id"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_issue_key", "decision_evidence", ["issue_key"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_source_transport",
+        "decision_evidence",
+        ["source_transport"],
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_source_ref", "decision_evidence", ["source_ref"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_actor_ref", "decision_evidence", ["actor_ref"]
+    )
+    _create_index_if_missing(
+        "ix_decision_evidence_created_at", "decision_evidence", ["created_at"]
+    )
 
 
 def downgrade() -> None:

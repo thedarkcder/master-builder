@@ -26,7 +26,10 @@ from orchestrator.core.security import require_admin
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-@router.get("/tenants/{tenant_id}/runs/{run_id}/token-timeline", response_model=TokenTimelineRead)
+@router.get(
+    "/tenants/{tenant_id}/runs/{run_id}/token-timeline",
+    response_model=TokenTimelineRead,
+)
 def get_tenant_run_token_timeline_route(
     tenant_id: str,
     run_id: str,
@@ -100,7 +103,10 @@ def compare_tokens_tenant_route(
     )
 
 
-@router.get("/tenants/{tenant_id}/token-stage-diagnostics", response_model=TokenStageDiagnosticsRead)
+@router.get(
+    "/tenants/{tenant_id}/token-stage-diagnostics",
+    response_model=TokenStageDiagnosticsRead,
+)
 def get_tenant_token_stage_diagnostics_route(
     tenant_id: str,
     project_id: str = Query(...),
@@ -136,7 +142,10 @@ def get_tenant_token_stage_diagnostics_route(
     )
 
 
-@router.get("/tenants/{tenant_id}/token-stage-diagnostics-compare", response_model=TokenStageDiagnosticsCompareRead)
+@router.get(
+    "/tenants/{tenant_id}/token-stage-diagnostics-compare",
+    response_model=TokenStageDiagnosticsCompareRead,
+)
 def get_tenant_token_stage_diagnostics_compare_route(
     tenant_id: str,
     project_ids: str = Query(...),

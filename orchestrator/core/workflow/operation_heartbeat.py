@@ -5,7 +5,10 @@ import logging
 import threading
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.workflow.operation_service import ACTIVE_OPERATION_ATTEMPT_STATUSES, touch_workflow_operation_attempt_heartbeat
+from orchestrator.core.workflow.operation_service import (
+    ACTIVE_OPERATION_ATTEMPT_STATUSES,
+    touch_workflow_operation_attempt_heartbeat,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import WorkflowOperationAttempt
 
@@ -40,7 +43,13 @@ class WorkflowOperationAttemptHeartbeatController:
             self._thread.join(timeout=max(1.0, float(self._interval_seconds())))
 
     def _interval_seconds(self) -> int:
-        raw_interval = int(getattr(get_settings(), "workflow_operation_attempt_heartbeat_interval_seconds", 30))
+        raw_interval = int(
+            getattr(
+                get_settings(),
+                "workflow_operation_attempt_heartbeat_interval_seconds",
+                30,
+            )
+        )
         return max(1, raw_interval)
 
     def _run(self) -> None:
@@ -50,7 +59,10 @@ class WorkflowOperationAttemptHeartbeatController:
                     attempt = session.get(WorkflowOperationAttempt, self.attempt_id)
                     if attempt is None:
                         return
-                    if str(attempt.status or "").strip().lower() not in ACTIVE_OPERATION_ATTEMPT_STATUSES:
+                    if (
+                        str(attempt.status or "").strip().lower()
+                        not in ACTIVE_OPERATION_ATTEMPT_STATUSES
+                    ):
                         return
                     touch_workflow_operation_attempt_heartbeat(
                         session,

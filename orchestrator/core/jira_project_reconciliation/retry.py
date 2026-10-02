@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from orchestrator.core.jira_project_reconciliation.dependencies import JiraProjectReconciliationHandlerDeps
+from orchestrator.core.jira_project_reconciliation.dependencies import (
+    JiraProjectReconciliationHandlerDeps,
+)
 from orchestrator.core.jira_project_reconciliation.service import (
     JiraProjectReconciliationWorkflowService,
     build_default_jira_project_reconciliation_gateway,
     latest_reconciliation_request_id_for_workflow,
 )
 from orchestrator.core.workflow.advance import DurableWorkflowLifecycle
-from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.execution_projection import (
+    WorkflowExecutionReference,
+    WorkflowSourceReference,
+)
 from orchestrator.core.jira_project_reconciliation.workflow import (
     JIRA_PROJECT_RECONCILIATION_STEP_CLASSIFICATION,
     JIRA_PROJECT_RECONCILIATION_STEP_LABEL_RECONCILIATION,
@@ -50,10 +55,13 @@ class JiraProjectReconciliationOperationRetryHandler:
                 JIRA_PROJECT_RECONCILIATION_STEP_PARENT_RECONCILIATION,
                 JIRA_PROJECT_RECONCILIATION_STEP_SUMMARY,
             )
-            if workflow_type.has_step(step_key) and workflow_type.step(step_key).retryable
+            if workflow_type.has_step(step_key)
+            and workflow_type.step(step_key).retryable
         )
 
-    def operation_retry_capabilities(self, workflow_type) -> tuple[WorkflowOperationRetryCapability, ...]:  # noqa: ANN001
+    def operation_retry_capabilities(
+        self, workflow_type
+    ) -> tuple[WorkflowOperationRetryCapability, ...]:  # noqa: ANN001
         return self.declared_operation_retry_capabilities(workflow_type)
 
     def retry_operation(
@@ -68,16 +76,27 @@ class JiraProjectReconciliationOperationRetryHandler:
             )
         tenant = request.session.get(Tenant, request.workflow.tenant_id)
         if tenant is None:
-            raise InvalidWorkflowOperationRetryError(f"Tenant {request.workflow.tenant_id} was not found")
+            raise InvalidWorkflowOperationRetryError(
+                f"Tenant {request.workflow.tenant_id} was not found"
+            )
         project_id = str(request.workflow.project_id or "").strip()
         if not project_id:
-            raise InvalidWorkflowOperationRetryError("Workflow is not bound to a project")
+            raise InvalidWorkflowOperationRetryError(
+                "Workflow is not bound to a project"
+            )
         project = request.session.get(Project, project_id)
         if project is None or project.tenant_id != tenant.tenant_id:
-            raise InvalidWorkflowOperationRetryError(f"Project {project_id} was not found for tenant {tenant.tenant_id}")
+            raise InvalidWorkflowOperationRetryError(
+                f"Project {project_id} was not found for tenant {tenant.tenant_id}"
+            )
         if not str(getattr(project, "jira_project_key", "") or "").strip():
-            raise InvalidWorkflowOperationRetryError("Project Jira key is required for reconciliation retry")
-        gateway_factory = self._deps.gateway_factory or build_default_jira_project_reconciliation_gateway
+            raise InvalidWorkflowOperationRetryError(
+                "Project Jira key is required for reconciliation retry"
+            )
+        gateway_factory = (
+            self._deps.gateway_factory
+            or build_default_jira_project_reconciliation_gateway
+        )
         gateway = gateway_factory(
             session=request.session,
             settings=request.settings,
@@ -95,7 +114,10 @@ class JiraProjectReconciliationOperationRetryHandler:
                 source=WorkflowSourceReference(
                     source_system=str(request.workflow.source_system or "").strip(),
                     source_ref=str(request.workflow.source_ref or "").strip(),
-                    external_id=str(getattr(request.workflow, "source_external_id", "") or "").strip() or None,
+                    external_id=str(
+                        getattr(request.workflow, "source_external_id", "") or ""
+                    ).strip()
+                    or None,
                     display_name=getattr(request.workflow, "display_name", None),
                     description=getattr(request.workflow, "source_description", None),
                 ),

@@ -42,7 +42,9 @@ def enforce_command_allowlist(command: str, allowlist: Iterable[str]) -> None:
         return
 
     for allowed in normalized_allowlist:
-        if normalized_command == allowed or normalized_command.startswith(f"{allowed} "):
+        if normalized_command == allowed or normalized_command.startswith(
+            f"{allowed} "
+        ):
             return
 
     raise PermissionError(f"Command '{command}' is not in the tenant allowlist")

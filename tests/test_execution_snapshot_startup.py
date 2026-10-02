@@ -133,7 +133,12 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                 )
 
         self.assertEqual(report, invalid_report)
-        self.assertTrue(any("execution_snapshot_startup_bootstrap_invalid_rows" in line for line in captured.output))
+        self.assertTrue(
+            any(
+                "execution_snapshot_startup_bootstrap_invalid_rows" in line
+                for line in captured.output
+            )
+        )
         self.assertEqual(session.calls[-1][0], "commit")
 
     def test_ensure_startup_bootstrap_passes_when_report_clean(self) -> None:
@@ -196,8 +201,20 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "test": {
                     "attempt": 1,
@@ -221,12 +238,26 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
             "targeted_only",
         )
 
-    def test_repair_execution_snapshot_payload_migrates_legacy_mobile_capture_targets_to_ios(self) -> None:
+    def test_repair_execution_snapshot_payload_migrates_legacy_mobile_capture_targets_to_ios(
+        self,
+    ) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "pm": {
                     "attempt": 1,
@@ -242,7 +273,10 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "title": "Native walkthrough",
                                 "acceptance_criterion": "native app works",
                                 "capture_target": "mobile",
-                                "variants": ["Invalid input is rejected", "Repeat action remains safe"],
+                                "variants": [
+                                    "Invalid input is rejected",
+                                    "Repeat action remains safe",
+                                ],
                             }
                         ],
                         "outcome": "continue",
@@ -264,7 +298,13 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "capture_target": "mobile",
                                 "start_path": "/",
                                 "expected_outcomes": [],
-                                "steps": [{"action": "assert_visible", "selector": "text=Ready", "value": None}],
+                                "steps": [
+                                    {
+                                        "action": "assert_visible",
+                                        "selector": "text=Ready",
+                                        "value": None,
+                                    }
+                                ],
                             }
                         ],
                         "recordings": [
@@ -294,14 +334,30 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         self.assertEqual(pm_requirement["capture_target"], "ios")
         self.assertEqual(qa_scenario["capture_target"], "ios")
         self.assertEqual(qa_recording["capture_target"], "ios")
-        self.assertEqual(qa_recording["capture_reference"], "ios-simulator://configured")
+        self.assertEqual(
+            qa_recording["capture_reference"], "ios-simulator://configured"
+        )
 
-    def test_repair_execution_snapshot_payload_ignores_non_test_stage_artifacts(self) -> None:
+    def test_repair_execution_snapshot_payload_ignores_non_test_stage_artifacts(
+        self,
+    ) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "dev": {
                     "attempt": 1,
@@ -320,12 +376,26 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         self.assertIsNone(repaired)
 
-    def test_repair_execution_snapshot_payload_blocks_legacy_empty_demo_variants_without_backfill(self) -> None:
+    def test_repair_execution_snapshot_payload_blocks_legacy_empty_demo_variants_without_backfill(
+        self,
+    ) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "pm": {
                     "attempt": 1,
@@ -365,12 +435,26 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         self.assertIn("Legacy PM demo requirements", pm_artifact["blocker_message"])
         self.assertIsNotNone(ExecutionSnapshot.load(repaired))
 
-    def test_repair_execution_snapshot_payload_blocks_legacy_missing_demo_capture_target_without_backfill(self) -> None:
+    def test_repair_execution_snapshot_payload_blocks_legacy_missing_demo_capture_target_without_backfill(
+        self,
+    ) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "pm": {
                     "attempt": 1,
@@ -387,7 +471,10 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                             {
                                 "title": "Browser walkthrough",
                                 "acceptance_criterion": "browser workflow works",
-                                "variants": ["Invalid input is rejected", "Repeat action remains safe"],
+                                "variants": [
+                                    "Invalid input is rejected",
+                                    "Repeat action remains safe",
+                                ],
                             }
                         ],
                         "outcome": "continue",
@@ -409,12 +496,26 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         self.assertIn("Legacy PM demo requirements", pm_artifact["blocker_message"])
         self.assertIsNotNone(ExecutionSnapshot.load(repaired))
 
-    def test_repair_execution_snapshot_payload_blocks_legacy_qa_recordings_without_digests(self) -> None:
+    def test_repair_execution_snapshot_payload_blocks_legacy_qa_recordings_without_digests(
+        self,
+    ) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "qa": {
                     "attempt": 1,
@@ -430,7 +531,13 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "capture_target": "browser",
                                 "start_path": "/",
                                 "expected_outcomes": ["Ready"],
-                                "steps": [{"action": "assert_visible", "selector": "text=Ready", "value": None}],
+                                "steps": [
+                                    {
+                                        "action": "assert_visible",
+                                        "selector": "text=Ready",
+                                        "value": None,
+                                    }
+                                ],
                             }
                         ],
                         "recordings": [
@@ -454,15 +561,32 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         qa_artifact = repaired["stages"]["qa"]["artifact"]
         self.assertEqual(qa_artifact["outcome"], "blocked")
         self.assertEqual(qa_artifact["recordings"], [])
-        self.assertIn("Legacy QA demo recordings predate SHA-256 proof and release context metadata", qa_artifact["blocker_message"])
+        self.assertIn(
+            "Legacy QA demo recordings predate SHA-256 proof and release context metadata",
+            qa_artifact["blocker_message"],
+        )
         self.assertIsNotNone(ExecutionSnapshot.load(repaired))
 
-    def test_repair_execution_snapshot_payload_backfills_legacy_qa_scenario_capture_targets(self) -> None:
+    def test_repair_execution_snapshot_payload_backfills_legacy_qa_scenario_capture_targets(
+        self,
+    ) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "qa": {
                     "attempt": 1,
@@ -477,7 +601,13 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "objective": "show app",
                                 "start_path": "/",
                                 "expected_outcomes": ["Ready"],
-                                "steps": [{"action": "assert_visible", "selector": "text=Ready", "value": None}],
+                                "steps": [
+                                    {
+                                        "action": "assert_visible",
+                                        "selector": "text=Ready",
+                                        "value": None,
+                                    }
+                                ],
                             }
                         ],
                         "recordings": [],
@@ -499,8 +629,20 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
-            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
-            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "workflow": {
+                "outcome": None,
+                "attempts": 0,
+                "summary": [],
+                "blocker_message": None,
+                "requeue_target": None,
+                "requeue_reason": None,
+            },
+            "events": {
+                "stage_updates": [],
+                "live_stage_updates": [],
+                "stage_trace": [],
+                "workstream_trace": [],
+            },
             "stages": {
                 "qa": {
                     "attempt": 1,
@@ -526,6 +668,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         }
 
         self.assertIsNone(ExecutionSnapshot.load(payload))
+
 
 if __name__ == "__main__":
     unittest.main()

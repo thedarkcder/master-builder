@@ -42,17 +42,25 @@ def _normalize_optional_string(value: object) -> str | None:
     return normalized or None
 
 
-def _route_binding_from_service_url(value: object, *, release_id: str) -> dict[str, Any]:
+def _route_binding_from_service_url(
+    value: object, *, release_id: str
+) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise ValueError(f"Deployment release {release_id} has invalid provider_context.service_urls item")
+        raise ValueError(
+            f"Deployment release {release_id} has invalid provider_context.service_urls item"
+        )
     service_key = _normalize_optional_string(value.get("service_key"))
     service_name = _normalize_optional_string(value.get("service_name")) or service_key
     url = _normalize_optional_string(value.get("url"))
     if service_key is None or service_name is None or url is None:
-        raise ValueError(f"Deployment release {release_id} has incomplete provider_context.service_urls item")
+        raise ValueError(
+            f"Deployment release {release_id} has incomplete provider_context.service_urls item"
+        )
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-        raise ValueError(f"Deployment release {release_id} service URL for {service_key} is not absolute http(s)")
+        raise ValueError(
+            f"Deployment release {release_id} service URL for {service_key} is not absolute http(s)"
+        )
     binding: dict[str, Any] = {
         "service_key": service_key,
         "service_name": service_name,
@@ -61,7 +69,9 @@ def _route_binding_from_service_url(value: object, *, release_id: str) -> dict[s
         "host": parsed.hostname.lower(),
         "path": parsed.path or "",
         "url_kind": "custom" if value.get("url_kind") == "custom" else "generated",
-        "status": value.get("status") if value.get("status") in {"pending", "active", "failed"} else "pending",
+        "status": value.get("status")
+        if value.get("status") in {"pending", "active", "failed"}
+        else "pending",
     }
     if parsed.port is not None:
         binding["proxy_port"] = parsed.port
@@ -74,16 +84,22 @@ def _route_binding_from_service_url(value: object, *, release_id: str) -> dict[s
     return binding
 
 
-def _rewrite_provider_context(value: object, *, release_id: str) -> tuple[dict[str, Any], bool]:
+def _rewrite_provider_context(
+    value: object, *, release_id: str
+) -> tuple[dict[str, Any], bool]:
     provider_context = _loads_json(value)
     service_urls = provider_context.get("service_urls")
     if service_urls is None:
         return provider_context, False
     if not isinstance(service_urls, list):
-        raise ValueError(f"Deployment release {release_id} provider_context.service_urls must be a list")
+        raise ValueError(
+            f"Deployment release {release_id} provider_context.service_urls must be a list"
+        )
     route_bindings = provider_context.get("route_bindings")
     if route_bindings is not None and not isinstance(route_bindings, list):
-        raise ValueError(f"Deployment release {release_id} provider_context.route_bindings must be a list")
+        raise ValueError(
+            f"Deployment release {release_id} provider_context.route_bindings must be a list"
+        )
     existing_bindings = list(route_bindings or [])
     existing_service_keys = {
         str(item.get("service_key") or "").strip()
@@ -105,12 +121,18 @@ def upgrade() -> None:
     if not _table_exists("project_deployment_releases"):
         return
     bind = op.get_bind()
-    rows = bind.execute(
-        text("SELECT release_id, provider_context FROM project_deployment_releases")
-    ).mappings().all()
+    rows = (
+        bind.execute(
+            text("SELECT release_id, provider_context FROM project_deployment_releases")
+        )
+        .mappings()
+        .all()
+    )
     for row in rows:
         release_id = str(row.get("release_id") or "").strip()
-        updated, changed = _rewrite_provider_context(row.get("provider_context"), release_id=release_id)
+        updated, changed = _rewrite_provider_context(
+            row.get("provider_context"), release_id=release_id
+        )
         if not changed:
             continue
         bind.execute(

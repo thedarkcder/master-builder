@@ -28,7 +28,9 @@ def upgrade() -> None:
         sa.Column("scopes", sa.JSON(), nullable=False),
         sa.Column("access_token_encrypted", sa.Text(), nullable=False),
         sa.Column("refresh_token_encrypted", sa.Text(), nullable=False),
-        sa.Column("access_token_expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "access_token_expires_at", sa.DateTime(timezone=True), nullable=False
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("connection_id"),
@@ -42,5 +44,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_jira_oauth_connections_cloud_id", table_name="jira_oauth_connections")
+    op.drop_index(
+        "ix_jira_oauth_connections_cloud_id", table_name="jira_oauth_connections"
+    )
     op.drop_table("jira_oauth_connections")

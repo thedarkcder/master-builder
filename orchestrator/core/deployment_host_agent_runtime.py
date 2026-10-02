@@ -81,7 +81,9 @@ def _normalize_capabilities(raw_value: object) -> tuple[str, ...]:
 
 
 def _resolve_access_token_path(settings: Settings) -> Path:
-    explicit = _normalize_optional_string(getattr(settings, "deployment_host_agent_access_token_path", ""))
+    explicit = _normalize_optional_string(
+        getattr(settings, "deployment_host_agent_access_token_path", "")
+    )
     if explicit is not None:
         return Path(explicit).expanduser()
     runtime_home = _normalize_optional_string(getattr(settings, "runtime_home", ""))
@@ -90,46 +92,94 @@ def _resolve_access_token_path(settings: Settings) -> Path:
     return Path.home() / ".master-builder" / "deployment-host-agent-access-token"
 
 
-def resolve_deployment_host_agent_config(*, settings: Settings | None = None) -> DeploymentHostAgentConfig:
+def resolve_deployment_host_agent_config(
+    *, settings: Settings | None = None
+) -> DeploymentHostAgentConfig:
     resolved_settings = settings or get_settings()
-    api_base_url = (
-        _normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_api_base_url", ""))
-        or _normalize_optional_string(getattr(resolved_settings, "public_api_base_url", ""))
+    api_base_url = _normalize_optional_string(
+        getattr(resolved_settings, "deployment_host_agent_api_base_url", "")
+    ) or _normalize_optional_string(
+        getattr(resolved_settings, "public_api_base_url", "")
     )
     if api_base_url is None:
-        raise DeploymentHostAgentError("deployment_host_agent_api_base_url or public_api_base_url is required")
+        raise DeploymentHostAgentError(
+            "deployment_host_agent_api_base_url or public_api_base_url is required"
+        )
     return DeploymentHostAgentConfig(
         api_base_url=api_base_url.rstrip("/"),
-        bootstrap_token=_normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_bootstrap_token", "")),
+        bootstrap_token=_normalize_optional_string(
+            getattr(resolved_settings, "deployment_host_agent_bootstrap_token", "")
+        ),
         bootstrap_token_path=(
             Path(raw_bootstrap_path).expanduser()
-            if (raw_bootstrap_path := _normalize_optional_string(
-                getattr(resolved_settings, "deployment_host_agent_bootstrap_token_path", ""),
-            )) is not None
+            if (
+                raw_bootstrap_path := _normalize_optional_string(
+                    getattr(
+                        resolved_settings,
+                        "deployment_host_agent_bootstrap_token_path",
+                        "",
+                    ),
+                )
+            )
+            is not None
             else None
         ),
-        access_token=_normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_access_token", "")),
+        access_token=_normalize_optional_string(
+            getattr(resolved_settings, "deployment_host_agent_access_token", "")
+        ),
         access_token_path=_resolve_access_token_path(resolved_settings),
-        capabilities=_normalize_capabilities(getattr(resolved_settings, "deployment_host_agent_capabilities", "")),
+        capabilities=_normalize_capabilities(
+            getattr(resolved_settings, "deployment_host_agent_capabilities", "")
+        ),
         heartbeat_interval_seconds=max(
             5,
-            int(getattr(resolved_settings, "deployment_host_agent_heartbeat_interval_seconds", 30)),
+            int(
+                getattr(
+                    resolved_settings,
+                    "deployment_host_agent_heartbeat_interval_seconds",
+                    30,
+                )
+            ),
         ),
-        poll_interval_seconds=max(1, int(getattr(resolved_settings, "deployment_host_agent_poll_seconds", 5))),
+        poll_interval_seconds=max(
+            1, int(getattr(resolved_settings, "deployment_host_agent_poll_seconds", 5))
+        ),
         command_timeout_seconds=max(
             30,
-            int(getattr(resolved_settings, "deployment_host_agent_command_timeout_seconds", 900)),
+            int(
+                getattr(
+                    resolved_settings,
+                    "deployment_host_agent_command_timeout_seconds",
+                    900,
+                )
+            ),
         ),
-        agent_version=_normalize_optional_string(getattr(resolved_settings, "sentry_release", "")) or "dev-local",
+        agent_version=_normalize_optional_string(
+            getattr(resolved_settings, "sentry_release", "")
+        )
+        or "dev-local",
         container_runtime_command=(
-            _normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_container_runtime_command", "docker"))
+            _normalize_optional_string(
+                getattr(
+                    resolved_settings,
+                    "deployment_host_agent_container_runtime_command",
+                    "docker",
+                )
+            )
             or "docker"
         ),
         local_preview_proxy_dynamic_dir=(
             Path(local_preview_proxy_dynamic_dir).expanduser()
-            if (local_preview_proxy_dynamic_dir := _normalize_optional_string(
-                getattr(resolved_settings, "deployment_host_agent_local_preview_proxy_dynamic_dir", ""),
-            )) is not None
+            if (
+                local_preview_proxy_dynamic_dir := _normalize_optional_string(
+                    getattr(
+                        resolved_settings,
+                        "deployment_host_agent_local_preview_proxy_dynamic_dir",
+                        "",
+                    ),
+                )
+            )
+            is not None
             else None
         ),
     )
@@ -265,7 +315,9 @@ class DeploymentHostControlPlaneClient:
         if command is None:
             return None
         if not isinstance(command, dict):
-            raise DeploymentHostControlPlaneError("Deployment host claim response returned a non-object command")
+            raise DeploymentHostControlPlaneError(
+                "Deployment host claim response returned a non-object command"
+            )
         return dict(command)
 
     def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
@@ -305,10 +357,14 @@ def _truncate_output(value: object, *, limit: int = 2000) -> str | None:
     return normalized[-limit:]
 
 
-def _execution_context_from_payload(payload: dict[str, object]) -> DeploymentRestoreExecutionContext:
+def _execution_context_from_payload(
+    payload: dict[str, object],
+) -> DeploymentRestoreExecutionContext:
     execution_context = payload.get("execution_context")
     if not isinstance(execution_context, dict):
-        raise DeploymentHostAgentError("Restore command payload is missing execution_context")
+        raise DeploymentHostAgentError(
+            "Restore command payload is missing execution_context"
+        )
     try:
         return DeploymentRestoreExecutionContext(
             database_type=str(execution_context["database_type"]),
@@ -321,20 +377,26 @@ def _execution_context_from_payload(payload: dict[str, object]) -> DeploymentRes
             artifact_path=str(execution_context["artifact_path"]),
         )
     except KeyError as exc:
-        raise DeploymentHostAgentError(f"Restore command payload is missing {exc.args[0]}") from exc
+        raise DeploymentHostAgentError(
+            f"Restore command payload is missing {exc.args[0]}"
+        ) from exc
 
 
 def _container_candidates_from_payload(payload: dict[str, object]) -> tuple[str, ...]:
     raw_candidates = payload.get("container_candidates")
     if not isinstance(raw_candidates, list):
-        raise DeploymentHostAgentError("Restore command payload is missing container_candidates")
+        raise DeploymentHostAgentError(
+            "Restore command payload is missing container_candidates"
+        )
     candidates: list[str] = []
     for raw_value in raw_candidates:
         candidate = _normalize_optional_string(raw_value)
         if candidate is not None and candidate not in candidates:
             candidates.append(candidate)
     if not candidates:
-        raise DeploymentHostAgentError("Restore command payload has no usable container candidates")
+        raise DeploymentHostAgentError(
+            "Restore command payload has no usable container candidates"
+        )
     return tuple(candidates)
 
 
@@ -386,8 +448,12 @@ def execute_restore_command(
                     "selected_container": candidate,
                     "attempts": attempts,
                     "database_type": execution_context.database_type,
-                    "resource_key": _normalize_optional_string(payload.get("resource_key")),
-                    "restore_run_id": _normalize_optional_string(payload.get("restore_run_id")),
+                    "resource_key": _normalize_optional_string(
+                        payload.get("resource_key")
+                    ),
+                    "restore_run_id": _normalize_optional_string(
+                        payload.get("restore_run_id")
+                    ),
                 },
                 None,
             )
@@ -419,14 +485,18 @@ class DeploymentHostAgent:
         self._health_state = "active"
 
     def _load_access_token(self) -> str | None:
-        return self._config.access_token or load_deployment_host_agent_access_token(self._config.access_token_path)
+        return self._config.access_token or load_deployment_host_agent_access_token(
+            self._config.access_token_path
+        )
 
     def _load_bootstrap_token(self) -> str | None:
         if self._config.bootstrap_token is not None:
             return self._config.bootstrap_token
         if self._config.bootstrap_token_path is None:
             return None
-        return load_deployment_host_agent_bootstrap_token(self._config.bootstrap_token_path)
+        return load_deployment_host_agent_bootstrap_token(
+            self._config.bootstrap_token_path
+        )
 
     def _ensure_client(self) -> DeploymentHostControlPlaneClient:
         if self._client is not None:
@@ -438,16 +508,24 @@ class DeploymentHostAgent:
                 raise DeploymentHostAgentError(
                     "Deployment host agent requires either an access token or a bootstrap token",
                 )
-            anonymous_client = self._client_factory(api_base_url=self._config.api_base_url, access_token=None)
+            anonymous_client = self._client_factory(
+                api_base_url=self._config.api_base_url, access_token=None
+            )
             registration = anonymous_client.register(
                 bootstrap_token=bootstrap_token,
                 agent_version=self._config.agent_version,
                 advertised_capabilities=self._config.capabilities,
             )
-            registered_access_token = _normalize_optional_string(registration.get("access_token"))
+            registered_access_token = _normalize_optional_string(
+                registration.get("access_token")
+            )
             if registered_access_token is None:
-                raise DeploymentHostAgentError("Deployment host registration did not return an access token")
-            persist_deployment_host_agent_access_token(self._config.access_token_path, registered_access_token)
+                raise DeploymentHostAgentError(
+                    "Deployment host registration did not return an access token"
+                )
+            persist_deployment_host_agent_access_token(
+                self._config.access_token_path, registered_access_token
+            )
             access_token = registered_access_token
             logger.info("deployment_host_agent_registered")
         self._client = self._client_factory(
@@ -468,7 +546,9 @@ class DeploymentHostAgent:
                 raise
             if self._load_bootstrap_token() is None:
                 raise
-            logger.warning("deployment_host_agent_reauth_requested status_code=%s", exc.status_code)
+            logger.warning(
+                "deployment_host_agent_reauth_requested status_code=%s", exc.status_code
+            )
             self._reset_access_token()
             return callback(self._ensure_client())
 
@@ -489,7 +569,9 @@ class DeploymentHostAgent:
 
     def process_once(self) -> DeploymentHostAgentResult:
         self._heartbeat_if_due(force=self._last_heartbeat_at is None)
-        command = self._call_control_plane(lambda active_client: active_client.claim_command())
+        command = self._call_control_plane(
+            lambda active_client: active_client.claim_command()
+        )
         if command is None:
             return DeploymentHostAgentResult(processed=False)
 
@@ -497,12 +579,20 @@ class DeploymentHostAgent:
         claim_id = _normalize_optional_string(command.get("claim_id"))
         kind = _normalize_optional_string(command.get("kind"))
         if command_id is None or claim_id is None or kind is None:
-            raise DeploymentHostAgentError("Claimed deployment host command is missing identifiers")
+            raise DeploymentHostAgentError(
+                "Claimed deployment host command is missing identifiers"
+            )
         command_payload = command.get("payload")
         if not isinstance(command_payload, dict):
-            raise DeploymentHostAgentError("Claimed deployment host command is missing payload")
+            raise DeploymentHostAgentError(
+                "Claimed deployment host command is missing payload"
+            )
 
-        self._call_control_plane(lambda active_client: active_client.start_command(command_id=command_id, claim_id=claim_id))
+        self._call_control_plane(
+            lambda active_client: active_client.start_command(
+                command_id=command_id, claim_id=claim_id
+            )
+        )
         if kind == "restore_database":
             status, result, last_error = execute_restore_command(
                 payload=command_payload,
@@ -600,8 +690,11 @@ def run_deployment_host_agent(*, settings: Settings | None = None) -> None:
         resolved_settings.log_level,
         environment=resolved_settings.sentry_environment,
         platform_version=resolved_settings.sentry_release or "dev-local",
-        default_agent_id=str(resolved_settings.agent_id or "").strip() or "deployment-host-agent",
+        default_agent_id=str(resolved_settings.agent_id or "").strip()
+        or "deployment-host-agent",
     )
-    agent = DeploymentHostAgent(config=resolve_deployment_host_agent_config(settings=resolved_settings))
+    agent = DeploymentHostAgent(
+        config=resolve_deployment_host_agent_config(settings=resolved_settings)
+    )
     logger.info("deployment_host_agent_started")
     agent.run()

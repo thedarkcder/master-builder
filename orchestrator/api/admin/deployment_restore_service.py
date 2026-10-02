@@ -34,8 +34,15 @@ from orchestrator.core.deployment_host_queue import (
     DeploymentHostCommandEnqueueRequest,
     enqueue_deployment_host_command,
 )
-from orchestrator.core.deployment_restore_executor import DeploymentRestoreExecutionContext
-from orchestrator.storage.models import Project, ProjectApp, ProjectDeploymentRestoreRun, Tenant
+from orchestrator.core.deployment_restore_executor import (
+    DeploymentRestoreExecutionContext,
+)
+from orchestrator.storage.models import (
+    Project,
+    ProjectApp,
+    ProjectDeploymentRestoreRun,
+    Tenant,
+)
 from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig
 
 _ACTIVE_DEPLOYMENT_PLANE_STATES = {"active", "degraded"}
@@ -64,16 +71,26 @@ def _project_app_context(
     tenant_id: str,
     project_id: str,
     app_id: str,
-) -> tuple[Tenant, Project, ProjectApp, TenantDeploymentPlaneRead, ProjectDeploymentConfigRead]:  # noqa: ANN001
+) -> tuple[
+    Tenant, Project, ProjectApp, TenantDeploymentPlaneRead, ProjectDeploymentConfigRead
+]:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
+    app = get_project_app(
+        session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+    )
     if app is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found"
+        )
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
     return tenant, project, app, tenant_plane, project_deployment_config_to_schema(app)
 
@@ -91,9 +108,14 @@ def _build_internal_coolify_client(
             detail="Tenant deployment plane is not configured for internal Coolify",
         )
     if tenant_plane.state not in _ACTIVE_DEPLOYMENT_PLANE_STATES:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant deployment plane is not active")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenant deployment plane is not active",
+        )
 
-    api_token_ref = _normalize_optional_string((tenant_plane.secret_refs or {}).get("coolify_api_token"))
+    api_token_ref = _normalize_optional_string(
+        (tenant_plane.secret_refs or {}).get("coolify_api_token")
+    )
     if api_token_ref is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -112,7 +134,12 @@ def _build_internal_coolify_client(
             status_code=status.HTTP_409_CONFLICT,
             detail="Tenant deployment plane references missing Coolify API token",
         )
-    return CoolifyApiClient(CoolifyApiConfig(base_url=_coolify_api_base_url(tenant_plane=tenant_plane), bearer_token=api_token))
+    return CoolifyApiClient(
+        CoolifyApiConfig(
+            base_url=_coolify_api_base_url(tenant_plane=tenant_plane),
+            bearer_token=api_token,
+        )
+    )
 
 
 def _resource_database_type(resource: ProjectDeploymentResourceWrite) -> str | None:
@@ -121,28 +148,45 @@ def _resource_database_type(resource: ProjectDeploymentResourceWrite) -> str | N
         return kind
     if kind == "database":
         config = _coerce_dict(resource.config)
-        return _normalize_optional_string(config.get("database_type") or config.get("coolify_database_type")) or "postgres"
+        return (
+            _normalize_optional_string(
+                config.get("database_type") or config.get("coolify_database_type")
+            )
+            or "postgres"
+        )
     return None
 
 
-def _selected_backup_policy(config: ProjectDeploymentConfigRead, backup_key: str) -> ProjectDeploymentBackupPolicyWrite:
+def _selected_backup_policy(
+    config: ProjectDeploymentConfigRead, backup_key: str
+) -> ProjectDeploymentBackupPolicyWrite:
     normalized_key = str(backup_key or "").strip().lower()
     for policy in config.backup_policies:
         if str(policy.key or "").strip().lower() == normalized_key:
             return policy
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Backup policy '{backup_key}' was not found")
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Backup policy '{backup_key}' was not found",
+    )
 
 
-def _selected_resource(config: ProjectDeploymentConfigRead, resource_key: str) -> ProjectDeploymentResourceWrite:
+def _selected_resource(
+    config: ProjectDeploymentConfigRead, resource_key: str
+) -> ProjectDeploymentResourceWrite:
     normalized_key = str(resource_key or "").strip().lower()
     for resource in config.resources:
         if str(resource.key or "").strip().lower() == normalized_key:
             return resource
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Resource '{resource_key}' was not found")
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Resource '{resource_key}' was not found",
+    )
 
 
 def _database_uuid(resource: ProjectDeploymentResourceWrite) -> str:
-    database_uuid = _normalize_optional_string(_coerce_dict(resource.config).get("coolify_uuid"))
+    database_uuid = _normalize_optional_string(
+        _coerce_dict(resource.config).get("coolify_uuid")
+    )
     if database_uuid is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -151,8 +195,13 @@ def _database_uuid(resource: ProjectDeploymentResourceWrite) -> str:
     return database_uuid
 
 
-def _backup_uuid(policy: ProjectDeploymentBackupPolicyWrite, payload: ProjectDeploymentBackupRestoreRequest) -> str:
-    backup_uuid = _normalize_optional_string(payload.backup_uuid) or _normalize_optional_string(
+def _backup_uuid(
+    policy: ProjectDeploymentBackupPolicyWrite,
+    payload: ProjectDeploymentBackupRestoreRequest,
+) -> str:
+    backup_uuid = _normalize_optional_string(
+        payload.backup_uuid
+    ) or _normalize_optional_string(
         _coerce_dict(policy.config).get("coolify_backup_uuid")
     )
     if backup_uuid is None:
@@ -163,7 +212,9 @@ def _backup_uuid(policy: ProjectDeploymentBackupPolicyWrite, payload: ProjectDep
     return backup_uuid
 
 
-def _normalize_execution(payload: dict[str, object]) -> ProjectDeploymentBackupExecutionRead | None:
+def _normalize_execution(
+    payload: dict[str, object],
+) -> ProjectDeploymentBackupExecutionRead | None:
     execution_uuid = (
         _normalize_optional_string(payload.get("execution_uuid"))
         or _normalize_optional_string(payload.get("uuid"))
@@ -178,7 +229,9 @@ def _normalize_execution(payload: dict[str, object]) -> ProjectDeploymentBackupE
         or _normalize_optional_string(payload.get("full_path"))
         or _normalize_optional_string(payload.get("absolute_path"))
     )
-    file_name = _normalize_optional_string(payload.get("file_name")) or _normalize_optional_string(payload.get("filename"))
+    file_name = _normalize_optional_string(
+        payload.get("file_name")
+    ) or _normalize_optional_string(payload.get("filename"))
     return ProjectDeploymentBackupExecutionRead(
         execution_uuid=execution_uuid,
         status=_normalize_optional_string(payload.get("status")),
@@ -198,7 +251,9 @@ def _list_execution_rows(
     backup_uuid: str,
 ) -> list[ProjectDeploymentBackupExecutionRead]:
     rows: list[ProjectDeploymentBackupExecutionRead] = []
-    for execution in client.list_database_backup_executions(database_uuid=database_uuid, backup_uuid=backup_uuid):
+    for execution in client.list_database_backup_executions(
+        database_uuid=database_uuid, backup_uuid=backup_uuid
+    ):
         normalized = _normalize_execution(_coerce_dict(execution))
         if normalized is not None:
             rows.append(normalized)
@@ -228,23 +283,31 @@ def list_project_deployment_backup_executions(
             detail=f"Resource '{resource.key}' is not restorable in v1",
         )
     database_uuid = _database_uuid(resource)
-    backup_uuid = _normalize_optional_string(_coerce_dict(backup_policy.config).get("coolify_backup_uuid"))
+    backup_uuid = _normalize_optional_string(
+        _coerce_dict(backup_policy.config).get("coolify_backup_uuid")
+    )
     if backup_uuid is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Backup policy '{backup_policy.key}' has not been applied to Coolify yet",
         )
-    client = _build_internal_coolify_client(session=session, tenant=tenant, tenant_plane=tenant_plane, project=project)
+    client = _build_internal_coolify_client(
+        session=session, tenant=tenant, tenant_plane=tenant_plane, project=project
+    )
     return ProjectDeploymentBackupExecutionListRead(
         backup_key=backup_policy.key,
         resource_key=resource.key,
         backup_uuid=backup_uuid,
         database_uuid=database_uuid,
-        executions=_list_execution_rows(client=client, database_uuid=database_uuid, backup_uuid=backup_uuid),
+        executions=_list_execution_rows(
+            client=client, database_uuid=database_uuid, backup_uuid=backup_uuid
+        ),
     )
 
 
-def _restore_run_to_schema(run: ProjectDeploymentRestoreRun) -> ProjectDeploymentRestoreRunRead:
+def _restore_run_to_schema(
+    run: ProjectDeploymentRestoreRun,
+) -> ProjectDeploymentRestoreRunRead:
     return ProjectDeploymentRestoreRunRead(
         restore_run_id=run.restore_run_id,
         tenant_id=run.tenant_id,
@@ -278,16 +341,22 @@ def list_project_deployment_restore_runs(
     project_id: str,
     app_id: str,
 ) -> list[ProjectDeploymentRestoreRunRead]:  # noqa: ANN001
-    _project_app_context(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
-    runs = session.execute(
-        select(ProjectDeploymentRestoreRun)
-        .where(
-            ProjectDeploymentRestoreRun.tenant_id == tenant_id,
-            ProjectDeploymentRestoreRun.project_id == project_id,
-            ProjectDeploymentRestoreRun.app_id == app_id,
+    _project_app_context(
+        session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+    )
+    runs = (
+        session.execute(
+            select(ProjectDeploymentRestoreRun)
+            .where(
+                ProjectDeploymentRestoreRun.tenant_id == tenant_id,
+                ProjectDeploymentRestoreRun.project_id == project_id,
+                ProjectDeploymentRestoreRun.app_id == app_id,
+            )
+            .order_by(ProjectDeploymentRestoreRun.created_at.desc())
         )
-        .order_by(ProjectDeploymentRestoreRun.created_at.desc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [_restore_run_to_schema(run) for run in runs]
 
 
@@ -299,14 +368,26 @@ def get_project_deployment_restore_run(
     app_id: str,
     restore_run_id: str,
 ) -> ProjectDeploymentRestoreRunRead:  # noqa: ANN001
-    _project_app_context(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+    _project_app_context(
+        session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id
+    )
     run = session.get(ProjectDeploymentRestoreRun, restore_run_id)
-    if run is None or run.tenant_id != tenant_id or run.project_id != project_id or run.app_id != app_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deployment restore run not found")
+    if (
+        run is None
+        or run.tenant_id != tenant_id
+        or run.project_id != project_id
+        or run.app_id != app_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Deployment restore run not found",
+        )
     return _restore_run_to_schema(run)
 
 
-def _resolve_restore_host_id(*, session, tenant_plane: TenantDeploymentPlaneRead) -> str:  # noqa: ANN001
+def _resolve_restore_host_id(
+    *, session, tenant_plane: TenantDeploymentPlaneRead
+) -> str:  # noqa: ANN001
     managed_host_id = _normalize_optional_string(tenant_plane.managed_host_id)
     if managed_host_id is None:
         host = resolve_default_active_deployment_host(
@@ -316,7 +397,10 @@ def _resolve_restore_host_id(*, session, tenant_plane: TenantDeploymentPlaneRead
         )
     else:
         host = resolve_active_deployment_host(session=session, host_id=managed_host_id)
-    capabilities = {str(value or "").strip().lower() for value in list(host.capability_keys_json or [])}
+    capabilities = {
+        str(value or "").strip().lower()
+        for value in list(host.capability_keys_json or [])
+    }
     if "restore_database" not in capabilities:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -341,7 +425,10 @@ def create_project_deployment_restore_run(
         app_id=app_id,
     )
     if payload.confirmation_value != app.slug:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Restore confirmation value must match the app slug")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Restore confirmation value must match the app slug",
+        )
 
     backup_policy = _selected_backup_policy(deployment_config, payload.backup_key)
     resource = _selected_resource(deployment_config, payload.resource_key)
@@ -360,11 +447,25 @@ def create_project_deployment_restore_run(
     host_id = _resolve_restore_host_id(session=session, tenant_plane=tenant_plane)
     database_uuid = _database_uuid(resource)
     backup_uuid = _backup_uuid(backup_policy, payload)
-    client = _build_internal_coolify_client(session=session, tenant=tenant, tenant_plane=tenant_plane, project=project)
-    executions = _list_execution_rows(client=client, database_uuid=database_uuid, backup_uuid=backup_uuid)
-    selected_execution = next((execution for execution in executions if execution.execution_uuid == payload.execution_uuid), None)
+    client = _build_internal_coolify_client(
+        session=session, tenant=tenant, tenant_plane=tenant_plane, project=project
+    )
+    executions = _list_execution_rows(
+        client=client, database_uuid=database_uuid, backup_uuid=backup_uuid
+    )
+    selected_execution = next(
+        (
+            execution
+            for execution in executions
+            if execution.execution_uuid == payload.execution_uuid
+        ),
+        None,
+    )
     if selected_execution is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backup execution was not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Backup execution was not found",
+        )
 
     now = _now()
     run = ProjectDeploymentRestoreRun(
@@ -412,7 +513,9 @@ def create_project_deployment_restore_run(
     return _restore_run_to_schema(run)
 
 
-def _find_restore_run(session, restore_run_id: str) -> ProjectDeploymentRestoreRun | None:  # noqa: ANN001
+def _find_restore_run(
+    session, restore_run_id: str
+) -> ProjectDeploymentRestoreRun | None:  # noqa: ANN001
     return session.get(ProjectDeploymentRestoreRun, restore_run_id)
 
 
@@ -442,7 +545,9 @@ def _mark_restore_run_running(
     if run.status == "running":
         return _restore_run_to_schema(run)
     if run.status in _TERMINAL_RESTORE_STATUSES:
-        raise RuntimeError(f"Deployment restore run cannot transition from status '{run.status}'")
+        raise RuntimeError(
+            f"Deployment restore run cannot transition from status '{run.status}'"
+        )
     now = _now()
     run.status = "running"
     run.started_at = run.started_at or now
@@ -476,9 +581,9 @@ def _execution_context_for_run(
 ) -> DeploymentRestoreExecutionContext:
     config = _coerce_dict(resource.config)
     artifact_payload = _coerce_dict(run.execution_payload)
-    artifact_path = _normalize_optional_string(artifact_payload.get("artifact_path")) or _normalize_optional_string(
-        artifact_payload.get("path")
-    )
+    artifact_path = _normalize_optional_string(
+        artifact_payload.get("artifact_path")
+    ) or _normalize_optional_string(artifact_payload.get("path"))
     if artifact_path is None:
         raise RuntimeError("Selected backup execution does not expose an artifact path")
 
@@ -503,10 +608,14 @@ def _execution_context_for_run(
         or (5432 if run.database_type == "postgres" else 3306)
     )
     if username is None or password is None or database_name is None:
-        raise RuntimeError(f"Resource '{resource.key}' is missing database restore credentials")
+        raise RuntimeError(
+            f"Resource '{resource.key}' is missing database restore credentials"
+        )
     return DeploymentRestoreExecutionContext(
         database_type=run.database_type,
-        container_name=_normalize_optional_string(config.get("coolify_container_name")) or resource.name or resource.key,
+        container_name=_normalize_optional_string(config.get("coolify_container_name"))
+        or resource.name
+        or resource.key,
         database_name=database_name,
         username=username,
         password=password,
@@ -541,7 +650,9 @@ def _resolve_resource_password(
             encryption_key=encryption_key,
         )
         if resolved is None:
-            raise RuntimeError(f"Resource '{run.resource_key}' references missing secret for {key}")
+            raise RuntimeError(
+                f"Resource '{run.resource_key}' references missing secret for {key}"
+            )
         return resolved
     return None
 
@@ -552,7 +663,9 @@ def _container_candidates_for_restore(
     database_uuid: str,
 ) -> list[str]:
     candidate_values = [
-        _normalize_optional_string(_coerce_dict(resource.config).get("coolify_container_name")),
+        _normalize_optional_string(
+            _coerce_dict(resource.config).get("coolify_container_name")
+        ),
         _normalize_optional_string(_coerce_dict(resource.config).get("container_name")),
         _normalize_optional_string(resource.name),
         _normalize_optional_string(resource.key),
@@ -560,7 +673,9 @@ def _container_candidates_for_restore(
     ]
     candidates = [value for value in candidate_values if value]
     if not candidates:
-        raise RuntimeError(f"Resource '{resource.key}' does not expose any restore container identifiers")
+        raise RuntimeError(
+            f"Resource '{resource.key}' does not expose any restore container identifiers"
+        )
     return candidates
 
 
@@ -581,8 +696,12 @@ def build_restore_host_command_payload(
     backup_policy = _selected_backup_policy(deployment_config, run.backup_policy_key)
     resource = _selected_resource(deployment_config, run.resource_key)
     if resource.key != backup_policy.resource_key:
-        raise RuntimeError(f"Backup policy '{backup_policy.key}' no longer targets resource '{resource.key}'")
-    execution_context = _execution_context_for_run(session=session, resource=resource, run=run)
+        raise RuntimeError(
+            f"Backup policy '{backup_policy.key}' no longer targets resource '{resource.key}'"
+        )
+    execution_context = _execution_context_for_run(
+        session=session, resource=resource, run=run
+    )
     return {
         "restore_run_id": run.restore_run_id,
         "database_type": run.database_type,
@@ -598,7 +717,9 @@ def build_restore_host_command_payload(
             "port": execution_context.port,
             "artifact_path": execution_context.artifact_path,
         },
-        "container_candidates": _container_candidates_for_restore(resource=resource, database_uuid=run.database_uuid),
+        "container_candidates": _container_candidates_for_restore(
+            resource=resource, database_uuid=run.database_uuid
+        ),
     }
 
 
@@ -630,6 +751,7 @@ def complete_project_deployment_restore_run(
         return _mark_restore_run_failed(
             session=session,
             run=run,
-            message=_normalize_optional_string(last_error) or "Deployment host restore failed",
+            message=_normalize_optional_string(last_error)
+            or "Deployment host restore failed",
         )
     raise RuntimeError("Deployment restore run status is invalid")

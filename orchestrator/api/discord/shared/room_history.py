@@ -52,7 +52,11 @@ def _normalize_metadata(value: object) -> dict[str, Any]:
 def _normalize_string_set(values: set[str] | None) -> set[str]:
     if not values:
         return set()
-    return {normalized for normalized in (_normalize_label(value) for value in values) if normalized}
+    return {
+        normalized
+        for normalized in (_normalize_label(value) for value in values)
+        if normalized
+    }
 
 
 @dataclass(frozen=True)
@@ -150,7 +154,12 @@ class DiscordRoomHistoryService:
         normalized_text = _normalize_text(text)
         normalized_speaker_type = _normalize_label(speaker_type)
         normalized_source_mode = _normalize_label(source_mode)
-        if not resolved_room_id or not normalized_text or not normalized_speaker_type or not normalized_source_mode:
+        if (
+            not resolved_room_id
+            or not normalized_text
+            or not normalized_speaker_type
+            or not normalized_source_mode
+        ):
             return None
 
         normalized_channel_id = _normalize_optional_text(channel_id)
@@ -174,7 +183,9 @@ class DiscordRoomHistoryService:
             metadata=_normalize_metadata(metadata),
         )
 
-    def room_history_entries(self, *, discord_config: dict | None) -> list[dict[str, Any]]:
+    def room_history_entries(
+        self, *, discord_config: dict | None
+    ) -> list[dict[str, Any]]:
         config = dict(discord_config or {})
         raw_entries = config.get(ROOM_HISTORY_CONFIG_KEY)
         if not isinstance(raw_entries, list):
@@ -223,7 +234,9 @@ class DiscordRoomHistoryService:
             if not resolved_room_id:
                 return []
 
-        entries = [entry for entry in all_entries if entry.get("room_id") == resolved_room_id]
+        entries = [
+            entry for entry in all_entries if entry.get("room_id") == resolved_room_id
+        ]
         if not entries:
             inferred_room_id = self._infer_room_id_from_entries(
                 entries=all_entries,
@@ -234,21 +247,44 @@ class DiscordRoomHistoryService:
             )
             if inferred_room_id and inferred_room_id != resolved_room_id:
                 resolved_room_id = inferred_room_id
-                entries = [entry for entry in all_entries if entry.get("room_id") == resolved_room_id]
+                entries = [
+                    entry
+                    for entry in all_entries
+                    if entry.get("room_id") == resolved_room_id
+                ]
         if speaker_types:
             allowed_speaker_types = _normalize_string_set(speaker_types)
-            entries = [entry for entry in entries if entry.get("speaker_type") in allowed_speaker_types]
+            entries = [
+                entry
+                for entry in entries
+                if entry.get("speaker_type") in allowed_speaker_types
+            ]
         if source_modes:
             allowed_source_modes = _normalize_string_set(source_modes)
-            entries = [entry for entry in entries if entry.get("source_mode") in allowed_source_modes]
+            entries = [
+                entry
+                for entry in entries
+                if entry.get("source_mode") in allowed_source_modes
+            ]
         normalized_user_id = _normalize_optional_text(user_id)
         if normalized_user_id is not None:
-            entries = [entry for entry in entries if entry.get("user_id") == normalized_user_id]
+            entries = [
+                entry for entry in entries if entry.get("user_id") == normalized_user_id
+            ]
         normalized_persona_id = _normalize_optional_text(persona_id)
         if normalized_persona_id is not None:
-            entries = [entry for entry in entries if entry.get("persona_id") == normalized_persona_id]
+            entries = [
+                entry
+                for entry in entries
+                if entry.get("persona_id") == normalized_persona_id
+            ]
 
-        history_limit = max(1, limit if isinstance(limit, int) and limit > 0 else self._max_history_context)
+        history_limit = max(
+            1,
+            limit
+            if isinstance(limit, int) and limit > 0
+            else self._max_history_context,
+        )
         return entries[-history_limit:]
 
     def append_room_history_entry(
@@ -288,14 +324,18 @@ class DiscordRoomHistoryService:
             created_at=created_at,
         )
         if normalized_entry is None:
-            raise ValueError("Room history entry requires a room id, speaker type, source mode, and text")
+            raise ValueError(
+                "Room history entry requires a room id, speaker type, source mode, and text"
+            )
 
         entries = self.room_history_entries(discord_config=config)
         entries.append(normalized_entry.as_dict())
         config[ROOM_HISTORY_CONFIG_KEY] = entries[-self._max_history_entries :]
         return config, normalized_entry.as_dict()
 
-    def _normalize_existing_entry(self, entry: dict[str, Any]) -> RoomHistoryEntry | None:
+    def _normalize_existing_entry(
+        self, entry: dict[str, Any]
+    ) -> RoomHistoryEntry | None:
         return self.build_room_history_entry(
             room_id=entry.get("room_id"),
             channel_id=entry.get("channel_id"),
@@ -309,7 +349,9 @@ class DiscordRoomHistoryService:
             persona_id=entry.get("persona_id"),
             issue_key=entry.get("issue_key"),
             status_name=entry.get("status"),
-            metadata=entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {},
+            metadata=entry.get("metadata")
+            if isinstance(entry.get("metadata"), dict)
+            else {},
             created_at=entry.get("created_at"),
         )
 
@@ -341,16 +383,26 @@ class DiscordRoomHistoryService:
                 return entry_room_id
             if _normalize_optional_text(entry.get("channel_id")) in lookup_values:
                 return entry_room_id
-            if _normalize_optional_text(entry.get("thread_channel_id")) in lookup_values:
+            if (
+                _normalize_optional_text(entry.get("thread_channel_id"))
+                in lookup_values
+            ):
                 return entry_room_id
             if _normalize_optional_text(entry.get("voice_channel_id")) in lookup_values:
                 return entry_room_id
-            if _normalize_optional_text(entry.get("linked_text_channel_id")) in lookup_values:
+            if (
+                _normalize_optional_text(entry.get("linked_text_channel_id"))
+                in lookup_values
+            ):
                 return entry_room_id
         return None
 
     def tenant_room_history(self, *, tenant) -> list[dict[str, Any]]:
-        return self.room_history_entries(discord_config=getattr(tenant, "discord_config", None))
+        return self.room_history_entries(
+            discord_config=getattr(tenant, "discord_config", None)
+        )
 
     def project_room_history(self, *, project) -> list[dict[str, Any]]:
-        return self.room_history_entries(discord_config=getattr(project, "discord_config", None))
+        return self.room_history_entries(
+            discord_config=getattr(project, "discord_config", None)
+        )

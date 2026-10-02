@@ -20,7 +20,9 @@ class StagingAdmissionPlan:
     actions: tuple[GitHubPullRequestCheckRunAction, ...] = ()
 
 
-def resolve_staging_admission_config(project_overrides: dict | None) -> StagingAdmissionConfig:
+def resolve_staging_admission_config(
+    project_overrides: dict | None,
+) -> StagingAdmissionConfig:
     raw = dict(project_overrides or {})
     enabled = bool(raw.get("staging_admission_enabled"))
     branch = str(raw.get("staging_branch") or "staging").strip() or "staging"
@@ -53,14 +55,20 @@ def plan_staging_admission_actions(
     if not candidate_pr_numbers:
         return StagingAdmissionPlan(enabled=True, results=[], actions=())
 
-    staging_head_sha = github_client.get_branch_head_sha(repo_full_name=repo_full_name, branch=config.branch)
+    staging_head_sha = github_client.get_branch_head_sha(
+        repo_full_name=repo_full_name, branch=config.branch
+    )
     results: list[dict[str, object]] = []
     actions: list[GitHubPullRequestCheckRunAction] = []
     for pr_number in candidate_pr_numbers:
-        pr = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+        pr = github_client.get_pull_request_details(
+            repo_full_name=repo_full_name, pr_number=pr_number
+        )
         if str(getattr(pr, "base_ref", "") or "").strip() != config.branch:
             continue
-        result = _evaluate_pull_request(pr=pr, branch=config.branch, staging_head_sha=staging_head_sha)
+        result = _evaluate_pull_request(
+            pr=pr, branch=config.branch, staging_head_sha=staging_head_sha
+        )
         results.append(
             {
                 "pr_number": pr_number,
@@ -102,7 +110,9 @@ def _candidate_pr_numbers(
     ref_name = str(payload.get("ref") or "").strip()
     if ref_name != f"refs/heads/{branch}":
         return []
-    pull_requests = github_client.list_open_pull_requests(repo_full_name=repo_full_name, limit=100)
+    pull_requests = github_client.list_open_pull_requests(
+        repo_full_name=repo_full_name, limit=100
+    )
     return [
         pr.number
         for pr in pull_requests

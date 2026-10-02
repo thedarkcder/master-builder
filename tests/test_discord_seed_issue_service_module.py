@@ -7,13 +7,31 @@ import pytest
 from fastapi import HTTPException
 
 from orchestrator.core.issue_fanout.draft_assembly import normalize_planning_package
-from orchestrator.core.issue_fanout.service import seed_issues_with_runtime, seed_parent_issues_with_runtime
-from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentGate
+from orchestrator.core.issue_fanout.service import (
+    seed_issues_with_runtime,
+    seed_parent_issues_with_runtime,
+)
+from orchestrator.core.projects.architecture_document_service import (
+    ArchitectureDocumentGate,
+)
 from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
-from orchestrator.core.runtime.payload_models import EngineeringSeedPlan, PmParentSeedPlan
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
-from orchestrator.tools.atlassian_oauth import JiraIssueCreateResult, AtlassianOAuthError
-from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES, _to_adf_description
+from orchestrator.core.runtime.payload_models import (
+    EngineeringSeedPlan,
+    PmParentSeedPlan,
+)
+from orchestrator.storage.models import (
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
+from orchestrator.tools.atlassian_oauth import (
+    JiraIssueCreateResult,
+    AtlassianOAuthError,
+)
+from orchestrator.tools.atlassian_oauth_issue_service import (
+    MAX_JIRA_ADF_DOCUMENT_BYTES,
+    _to_adf_description,
+)
 
 
 def _technical_decision() -> dict[str, object]:
@@ -54,11 +72,15 @@ def _oauth_context(client: object) -> SimpleNamespace:
     return SimpleNamespace(
         client=client,
         access_token="token",
-        connection=SimpleNamespace(cloud_id="cloud-1", site_url="https://example.atlassian.net"),
+        connection=SimpleNamespace(
+            cloud_id="cloud-1", site_url="https://example.atlassian.net"
+        ),
     )
 
 
-def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1) -> dict:
+def _seed_payload(
+    *, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1
+) -> dict:
     children = [
         {
             "summary": "Instrument checkout retry telemetry",
@@ -66,7 +88,10 @@ def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", 
             "capability": "Checkout retry telemetry",
             "delivery": "Build checkout retry telemetry so each retry attempt and recovery outcome is captured in the system.",
             "expected_outcome": "Operators can see retry attempts and recovery outcomes for checkout failures.",
-            "acceptance_criteria": ["Retry attempts are recorded", "Terminal recovery outcomes are visible in telemetry"],
+            "acceptance_criteria": [
+                "Retry attempts are recorded",
+                "Terminal recovery outcomes are visible in telemetry",
+            ],
             "dependencies": ["Telemetry schema review"],
             "risks": ["Event volume could be noisy"],
             "how_to_test": ["Run checkout retry integration test"],
@@ -113,30 +138,48 @@ def _seed_payload(*, project_key: str = "GP", parent_issue_type: str = "Story", 
     }
 
 
-def _engineering_seed_plan(*, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1) -> EngineeringSeedPlan:
+def _engineering_seed_plan(
+    *, project_key: str = "GP", parent_issue_type: str = "Story", child_count: int = 1
+) -> EngineeringSeedPlan:
     return EngineeringSeedPlan.from_payload(
-        _seed_payload(project_key=project_key, parent_issue_type=parent_issue_type, child_count=child_count)
+        _seed_payload(
+            project_key=project_key,
+            parent_issue_type=parent_issue_type,
+            child_count=child_count,
+        )
     )
 
 
-def _pm_parent_seed_plan(*, project_key: str = "GP", parent_issue_type: str = "Story") -> PmParentSeedPlan:
+def _pm_parent_seed_plan(
+    *, project_key: str = "GP", parent_issue_type: str = "Story"
+) -> PmParentSeedPlan:
     return PmParentSeedPlan.from_payload(
         {
             "project_key": project_key,
-            "issues": [_seed_payload(parent_issue_type=parent_issue_type)["parent_issue"]],
+            "issues": [
+                _seed_payload(parent_issue_type=parent_issue_type)["parent_issue"]
+            ],
             "questions": [],
         }
     )
 
 
-def _planning_package(*, planning_state: str, child_issues: list[dict] | None = None) -> dict:
-    children = child_issues if child_issues is not None else _seed_payload()["engineering_children"]
+def _planning_package(
+    *, planning_state: str, child_issues: list[dict] | None = None
+) -> dict:
+    children = (
+        child_issues
+        if child_issues is not None
+        else _seed_payload()["engineering_children"]
+    )
     return {
         "planning_state": planning_state,
         "specialist_outputs": {
             "architecture": {
                 "findings": ["Architectural boundaries should stay modular."],
-                "recommendations": ["Use a dedicated planning package before Jira write."],
+                "recommendations": [
+                    "Use a dedicated planning package before Jira write."
+                ],
                 "required_tasks": ["Implement shared planning package merge"],
                 "child_ticket_specs": [
                     {
@@ -144,9 +187,15 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                         "capability": "Planning package handoff",
                         "delivery": "Build the Jira child drafting path so specialist planning context is carried into each engineering child issue.",
                         "expected_outcome": "Engineering child issues include the planning package context they need to execute.",
-                        "acceptance_criteria": ["Jira child draft includes specialist planning context"],
-                        "how_to_test": ["Assert merged planning context appears in the child description"],
-                        "done_means": ["Child ticket reflects specialist planning context"],
+                        "acceptance_criteria": [
+                            "Jira child draft includes specialist planning context"
+                        ],
+                        "how_to_test": [
+                            "Assert merged planning context appears in the child description"
+                        ],
+                        "done_means": [
+                            "Child ticket reflects specialist planning context"
+                        ],
                         "dependencies": ["Planning package schema"],
                         "risks": ["Descriptions may grow too large"],
                         "labels": ["engineering"],
@@ -154,7 +203,9 @@ def _planning_package(*, planning_state: str, child_issues: list[dict] | None = 
                 ],
                 "technical_decisions": [_technical_decision()],
                 "pm_decision_requests": [],
-                "acceptance_impacts": ["Parent stays PM-only until planning completes."],
+                "acceptance_impacts": [
+                    "Parent stays PM-only until planning completes."
+                ],
                 "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Planner[Planning runtime]",
             },
             "security": {
@@ -187,7 +238,9 @@ def _adf_text(value: object) -> str:
     if isinstance(value, dict):
         if isinstance(value.get("text"), str):
             return value["text"]
-        parts = [_adf_text(item) for item in value.get("content", []) if item is not None]
+        parts = [
+            _adf_text(item) for item in value.get("content", []) if item is not None
+        ]
         return "\n".join(part for part in parts if part)
     if isinstance(value, list):
         parts = [_adf_text(item) for item in value if item is not None]
@@ -212,21 +265,27 @@ def test_seed_issues_scopes_allowed_project_keys() -> None:
             allow_create=True,
             scoped_project_keys=["GP"],
             codex_working_dir="/tmp",
-            tenant_project_keys_fn=lambda **_kwargs: ["GP", "example"],
+            tenant_project_keys_fn=lambda **_kwargs: ["GP", "DEMO"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_runtime_fn=lambda **_kwargs: _engineering_seed_plan(project_key="example"),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: _engineering_seed_plan(
+                project_key="DEMO"
+            ),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: "",
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+                _FakeClient()
+            ),
             select_seed_match_fn=lambda **_kwargs: None,
         )
     assert exc_ctx.value.status_code == 409
-    assert "unsupported Jira project key 'example'" in str(exc_ctx.value.detail)
+    assert "unsupported Jira project key 'DEMO'" in str(exc_ctx.value.detail)
 
 
-def test_normalize_planning_package_rejects_removed_product_escalations_contract() -> None:
+def test_normalize_planning_package_rejects_removed_product_escalations_contract() -> (
+    None
+):
     package = _planning_package(planning_state="planning_completed")
     package["specialist_outputs"]["testing"]["product_escalations"] = [
         {
@@ -247,8 +306,12 @@ def test_normalize_planning_package_keeps_technical_decisions_typed() -> None:
 
     normalized = normalize_planning_package(package)
 
-    assert [decision.decision_id for decision in normalized.technical_decisions] == ["planning-package-handoff"]
-    assert all("Technical decision" not in line for line in normalized.specialist_summary)
+    assert [decision.decision_id for decision in normalized.technical_decisions] == [
+        "planning-package-handoff"
+    ]
+    assert all(
+        "Technical decision" not in line for line in normalized.specialist_summary
+    )
 
 
 def test_normalize_planning_package_requires_stage_technical_decisions() -> None:
@@ -261,7 +324,9 @@ def test_normalize_planning_package_requires_stage_technical_decisions() -> None
         assert exc.status_code == 409
         assert "security' missing 'technical_decisions" in str(exc.detail)
     else:
-        raise AssertionError("missing technical_decisions should fail planning package normalization")
+        raise AssertionError(
+            "missing technical_decisions should fail planning package normalization"
+        )
 
 
 def test_seed_issues_creates_parent_and_engineering_child() -> None:
@@ -285,13 +350,8 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
             return None
 
-
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
-
-
-
-
 
     message, data = seed_issues_with_runtime(
         session=MagicMock(),
@@ -309,7 +369,9 @@ def test_seed_issues_creates_parent_and_engineering_child() -> None:
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
     )
 
@@ -338,18 +400,15 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
 
         def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
             issue = kwargs["issue"]
-            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+            return JiraIssueCreateResult(
+                key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1"
+            )
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
             return None
 
-
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
-
-
-
-
 
     def _plan_seed_issues_with_runtime_fn(**kwargs):  # noqa: ANN001
         nonlocal captured_context, captured_issue_types
@@ -399,7 +458,9 @@ def test_seed_issues_passes_typed_attempt_ref_into_invocation_context() -> None:
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
         workflow_id="wf-123",
         operation_id="op-456",
@@ -436,7 +497,9 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
             if issue.summary == "Improve checkout recovery":
                 return JiraIssueCreateResult(key="GP-10", issue_id="10")
             if issue.parent_issue_key:
-                raise AtlassianOAuthError("Subtask issue type is not available for project GP")
+                raise AtlassianOAuthError(
+                    "Subtask issue type is not available for project GP"
+                )
             return JiraIssueCreateResult(key="GP-11", issue_id="11")
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -445,7 +508,6 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
         def add_issue_link(self, **kwargs):  # type: ignore[no-untyped-def]
             raise AssertionError("linked-task fallback should not be used")
             return {}
-
 
     with __import__("pytest").raises(HTTPException) as exc_ctx:
         seed_issues_with_runtime(
@@ -464,12 +526,16 @@ def test_seed_issues_fails_when_subtasks_are_unavailable() -> None:
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+                _FakeClient()
+            ),
             select_seed_match_fn=lambda **_kwargs: None,
         )
 
     assert exc_ctx.value.status_code == 409
-    assert "Story parent GP-10 requires a Jira subtask issue type" in str(exc_ctx.value.detail)
+    assert "Story parent GP-10 requires a Jira subtask issue type" in str(
+        exc_ctx.value.detail
+    )
     assert created[0].summary == "Improve checkout recovery"
     assert len(created) == 1
 
@@ -493,15 +559,22 @@ def test_seed_issues_with_incomplete_oauth_context_returns_controlled_502() -> N
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_atlassian_oauth_context_fn=lambda **_kwargs: SimpleNamespace(access_token="tok-only"),
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: SimpleNamespace(
+                access_token="tok-only"
+            ),
             select_seed_match_fn=lambda **_kwargs: None,
         )
     assert exc_ctx.value.status_code == 502
-    assert str(exc_ctx.value.detail) == "Failed to seed Jira issues: Atlassian context is incomplete"
+    assert (
+        str(exc_ctx.value.detail)
+        == "Failed to seed Jira issues: Atlassian context is incomplete"
+    )
     assert "tok-only" not in str(exc_ctx.value.detail)
 
 
-def test_seed_issues_keeps_explicit_parent_issue_type_at_project_supported_story() -> None:
+def test_seed_issues_keeps_explicit_parent_issue_type_at_project_supported_story() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -525,8 +598,6 @@ def test_seed_issues_keeps_explicit_parent_issue_type_at_project_supported_story
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-
-
     _, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
@@ -539,11 +610,15 @@ def test_seed_issues_keeps_explicit_parent_issue_type_at_project_supported_story
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _engineering_seed_plan(parent_issue_type="Story"),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _engineering_seed_plan(
+            parent_issue_type="Story"
+        ),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
     )
 
@@ -551,7 +626,9 @@ def test_seed_issues_keeps_explicit_parent_issue_type_at_project_supported_story
     assert created[0].issue_type == "Story"
 
 
-def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_children_exist() -> None:
+def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_children_exist() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -566,7 +643,9 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
             created.append(kwargs["issue"])
             issue = kwargs["issue"]
             if issue.parent_issue_key:
-                return JiraIssueCreateResult(key=f"GP-{len(created)}", issue_id=str(len(created)))
+                return JiraIssueCreateResult(
+                    key=f"GP-{len(created)}", issue_id=str(len(created))
+                )
             return JiraIssueCreateResult(key="GP-1", issue_id="1")
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -575,7 +654,6 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
 
-
     _, data = seed_issues_with_runtime(
         session=MagicMock(),
         tenant=tenant,
@@ -588,11 +666,15 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _engineering_seed_plan(parent_issue_type="Story", child_count=2),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: _engineering_seed_plan(
+            parent_issue_type="Story", child_count=2
+        ),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
     )
 
@@ -600,7 +682,9 @@ def test_seed_issues_keeps_single_behavior_parent_at_story_when_multiple_childre
     assert created[0].issue_type == "Story"
 
 
-def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope() -> None:
+def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -615,7 +699,9 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
             created.append(kwargs["issue"])
             issue = kwargs["issue"]
             if issue.parent_issue_key:
-                return JiraIssueCreateResult(key=f"GP-{len(created)}", issue_id=str(len(created)))
+                return JiraIssueCreateResult(
+                    key=f"GP-{len(created)}", issue_id=str(len(created))
+                )
             return JiraIssueCreateResult(key="GP-1", issue_id="1")
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -626,7 +712,9 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
 
     payload = _seed_payload(parent_issue_type="Epic", child_count=2)
     payload["parent_issue"]["summary"] = "Checkout recovery initiative"
-    payload["parent_issue"]["objective"] = "Coordinate a multi-story recovery initiative across checkout."
+    payload["parent_issue"]["objective"] = (
+        "Coordinate a multi-story recovery initiative across checkout."
+    )
 
     _, data = seed_issues_with_runtime(
         session=MagicMock(),
@@ -640,11 +728,15 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlan.from_payload(payload),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: (
+            EngineeringSeedPlan.from_payload(payload)
+        ),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
     )
 
@@ -656,7 +748,9 @@ def test_seed_issues_writes_explicit_epic_parent_issue_type_for_initiative_scope
     assert created[2].parent_issue_key == "GP-1"
 
 
-def test_seed_issues_uses_project_task_type_for_epic_children_when_story_is_unavailable() -> None:
+def test_seed_issues_uses_project_task_type_for_epic_children_when_story_is_unavailable() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -671,7 +765,9 @@ def test_seed_issues_uses_project_task_type_for_epic_children_when_story_is_unav
             created.append(kwargs["issue"])
             issue = kwargs["issue"]
             if issue.parent_issue_key:
-                return JiraIssueCreateResult(key=f"GP-{len(created)}", issue_id=str(len(created)))
+                return JiraIssueCreateResult(
+                    key=f"GP-{len(created)}", issue_id=str(len(created))
+                )
             return JiraIssueCreateResult(key="GP-1", issue_id="1")
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
@@ -682,7 +778,9 @@ def test_seed_issues_uses_project_task_type_for_epic_children_when_story_is_unav
 
     payload = _seed_payload(parent_issue_type="Epic", child_count=2)
     payload["parent_issue"]["summary"] = "Checkout recovery initiative"
-    payload["parent_issue"]["objective"] = "Coordinate a multi-story recovery initiative across checkout."
+    payload["parent_issue"]["objective"] = (
+        "Coordinate a multi-story recovery initiative across checkout."
+    )
 
     _, data = seed_issues_with_runtime(
         session=MagicMock(),
@@ -696,11 +794,15 @@ def test_seed_issues_uses_project_task_type_for_epic_children_when_story_is_unav
         tenant_project_keys_fn=lambda **_kwargs: ["GP"],
         get_settings_fn=lambda: SimpleNamespace(),
         build_runtime_fn=lambda **_kwargs: object(),
-        plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlan.from_payload(payload),
+        plan_seed_issues_with_runtime_fn=lambda **_kwargs: (
+            EngineeringSeedPlan.from_payload(payload)
+        ),
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
     )
 
@@ -746,16 +848,22 @@ def test_seed_parent_issues_rejects_incomplete_pm_status_before_jira_write() -> 
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_runtime_fn=lambda **_kwargs: object(),
-            plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: _pm_parent_seed_plan(),
+            plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: (
+                _pm_parent_seed_plan()
+            ),
             codex_runtime_error_type=RuntimeError,
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+                _FakeClient()
+            ),
             select_seed_match_fn=lambda **_kwargs: None,
             pm_status="drafting",
         )
 
     assert exc_ctx.value.status_code == 409
-    assert "PM interview is not ready to write Jira parent issues yet" in str(exc_ctx.value.detail)
+    assert "PM interview is not ready to write Jira parent issues yet" in str(
+        exc_ctx.value.detail
+    )
     assert create_issue_mock.call_count == 0
 
 
@@ -774,8 +882,12 @@ def test_seed_parent_issues_blocks_when_stage_spi_not_ready() -> None:
             codex_working_dir="/tmp",
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(stage_spi_enabled=True),
-            build_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build runtime")),
-            plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not plan")),
+            build_runtime_fn=lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("should not build runtime")
+            ),
+            plan_pm_parent_issues_with_runtime_fn=lambda **_kwargs: (
+                _ for _ in ()
+            ).throw(AssertionError("should not plan")),
             codex_runtime_error_type=RuntimeError,
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
             tenant_atlassian_oauth_context_fn=lambda **_kwargs: SimpleNamespace(),
@@ -793,7 +905,9 @@ def test_seed_parent_issues_blocks_when_stage_spi_not_ready() -> None:
     assert "Stage plugin has not approved" in str(exc_ctx.value.detail)
 
 
-def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_pm_complete() -> None:
+def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_pm_complete() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -807,7 +921,9 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
         def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
             created.append(kwargs["issue"])
             issue = kwargs["issue"]
-            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+            return JiraIssueCreateResult(
+                key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1"
+            )
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
             return None
@@ -831,7 +947,9 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
         pm_status="pm_completed",
         planning_package=_planning_package(planning_state="planning_drafting"),
@@ -849,10 +967,14 @@ def test_seed_issues_blocks_children_until_planning_completes_and_keeps_parent_p
     assert "Planning state: planning_drafting" in parent_description
     assert "Architecture Context" not in parent_description
     assert "Architectural boundaries should stay modular." not in parent_description
-    assert "Parent[Parent brief] --> Planner[Planning runtime]" not in parent_description
+    assert (
+        "Parent[Parent brief] --> Planner[Planning runtime]" not in parent_description
+    )
 
 
-def test_seed_issues_merges_planning_package_context_into_child_ticket_descriptions() -> None:
+def test_seed_issues_merges_planning_package_context_into_child_ticket_descriptions() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list = []
 
@@ -866,7 +988,9 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
         def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
             created.append(kwargs["issue"])
             issue = kwargs["issue"]
-            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+            return JiraIssueCreateResult(
+                key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1"
+            )
 
         def update_issue_fields(self, **_kwargs):  # type: ignore[no-untyped-def]
             return None
@@ -890,7 +1014,9 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
         pm_status="pm_completed",
         planning_package=_planning_package(
@@ -901,10 +1027,14 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
                     "capability": "Planning package handoff",
                     "delivery": "Build the Jira child drafting path so specialist planning context is carried into each engineering child issue.",
                     "expected_outcome": "Engineering child issues include the planning package context they need to execute.",
-                    "acceptance_criteria": ["Jira child draft includes specialist planning context"],
+                    "acceptance_criteria": [
+                        "Jira child draft includes specialist planning context"
+                    ],
                     "dependencies": ["Planning package schema"],
                     "risks": ["Descriptions may grow too large"],
-                    "how_to_test": ["Assert merged planning context appears in the child description"],
+                    "how_to_test": [
+                        "Assert merged planning context appears in the child description"
+                    ],
                     "done_means": ["Child ticket reflects specialist planning context"],
                     "labels": ["engineering"],
                 }
@@ -920,9 +1050,15 @@ def test_seed_issues_merges_planning_package_context_into_child_ticket_descripti
     assert "What to Build" in child_description
     assert "Expected Outcome" in child_description
     assert "Specialist Planning Context" in child_description
-    assert "Architecture Findings: Architectural boundaries should stay modular." in child_description
+    assert (
+        "Architecture Findings: Architectural boundaries should stay modular."
+        in child_description
+    )
     assert "Security Findings: Security review must be explicit." in child_description
-    assert "Testing Recommendations: Add regression coverage for the handoff." in child_description
+    assert (
+        "Testing Recommendations: Add regression coverage for the handoff."
+        in child_description
+    )
 
 
 def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
@@ -940,14 +1076,20 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
         def create_issue(self, **kwargs):  # type: ignore[no-untyped-def]
             issue = kwargs["issue"]
             bounded = _to_adf_description(issue.description)
-            serialized = __import__("json").dumps(
-                bounded,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
+            serialized = (
+                __import__("json")
+                .dumps(
+                    bounded,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                .encode("utf-8")
+            )
             assert len(serialized) <= MAX_JIRA_ADF_DOCUMENT_BYTES
             created_payloads.append(bounded)
-            return JiraIssueCreateResult(key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1")
+            return JiraIssueCreateResult(
+                key="GP-1" if not issue.parent_issue_key else "GP-2", issue_id="1"
+            )
 
         def add_issue_link(self, **_kwargs):  # type: ignore[no-untyped-def]
             return {}
@@ -968,7 +1110,9 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
         codex_runtime_error_type=RuntimeError,
         build_seed_issue_description_fn=lambda **_kwargs: {},
         issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+        tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+            _FakeClient()
+        ),
         select_seed_match_fn=lambda **_kwargs: None,
         pm_status="pm_completed",
         planning_package={
@@ -1028,7 +1172,9 @@ def test_seed_issues_truncates_large_jira_descriptions_before_write() -> None:
     assert "Content truncated to fit Jira content size limit." not in child_text
 
 
-def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_draft() -> None:
+def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_draft() -> (
+    None
+):
     tenant = SimpleNamespace(tenant_id="tenant-a")
     created: list[object] = []
     remote_links: list[dict[str, object]] = []
@@ -1081,11 +1227,15 @@ def test_seed_issues_blocks_child_fanout_when_architecture_document_is_still_dra
             tenant_project_keys_fn=lambda **_kwargs: ["GP"],
             get_settings_fn=lambda: SimpleNamespace(),
             build_runtime_fn=lambda **_kwargs: object(),
-            plan_seed_issues_with_runtime_fn=lambda **_kwargs: EngineeringSeedPlan.from_payload(payload),
+            plan_seed_issues_with_runtime_fn=lambda **_kwargs: (
+                EngineeringSeedPlan.from_payload(payload)
+            ),
             codex_runtime_error_type=RuntimeError,
             build_seed_issue_description_fn=lambda **_kwargs: {},
             issue_key_pattern=__import__("re").compile(r"^[A-Z]+-\d+$"),
-            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(_FakeClient()),
+            tenant_atlassian_oauth_context_fn=lambda **_kwargs: _oauth_context(
+                _FakeClient()
+            ),
             select_seed_match_fn=lambda **_kwargs: None,
             planning_package=_planning_package(planning_state="planning_completed"),
         )

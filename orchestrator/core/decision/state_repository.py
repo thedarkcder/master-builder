@@ -11,7 +11,9 @@ from orchestrator.core.decision.precheck_mapping import (
     merge_case_metadata,
     serialize_result_snapshot,
 )
-from orchestrator.core.decision.question_state import unresolved_question_ids_for_question_set
+from orchestrator.core.decision.question_state import (
+    unresolved_question_ids_for_question_set,
+)
 from orchestrator.core.decision.state_machine import (
     case_state_for_decision,
     decision_missing_slots_for_precheck,
@@ -80,7 +82,9 @@ def load_or_create_case(
     return case
 
 
-def existing_case_for_issue(*, session, tenant_id: str, issue_key: str) -> DecisionCase | None:
+def existing_case_for_issue(
+    *, session, tenant_id: str, issue_key: str
+) -> DecisionCase | None:
     return session.execute(
         select(DecisionCase).where(
             DecisionCase.tenant_id == tenant_id,
@@ -147,11 +151,15 @@ def persist_decision_state(
     question_set = (
         list(question_set_override)
         if question_driven and isinstance(question_set_override, list)
-        else build_question_set(pre_check=pre_check, classification=classification) if question_driven else []
+        else build_question_set(pre_check=pre_check, classification=classification)
+        if question_driven
+        else []
     )
     reason = str(question_reason or "").strip() if question_driven else ""
     if question_driven and not reason:
-        reason = str(decision_reason(pre_check=pre_check, classification=classification) or "").strip()
+        reason = str(
+            decision_reason(pre_check=pre_check, classification=classification) or ""
+        ).strip()
     reason = reason or None
 
     current_active_cycle = active_cycle(session=session, case=case)
@@ -162,14 +170,19 @@ def persist_decision_state(
             next_question_set = question_set or list(cycle.question_set_json)
             cycle.classification = classification
             cycle.question_set_json = next_question_set
-            cycle.unresolved_question_ids_json = unresolved_question_ids_for_question_set(
-                question_set=next_question_set,
-                accepted_question_ids=accepted_question_ids,
+            cycle.unresolved_question_ids_json = (
+                unresolved_question_ids_for_question_set(
+                    question_set=next_question_set,
+                    accepted_question_ids=accepted_question_ids,
+                )
             )
             cycle.reason = reason or cycle.reason
             cycle.updated_at = occurred_at
         else:
-            if current_active_cycle is not None and current_active_cycle.status == "open":
+            if (
+                current_active_cycle is not None
+                and current_active_cycle.status == "open"
+            ):
                 current_active_cycle.status = "closed"
                 current_active_cycle.closed_at = occurred_at
                 current_active_cycle.updated_at = occurred_at
@@ -234,7 +247,11 @@ def persist_decision_state(
         if pre_check is not None
         else None
     )
-    case.ready_label_present = bool(getattr(pre_check, "ready_label_present", False)) if pre_check is not None else False
+    case.ready_label_present = (
+        bool(getattr(pre_check, "ready_label_present", False))
+        if pre_check is not None
+        else False
+    )
     case.metadata_json = merge_case_metadata(
         existing_metadata=case.metadata_json,
         auto_resolved_answers=auto_resolved_answers,
@@ -276,7 +293,9 @@ def persist_decision_state(
                 decision=decision,
                 classification=classification,
                 issue_labels=issue_labels,
-                missing_slots=decision_missing_slots_for_precheck(pre_check) if pre_check is not None else [],
+                missing_slots=decision_missing_slots_for_precheck(pre_check)
+                if pre_check is not None
+                else [],
                 auto_resolved_slots=sorted(auto_resolved_answers.keys()),
             ),
         },

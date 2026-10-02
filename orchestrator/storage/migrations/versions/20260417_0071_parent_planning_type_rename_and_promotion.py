@@ -37,7 +37,10 @@ def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 WORKFLOW_ID_FK_SPECS = (
@@ -117,13 +120,18 @@ def _create_workflow_id_foreign_keys(bind: sa.engine.Connection) -> None:
         table_name = spec["table_name"]
         if table_name not in table_names:
             continue
-        if not all(_has_column(table_name, column_name) for column_name in spec["local_columns"]):
+        if not all(
+            _has_column(table_name, column_name)
+            for column_name in spec["local_columns"]
+        ):
             continue
         existing_foreign_keys = inspector.get_foreign_keys(table_name)
         if any(
             foreign_key.get("referred_table") == spec["remote_table"]
-            and list(foreign_key.get("constrained_columns") or []) == spec["local_columns"]
-            and list(foreign_key.get("referred_columns") or []) == spec["remote_columns"]
+            and list(foreign_key.get("constrained_columns") or [])
+            == spec["local_columns"]
+            and list(foreign_key.get("referred_columns") or [])
+            == spec["remote_columns"]
             for foreign_key in existing_foreign_keys
         ):
             continue

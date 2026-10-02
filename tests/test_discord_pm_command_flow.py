@@ -18,17 +18,29 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
     def test_pm_command_requires_question(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!pm"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!pm",
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !pm", response.json()["detail"])
 
-    def test_pm_command_returns_product_first_answer_and_stores_minimal_history(self) -> None:
+    def test_pm_command_returns_product_first_answer_and_stores_minimal_history(
+        self,
+    ) -> None:
         with (
             self.session_factory() as session,
             patch(
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
+                return_value=(
+                    None,
+                    None,
+                    [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}],
+                    {"To Do": 1},
+                    [],
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
@@ -59,7 +71,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
             ) as plan_mock,
             patch(
                 "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
-                side_effect=AssertionError("Incomplete PM interview should not seed Jira"),
+                side_effect=AssertionError(
+                    "Incomplete PM interview should not seed Jira"
+                ),
             ) as seed_mock,
         ):
             command_response = execute_discord_command(
@@ -81,7 +95,10 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertNotIn("parent_issue_key", command_response.data)
         self.assertFalse(command_response.data["ready_to_write"])
         seed_mock.assert_not_called()
-        self.assertEqual(plan_mock.call_args.kwargs["request_text"], "shape a rollout narrative for TP-20")
+        self.assertEqual(
+            plan_mock.call_args.kwargs["request_text"],
+            "shape a rollout narrative for TP-20",
+        )
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, self.tenant_id)
@@ -97,7 +114,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
             planning_state="planning_completed",
             required_tasks=("Implement retry telemetry", "Add fallback UX validation"),
             findings=("Telemetry coverage must be explicit.",),
-            recommendations=("Keep the first cut focused on customer-visible recovery.",),
+            recommendations=(
+                "Keep the first cut focused on customer-visible recovery.",
+            ),
             acceptance_impacts=("Acceptance criteria must mention fallback UX.",),
             technical_decisions=(),
             pm_decision_requests=(),
@@ -112,7 +131,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                     persona_id="architect",
                     to_payload=lambda: {
                         "findings": ["Split telemetry and UX work."],
-                        "recommendations": ["One child ticket per implementation slice."],
+                        "recommendations": [
+                            "One child ticket per implementation slice."
+                        ],
                         "required_tasks": ["Implement retry telemetry"],
                         "child_ticket_specs": [
                             {
@@ -120,11 +141,19 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                                 "capability": "Retry telemetry",
                                 "delivery": "Build retry telemetry so recovery attempts and outcomes are captured for the user-visible retry flow.",
                                 "expected_outcome": "Operators can see retry activity and outcomes for the recovery flow.",
-                                "acceptance_criteria": ["Telemetry needs explicit coverage."],
-                                "how_to_test": ["Run the retry flow and verify telemetry is emitted"],
-                                "done_means": ["Retry telemetry is implemented and validated"],
+                                "acceptance_criteria": [
+                                    "Telemetry needs explicit coverage."
+                                ],
+                                "how_to_test": [
+                                    "Run the retry flow and verify telemetry is emitted"
+                                ],
+                                "done_means": [
+                                    "Retry telemetry is implemented and validated"
+                                ],
                                 "dependencies": [],
-                                "risks": ["Recovery telemetry may omit failure cases if the flow is not covered end to end"],
+                                "risks": [
+                                    "Recovery telemetry may omit failure cases if the flow is not covered end to end"
+                                ],
                                 "labels": ["engineering"],
                             }
                         ],
@@ -164,7 +193,13 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch(
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
+                return_value=(
+                    None,
+                    None,
+                    [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}],
+                    {"To Do": 1},
+                    [],
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
@@ -181,7 +216,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         ],
                         "ui_references": ["Checkout failure screen"],
                         "constraints": ["Use the existing checkout system"],
-                        "success_outcomes": ["Higher recovery rate from checkout failures"],
+                        "success_outcomes": [
+                            "Higher recovery rate from checkout failures"
+                        ],
                         "recommendation": "Focus on the customer-visible fallback first.",
                         "scope_in": ["Retry telemetry", "Fallback UX"],
                         "scope_out": ["Provider migration"],
@@ -200,7 +237,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                     {
                         "created_parent_issue_keys": ["TP-501"],
                         "updated_parent_issue_keys": [],
-                        "created_parent_issue_links": ["https://example.atlassian.net/browse/TP-501"],
+                        "created_parent_issue_links": [
+                            "https://example-2.atlassian.net/browse/TP-501"
+                        ],
                         "updated_parent_issue_links": [],
                         "all_parent_issue_keys": ["TP-501"],
                     },
@@ -237,13 +276,21 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(command_response.command, "pm")
         self.assertEqual(command_response.data["parent_issue_key"], "TP-501")
         self.assertEqual(command_response.data["created_parent_issue_keys"], ["TP-501"])
-        self.assertEqual(command_response.data["created_children"], ["TP-502", "TP-503"])
+        self.assertEqual(
+            command_response.data["created_children"], ["TP-502", "TP-503"]
+        )
         self.assertEqual(command_response.data["followup_context_type"], "pm_interview")
         self.assertTrue(command_response.data["ready_to_write"])
-        self.assertIn("## Approved Product Brief", str(command_response.data["product_brief_markdown"]))
+        self.assertIn(
+            "## Approved Product Brief",
+            str(command_response.data["product_brief_markdown"]),
+        )
         self.assertIn("PM parent issue upsert complete", command_response.message)
         self.assertIn("Issue upsert complete", command_response.message)
-        self.assertEqual(plan_mock.call_args.kwargs["request_text"], "final handoff for TP-20 checkout reliability")
+        self.assertEqual(
+            plan_mock.call_args.kwargs["request_text"],
+            "final handoff for TP-20 checkout reliability",
+        )
         seed_mock.assert_called_once()
         planning_mock.assert_called_once()
         seed_children_mock.assert_called_once()
@@ -257,7 +304,13 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                 self.session_factory() as session,
                 patch(
                     "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
-                    return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
+                    return_value=(
+                        None,
+                        None,
+                        [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}],
+                        {"To Do": 1},
+                        [],
+                    ),
                 ),
                 patch(
                     "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
@@ -274,7 +327,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                             ],
                             "ui_references": ["Checkout failure screen"],
                             "constraints": ["Use the existing checkout system"],
-                            "success_outcomes": ["Higher recovery rate from checkout failures"],
+                            "success_outcomes": [
+                                "Higher recovery rate from checkout failures"
+                            ],
                             "recommendation": "Focus on the customer-visible fallback first.",
                             "scope_in": ["Retry telemetry", "Fallback UX"],
                             "scope_out": ["Provider migration"],
@@ -286,7 +341,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "ready_to_write": True,
                     },
                 ),
-                patch("orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime") as seed_mock,
+                patch(
+                    "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime"
+                ) as seed_mock,
             ):
                 command_response = execute_discord_command(
                     tenant_id=self.tenant_id,
@@ -314,7 +371,11 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
     def test_pm_approve_is_rejected(self) -> None:
         response = self.client.post(
             f"/discord/command/{self.tenant_id}",
-            json={"user_id": "u-viewer", "channel_id": "discord-channel-1", "command": "!pm approve rollout to beta"},
+            json={
+                "user_id": "u-viewer",
+                "channel_id": "discord-channel-1",
+                "command": "!pm approve rollout to beta",
+            },
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Usage: !pm <product request>", response.json()["detail"])
@@ -324,7 +385,13 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch(
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
+                return_value=(
+                    None,
+                    None,
+                    [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}],
+                    {"To Do": 1},
+                    [],
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
@@ -340,7 +407,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "scope_in": ["Transcription", "Routing"],
                         "scope_out": ["Full architecture design"],
                         "risks": ["The product brief is still too broad."],
-                        "open_questions": ["What decision should the PM help make next?"],
+                        "open_questions": [
+                            "What decision should the PM help make next?"
+                        ],
                         "next_steps": ["Continue the PM interview in the room thread."],
                     },
                     "status": "question_pending",
@@ -378,12 +447,20 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
             self.assertTrue(str(latest_entry.get("question") or "").startswith("room "))
             self.assertTrue(str(latest_entry.get("answer") or "").startswith("pm: "))
 
-    def test_pm_live_voice_source_routes_to_persona_runtime_with_channel_local_history(self) -> None:
+    def test_pm_live_voice_source_routes_to_persona_runtime_with_channel_local_history(
+        self,
+    ) -> None:
         with (
             self.session_factory() as session,
             patch(
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
-                return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, [{"question": "voice earlier", "answer": "security: older reply"}]),
+                return_value=(
+                    None,
+                    None,
+                    [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}],
+                    {"To Do": 1},
+                    [{"question": "voice earlier", "answer": "security: older reply"}],
+                ),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
@@ -400,7 +477,9 @@ class DiscordPmCommandFlowTests(DiscordCommandApiTestHarness):
                         "scope_out": ["Detailed security design"],
                         "risks": ["The ask mixes product and implementation concerns."],
                         "open_questions": ["Which user-visible behavior matters most?"],
-                        "next_steps": ["Continue the PM interview with one focused answer."],
+                        "next_steps": [
+                            "Continue the PM interview with one focused answer."
+                        ],
                     },
                     "status": "question_pending",
                     "ready_to_write": False,

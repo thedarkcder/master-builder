@@ -30,9 +30,15 @@ def iter_audit_event_export(
         limit=2000,
         newest_first=False,
     ):
-        if request.recorded_after is not None and event.recorded_at < request.recorded_after:
+        if (
+            request.recorded_after is not None
+            and event.recorded_at < request.recorded_after
+        ):
             continue
-        if request.recorded_before is not None and event.recorded_at > request.recorded_before:
+        if (
+            request.recorded_before is not None
+            and event.recorded_at > request.recorded_before
+        ):
             continue
         payload = workflow_observability_event_to_schema(event).model_dump(mode="json")
         yield json.dumps(payload, sort_keys=True) + "\n"

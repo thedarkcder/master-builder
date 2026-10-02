@@ -49,7 +49,10 @@ def _technical_decision(decision_id: str = "decision-1") -> dict[str, object]:
         ],
         "selected_option_id": "signed-token",
         "rationale": "Signed expiring tokens satisfy the brief without exposing raw identifiers.",
-        "evidence": ["Parent brief requires share links", "Security stage requires spoofing protection"],
+        "evidence": [
+            "Parent brief requires share links",
+            "Security stage requires spoofing protection",
+        ],
         "confidence": "high",
         "product_impact": "none",
     }
@@ -87,7 +90,9 @@ class SpecialistPlanningTests(unittest.TestCase):
             related_issues=({"key": "MAB-19", "summary": "Auth session refresh"},),
             status_counts={"To Do": 2},
             github_context={"repos": ["acme/app"]},
-            conversation_history=({"question": "What do friends receive?", "answer": "A store link"},),
+            conversation_history=(
+                {"question": "What do friends receive?", "answer": "A store link"},
+            ),
             working_dir="/tmp/workspace",
         )
 
@@ -104,47 +109,81 @@ class SpecialistPlanningTests(unittest.TestCase):
             prompts.append((template_name, kwargs))
             return template_name
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return _stage_contract(**{
-                    "findings": ["Architecture should split invite creation from delivery"],
-                    "recommendations": ["Use a dedicated invite service"],
-                    "required_tasks": ["Build invite service", "Persist invite state"],
-                    "child_ticket_specs": [
-                        {
-                            "summary": "Create invite service",
-                            "capability": "Invite creation and delivery",
-                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
-                            "expected_outcome": "Users can create an invite from Profile and the system delivers a signed invite link.",
-                            "acceptance_criteria": ["Users can start invite flow from Profile", "Invite links are delivered through the chosen channel"],
-                            "how_to_test": ["Run invite service integration tests", "Verify Profile invite flow in browser automation"],
-                            "done_means": ["Invite flow is implemented and validated end to end"],
-                            "dependencies": ["Invite delivery channel remains available"],
-                            "risks": ["Invite creation and delivery can drift apart if boundaries are unclear"],
-                            "labels": ["engineering"],
-                        }
-                    ],
-                    "acceptance_impacts": ["Invite flow works from Profile"],
-                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                })
+                return _stage_contract(
+                    **{
+                        "findings": [
+                            "Architecture should split invite creation from delivery"
+                        ],
+                        "recommendations": ["Use a dedicated invite service"],
+                        "required_tasks": [
+                            "Build invite service",
+                            "Persist invite state",
+                        ],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Create invite service",
+                                "capability": "Invite creation and delivery",
+                                "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                                "expected_outcome": "Users can create an invite from Profile and the system delivers a signed invite link.",
+                                "acceptance_criteria": [
+                                    "Users can start invite flow from Profile",
+                                    "Invite links are delivered through the chosen channel",
+                                ],
+                                "how_to_test": [
+                                    "Run invite service integration tests",
+                                    "Verify Profile invite flow in browser automation",
+                                ],
+                                "done_means": [
+                                    "Invite flow is implemented and validated end to end"
+                                ],
+                                "dependencies": [
+                                    "Invite delivery channel remains available"
+                                ],
+                                "risks": [
+                                    "Invite creation and delivery can drift apart if boundaries are unclear"
+                                ],
+                                "labels": ["engineering"],
+                            }
+                        ],
+                        "acceptance_impacts": ["Invite flow works from Profile"],
+                        "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                    }
+                )
             if context.stage == PLANNING_STATE_SECURITY:
-                return _stage_contract(**{
-                    "findings": ["Invite links should not reveal raw user IDs"],
-                    "recommendations": ["Sign links and verify expiry"],
-                    "required_tasks": ["Add signed invite tokens"],
-                    "acceptance_impacts": ["Unauthorized reuse is blocked"],
-                })
-            return _stage_contract(**{
-                "findings": ["Need coverage for expired and malformed links"],
-                "recommendations": ["Add regression tests for both cases"],
-                "required_tasks": ["Add expired-link test", "Add malformed-link test"],
-                "acceptance_impacts": ["Acceptance criteria remain testable"],
-            })
+                return _stage_contract(
+                    **{
+                        "findings": ["Invite links should not reveal raw user IDs"],
+                        "recommendations": ["Sign links and verify expiry"],
+                        "required_tasks": ["Add signed invite tokens"],
+                        "acceptance_impacts": ["Unauthorized reuse is blocked"],
+                    }
+                )
+            return _stage_contract(
+                **{
+                    "findings": ["Need coverage for expired and malformed links"],
+                    "recommendations": ["Add regression tests for both cases"],
+                    "required_tasks": [
+                        "Add expired-link test",
+                        "Add malformed-link test",
+                    ],
+                    "acceptance_impacts": ["Acceptance criteria remain testable"],
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                side_effect=_render_prompt,
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -169,7 +208,9 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIsInstance(result.stages[1], SecurityStageOutput)
         self.assertIsInstance(result.stages[2], TestingStageOutput)
         self.assertFalse(any(stage.blocked for stage in result.stages))
-        self.assertIn("Architecture should split invite creation from delivery", result.findings)
+        self.assertIn(
+            "Architecture should split invite creation from delivery", result.findings
+        )
         self.assertIn("Use a dedicated invite service", result.recommendations)
         self.assertIn("Add signed invite tokens", result.required_tasks)
         self.assertIn("Invite flow works from Profile", result.acceptance_impacts)
@@ -190,53 +231,84 @@ class SpecialistPlanningTests(unittest.TestCase):
         first_prompt_name, first_prompt_context = prompts[0]
         self.assertEqual(first_prompt_name, "workflow/pm_planning_architect_system.j2")
         self.assertIn("domain_model", first_prompt_context)
-        self.assertEqual(first_prompt_context["domain_model"]["name"], "ArchitectStageOutput")
+        self.assertEqual(
+            first_prompt_context["domain_model"]["name"], "ArchitectStageOutput"
+        )
         user_prompt_name, user_prompt_context = prompts[1]
         self.assertEqual(user_prompt_name, "workflow/pm_planning_architect_user.j2")
         self.assertEqual(user_prompt_context["parent_issue_key"], "PM-42")
-        self.assertEqual(user_prompt_context["domain_model"], first_prompt_context["domain_model"])
-        self.assertIn("Let users share the app with friends", user_prompt_context["product_brief_json"])
+        self.assertEqual(
+            user_prompt_context["domain_model"], first_prompt_context["domain_model"]
+        )
+        self.assertIn(
+            "Let users share the app with friends",
+            user_prompt_context["product_brief_json"],
+        )
 
     def test_pm_decision_requests_block_planning_but_still_run_all_stages(self) -> None:
         request = self._request()
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return _stage_contract(**{
-                    "findings": ["Architecture is straightforward"],
-                    "recommendations": ["Proceed with a service boundary"],
-                    "required_tasks": ["Add invite service"],
-                    "child_ticket_specs": [],
-                    "acceptance_impacts": ["Share entry point exists"],
-                })
+                return _stage_contract(
+                    **{
+                        "findings": ["Architecture is straightforward"],
+                        "recommendations": ["Proceed with a service boundary"],
+                        "required_tasks": ["Add invite service"],
+                        "child_ticket_specs": [],
+                        "acceptance_impacts": ["Share entry point exists"],
+                    }
+                )
             if context.stage == PLANNING_STATE_SECURITY:
-                return _stage_contract(**{
-                    "findings": ["Share target is unclear"],
-                    "recommendations": ["Clarify whether this is invite, referral, or social share"],
-                    "required_tasks": [],
-                    "pm_decision_requests": [
-                        {
-                            "request_id": "pm-share-type",
-                            "question": "Is this a simple invite link or a referral system? Examples: invite-only link, reward-based referral.",
-                            "why_it_matters": "The answer changes product behavior and abuse controls.",
-                            "related_decision_ids": ["decision-1"],
-                        }
+                return _stage_contract(
+                    **{
+                        "findings": ["Share target is unclear"],
+                        "recommendations": [
+                            "Clarify whether this is invite, referral, or social share"
+                        ],
+                        "required_tasks": [],
+                        "pm_decision_requests": [
+                            {
+                                "request_id": "pm-share-type",
+                                "question": "Is this a simple invite link or a referral system? Examples: invite-only link, reward-based referral.",
+                                "why_it_matters": "The answer changes product behavior and abuse controls.",
+                                "related_decision_ids": ["decision-1"],
+                            }
+                        ],
+                        "acceptance_impacts": [
+                            "Security model depends on the share type"
+                        ],
+                    }
+                )
+            return _stage_contract(
+                **{
+                    "findings": ["Testing depends on the share type"],
+                    "recommendations": [
+                        "Hold test automation until the share behavior is clarified"
                     ],
-                    "acceptance_impacts": ["Security model depends on the share type"],
-                })
-            return _stage_contract(**{
-                "findings": ["Testing depends on the share type"],
-                "recommendations": ["Hold test automation until the share behavior is clarified"],
-                "required_tasks": ["Draft negative-path test matrix"],
-                "acceptance_impacts": ["Validation scope depends on the share type"],
-            })
+                    "required_tasks": ["Draft negative-path test matrix"],
+                    "acceptance_impacts": [
+                        "Validation scope depends on the share type"
+                    ],
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                return_value="prompt",
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
-            result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=request)
+            result = run_specialist_planning_fanout(
+                runtime=SimpleNamespace(), request=request
+            )
 
         self.assertEqual(result.planning_state, PLANNING_STATE_BLOCKED)
         self.assertEqual(result.blocked_stage_states, (PLANNING_STATE_SECURITY,))
@@ -252,7 +324,12 @@ class SpecialistPlanningTests(unittest.TestCase):
     def test_prompt_templates_render_structured_contracts(self) -> None:
         from pathlib import Path
 
-        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        prompts_dir = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+        )
         user_context = {
             "parent_issue_key": "PM-42",
             "parent_summary": "Share the app with friends",
@@ -267,20 +344,24 @@ class SpecialistPlanningTests(unittest.TestCase):
             "native_tools_json": "[]",
         }
         for stage in PLANNING_STAGES:
-            domain_model = prompt_domain_model_for_template(stage.system_prompt_template)
+            domain_model = prompt_domain_model_for_template(
+                stage.system_prompt_template
+            )
             self.assertIsNotNone(domain_model)
-            system_prompt = render_prompt(stage.system_prompt_template, domain_model=domain_model)
+            system_prompt = render_prompt(
+                stage.system_prompt_template, domain_model=domain_model
+            )
             user_prompt = render_prompt(
                 stage.user_prompt_template,
                 domain_model=domain_model,
                 **user_context,
             )
-            raw_system = (prompts_dir / stage.system_prompt_template.removeprefix("workflow/")).read_text(
-                encoding="utf-8"
-            )
-            raw_user = (prompts_dir / stage.user_prompt_template.removeprefix("workflow/")).read_text(
-                encoding="utf-8"
-            )
+            raw_system = (
+                prompts_dir / stage.system_prompt_template.removeprefix("workflow/")
+            ).read_text(encoding="utf-8")
+            raw_user = (
+                prompts_dir / stage.user_prompt_template.removeprefix("workflow/")
+            ).read_text(encoding="utf-8")
             self.assertIn("{{ domain_model", raw_system)
             self.assertIn("{{ domain_model", raw_user)
             for prompt_text in (system_prompt, user_prompt):
@@ -303,9 +384,14 @@ class SpecialistPlanningTests(unittest.TestCase):
             self.assertIn('"type":"tool_request"', user_prompt)
             self.assertIn('"type":"final_response"', user_prompt)
             self.assertIn("Allowed governed tools for this stage", user_prompt)
-            self.assertIn("Native Codex tools available directly in this runtime", user_prompt)
+            self.assertIn(
+                "Native Codex tools available directly in this runtime", user_prompt
+            )
             self.assertIn("Use only the governed tool bridge", system_prompt)
-            self.assertIn("Do not use native Codex shell, web, or browser tools directly", user_prompt)
+            self.assertIn(
+                "Do not use native Codex shell, web, or browser tools directly",
+                user_prompt,
+            )
 
     def test_fanout_uses_tool_bridge_when_session_and_settings_present(self) -> None:
         request = self._request()
@@ -317,23 +403,35 @@ class SpecialistPlanningTests(unittest.TestCase):
                 captured["native_tools_json"] = kwargs["native_tools_json"]
             return template_name
 
-        def _invoke_runtime_json_with_tools(*, context, user_prompt, allowed_tools, **kwargs):  # noqa: ANN001
+        def _invoke_runtime_json_with_tools(
+            *, context, user_prompt, allowed_tools, **kwargs
+        ):  # noqa: ANN001
             _ = kwargs
             captured["stages"].append(context.stage)
             captured["user_prompt"] = user_prompt
             captured["allowed_tools"] = set(allowed_tools)
-            return _stage_contract(**{
-                "findings": [],
-                "recommendations": [],
-                "required_tasks": [],
-                "child_ticket_specs": [] if context.stage == PLANNING_STATE_ENGINEERING else None,
-                "acceptance_impacts": [],
-                "mermaid_diagram": "",
-            })
+            return _stage_contract(
+                **{
+                    "findings": [],
+                    "recommendations": [],
+                    "required_tasks": [],
+                    "child_ticket_specs": []
+                    if context.stage == PLANNING_STATE_ENGINEERING
+                    else None,
+                    "acceptance_impacts": [],
+                    "mermaid_diagram": "",
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", side_effect=_render_prompt),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools", side_effect=_invoke_runtime_json_with_tools),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                side_effect=_render_prompt,
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
+                side_effect=_invoke_runtime_json_with_tools,
+            ),
         ):
             run_specialist_planning_fanout(
                 session=object(),
@@ -348,51 +446,80 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("repo.read", captured["allowed_tools"])
         self.assertNotIn("web.search", captured["allowed_tools"])
         self.assertIn("tool_name", str(captured["governed_tools_json"]))
-        self.assertIn("project.check_runtime_bindings", str(captured["governed_tools_json"]))
+        self.assertIn(
+            "project.check_runtime_bindings", str(captured["governed_tools_json"])
+        )
         self.assertEqual(captured["native_tools_json"], "[]")
 
-    def test_build_runtime_seed_planning_package_keeps_architecture_artifacts(self) -> None:
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+    def test_build_runtime_seed_planning_package_keeps_architecture_artifacts(
+        self,
+    ) -> None:
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return _stage_contract(**{
-                    "findings": ["Architecture should split invite creation from delivery"],
-                    "recommendations": ["Use a dedicated invite service"],
-                    "required_tasks": ["Build invite service"],
-                    "child_ticket_specs": [
-                        {
-                            "summary": "Create invite service",
-                            "capability": "Invite creation and delivery",
-                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
-                            "expected_outcome": "Users can create and send invites without leaving Profile.",
-                            "acceptance_criteria": ["Invite flow is available from Profile", "Invite delivery succeeds with a signed link"],
-                            "how_to_test": ["Run invite flow integration tests"],
-                            "done_means": ["Invite service lands with automated verification"],
-                            "dependencies": ["Invite delivery provider remains available"],
-                            "risks": ["Invite state may split from delivery outcome if boundaries blur"],
-                            "labels": ["engineering"],
-                        }
-                    ],
-                    "acceptance_impacts": ["Invite flow works from Profile"],
-                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                })
+                return _stage_contract(
+                    **{
+                        "findings": [
+                            "Architecture should split invite creation from delivery"
+                        ],
+                        "recommendations": ["Use a dedicated invite service"],
+                        "required_tasks": ["Build invite service"],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Create invite service",
+                                "capability": "Invite creation and delivery",
+                                "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                                "expected_outcome": "Users can create and send invites without leaving Profile.",
+                                "acceptance_criteria": [
+                                    "Invite flow is available from Profile",
+                                    "Invite delivery succeeds with a signed link",
+                                ],
+                                "how_to_test": ["Run invite flow integration tests"],
+                                "done_means": [
+                                    "Invite service lands with automated verification"
+                                ],
+                                "dependencies": [
+                                    "Invite delivery provider remains available"
+                                ],
+                                "risks": [
+                                    "Invite state may split from delivery outcome if boundaries blur"
+                                ],
+                                "labels": ["engineering"],
+                            }
+                        ],
+                        "acceptance_impacts": ["Invite flow works from Profile"],
+                        "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                    }
+                )
             if context.stage == PLANNING_STATE_SECURITY:
-                return _stage_contract(**{
-                    "findings": ["Signed links prevent spoofing"],
-                    "recommendations": ["Verify expiry and signature server-side"],
-                    "required_tasks": ["Add signed invite tokens"],
-                    "acceptance_impacts": ["Unauthorized reuse is blocked"],
-                })
-            return _stage_contract(**{
-                "findings": ["Need malformed-link coverage"],
-                "recommendations": ["Add regression tests"],
-                "required_tasks": ["Add malformed-link test"],
-                "acceptance_impacts": ["Acceptance criteria remain testable"],
-            })
+                return _stage_contract(
+                    **{
+                        "findings": ["Signed links prevent spoofing"],
+                        "recommendations": ["Verify expiry and signature server-side"],
+                        "required_tasks": ["Add signed invite tokens"],
+                        "acceptance_impacts": ["Unauthorized reuse is blocked"],
+                    }
+                )
+            return _stage_contract(
+                **{
+                    "findings": ["Need malformed-link coverage"],
+                    "recommendations": ["Add regression tests"],
+                    "required_tasks": ["Add malformed-link test"],
+                    "acceptance_impacts": ["Acceptance criteria remain testable"],
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                return_value="prompt",
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -417,69 +544,100 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("Invite service", str(package["architecture_diagram"]))
         self.assertTrue(package["child_issues"])
         self.assertEqual(package["child_issues"][0]["summary"], "Create invite service")
-        self.assertIn("Build the invite flow entry point", package["child_issues"][0]["delivery"])
-        self.assertIn("Invite flow is available from Profile", package["child_issues"][0]["acceptance_criteria"][0])
+        self.assertIn(
+            "Build the invite flow entry point", package["child_issues"][0]["delivery"]
+        )
+        self.assertIn(
+            "Invite flow is available from Profile",
+            package["child_issues"][0]["acceptance_criteria"][0],
+        )
 
-    def test_architect_stage_retries_contract_violation_and_uses_corrected_payload(self) -> None:
+    def test_architect_stage_retries_contract_violation_and_uses_corrected_payload(
+        self,
+    ) -> None:
         prompts: list[str] = []
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
             if context.stage == PLANNING_STATE_ENGINEERING and len(prompts) == 1:
-                return _stage_contract(**{
-                    "findings": ["Architecture should split invite creation from delivery"],
-                    "recommendations": ["Use a dedicated invite service"],
-                    "required_tasks": ["Build invite service"],
-                    "child_ticket_specs": [
-                        {
-                            "summary": "Create invite service",
-                            "capability": "Invite creation and delivery",
-                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
-                            "expected_outcome": "Users can create and send invites without leaving Profile.",
-                            "acceptance_criteria": ["Invite flow is available from Profile"],
-                            "how_to_test": ["Run invite flow integration tests"],
-                            "done_means": [],
-                            "dependencies": [],
-                            "risks": [],
-                            "labels": ["engineering"],
-                        }
-                    ],
-                    "acceptance_impacts": ["Invite flow works from Profile"],
-                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                })
+                return _stage_contract(
+                    **{
+                        "findings": [
+                            "Architecture should split invite creation from delivery"
+                        ],
+                        "recommendations": ["Use a dedicated invite service"],
+                        "required_tasks": ["Build invite service"],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Create invite service",
+                                "capability": "Invite creation and delivery",
+                                "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                                "expected_outcome": "Users can create and send invites without leaving Profile.",
+                                "acceptance_criteria": [
+                                    "Invite flow is available from Profile"
+                                ],
+                                "how_to_test": ["Run invite flow integration tests"],
+                                "done_means": [],
+                                "dependencies": [],
+                                "risks": [],
+                                "labels": ["engineering"],
+                            }
+                        ],
+                        "acceptance_impacts": ["Invite flow works from Profile"],
+                        "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                    }
+                )
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return _stage_contract(**{
-                    "findings": ["Architecture should split invite creation from delivery"],
-                    "recommendations": ["Use a dedicated invite service"],
-                    "required_tasks": ["Build invite service"],
-                    "child_ticket_specs": [
-                        {
-                            "summary": "Create invite service",
-                            "capability": "Invite creation and delivery",
-                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
-                            "expected_outcome": "Users can create and send invites without leaving Profile.",
-                            "acceptance_criteria": ["Invite flow is available from Profile"],
-                            "how_to_test": ["Run invite flow integration tests"],
-                            "done_means": ["Invite service is implemented with end-to-end verification"],
-                            "dependencies": [],
-                            "risks": [],
-                            "labels": ["engineering"],
-                        }
-                    ],
-                    "acceptance_impacts": ["Invite flow works from Profile"],
-                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                })
-            return _stage_contract(**{
-                "findings": [],
-                "recommendations": [],
-                "required_tasks": [],
-                "acceptance_impacts": [],
-            })
+                return _stage_contract(
+                    **{
+                        "findings": [
+                            "Architecture should split invite creation from delivery"
+                        ],
+                        "recommendations": ["Use a dedicated invite service"],
+                        "required_tasks": ["Build invite service"],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Create invite service",
+                                "capability": "Invite creation and delivery",
+                                "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                                "expected_outcome": "Users can create and send invites without leaving Profile.",
+                                "acceptance_criteria": [
+                                    "Invite flow is available from Profile"
+                                ],
+                                "how_to_test": ["Run invite flow integration tests"],
+                                "done_means": [
+                                    "Invite service is implemented with end-to-end verification"
+                                ],
+                                "dependencies": [],
+                                "risks": [],
+                                "labels": ["engineering"],
+                            }
+                        ],
+                        "acceptance_impacts": ["Invite flow works from Profile"],
+                        "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                    }
+                )
+            return _stage_contract(
+                **{
+                    "findings": [],
+                    "recommendations": [],
+                    "required_tasks": [],
+                    "acceptance_impacts": [],
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                return_value="prompt",
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
             result = run_specialist_planning_fanout(
                 runtime=SimpleNamespace(),
@@ -501,53 +659,69 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertIn("ArchitectStageOutput", prompts[1])
         self.assertIn("done_means", prompts[1])
 
-    def test_stage_preserves_multiple_pm_decision_requests_for_same_decision_set(self) -> None:
+    def test_stage_preserves_multiple_pm_decision_requests_for_same_decision_set(
+        self,
+    ) -> None:
         prompts: list[str] = []
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
             if context.stage == PLANNING_STATE_SECURITY:
-                return _stage_contract(**{
-                    "findings": ["Share behavior may change abuse controls"],
-                    "recommendations": ["Ask product-owned questions"],
-                    "required_tasks": [],
-                    "pm_decision_requests": [
-                        {
-                            "request_id": "pm-share-type-1",
-                            "question": "Is this a simple invite link or a referral system?",
-                            "why_it_matters": "The answer changes abuse controls.",
-                            "related_decision_ids": ["decision-1"],
-                        },
-                        {
-                            "request_id": "pm-share-type-2",
-                            "question": "Should sharing be invite-only or reward referral?",
-                            "why_it_matters": "The answer changes product behavior.",
-                            "related_decision_ids": ["decision-1"],
-                        },
-                    ],
-                    "acceptance_impacts": ["Security model depends on share type"],
-                })
-            return _stage_contract(**{
-                "findings": ["No blocking ambiguity"],
-                "recommendations": ["Proceed"],
-                "required_tasks": [],
-                "acceptance_impacts": [],
-                **(
-                    {
-                        "child_ticket_specs": [],
-                        "mermaid_diagram": "flowchart TD\nA[Start]",
+                return _stage_contract(
+                    **{
+                        "findings": ["Share behavior may change abuse controls"],
+                        "recommendations": ["Ask product-owned questions"],
+                        "required_tasks": [],
+                        "pm_decision_requests": [
+                            {
+                                "request_id": "pm-share-type-1",
+                                "question": "Is this a simple invite link or a referral system?",
+                                "why_it_matters": "The answer changes abuse controls.",
+                                "related_decision_ids": ["decision-1"],
+                            },
+                            {
+                                "request_id": "pm-share-type-2",
+                                "question": "Should sharing be invite-only or reward referral?",
+                                "why_it_matters": "The answer changes product behavior.",
+                                "related_decision_ids": ["decision-1"],
+                            },
+                        ],
+                        "acceptance_impacts": ["Security model depends on share type"],
                     }
-                    if context.stage == PLANNING_STATE_ENGINEERING
-                    else {}
-                ),
-            })
+                )
+            return _stage_contract(
+                **{
+                    "findings": ["No blocking ambiguity"],
+                    "recommendations": ["Proceed"],
+                    "required_tasks": [],
+                    "acceptance_impacts": [],
+                    **(
+                        {
+                            "child_ticket_specs": [],
+                            "mermaid_diagram": "flowchart TD\nA[Start]",
+                        }
+                        if context.stage == PLANNING_STATE_ENGINEERING
+                        else {}
+                    ),
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                return_value="prompt",
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
-            result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=self._request())
+            result = run_specialist_planning_fanout(
+                runtime=SimpleNamespace(), request=self._request()
+            )
 
         self.assertEqual(len(result.pm_decision_requests), 2)
         self.assertNotIn("CONTRACT REPAIR REQUIRED", "\n".join(prompts))
@@ -556,97 +730,146 @@ class SpecialistPlanningTests(unittest.TestCase):
         prompts: list[str] = []
         security_calls = 0
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             nonlocal security_calls
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
             if context.stage == PLANNING_STATE_SECURITY:
                 security_calls += 1
                 if security_calls == 1:
-                    return _stage_contract(**{
+                    return _stage_contract(
+                        **{
+                            "findings": [
+                                {
+                                    "title": "Email verification boundary",
+                                    "severity": "high",
+                                    "evidence": [
+                                        "Local auth email binding affects account takeover risk"
+                                    ],
+                                }
+                            ],
+                            "recommendations": [
+                                "Use verified-email evidence before sensitive binding"
+                            ],
+                            "required_tasks": [
+                                "Add security tests for verified email binding"
+                            ],
+                            "acceptance_impacts": [],
+                        }
+                    )
+                return _stage_contract(
+                    **{
                         "findings": [
-                            {
-                                "title": "Email verification boundary",
-                                "severity": "high",
-                                "evidence": ["Local auth email binding affects account takeover risk"],
-                            }
+                            "Email verification boundary affects account takeover risk."
                         ],
-                        "recommendations": ["Use verified-email evidence before sensitive binding"],
-                        "required_tasks": ["Add security tests for verified email binding"],
+                        "recommendations": [
+                            "Use verified-email evidence before sensitive binding"
+                        ],
+                        "required_tasks": [
+                            "Add security tests for verified email binding"
+                        ],
                         "acceptance_impacts": [],
-                    })
-                return _stage_contract(**{
-                    "findings": ["Email verification boundary affects account takeover risk."],
-                    "recommendations": ["Use verified-email evidence before sensitive binding"],
-                    "required_tasks": ["Add security tests for verified email binding"],
-                    "acceptance_impacts": [],
-                })
-            return _stage_contract(**{
-                "findings": ["No blocking ambiguity"],
-                "recommendations": ["Proceed"],
-                "required_tasks": [],
-                "acceptance_impacts": [],
-                **(
-                    {
-                        "child_ticket_specs": [],
-                        "mermaid_diagram": "flowchart TD\nA[Start]",
                     }
-                    if context.stage == PLANNING_STATE_ENGINEERING
-                    else {}
-                ),
-            })
+                )
+            return _stage_contract(
+                **{
+                    "findings": ["No blocking ambiguity"],
+                    "recommendations": ["Proceed"],
+                    "required_tasks": [],
+                    "acceptance_impacts": [],
+                    **(
+                        {
+                            "child_ticket_specs": [],
+                            "mermaid_diagram": "flowchart TD\nA[Start]",
+                        }
+                        if context.stage == PLANNING_STATE_ENGINEERING
+                        else {}
+                    ),
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                return_value="prompt",
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
-            result = run_specialist_planning_fanout(runtime=SimpleNamespace(), request=self._request())
+            result = run_specialist_planning_fanout(
+                runtime=SimpleNamespace(), request=self._request()
+            )
 
-        self.assertIn("Email verification boundary affects account takeover risk.", result.findings)
+        self.assertIn(
+            "Email verification boundary affects account takeover risk.",
+            result.findings,
+        )
         self.assertEqual(security_calls, 2)
         self.assertIn("CONTRACT REPAIR REQUIRED", prompts[2])
         self.assertIn("Domain model JSON", prompts[2])
         self.assertIn("SpecialistStageOutput", prompts[2])
         self.assertIn("findings", prompts[2])
 
-    def test_architect_stage_fails_hard_when_child_ticket_spec_repair_is_still_missing_done_means(self) -> None:
+    def test_architect_stage_fails_hard_when_child_ticket_spec_repair_is_still_missing_done_means(
+        self,
+    ) -> None:
         calls: list[str] = []
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
+        def _invoke_runtime_json(
+            *, context, system_prompt, user_prompt, runtime, allowed_native_tools=None
+        ):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             calls.append(context.stage)
             if context.stage == PLANNING_STATE_ENGINEERING:
-                return _stage_contract(**{
-                    "findings": ["Architecture should split invite creation from delivery"],
-                    "recommendations": ["Use a dedicated invite service"],
-                    "required_tasks": ["Build invite service"],
-                    "child_ticket_specs": [
-                        {
-                            "summary": "Create invite service",
-                            "capability": "Invite creation and delivery",
-                            "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
-                            "expected_outcome": "Users can create and send invites without leaving Profile.",
-                            "acceptance_criteria": ["Invite flow is available from Profile"],
-                            "how_to_test": ["Run invite flow integration tests"],
-                            "done_means": [],
-                            "dependencies": [],
-                            "risks": [],
-                            "labels": ["engineering"],
-                        }
-                    ],
-                    "acceptance_impacts": ["Invite flow works from Profile"],
-                    "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
-                })
-            return _stage_contract(**{
-                "findings": [],
-                "recommendations": [],
-                "required_tasks": [],
-                "acceptance_impacts": [],
-            })
+                return _stage_contract(
+                    **{
+                        "findings": [
+                            "Architecture should split invite creation from delivery"
+                        ],
+                        "recommendations": ["Use a dedicated invite service"],
+                        "required_tasks": ["Build invite service"],
+                        "child_ticket_specs": [
+                            {
+                                "summary": "Create invite service",
+                                "capability": "Invite creation and delivery",
+                                "delivery": "Build the invite flow entry point and service so users can create and send app invites from Profile.",
+                                "expected_outcome": "Users can create and send invites without leaving Profile.",
+                                "acceptance_criteria": [
+                                    "Invite flow is available from Profile"
+                                ],
+                                "how_to_test": ["Run invite flow integration tests"],
+                                "done_means": [],
+                                "dependencies": [],
+                                "risks": [],
+                                "labels": ["engineering"],
+                            }
+                        ],
+                        "acceptance_impacts": ["Invite flow works from Profile"],
+                        "mermaid_diagram": "flowchart TD\n  Share[Share entry] --> InviteService[Invite service]",
+                    }
+                )
+            return _stage_contract(
+                **{
+                    "findings": [],
+                    "recommendations": [],
+                    "required_tasks": [],
+                    "acceptance_impacts": [],
+                }
+            )
 
         with (
-            patch("orchestrator.core.planning.specialist.stage_runner.render_prompt", return_value="prompt"),
-            patch("orchestrator.core.runtime.stage_session.invoke_runtime_json", side_effect=_invoke_runtime_json),
+            patch(
+                "orchestrator.core.planning.specialist.stage_runner.render_prompt",
+                return_value="prompt",
+            ),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json",
+                side_effect=_invoke_runtime_json,
+            ),
         ):
             with self.assertRaisesRegex(
                 RetryableSpecialistPlanningContractError,
@@ -657,7 +880,9 @@ class SpecialistPlanningTests(unittest.TestCase):
                     request=self._request(),
                     runtime_for_selector=lambda _selector: SimpleNamespace(),
                 )
-        self.assertEqual(calls, [PLANNING_STATE_ENGINEERING, PLANNING_STATE_ENGINEERING])
+        self.assertEqual(
+            calls, [PLANNING_STATE_ENGINEERING, PLANNING_STATE_ENGINEERING]
+        )
 
 
 if __name__ == "__main__":

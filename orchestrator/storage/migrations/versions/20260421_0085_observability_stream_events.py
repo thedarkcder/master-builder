@@ -40,11 +40,19 @@ def upgrade() -> None:
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("payload_json", sa.JSON(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(["workflow_id"], ["workflow_executions.workflow_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["workflow_id"], ["workflow_executions.workflow_id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["operation_id"], ["workflow_operations.operation_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["operation_id"], ["workflow_operations.operation_id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("stream_offset"),
     )
     op.create_index(
@@ -72,7 +80,16 @@ def downgrade() -> None:
     inspector = inspect(bind)
     if "observability_stream_events" not in inspector.get_table_names():
         return
-    op.drop_index("ix_observability_stream_events_attempt_id_stream_offset", table_name="observability_stream_events")
-    op.drop_index("ix_observability_stream_events_operation_id_stream_offset", table_name="observability_stream_events")
-    op.drop_index("ix_observability_stream_events_tenant_id_stream_offset", table_name="observability_stream_events")
+    op.drop_index(
+        "ix_observability_stream_events_attempt_id_stream_offset",
+        table_name="observability_stream_events",
+    )
+    op.drop_index(
+        "ix_observability_stream_events_operation_id_stream_offset",
+        table_name="observability_stream_events",
+    )
+    op.drop_index(
+        "ix_observability_stream_events_tenant_id_stream_offset",
+        table_name="observability_stream_events",
+    )
     op.drop_table("observability_stream_events")

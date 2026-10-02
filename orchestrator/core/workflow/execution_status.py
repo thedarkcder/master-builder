@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.workflow.operation_service import OPERATION_STATUS_COMPLETED, OPERATION_STATUS_WAITING_FOR_INPUT
+from orchestrator.core.workflow.operation_service import (
+    OPERATION_STATUS_COMPLETED,
+    OPERATION_STATUS_WAITING_FOR_INPUT,
+)
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 
@@ -14,7 +17,9 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def mark_workflow_running(*, workflow: WorkflowExecution, now: datetime | None = None) -> WorkflowExecution:
+def mark_workflow_running(
+    *, workflow: WorkflowExecution, now: datetime | None = None
+) -> WorkflowExecution:
     timestamp = now or _now()
     workflow.status = "running"
     workflow.last_error = None
@@ -71,28 +76,44 @@ def recompute_workflow_status(
     now: datetime | None = None,
 ) -> WorkflowExecution:
     timestamp = now or _now()
-    definitions = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key).steps
-    operations = session.execute(
-        select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
-    ).scalars().all()
+    definitions = get_workflow_type(
+        session, workflow_type_key=workflow.workflow_type_key
+    ).steps
+    operations = (
+        session.execute(
+            select(WorkflowOperation).where(
+                WorkflowOperation.workflow_id == workflow.workflow_id
+            )
+        )
+        .scalars()
+        .all()
+    )
     status_by_type = {
-        str(operation.operation_type or "").strip(): str(operation.status or "").strip().lower()
+        str(operation.operation_type or "").strip(): str(operation.status or "")
+        .strip()
+        .lower()
         for operation in operations
         if str(operation.operation_type or "").strip()
     }
     summaries_by_type = {
-        str(operation.operation_type or "").strip(): str(operation.summary or "").strip()
+        str(operation.operation_type or "").strip(): str(
+            operation.summary or ""
+        ).strip()
         for operation in operations
         if str(operation.operation_type or "").strip()
     }
-    required_definitions = [definition for definition in definitions if bool(definition.required)]
+    required_definitions = [
+        definition for definition in definitions if bool(definition.required)
+    ]
 
     for definition in required_definitions:
         normalized_status = status_by_type.get(definition.key, "pending")
         if normalized_status == "failed":
             return mark_workflow_failed(
                 workflow=workflow,
-                message=summaries_by_type.get(definition.key) or workflow.last_error or "",
+                message=summaries_by_type.get(definition.key)
+                or workflow.last_error
+                or "",
                 now=timestamp,
             )
         if normalized_status == OPERATION_STATUS_WAITING_FOR_INPUT:

@@ -8,19 +8,36 @@ from orchestrator.core.config import Settings
 from orchestrator.core.workflow.advance import execute_workflow_advance
 from orchestrator.core.workflow.engine import WorkflowEngineState
 from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry
-from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
+from orchestrator.core.workflow.operation_retry_use_case import (
+    retry_workflow_operation_with_registered_handler,
+)
 from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
-from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+)
 
 
 class LegacyWorkflowEngine:
     backend = "legacy"
 
-    def __init__(self, *, process_claimed_run_fn, build_runner_fn, runtime_kwargs_fn, workflow_handler_registry=None):
+    def __init__(
+        self,
+        *,
+        process_claimed_run_fn,
+        build_runner_fn,
+        runtime_kwargs_fn,
+        workflow_handler_registry=None,
+    ):
         self._process_claimed_run_fn = process_claimed_run_fn
         self._build_runner_fn = build_runner_fn
         self._runtime_kwargs_fn = runtime_kwargs_fn
-        self._workflow_handler_registry: WorkflowHandlerRegistry | None = workflow_handler_registry
+        self._workflow_handler_registry: WorkflowHandlerRegistry | None = (
+            workflow_handler_registry
+        )
 
     def advance_workflow(
         self,
@@ -56,7 +73,9 @@ class LegacyWorkflowEngine:
         _ = settings, session_factory, claim_id
         tenant = session.get(Tenant, run.tenant_id)
         if tenant is None:
-            raise RuntimeError(f"Tenant {run.tenant_id} missing for workflow {workflow.workflow_id}")
+            raise RuntimeError(
+                f"Tenant {run.tenant_id} missing for workflow {workflow.workflow_id}"
+            )
         runner = self._build_runner_fn(session=session)
         result = self._process_claimed_run_fn(
             session=session,
@@ -66,7 +85,9 @@ class LegacyWorkflowEngine:
             **self._runtime_kwargs_fn(session=session, settings=settings),
         )
         if result is None:
-            raise RuntimeError(f"Legacy workflow engine did not process run {run.run_id}")
+            raise RuntimeError(
+                f"Legacy workflow engine did not process run {run.run_id}"
+            )
         return result
 
     def resume_workflow(
@@ -79,7 +100,9 @@ class LegacyWorkflowEngine:
         request: RunHumanInputRequest,
     ) -> Run:
         _ = workflow, session_factory
-        from orchestrator.core.runs.human_input_service import resume_run_from_human_input_answer
+        from orchestrator.core.runs.human_input_service import (
+            resume_run_from_human_input_answer,
+        )
 
         return resume_run_from_human_input_answer(
             session=session,
@@ -109,7 +132,9 @@ class LegacyWorkflowEngine:
         operation: WorkflowOperation,
     ) -> WorkflowOperationHandle:
         if self._workflow_handler_registry is None:
-            raise RuntimeError("Workflow operation retry handler registry is not configured")
+            raise RuntimeError(
+                "Workflow operation retry handler registry is not configured"
+            )
         return retry_workflow_operation_with_registered_handler(
             session=session,
             settings=settings,

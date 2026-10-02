@@ -12,7 +12,9 @@ from orchestrator.core.platform.secret_service import resolve_platform_secret_re
 
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
-INSTALL_REQUEST_DECISION_CUSTOM_ID_PATTERN = re.compile(r"^install_request\.(approve|reject)\.([0-9a-f]{32})$")
+INSTALL_REQUEST_DECISION_CUSTOM_ID_PATTERN = re.compile(
+    r"^install_request\.(approve|reject)\.([0-9a-f]{32})$"
+)
 ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
 ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
 
@@ -87,7 +89,9 @@ def _validate_discord_interaction_signature(
         ) from exc
 
 
-def _discord_interaction_response(*, content: str, ephemeral: bool = True) -> JSONResponse:
+def _discord_interaction_response(
+    *, content: str, ephemeral: bool = True
+) -> JSONResponse:
     response_data = {"content": content}
     if ephemeral:
         response_data["flags"] = 64

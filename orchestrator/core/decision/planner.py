@@ -31,7 +31,9 @@ class DecisionPlannerResult:
     captured_answer_summary: str | None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "gate_status", PlannerGateStatus.parse(self.gate_status))
+        object.__setattr__(
+            self, "gate_status", PlannerGateStatus.parse(self.gate_status)
+        )
 
 
 def plan_decision_questions(
@@ -81,8 +83,12 @@ def plan_decision_questions(
                 block_reason=block_reason or "",
                 cycle_id=cycle.cycle_id if cycle is not None else "",
                 case_state=case.state if case is not None else "",
-                current_questions_json=json.dumps(cycle.question_set_json if cycle is not None else []),
-                current_cycle_metadata_json=json.dumps(cycle.metadata_json if cycle is not None else {}),
+                current_questions_json=json.dumps(
+                    cycle.question_set_json if cycle is not None else []
+                ),
+                current_cycle_metadata_json=json.dumps(
+                    cycle.metadata_json if cycle is not None else {}
+                ),
                 allowed_tools_json=json.dumps(
                     sorted(stage_session.tooling.governed_tools),
                     ensure_ascii=False,
@@ -92,7 +98,9 @@ def plan_decision_questions(
     except CodexRuntimeError as exc:
         raise RuntimeError(f"Decision planner failed: {exc}") from exc
 
-    parsed_payload = DecisionPlanner.from_payload(payload, classification=classification)
+    parsed_payload = DecisionPlanner.from_payload(
+        payload, classification=classification
+    )
     return DecisionPlannerResult(
         gate_status=parsed_payload.gate_status,
         reason=parsed_payload.reason,

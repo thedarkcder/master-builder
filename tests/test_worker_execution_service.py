@@ -7,8 +7,12 @@ from unittest.mock import patch
 
 
 class WorkerExecutionServiceTests(unittest.TestCase):
-    def test_claimed_run_path_delegates_to_process_service_with_claimed_selection(self) -> None:
-        from orchestrator.core.worker import execution_service as execution_service_module
+    def test_claimed_run_path_delegates_to_process_service_with_claimed_selection(
+        self,
+    ) -> None:
+        from orchestrator.core.worker import (
+            execution_service as execution_service_module,
+        )
 
         claimed_run = SimpleNamespace(
             run_id="run-1",
@@ -27,7 +31,9 @@ class WorkerExecutionServiceTests(unittest.TestCase):
             project_id="project-1",
             policy_overrides={"max_dev_test_review_loops": 3},
         )
-        workflow = SimpleNamespace(workflow_id="workflow-1", orchestration_backend="legacy")
+        workflow = SimpleNamespace(
+            workflow_id="workflow-1", orchestration_backend="legacy"
+        )
         session = MagicMock()
         session.get.side_effect = [claimed_run, tenant, workflow]
 
@@ -42,7 +48,10 @@ class WorkerExecutionServiceTests(unittest.TestCase):
                 "resolve_run_execution_policy_context",
                 return_value=SimpleNamespace(
                     project=project,
-                    effective_policy={"max_dev_test_review_loops": 3, "allow_pr_creation": True},
+                    effective_policy={
+                        "max_dev_test_review_loops": 3,
+                        "allow_pr_creation": True,
+                    },
                 ),
             ),
             patch.object(
@@ -72,8 +81,8 @@ class WorkerExecutionServiceTests(unittest.TestCase):
             project,
         )
         self.assertEqual(
-            process_claimed_mock.call_args.kwargs["selection"].claimed_run.effective_policy[
-                "max_dev_test_review_loops"
-            ],
+            process_claimed_mock.call_args.kwargs[
+                "selection"
+            ].claimed_run.effective_policy["max_dev_test_review_loops"],
             3,
         )

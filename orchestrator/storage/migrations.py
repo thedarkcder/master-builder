@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -7,6 +5,7 @@ from sqlalchemy import create_engine, inspect, text
 import sqlalchemy as sa
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.source_layout import require_source_checkout
 from orchestrator.storage.database_support import ensure_postgres_database_url
 
 
@@ -28,7 +27,10 @@ def _table_exists(inspector: sa.Inspector, table_name: str) -> bool:
 def _column_exists(inspector: sa.Inspector, table_name: str, column_name: str) -> bool:
     if not _table_exists(inspector, table_name):
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _review_id_is_bigint(inspector: sa.Inspector) -> bool:
@@ -38,11 +40,16 @@ def _review_id_is_bigint(inspector: sa.Inspector) -> bool:
         if column.get("name") != "review_id":
             continue
         column_type = column.get("type")
-        return isinstance(column_type, sa.BigInteger) or str(column_type).upper() == "BIGINT"
+        return (
+            isinstance(column_type, sa.BigInteger)
+            or str(column_type).upper() == "BIGINT"
+        )
     return False
 
 
-def _index_columns(inspector: sa.Inspector, table_name: str, index_name: str) -> list[str] | None:
+def _index_columns(
+    inspector: sa.Inspector, table_name: str, index_name: str
+) -> list[str] | None:
     if not _table_exists(inspector, table_name):
         return None
     for index in inspector.get_indexes(table_name):
@@ -53,15 +60,21 @@ def _index_columns(inspector: sa.Inspector, table_name: str, index_name: str) ->
 
 def _desired_top_revisions(inspector: sa.Inspector) -> list[str] | None:
     tenant_revision: str | None = None
-    if _column_exists(inspector, "tenant_memberships", "discord_state") or _table_exists(
-        inspector, "tenant_user_discord_identities"
-    ):
+    if _column_exists(
+        inspector, "tenant_memberships", "discord_state"
+    ) or _table_exists(inspector, "tenant_user_discord_identities"):
         tenant_revision = "20260327_0040"
-    elif _column_exists(inspector, "tenants", "experience_config") or _table_exists(inspector, "tenant_users"):
+    elif _column_exists(inspector, "tenants", "experience_config") or _table_exists(
+        inspector, "tenant_users"
+    ):
         tenant_revision = "20260327_0039"
 
     review_revision = "20260327_0041" if _review_id_is_bigint(inspector) else None
-    desired = {revision for revision in (tenant_revision, review_revision) if revision is not None}
+    desired = {
+        revision
+        for revision in (tenant_revision, review_revision)
+        if revision is not None
+    }
     if not desired:
         return None
     return sorted(desired)
@@ -76,7 +89,9 @@ def _normalize_repaired_top_revisions(database_url: str) -> None:
                 return
             current_rows = [
                 str(value)
-                for value in connection.execute(text("SELECT version_num FROM alembic_version ORDER BY version_num")).scalars()
+                for value in connection.execute(
+                    text("SELECT version_num FROM alembic_version ORDER BY version_num")
+                ).scalars()
             ]
             current = set(current_rows)
             if not current or not current.issubset(_TOP_REVISION_IDS):
@@ -87,7 +102,11 @@ def _normalize_repaired_top_revisions(database_url: str) -> None:
                 or _column_exists(inspector, "tenant_memberships", "discord_state")
             ):
                 connection.execute(text("DELETE FROM alembic_version"))
-                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260323_0038')"))
+                connection.execute(
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES ('20260323_0038')"
+                    )
+                )
                 return
             desired_rows = _desired_top_revisions(inspector)
             if desired_rows is None or current_rows == desired_rows:
@@ -95,7 +114,9 @@ def _normalize_repaired_top_revisions(database_url: str) -> None:
             connection.execute(text("DELETE FROM alembic_version"))
             for revision in desired_rows:
                 connection.execute(
-                    text("INSERT INTO alembic_version (version_num) VALUES (:revision)"),
+                    text(
+                        "INSERT INTO alembic_version (version_num) VALUES (:revision)"
+                    ),
                     {"revision": revision},
                 )
     finally:
@@ -125,16 +146,26 @@ def _repair_stamp_if_schema_ahead_of_version(database_url: str) -> None:
             if len(rows) != 1:
                 return
             current = rows[0]
-            if current == "20260328_0044" and _table_exists(inspector, "worker_runtime_states"):
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0045'"))
+            if current == "20260328_0044" and _table_exists(
+                inspector, "worker_runtime_states"
+            ):
+                connection.execute(
+                    text("UPDATE alembic_version SET version_num = '20260328_0045'")
+                )
                 current = "20260328_0045"
-            if current == "20260328_0045" and _table_exists(inspector, "platform_settings"):
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260328_0046'"))
+            if current == "20260328_0045" and _table_exists(
+                inspector, "platform_settings"
+            ):
+                connection.execute(
+                    text("UPDATE alembic_version SET version_num = '20260328_0046'")
+                )
     finally:
         engine.dispose()
 
 
-def _repair_revision_is_materialized(inspector: sa.Inspector, repair_revision: str) -> bool:
+def _repair_revision_is_materialized(
+    inspector: sa.Inspector, repair_revision: str
+) -> bool:
     if repair_revision != "20260523_0107":
         raise RuntimeError(
             f"Orphaned alembic revision repair is not configured for repair target {repair_revision}; "
@@ -144,7 +175,9 @@ def _repair_revision_is_materialized(inspector: sa.Inspector, repair_revision: s
         _table_exists(inspector, "planning_decision_records")
         and _table_exists(inspector, "workflow_operation_work_units")
         and _column_exists(inspector, "workflow_executions", "source_external_id")
-        and _column_exists(inspector, "workflow_operation_attempts", "last_heartbeat_at")
+        and _column_exists(
+            inspector, "workflow_operation_attempts", "last_heartbeat_at"
+        )
         and _column_exists(inspector, "workflow_operation_attempts", "lease_expires_at")
         and _column_exists(inspector, "workflow_operation_attempts", "lease_owner")
         and _table_exists(inspector, "workflow_executable_work_items")
@@ -192,9 +225,11 @@ def _repair_orphaned_revision_stamp(database_url: str, head_revision: str) -> No
 
 
 def run_migrations(database_url: str | None = None) -> None:
+    root = require_source_checkout()
     settings = get_settings()
-    root = Path(__file__).resolve().parents[2]
-    target_database_url = database_url or settings.database_url
+    target_database_url = (
+        settings.database_url if database_url is None else database_url
+    )
     ensure_postgres_database_url(
         database_url=target_database_url,
         context="Migrations",

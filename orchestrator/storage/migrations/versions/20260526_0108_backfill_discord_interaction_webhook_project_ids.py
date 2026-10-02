@@ -61,20 +61,31 @@ def _channel_ids_from_discord_config(discord_config: dict[str, object]) -> set[s
     configured_channel_id = str(discord_config.get("channel_id") or "").strip()
     if configured_channel_id:
         allowed.add(configured_channel_id)
-    for key in ("ask_thread_channel_ids", "seed_followup_thread_channel_ids", *ROOM_LIST_KEYS):
+    for key in (
+        "ask_thread_channel_ids",
+        "seed_followup_thread_channel_ids",
+        *ROOM_LIST_KEYS,
+    ):
         raw_values = discord_config.get(key)
         if not isinstance(raw_values, list):
             continue
-        allowed.update(str(value or "").strip() for value in raw_values if str(value or "").strip())
+        allowed.update(
+            str(value or "").strip() for value in raw_values if str(value or "").strip()
+        )
     for key in ROOM_SINGLE_KEYS:
         normalized = str(discord_config.get(key) or "").strip()
         if normalized:
             allowed.add(normalized)
     raw_live_voice_room_links = discord_config.get("live_voice_room_links")
     if isinstance(raw_live_voice_room_links, dict):
-        for voice_channel_id, linked_text_channel_id in raw_live_voice_room_links.items():
+        for (
+            voice_channel_id,
+            linked_text_channel_id,
+        ) in raw_live_voice_room_links.items():
             normalized_voice_channel_id = str(voice_channel_id or "").strip()
-            normalized_linked_text_channel_id = str(linked_text_channel_id or "").strip()
+            normalized_linked_text_channel_id = str(
+                linked_text_channel_id or ""
+            ).strip()
             if normalized_voice_channel_id:
                 allowed.add(normalized_voice_channel_id)
             if normalized_linked_text_channel_id:
@@ -91,7 +102,9 @@ def _payload_channel_id(payload_json: object) -> str | None:
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    if not {"projects", "tenants", "webhook_jobs"}.issubset(set(inspector.get_table_names())):
+    if not {"projects", "tenants", "webhook_jobs"}.issubset(
+        set(inspector.get_table_names())
+    ):
         return
 
     project_rows = bind.execute(
@@ -118,7 +131,9 @@ def upgrade() -> None:
         if not tenant_id or not project_id:
             continue
         tenant_projects[tenant_id].append(project_id)
-        for channel_id in _channel_ids_from_discord_config(_parse_json(row["discord_config"])):
+        for channel_id in _channel_ids_from_discord_config(
+            _parse_json(row["discord_config"])
+        ):
             channel_project_candidates[(tenant_id, channel_id)].append(project_id)
         tenant_discord_config = _parse_json(row["tenant_discord_config"])
         tenant_channel_id = str(tenant_discord_config.get("channel_id") or "").strip()
@@ -170,4 +185,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError("Discord interaction webhook project scope backfill cannot be downgraded")
+    raise RuntimeError(
+        "Discord interaction webhook project scope backfill cannot be downgraded"
+    )

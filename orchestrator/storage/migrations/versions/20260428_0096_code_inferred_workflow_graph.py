@@ -24,7 +24,9 @@ def _table_exists(table_name: str) -> bool:
 
 def _fk_names(table_name: str) -> list[str]:
     inspector = sa.inspect(op.get_bind())
-    return [fk["name"] for fk in inspector.get_foreign_keys(table_name) if fk.get("name")]
+    return [
+        fk["name"] for fk in inspector.get_foreign_keys(table_name) if fk.get("name")
+    ]
 
 
 def upgrade() -> None:
@@ -33,7 +35,9 @@ def upgrade() -> None:
 
     if _table_exists("workflow_executions"):
         workflow_execution_fk_names = [
-            fk_name for fk_name in _fk_names("workflow_executions") if "workflow_type" in fk_name
+            fk_name
+            for fk_name in _fk_names("workflow_executions")
+            if "workflow_type" in fk_name
         ]
         if dialect == "sqlite":
             if workflow_execution_fk_names:

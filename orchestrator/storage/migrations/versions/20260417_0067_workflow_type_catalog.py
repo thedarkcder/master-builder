@@ -32,14 +32,19 @@ def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column.get("name") == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column.get("name") == column_name
+        for column in inspector.get_columns(table_name)
+    )
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -47,7 +52,9 @@ def upgrade() -> None:
         _has_table("workflow_types")
         and _has_table("workflow_type_operations")
         and _has_column("workflow_executions", "workflow_type_key")
-        and _has_index("workflow_executions", "ix_workflow_executions_workflow_type_key")
+        and _has_index(
+            "workflow_executions", "ix_workflow_executions_workflow_type_key"
+        )
     ):
         return
 
@@ -71,17 +78,37 @@ def upgrade() -> None:
             sa.Column("label", sa.String(length=255), nullable=False),
             sa.Column("retry_policy", sa.Text(), nullable=False),
             sa.Column("description", sa.Text(), nullable=True),
-            sa.Column("required", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "required", sa.Boolean(), nullable=False, server_default=sa.true()
+            ),
             sa.Column("sort_order", sa.Integer(), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-            sa.ForeignKeyConstraint(["workflow_type_key"], ["workflow_types.workflow_type_key"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["workflow_type_key"],
+                ["workflow_types.workflow_type_key"],
+                ondelete="CASCADE",
+            ),
             sa.PrimaryKeyConstraint("operation_definition_id"),
-            sa.UniqueConstraint("workflow_type_key", "operation_type", name="uq_workflow_type_operations_key_type"),
-            sa.UniqueConstraint("workflow_type_key", "sort_order", name="uq_workflow_type_operations_key_order"),
+            sa.UniqueConstraint(
+                "workflow_type_key",
+                "operation_type",
+                name="uq_workflow_type_operations_key_type",
+            ),
+            sa.UniqueConstraint(
+                "workflow_type_key",
+                "sort_order",
+                name="uq_workflow_type_operations_key_order",
+            ),
         )
-    if not _has_index("workflow_type_operations", "ix_workflow_type_operations_workflow_type_key"):
-        op.create_index("ix_workflow_type_operations_workflow_type_key", "workflow_type_operations", ["workflow_type_key"])
+    if not _has_index(
+        "workflow_type_operations", "ix_workflow_type_operations_workflow_type_key"
+    ):
+        op.create_index(
+            "ix_workflow_type_operations_workflow_type_key",
+            "workflow_type_operations",
+            ["workflow_type_key"],
+        )
 
     workflow_types = sa.table(
         "workflow_types",
@@ -295,10 +322,19 @@ def upgrade() -> None:
 
     added_workflow_type_key = False
     if not _has_column("workflow_executions", "workflow_type_key"):
-        op.add_column("workflow_executions", sa.Column("workflow_type_key", sa.String(length=64), nullable=True))
+        op.add_column(
+            "workflow_executions",
+            sa.Column("workflow_type_key", sa.String(length=64), nullable=True),
+        )
         added_workflow_type_key = True
-    if not _has_index("workflow_executions", "ix_workflow_executions_workflow_type_key"):
-        op.create_index("ix_workflow_executions_workflow_type_key", "workflow_executions", ["workflow_type_key"])
+    if not _has_index(
+        "workflow_executions", "ix_workflow_executions_workflow_type_key"
+    ):
+        op.create_index(
+            "ix_workflow_executions_workflow_type_key",
+            "workflow_executions",
+            ["workflow_type_key"],
+        )
 
     op.execute(
         """
@@ -315,9 +351,15 @@ def upgrade() -> None:
     )
 
     bind = op.get_bind()
-    missing = bind.execute(sa.text("SELECT COUNT(*) FROM workflow_executions WHERE workflow_type_key IS NULL")).scalar_one()
+    missing = bind.execute(
+        sa.text(
+            "SELECT COUNT(*) FROM workflow_executions WHERE workflow_type_key IS NULL"
+        )
+    ).scalar_one()
     if int(missing or 0) != 0:
-        raise RuntimeError("workflow_executions contains rows without a backfilled workflow_type_key")
+        raise RuntimeError(
+            "workflow_executions contains rows without a backfilled workflow_type_key"
+        )
 
     if bind.dialect.name != "sqlite" and added_workflow_type_key:
         op.alter_column("workflow_executions", "workflow_type_key", nullable=False)
@@ -345,9 +387,18 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_workflow_executions_workflow_type_key", "workflow_executions", type_="foreignkey")
-    op.drop_index("ix_workflow_executions_workflow_type_key", table_name="workflow_executions")
+    op.drop_constraint(
+        "fk_workflow_executions_workflow_type_key",
+        "workflow_executions",
+        type_="foreignkey",
+    )
+    op.drop_index(
+        "ix_workflow_executions_workflow_type_key", table_name="workflow_executions"
+    )
     op.drop_column("workflow_executions", "workflow_type_key")
-    op.drop_index("ix_workflow_type_operations_workflow_type_key", table_name="workflow_type_operations")
+    op.drop_index(
+        "ix_workflow_type_operations_workflow_type_key",
+        table_name="workflow_type_operations",
+    )
     op.drop_table("workflow_type_operations")
     op.drop_table("workflow_types")

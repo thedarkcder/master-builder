@@ -22,7 +22,9 @@ from orchestrator.tools.bootstrap import list_repo_bootstrap_states
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
-@router.get("/tenants/{tenant_id}/repo-bootstrap", response_model=list[RepoBootstrapStateRead])
+@router.get(
+    "/tenants/{tenant_id}/repo-bootstrap", response_model=list[RepoBootstrapStateRead]
+)
 def list_tenant_repo_bootstrap_states(
     tenant_id: str,
     _: str = Depends(require_admin),
@@ -36,7 +38,10 @@ def list_tenant_repo_bootstrap_states(
     )
 
 
-@router.get("/tenants/{tenant_id}/release/bootstrap", response_model=ReleaseBootstrapReportRead | None)
+@router.get(
+    "/tenants/{tenant_id}/release/bootstrap",
+    response_model=ReleaseBootstrapReportRead | None,
+)
 def get_release_bootstrap_report(
     tenant_id: str,
     _: str = Depends(require_admin),
@@ -50,7 +55,9 @@ def get_release_bootstrap_report(
     )
 
 
-@router.post("/tenants/{tenant_id}/release/bootstrap", response_model=ReleaseBootstrapReportRead)
+@router.post(
+    "/tenants/{tenant_id}/release/bootstrap", response_model=ReleaseBootstrapReportRead
+)
 def run_release_bootstrap(
     tenant_id: str,
     _: str = Depends(require_admin),

@@ -104,24 +104,43 @@ class FakeDiscordApiClient:
         self._messages[(channel_id, message_id)] = payload
         return {"id": message_id}
 
-    def create_thread_from_message(self, *, channel_id: str, message_id: str, name: str, auto_archive_duration: int = 1440) -> str:  # noqa: ARG002
+    def create_thread_from_message(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+        name: str,
+        auto_archive_duration: int = 1440,
+    ) -> str:  # noqa: ARG002
         thread_id = f"thread-{message_id}"
-        self.created_threads.append({"channel_id": channel_id, "message_id": message_id, "name": name})
+        self.created_threads.append(
+            {"channel_id": channel_id, "message_id": message_id, "name": name}
+        )
         self._messages[(channel_id, message_id)] = {
-            **self._messages.get((channel_id, message_id), {"id": message_id, "channel_id": channel_id}),
+            **self._messages.get(
+                (channel_id, message_id), {"id": message_id, "channel_id": channel_id}
+            ),
             "thread": {"id": thread_id},
         }
         return thread_id
 
-    def ensure_thread_for_message(self, *, channel_id: str, message_id: str, thread_name: str) -> str:
+    def ensure_thread_for_message(
+        self, *, channel_id: str, message_id: str, thread_name: str
+    ) -> str:
         message = self._messages.get((channel_id, message_id))
         thread = message.get("thread") if isinstance(message, dict) else None
         if isinstance(thread, dict) and str(thread.get("id") or "").strip():
             return str(thread["id"])
-        return self.create_thread_from_message(channel_id=channel_id, message_id=message_id, name=thread_name)
+        return self.create_thread_from_message(
+            channel_id=channel_id, message_id=message_id, name=thread_name
+        )
 
     def get_message(self, *, channel_id: str, message_id: str) -> dict:
-        return dict(self._messages.get((channel_id, message_id), {"id": message_id, "channel_id": channel_id}))
+        return dict(
+            self._messages.get(
+                (channel_id, message_id), {"id": message_id, "channel_id": channel_id}
+            )
+        )
 
     def get_channel(self, *, channel_id: str) -> dict[str, str]:
         return {"id": channel_id, "name": f"channel-{channel_id}"}
@@ -137,7 +156,9 @@ def configure_runtime_environment(
     database_url = f"sqlite:///{temp_dir.name}/{database_name}"
     checkout_dir = os.path.join(temp_dir.name, "checkouts")
     os.environ["ORCHESTRATOR_DATABASE_URL"] = database_url
-    os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+    os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode(
+        "utf-8"
+    )
     if include_checkout_dir:
         os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = checkout_dir
     if include_admin:
@@ -190,7 +211,9 @@ class ProductionPathApiTestCase(SqliteTemplateDbTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._runtime_workspace = TemporaryDirectory()
-        cls._runtime_checkout_dir = os.path.join(cls._runtime_workspace.name, "checkouts")
+        cls._runtime_checkout_dir = os.path.join(
+            cls._runtime_workspace.name, "checkouts"
+        )
         cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
         super().setUpClass()
 
@@ -200,7 +223,9 @@ class ProductionPathApiTestCase(SqliteTemplateDbTestCase):
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
         }
         if cls.include_checkout_dir():
-            env_updates["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = cls._runtime_checkout_dir
+            env_updates["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = (
+                cls._runtime_checkout_dir
+            )
         if cls.include_admin_env():
             env_updates["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
             env_updates["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
@@ -251,8 +276,8 @@ class ProductionPathApiTestCase(SqliteTemplateDbTestCase):
 def seed_core_runtime_state(
     session_factory,
     *,
-    tenant_id: str = "example",
-    project_id: str = "example-default",
+    tenant_id: str = "example-workspace",
+    project_id: str = "example-workspace-default",
     jira_project_key: str = "TP",
     github_repository: str = "org/repo",
     discord_channel_id: str = "discord-channel-1",
@@ -293,7 +318,9 @@ def seed_core_runtime_state(
                 "installation_id": "12345",
                 "webhook_secret_ref": None,
             },
-            repos_config={"github_repository": f"https://github.com/{github_repository}"},
+            repos_config={
+                "github_repository": f"https://github.com/{github_repository}"
+            },
             policy_config={
                 "allow_jira_transitions": False,
                 "allow_pr_creation": True,
@@ -346,7 +373,9 @@ def seed_core_runtime_state(
         return tenant, project, connection
 
 
-def upsert_platform_secret(*, session_factory, secret_ref: str, plaintext_value: str) -> None:
+def upsert_platform_secret(
+    *, session_factory, secret_ref: str, plaintext_value: str
+) -> None:
     with session_factory() as session:
         platform_secret_service.upsert_secret(
             session=session,

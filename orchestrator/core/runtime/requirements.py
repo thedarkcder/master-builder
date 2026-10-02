@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from orchestrator.core.runtime.agent_execution_profiles import list_supported_runtime_kinds
-from orchestrator.core.runtime.agent_runtime_resolver import resolve_execution_profile_for_selector
+from orchestrator.core.runtime.agent_execution_profiles import (
+    list_supported_runtime_kinds,
+)
+from orchestrator.core.runtime.agent_runtime_resolver import (
+    resolve_execution_profile_for_selector,
+)
 from orchestrator.core.config import Settings
 
 WORKFLOW_RUNTIME_SELECTORS: tuple[str, ...] = (
@@ -44,7 +48,9 @@ def normalize_runtime_kinds(raw_value: object | None) -> list[str]:
 
 
 def required_runtime_kinds_for_run(run: object) -> set[str]:
-    return set(normalize_runtime_kinds(getattr(run, "required_runtime_kinds_json", None)))
+    return set(
+        normalize_runtime_kinds(getattr(run, "required_runtime_kinds_json", None))
+    )
 
 
 def resolve_required_runtime_kinds_for_workflow(

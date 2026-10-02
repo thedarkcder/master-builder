@@ -96,7 +96,7 @@ export function HetznerSetupForm() {
       `export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
       `export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET=${quote(state.atlassianState)}`,
       `export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.encKey)}`,
-      `export NEXTAUTH_SECRET=${quote(state.nextAuthSecret)}`,
+      `export AUTH_SECRET=${quote(state.nextAuthSecret)}`,
       `export ORCHESTRATOR_EMAIL_FROM_ADDRESS=${quote(state.emailFrom)}`,
       `export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=${quote(state.emailProvider)}`,
       `export ORCHESTRATOR_RESEND_API_KEY=${quote(state.resendKey)}`,
@@ -122,7 +122,7 @@ export function HetznerSetupForm() {
       `  - export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
       `  - export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET=${quote(state.atlassianState)}`,
       `  - export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=${quote(state.encKey)}`,
-      `  - export NEXTAUTH_SECRET=${quote(state.nextAuthSecret)}`,
+      `  - export AUTH_SECRET=${quote(state.nextAuthSecret)}`,
       `  - export ORCHESTRATOR_EMAIL_FROM_ADDRESS=${quote(state.emailFrom)}`,
       `  - export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=${quote(state.emailProvider)}`,
       `  - export ORCHESTRATOR_RESEND_API_KEY=${quote(state.resendKey)}`,
@@ -180,7 +180,7 @@ export function HetznerSetupForm() {
           {input("githubState", "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", "password")}
           {input("atlassianState", "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET", "password")}
           {input("encKey", "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", "password")}
-          {input("nextAuthSecret", "NEXTAUTH_SECRET", "password")}
+          {input("nextAuthSecret", "AUTH_SECRET", "password")}
           {input("emailFrom", "ORCHESTRATOR_EMAIL_FROM_ADDRESS")}
           {input("emailProvider", "ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER")}
           {input("resendKey", "ORCHESTRATOR_RESEND_API_KEY", "password")}

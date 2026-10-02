@@ -24,7 +24,9 @@ def _table_exists(table_name: str) -> bool:
 
 def _index_exists(table_name: str, index_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
-    return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
+    return any(
+        index.get("name") == index_name for index in inspector.get_indexes(table_name)
+    )
 
 
 def upgrade() -> None:
@@ -46,17 +48,36 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
-            sa.ForeignKeyConstraint(["project_id"], ["projects.project_id"], ondelete="SET NULL"),
+            sa.ForeignKeyConstraint(
+                ["project_id"], ["projects.project_id"], ondelete="SET NULL"
+            ),
             sa.ForeignKeyConstraint(["run_id"], ["runs.run_id"], ondelete="SET NULL"),
-            sa.ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+            sa.ForeignKeyConstraint(
+                ["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"
+            ),
             sa.PrimaryKeyConstraint("context_id"),
         )
     for index_name, columns in (
-        ("ix_followup_contexts_tenant_status_thread", ["tenant_id", "status", "thread_channel_id"]),
-        ("ix_followup_contexts_tenant_status_channel", ["tenant_id", "status", "channel_id"]),
-        ("ix_followup_contexts_tenant_status_root_message", ["tenant_id", "status", "root_message_id"]),
-        ("ix_followup_contexts_tenant_status_request", ["tenant_id", "status", "request_id"]),
-        ("ix_followup_contexts_tenant_type_issue", ["tenant_id", "context_type", "issue_key"]),
+        (
+            "ix_followup_contexts_tenant_status_thread",
+            ["tenant_id", "status", "thread_channel_id"],
+        ),
+        (
+            "ix_followup_contexts_tenant_status_channel",
+            ["tenant_id", "status", "channel_id"],
+        ),
+        (
+            "ix_followup_contexts_tenant_status_root_message",
+            ["tenant_id", "status", "root_message_id"],
+        ),
+        (
+            "ix_followup_contexts_tenant_status_request",
+            ["tenant_id", "status", "request_id"],
+        ),
+        (
+            "ix_followup_contexts_tenant_type_issue",
+            ["tenant_id", "context_type", "issue_key"],
+        ),
         ("ix_followup_contexts_created_at", ["created_at"]),
     ):
         if not _index_exists("followup_contexts", index_name):

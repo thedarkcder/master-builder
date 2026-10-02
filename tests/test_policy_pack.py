@@ -26,15 +26,23 @@ class PolicyPackTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "JSON object"):
                 load_policy_pack(language_key="python", policy_pack_dir=tmp)
 
-            missing_path.write_text('{"name":"","primary_language":"python","banned_patterns":["x"]}', encoding="utf-8")
+            missing_path.write_text(
+                '{"name":"","primary_language":"python","banned_patterns":["x"]}',
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(ValueError, "missing 'name'"):
                 load_policy_pack(language_key="python", policy_pack_dir=tmp)
 
-            missing_path.write_text('{"name":"python","primary_language":"","banned_patterns":["x"]}', encoding="utf-8")
+            missing_path.write_text(
+                '{"name":"python","primary_language":"","banned_patterns":["x"]}',
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(ValueError, "missing 'primary_language'"):
                 load_policy_pack(language_key="python", policy_pack_dir=tmp)
 
-            missing_path.write_text('{"name":"python","primary_language":"python"}', encoding="utf-8")
+            missing_path.write_text(
+                '{"name":"python","primary_language":"python"}', encoding="utf-8"
+            )
             with self.assertRaisesRegex(ValueError, "missing 'banned_patterns'"):
                 load_policy_pack(language_key="python", policy_pack_dir=tmp)
 
@@ -55,8 +63,12 @@ class PolicyPackTests(unittest.TestCase):
 
     def test_detect_language_key_for_filename(self) -> None:
         self.assertEqual(_detect_language_key_for_filename("src/app.py"), "python")
-        self.assertEqual(_detect_language_key_for_filename("admin-ui/src/App.tsx"), "react")
-        self.assertEqual(_detect_language_key_for_filename("services/frontend/index.ts"), "react")
+        self.assertEqual(
+            _detect_language_key_for_filename("admin-ui/src/App.tsx"), "react"
+        )
+        self.assertEqual(
+            _detect_language_key_for_filename("services/frontend/index.ts"), "react"
+        )
         self.assertEqual(_detect_language_key_for_filename("server/index.ts"), "node")
         self.assertIsNone(_detect_language_key_for_filename("README.md"))
 
@@ -74,7 +86,9 @@ class PolicyPackTests(unittest.TestCase):
         assert selected is not None
         self.assertEqual(selected.language_key, "react")
 
-    def test_select_policy_pack_returns_none_when_no_supported_file_or_missing_pack(self) -> None:
+    def test_select_policy_pack_returns_none_when_no_supported_file_or_missing_pack(
+        self,
+    ) -> None:
         self.assertIsNone(
             select_policy_pack_for_files(
                 files=[PullRequestFileChange(filename="README.md", patch="+ docs")],
@@ -89,7 +103,11 @@ class PolicyPackTests(unittest.TestCase):
             )
             self.assertIsNone(
                 select_policy_pack_for_files(
-                    files=[PullRequestFileChange(filename="admin-ui/src/App.tsx", patch="+ const x = 1;")],
+                    files=[
+                        PullRequestFileChange(
+                            filename="admin-ui/src/App.tsx", patch="+ const x = 1;"
+                        )
+                    ],
                     policy_pack_dir=tmp,
                 )
             )
@@ -174,13 +192,19 @@ class PolicyPackTests(unittest.TestCase):
 
     def test_find_banned_pattern_violations_skips_empty_patch(self) -> None:
         selected = select_policy_pack_for_files(
-            files=[PullRequestFileChange(filename="orchestrator/worker.py", patch="+ import time")],
+            files=[
+                PullRequestFileChange(
+                    filename="orchestrator/worker.py", patch="+ import time"
+                )
+            ],
         )
         self.assertIsNotNone(selected)
         assert selected is not None
 
         violations = find_banned_pattern_violations(
             policy_pack=selected,
-            files=[PullRequestFileChange(filename="orchestrator/worker.py", patch=None)],
+            files=[
+                PullRequestFileChange(filename="orchestrator/worker.py", patch=None)
+            ],
         )
         self.assertEqual(violations, [])

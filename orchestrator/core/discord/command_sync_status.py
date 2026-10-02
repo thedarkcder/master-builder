@@ -37,7 +37,9 @@ def discord_command_sync_service_instance_id() -> str:
     return f"{os.uname().nodename}:{os.getpid()}"
 
 
-def _row_to_snapshot(row: DiscordCommandSyncRuntimeState | None) -> DiscordCommandSyncStatusSnapshot:
+def _row_to_snapshot(
+    row: DiscordCommandSyncRuntimeState | None,
+) -> DiscordCommandSyncStatusSnapshot:
     if row is None:
         return DiscordCommandSyncStatusSnapshot()
     return DiscordCommandSyncStatusSnapshot(
@@ -87,12 +89,16 @@ def get_discord_command_sync_status(
     settings: Settings | None = None,
 ) -> DiscordCommandSyncStatusSnapshot:
     if session is not None:
-        return _row_to_snapshot(session.get(DiscordCommandSyncRuntimeState, RUNTIME_NAME))
+        return _row_to_snapshot(
+            session.get(DiscordCommandSyncRuntimeState, RUNTIME_NAME)
+        )
 
     resolved_settings = settings or get_settings()
     session_factory = create_session_factory(resolved_settings.database_url)
     with session_factory() as owned_session:
-        return _row_to_snapshot(owned_session.get(DiscordCommandSyncRuntimeState, RUNTIME_NAME))
+        return _row_to_snapshot(
+            owned_session.get(DiscordCommandSyncRuntimeState, RUNTIME_NAME)
+        )
 
 
 def mark_discord_command_sync_attempt(

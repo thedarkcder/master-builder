@@ -4,7 +4,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
-from orchestrator.core.runtime.models import CodexModelOption, normalize_codex_model, normalize_codex_reasoning_effort, parse_supported_codex_models
+from orchestrator.core.runtime.models import (
+    CodexModelOption,
+    normalize_codex_model,
+    normalize_codex_reasoning_effort,
+    parse_supported_codex_models,
+)
 
 PROFILE_PM_CONVERSATION = "pm_conversation"
 PROFILE_ENGINEERING_EXECUTION = "engineering_execution"
@@ -248,8 +253,12 @@ def merge_agent_routing(
     return merged
 
 
-def _select_fast_codex_model(*, default_model: str, configured_models: str | None) -> str:
-    options = parse_supported_codex_models(default_model=default_model, configured_models=configured_models)
+def _select_fast_codex_model(
+    *, default_model: str, configured_models: str | None
+) -> str:
+    options = parse_supported_codex_models(
+        default_model=default_model, configured_models=configured_models
+    )
     for candidate in options:
         if candidate.model_id == "gpt-5.4-mini":
             return candidate.model_id
@@ -257,7 +266,9 @@ def _select_fast_codex_model(*, default_model: str, configured_models: str | Non
         return options[1].model_id
     resolved_default_model = normalize_codex_model(default_model)
     if resolved_default_model is None:
-        raise ValueError("default_execution_profiles requires a built-in engineering default model")
+        raise ValueError(
+            "default_execution_profiles requires a built-in engineering default model"
+        )
     return resolved_default_model
 
 
@@ -272,12 +283,20 @@ def default_execution_profiles(
 ) -> dict[str, dict[str, Any]]:
     normalized_codex_command = str(default_codex_cli_command or "").strip() or "codex"
     normalized_chat_command = (
-        str(default_chat_cli_command or default_claude_cli_command or "").strip() or normalized_codex_command
+        str(default_chat_cli_command or default_claude_cli_command or "").strip()
+        or normalized_codex_command
     )
-    normalized_codex_model = _BUILTIN_PROFILE_MODELS[PROFILE_ENGINEERING_EXECUTION_DEFAULT]
+    normalized_codex_model = _BUILTIN_PROFILE_MODELS[
+        PROFILE_ENGINEERING_EXECUTION_DEFAULT
+    ]
     normalized_chat_model = _BUILTIN_PROFILE_MODELS[PROFILE_PM_CONVERSATION_DEFAULT]
-    normalized_codex_effort = normalize_codex_reasoning_effort(default_codex_reasoning_effort) or "medium"
-    normalized_chat_effort = normalize_codex_reasoning_effort(default_chat_reasoning_effort) or normalized_codex_effort
+    normalized_codex_effort = (
+        normalize_codex_reasoning_effort(default_codex_reasoning_effort) or "medium"
+    )
+    normalized_chat_effort = (
+        normalize_codex_reasoning_effort(default_chat_reasoning_effort)
+        or normalized_codex_effort
+    )
     fast_codex_model = _select_fast_codex_model(
         default_model=normalized_codex_model,
         configured_models=default_codex_supported_models,
@@ -398,8 +417,12 @@ def _normalize_profile_record(raw_profile: dict[str, Any]) -> dict[str, Any] | N
         "model": model,
         "tool_bridge_allowed": bool(raw_profile.get("tool_bridge_allowed")),
     }
-    reasoning_effort = normalize_codex_reasoning_effort(raw_profile.get("reasoning_effort"))
-    if reasoning_effort is not None and runtime_kind_supports_reasoning_effort(runtime_kind):
+    reasoning_effort = normalize_codex_reasoning_effort(
+        raw_profile.get("reasoning_effort")
+    )
+    if reasoning_effort is not None and runtime_kind_supports_reasoning_effort(
+        runtime_kind
+    ):
         profile["reasoning_effort"] = reasoning_effort
     fallback_profile = str(raw_profile.get("fallback_profile") or "").strip()
     if fallback_profile:
@@ -446,7 +469,11 @@ def merge_execution_profiles(
     project_profiles: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     merged = deepcopy(default_profiles)
-    for source in (platform_profiles or {}, tenant_profiles or {}, project_profiles or {}):
+    for source in (
+        platform_profiles or {},
+        tenant_profiles or {},
+        project_profiles or {},
+    ):
         for profile_name, profile in source.items():
             merged[profile_name] = deepcopy(profile)
     return merged
@@ -475,17 +502,24 @@ def resolve_execution_profile_name(
     normalized_agent_name = str(agent_name or "").strip()
     normalized_agent_role = str(agent_role or "").strip()
     if normalized_agent_name:
-        profile_name = str((platform_name_routing or {}).get(normalized_agent_name) or "").strip()
+        profile_name = str(
+            (platform_name_routing or {}).get(normalized_agent_name) or ""
+        ).strip()
         if profile_name:
             return profile_name
     if normalized_agent_role:
-        profile_name = str((platform_role_routing or {}).get(normalized_agent_role) or "").strip()
+        profile_name = str(
+            (platform_role_routing or {}).get(normalized_agent_role) or ""
+        ).strip()
         if profile_name:
             return profile_name
     normalized_selector = str(selector or "").strip()
     if not normalized_selector:
         return PROFILE_GENERAL_PLANNING
-    return str(routing.get(normalized_selector) or PROFILE_GENERAL_PLANNING).strip() or PROFILE_GENERAL_PLANNING
+    return (
+        str(routing.get(normalized_selector) or PROFILE_GENERAL_PLANNING).strip()
+        or PROFILE_GENERAL_PLANNING
+    )
 
 
 def build_agent_execution_profile(
@@ -493,22 +527,33 @@ def build_agent_execution_profile(
     profile_name: str,
     profiles: dict[str, dict[str, Any]],
 ) -> AgentExecutionProfile:
-    raw_profile = dict(profiles.get(profile_name) or profiles.get(PROFILE_GENERAL_PLANNING) or {})
-    runtime_kind = _normalized_runtime_kind(raw_profile.get("runtime_kind")) or RUNTIME_KIND_CODEX_CLI
+    raw_profile = dict(
+        profiles.get(profile_name) or profiles.get(PROFILE_GENERAL_PLANNING) or {}
+    )
+    runtime_kind = (
+        _normalized_runtime_kind(raw_profile.get("runtime_kind"))
+        or RUNTIME_KIND_CODEX_CLI
+    )
     cli_command = str(raw_profile.get("cli_command") or "").strip()
     model = normalize_codex_model(raw_profile.get("model"))
     if model is None:
         raise ValueError(f"Execution profile '{profile_name}' is missing a model")
-    reasoning_effort = normalize_codex_reasoning_effort(raw_profile.get("reasoning_effort"))
+    reasoning_effort = normalize_codex_reasoning_effort(
+        raw_profile.get("reasoning_effort")
+    )
     fallback_profile = str(raw_profile.get("fallback_profile") or "").strip() or None
     base_url = str(raw_profile.get("base_url") or "").strip() or None
-    api_key_secret_ref = str(raw_profile.get("api_key_secret_ref") or "").strip() or None
+    api_key_secret_ref = (
+        str(raw_profile.get("api_key_secret_ref") or "").strip() or None
+    )
     return AgentExecutionProfile(
         profile_name=profile_name,
         runtime_kind=runtime_kind,
         cli_command=cli_command,
         model=model,
-        reasoning_effort=reasoning_effort if runtime_kind_supports_reasoning_effort(runtime_kind) else None,
+        reasoning_effort=reasoning_effort
+        if runtime_kind_supports_reasoning_effort(runtime_kind)
+        else None,
         tool_bridge_allowed=bool(raw_profile.get("tool_bridge_allowed")),
         fallback_profile=fallback_profile,
         base_url=base_url,
@@ -523,21 +568,26 @@ def collect_models_for_runtime_kind(
     codex_supported_models: str | None,
     profiles: dict[str, dict[str, Any]] | None = None,
 ) -> list[CodexModelOption]:
-    normalized_runtime_kind = _normalized_runtime_kind(runtime_kind) or RUNTIME_KIND_CODEX_CLI
+    normalized_runtime_kind = (
+        _normalized_runtime_kind(runtime_kind) or RUNTIME_KIND_CODEX_CLI
+    )
     options: list[CodexModelOption] = []
     seen: set[str] = set()
 
     profile_models_for_runtime = [
         normalize_codex_model(profile.get("model"))
         for profile in (profiles or {}).values()
-        if _normalized_runtime_kind(profile.get("runtime_kind")) == normalized_runtime_kind
+        if _normalized_runtime_kind(profile.get("runtime_kind"))
+        == normalized_runtime_kind
     ]
     resolved_default_model = normalize_codex_model(default_model) or next(
         (model for model in profile_models_for_runtime if model is not None),
         None,
     )
 
-    def add_option(model_id: str, label: str | None = None, description: str | None = None) -> None:
+    def add_option(
+        model_id: str, label: str | None = None, description: str | None = None
+    ) -> None:
         normalized_model = normalize_codex_model(model_id)
         if normalized_model is None or normalized_model in seen:
             return
@@ -557,7 +607,9 @@ def collect_models_for_runtime_kind(
         ):
             add_option(option.model_id, option.label, option.description)
 
-    for model_id, label, description in _STATIC_MODEL_OPTIONS.get(normalized_runtime_kind, ()):
+    for model_id, label, description in _STATIC_MODEL_OPTIONS.get(
+        normalized_runtime_kind, ()
+    ):
         add_option(model_id, label, description)
 
     for model_id in profile_models_for_runtime:

@@ -38,7 +38,9 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
         self.checkout_dir = os.path.join(self.temp_dir.name, "checkouts")
 
         os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
+        os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = (
+            Fernet.generate_key().decode("utf-8")
+        )
         os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.checkout_dir
 
         get_settings.cache_clear()
@@ -59,8 +61,8 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             tenant = Tenant(
-                tenant_id="example",
-                name="example",
+                tenant_id="example-workspace",
+                name="Example Workspace",
                 is_enabled=True,
                 jira_config={
                     "connection_id": "conn-1",
@@ -90,9 +92,9 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
                 updated_at=now,
             )
             project = Project(
-                project_id="example-default",
-                tenant_id="example",
-                name="example Default",
+                project_id="example-workspace-default",
+                tenant_id="example-workspace",
+                name="Example Workspace Default",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
                 policy_overrides={},
@@ -124,8 +126,8 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
             )
             case = DecisionCase(
                 case_id="case-1",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 issue_key="GP-124",
                 state="blocked",
                 blocked_reason="decision_gate_required",
@@ -146,8 +148,8 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
             cycle = DecisionCycle(
                 cycle_id="cycle-1",
                 case_id="case-1",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 issue_key="GP-124",
                 status="open",
                 reason="Need one policy answer",
@@ -170,8 +172,8 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
                 answer_id="answer-1",
                 case_id="case-1",
                 cycle_id="cycle-1",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 issue_key="GP-124",
                 question_id="q0",
                 question_kind="decision_gate",
@@ -192,8 +194,8 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
                 dedupe_key="discord:cycle-1:message-1",
                 case_id="case-1",
                 cycle_id="cycle-1",
-                tenant_id="example",
-                project_id="example-default",
+                tenant_id="example-workspace",
+                project_id="example-workspace-default",
                 issue_key="GP-124",
                 source_transport="discord",
                 source_ref="message-1",
@@ -204,19 +206,23 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
                 metadata_json={"source": "discord"},
                 created_at=now,
             )
-            session.add_all([tenant, project, connection, case, cycle, answer, evidence])
+            session.add_all(
+                [tenant, project, connection, case, cycle, answer, evidence]
+            )
             session.commit()
 
-    def _invoke_agent_tool(self, *, tool_name: str, args: dict[str, object], issue_key: str = "GP-124") -> tuple[int, dict]:
+    def _invoke_agent_tool(
+        self, *, tool_name: str, args: dict[str, object], issue_key: str = "GP-124"
+    ) -> tuple[int, dict]:
         output = io.StringIO()
         with redirect_stdout(output):
             exit_code = cli_main(
                 [
                     "agent-tool",
                     "--tenant",
-                    "example",
+                    "example-workspace",
                     "--project",
-                    "example-default",
+                    "example-workspace-default",
                     "--issue",
                     issue_key,
                     "--stage",
@@ -232,7 +238,9 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
         return exit_code, payload
 
     def test_cli_agent_tool_decision_read_state_returns_current_state(self) -> None:
-        exit_code, payload = self._invoke_agent_tool(tool_name="decision.read_state", args={})
+        exit_code, payload = self._invoke_agent_tool(
+            tool_name="decision.read_state", args={}
+        )
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["ok"])
@@ -253,8 +261,14 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.tools.atlassian_oauth_client", return_value=fake_client),
-            patch("orchestrator.core.runtime.tools.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch(
+                "orchestrator.core.runtime.tools.atlassian_oauth_client",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.core.runtime.tools.refresh_atlassian_connection_tokens",
+                return_value="access-token",
+            ),
         ):
             exit_code, payload = self._invoke_agent_tool(
                 tool_name="jira.get_issue",

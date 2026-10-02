@@ -28,7 +28,12 @@ from orchestrator.core.runs.service import (
 )
 from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
 from orchestrator.core.workflow.type_catalog import get_workflow_type_by_handler_key
-from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    WorkflowExecution,
+    WorkflowOperation,
+)
 
 __all__ = [
     "WorkflowAdvanceHandler",
@@ -85,7 +90,9 @@ class WorkflowRuntime:
                 "workflow.execution_key": request.execution.key,
                 "workflow.source_system": request.execution.source.source_system,
                 "workflow.source_ref": request.execution.source.source_ref,
-                "orchestration.backend": str(getattr(self._settings, "orchestration_backend", "") or ""),
+                "orchestration.backend": str(
+                    getattr(self._settings, "orchestration_backend", "") or ""
+                ),
             },
         ):
             workflow_type = get_workflow_type_by_handler_key(
@@ -109,7 +116,9 @@ class WorkflowRuntime:
         claim_id: str,
     ) -> Run:
         workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
-        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        workflow_type_key = str(
+            getattr(workflow, "workflow_type_key", "") or ""
+        ).strip()
         tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
         project_id = str(getattr(workflow, "project_id", "") or "").strip()
         run_id = str(getattr(run, "run_id", "") or "").strip()
@@ -126,7 +135,9 @@ class WorkflowRuntime:
             return self._engine(workflow=workflow).start_workflow(
                 session=self._session,
                 settings=self._settings,
-                session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
+                session_factory=create_session_factory_for_engine(
+                    session=self._session, settings=self._settings
+                ),
                 workflow=workflow,
                 run=run,
                 claim_id=claim_id,
@@ -152,7 +163,11 @@ class WorkflowRuntime:
                 "workflow.commit_immediately": commit,
             },
         ):
-            enqueue = enqueue_attempt_for_workflow if commit else enqueue_attempt_for_workflow_uncommitted
+            enqueue = (
+                enqueue_attempt_for_workflow
+                if commit
+                else enqueue_attempt_for_workflow_uncommitted
+            )
             return enqueue(
                 self._session,
                 workflow_id=workflow_id,
@@ -166,7 +181,9 @@ class WorkflowRuntime:
         request: RunHumanInputRequest,
     ) -> Run:
         workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
-        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        workflow_type_key = str(
+            getattr(workflow, "workflow_type_key", "") or ""
+        ).strip()
         tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
         request_id = str(getattr(request, "request_id", "") or "").strip()
         with telemetry_span(
@@ -181,7 +198,9 @@ class WorkflowRuntime:
             return self._engine(workflow=workflow).resume_workflow(
                 session=self._session,
                 settings=self._settings,
-                session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
+                session_factory=create_session_factory_for_engine(
+                    session=self._session, settings=self._settings
+                ),
                 workflow=workflow,
                 request=request,
             )
@@ -192,7 +211,9 @@ class WorkflowRuntime:
         workflow: WorkflowExecution,
     ) -> WorkflowEngineState:
         workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
-        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        workflow_type_key = str(
+            getattr(workflow, "workflow_type_key", "") or ""
+        ).strip()
         tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
         with telemetry_span(
             "workflow_runtime.query_execution",
@@ -211,7 +232,9 @@ class WorkflowRuntime:
         operation: WorkflowOperation,
     ) -> WorkflowOperationHandle:
         workflow_id = str(getattr(workflow, "workflow_id", "") or "").strip()
-        workflow_type_key = str(getattr(workflow, "workflow_type_key", "") or "").strip()
+        workflow_type_key = str(
+            getattr(workflow, "workflow_type_key", "") or ""
+        ).strip()
         tenant_id = str(getattr(workflow, "tenant_id", "") or "").strip()
         operation_id = str(getattr(operation, "operation_id", "") or "").strip()
         operation_type = str(getattr(operation, "operation_type", "") or "").strip()
@@ -228,7 +251,9 @@ class WorkflowRuntime:
             return self._engine(workflow=workflow).retry_workflow_operation(
                 session=self._session,
                 settings=self._settings,
-                session_factory=create_session_factory_for_engine(session=self._session, settings=self._settings),
+                session_factory=create_session_factory_for_engine(
+                    session=self._session, settings=self._settings
+                ),
                 workflow=workflow,
                 operation=operation,
             )

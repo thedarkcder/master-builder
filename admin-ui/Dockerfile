@@ -2,21 +2,19 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY . .
+COPY admin-ui/ ./
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
+COPY third_party ./third_party
 
-RUN if [ -f package-lock.json ]; then \
-      npm ci --no-audit --no-fund; \
-    elif [ -f yarn.lock ]; then \
-      corepack enable && yarn install --frozen-lockfile; \
-    else \
-      npm install --no-audit --no-fund; \
-    fi
+RUN npm ci --no-audit --no-fund
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_PUBLIC_API_BASE_URL=http://localhost:60001
 ENV ADMIN_UI_PORT=4100
 
-RUN npm run build
+# Build-only key; supply an independent AUTH_SECRET at runtime.
+# No local environment file is copied into the build context.
+RUN AUTH_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')" ORCHESTRATOR_API_BASE_URL=http://api:4000 npm run build
 
 EXPOSE 4100
 

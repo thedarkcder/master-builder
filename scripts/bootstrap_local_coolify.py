@@ -45,15 +45,21 @@ def main() -> int:
 
     database_url = _psycopg_database_url(_required_env("ORCHESTRATOR_DATABASE_URL"))
     encryption_key = _required_env("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY")
-    coolify_local_api_base_url = os.environ.get("LOCAL_COOLIFY_API_BASE_URL", DEFAULT_LOCAL_COOLIFY_API_BASE_URL)
+    coolify_local_api_base_url = os.environ.get(
+        "LOCAL_COOLIFY_API_BASE_URL", DEFAULT_LOCAL_COOLIFY_API_BASE_URL
+    )
     coolify_container_name = os.environ.get("LOCAL_COOLIFY_CONTAINER_NAME", "coolify")
     local_preview_base_domain = os.environ.get("LOCAL_PREVIEW_BASE_DOMAIN", "").strip()
     local_preview_lan_ip = os.environ.get("LOCAL_PREVIEW_LAN_IP", "").strip()
-    local_preview_proxy_port = os.environ.get("LOCAL_PREVIEW_PROXY_PORT", DEFAULT_LOCAL_PREVIEW_PROXY_PORT).strip()
+    local_preview_proxy_port = os.environ.get(
+        "LOCAL_PREVIEW_PROXY_PORT", DEFAULT_LOCAL_PREVIEW_PROXY_PORT
+    ).strip()
 
     _wait_for_coolify_api(coolify_local_api_base_url)
     _enable_coolify_api()
-    ssh_private_key = _ensure_local_ssh_host(root_dir=root_dir, coolify_container_name=coolify_container_name)
+    ssh_private_key = _ensure_local_ssh_host(
+        root_dir=root_dir, coolify_container_name=coolify_container_name
+    )
 
     with psycopg.connect(database_url) as connection:
         tenants = _local_coolify_tenants(connection)
@@ -61,7 +67,13 @@ def main() -> int:
             print("No local Coolify deployment planes configured.")
             return 0
 
-        token = _coolify_token(connection, encryption_key, coolify_local_api_base_url, coolify_container_name, tenants)
+        token = _coolify_token(
+            connection,
+            encryption_key,
+            coolify_local_api_base_url,
+            coolify_container_name,
+            tenants,
+        )
         server_uuid, destination_uuid = _configure_coolify_local_server(
             token=token,
             coolify_local_api_base_url=coolify_local_api_base_url,
@@ -85,7 +97,9 @@ def main() -> int:
                 coolify_local_api_base_url=coolify_local_api_base_url,
             )
             plane = dict(tenant.deployment_plane_config)
-            plane["api_base_url"] = _resolve_local_coolify_api_base_url(plane.get("api_base_url"))
+            plane["api_base_url"] = _resolve_local_coolify_api_base_url(
+                plane.get("api_base_url")
+            )
             plane["base_domain"] = _resolve_local_preview_base_domain(
                 existing_base_domain=plane.get("base_domain"),
                 configured_base_domain=local_preview_base_domain,
@@ -93,7 +107,9 @@ def main() -> int:
                 proxy_port=local_preview_proxy_port,
             )
             plane["coolify_project_uuid"] = project_uuid
-            plane["coolify_environment_name"] = str(plane.get("coolify_environment_name") or "production")
+            plane["coolify_environment_name"] = str(
+                plane.get("coolify_environment_name") or "production"
+            )
             plane["coolify_server_uuid"] = server_uuid
             plane["coolify_destination_uuid"] = destination_uuid
             plane["coolify_github_app_uuid"] = app_uuid_by_tenant[tenant.tenant_id]
@@ -115,7 +131,9 @@ def _load_dotenv(path: Path) -> None:
             continue
         key, value = stripped.split("=", 1)
         value = value.strip()
-        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
             value = value[1:-1]
         os.environ.setdefault(key.strip(), value)
 
@@ -145,19 +163,37 @@ def _wait_for_coolify_api(base_url: str) -> None:
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error = str(exc)
         time.sleep(2)
-    raise RuntimeError(f"Local Coolify API did not become ready at {health_url}: {last_error}")
+    raise RuntimeError(
+        f"Local Coolify API did not become ready at {health_url}: {last_error}"
+    )
 
 
 def _enable_coolify_api() -> None:
-    _run_coolify_db_sql("update instance_settings set is_api_enabled = true where id = 0;")
+    _run_coolify_db_sql(
+        "update instance_settings set is_api_enabled = true where id = 0;"
+    )
 
 
 def _ensure_local_ssh_host(*, root_dir: Path, coolify_container_name: str) -> str:
-    key_path = Path.home() / ".master-builder-coolify" / "ssh" / "master-builder-local-host"
+    key_path = (
+        Path.home() / ".master-builder-coolify" / "ssh" / "master-builder-local-host"
+    )
     public_key_path = key_path.with_suffix(".pub")
     key_path.parent.mkdir(parents=True, exist_ok=True)
     if not key_path.exists() or not public_key_path.exists():
-        subprocess.check_call(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path), "-C", "master-builder-local-coolify"])
+        subprocess.check_call(
+            [
+                "ssh-keygen",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(key_path),
+                "-C",
+                "master-builder-local-coolify",
+            ]
+        )
     key_path.chmod(0o600)
     subprocess.check_call(
         [
@@ -201,7 +237,9 @@ def _ensure_local_ssh_host(*, root_dir: Path, coolify_container_name: str) -> st
             stdout=subprocess.DEVNULL,
         )
     private_key = key_path.read_text(encoding="utf-8")
-    _wait_for_local_ssh_host(coolify_container_name=coolify_container_name, private_key=private_key)
+    _wait_for_local_ssh_host(
+        coolify_container_name=coolify_container_name, private_key=private_key
+    )
     return private_key
 
 
@@ -221,16 +259,27 @@ def _ensure_container_running(container_name: str) -> None:
         text=True,
     ).strip()
     if running != "true":
-        subprocess.check_call(["docker", "start", container_name], stdout=subprocess.DEVNULL)
+        subprocess.check_call(
+            ["docker", "start", container_name], stdout=subprocess.DEVNULL
+        )
 
 
 def _ensure_container_network(container_name: str, network_name: str) -> None:
     networks = subprocess.check_output(
-        ["docker", "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}", container_name],
+        [
+            "docker",
+            "inspect",
+            "--format",
+            "{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}",
+            container_name,
+        ],
         text=True,
     ).splitlines()
     if network_name not in {network.strip() for network in networks}:
-        subprocess.check_call(["docker", "network", "connect", network_name, container_name], stdout=subprocess.DEVNULL)
+        subprocess.check_call(
+            ["docker", "network", "connect", network_name, container_name],
+            stdout=subprocess.DEVNULL,
+        )
 
 
 def _wait_for_local_ssh_host(*, coolify_container_name: str, private_key: str) -> None:
@@ -247,9 +296,9 @@ def _wait_for_local_ssh_host(*, coolify_container_name: str, private_key: str) -
                 (
                     "key_file=$(mktemp) && "
                     "trap 'rm -f \"$key_file\"' EXIT && "
-                    "cat > \"$key_file\" && "
-                    "chmod 600 \"$key_file\" && "
-                    "ssh -i \"$key_file\" "
+                    'cat > "$key_file" && '
+                    'chmod 600 "$key_file" && '
+                    'ssh -i "$key_file" '
                     "-o BatchMode=yes "
                     "-o StrictHostKeyChecking=no "
                     "-o UserKnownHostsFile=/dev/null "
@@ -279,7 +328,7 @@ def _run_coolify_db_sql(sql: str) -> str:
             "coolify-db",
             "sh",
             "-lc",
-            f"psql -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -tAc {json.dumps(normalized_sql)}",
+            f'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc {json.dumps(normalized_sql)}',
         ],
         text=True,
     ).strip()
@@ -369,15 +418,24 @@ def _coolify_token(
         existing = _managed_secret(connection, encryption_key, token_ref)
         if existing and _coolify_token_works(existing, coolify_local_api_base_url):
             for target_tenant in tenants:
-                if not _managed_secret(connection, encryption_key, _coolify_token_ref(target_tenant)):
-                    _upsert_managed_secret(connection, encryption_key, _coolify_token_ref(target_tenant), existing)
+                if not _managed_secret(
+                    connection, encryption_key, _coolify_token_ref(target_tenant)
+                ):
+                    _upsert_managed_secret(
+                        connection,
+                        encryption_key,
+                        _coolify_token_ref(target_tenant),
+                        existing,
+                    )
             return existing
 
     token = _create_coolify_token(coolify_container_name)
     if not _coolify_token_works(token, coolify_local_api_base_url):
         raise RuntimeError("Generated Coolify API token did not authenticate")
     for tenant in tenants:
-        _upsert_managed_secret(connection, encryption_key, _coolify_token_ref(tenant), token)
+        _upsert_managed_secret(
+            connection, encryption_key, _coolify_token_ref(tenant), token
+        )
     return token
 
 
@@ -386,7 +444,9 @@ def _resolve_local_coolify_api_base_url(existing_api_base_url: object) -> str:
     if not configured:
         return DEFAULT_COOLIFY_API_BASE_URL
     normalized = configured.removesuffix("/")
-    if normalized.startswith("http://localhost:8000") or normalized.startswith("http://127.0.0.1:8000"):
+    if normalized.startswith("http://localhost:8000") or normalized.startswith(
+        "http://127.0.0.1:8000"
+    ):
         return DEFAULT_COOLIFY_API_BASE_URL
     return configured
 
@@ -408,13 +468,20 @@ def _create_coolify_token(container_name: str) -> str:
             container_name,
             "sh",
             "-lc",
-            "php artisan tinker --execute='session([\"currentTeam\" => App\\\\Models\\\\Team::findOrFail(0)]); "
-            "file_put_contents(\"/tmp/master-builder-local-token\", App\\\\Models\\\\User::findOrFail(0)"
-            "->createToken(\"master-builder-local\", [\"root\", \"read\", \"write\", \"deploy\"])->plainTextToken);' >/dev/null",
+            'php artisan tinker --execute=\'session(["currentTeam" => App\\\\Models\\\\Team::findOrFail(0)]); '
+            'file_put_contents("/tmp/master-builder-local-token", App\\\\Models\\\\User::findOrFail(0)'
+            '->createToken("master-builder-local", ["root", "read", "write", "deploy"])->plainTextToken);\' >/dev/null',
         ]
     )
     token = subprocess.check_output(
-        ["docker", "exec", container_name, "sh", "-lc", "cat /tmp/master-builder-local-token && rm -f /tmp/master-builder-local-token"],
+        [
+            "docker",
+            "exec",
+            container_name,
+            "sh",
+            "-lc",
+            "cat /tmp/master-builder-local-token && rm -f /tmp/master-builder-local-token",
+        ],
         text=True,
     ).strip()
     if not token:
@@ -465,7 +532,9 @@ def _base_domain_hostname(value: str) -> str | None:
     normalized = value.strip().lower().rstrip(".")
     if not normalized:
         return None
-    parsed = urllib.parse.urlsplit(normalized if "://" in normalized else f"//{normalized}")
+    parsed = urllib.parse.urlsplit(
+        normalized if "://" in normalized else f"//{normalized}"
+    )
     return parsed.hostname
 
 
@@ -473,7 +542,9 @@ def _base_domain_port(value: str) -> str | None:
     normalized = value.strip().lower().rstrip(".")
     if not normalized:
         return None
-    parsed = urllib.parse.urlsplit(normalized if "://" in normalized else f"//{normalized}")
+    parsed = urllib.parse.urlsplit(
+        normalized if "://" in normalized else f"//{normalized}"
+    )
     return str(parsed.port) if parsed.port is not None else None
 
 
@@ -494,7 +565,9 @@ def _preview_base_domain_for_lan_ip(*, lan_ip: str, port: str) -> str:
     if ip.version != 4:
         raise RuntimeError("LOCAL_PREVIEW_LAN_IP must be an IPv4 address")
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-        raise RuntimeError("LOCAL_PREVIEW_LAN_IP must be reachable from another LAN device")
+        raise RuntimeError(
+            "LOCAL_PREVIEW_LAN_IP must be reachable from another LAN device"
+        )
     wildcard_host = normalized_ip.replace(".", "-")
     return f"{wildcard_host}.sslip.io:{_normalize_proxy_port(port)}"
 
@@ -509,21 +582,38 @@ def _detect_lan_ipv4() -> str:
             "Could not detect a LAN IPv4 address for local preview URLs. "
             "Set LOCAL_PREVIEW_LAN_IP or LOCAL_PREVIEW_BASE_DOMAIN."
         ) from exc
-    _preview_base_domain_for_lan_ip(lan_ip=detected, port=DEFAULT_LOCAL_PREVIEW_PROXY_PORT)
+    _preview_base_domain_for_lan_ip(
+        lan_ip=detected, port=DEFAULT_LOCAL_PREVIEW_PROXY_PORT
+    )
     return detected
 
 
-def _managed_secret(connection: psycopg.Connection, encryption_key: str, secret_ref: str) -> str | None:
+def _managed_secret(
+    connection: psycopg.Connection, encryption_key: str, secret_ref: str
+) -> str | None:
     with connection.cursor() as cursor:
-        cursor.execute("select value_encrypted from managed_secrets where secret_ref=%s", (secret_ref,))
+        cursor.execute(
+            "select value_encrypted from managed_secrets where secret_ref=%s",
+            (secret_ref,),
+        )
         row = cursor.fetchone()
     if row is None:
         return None
-    return Fernet(encryption_key.encode("utf-8")).decrypt(row[0].encode("utf-8")).decode("utf-8")
+    return (
+        Fernet(encryption_key.encode("utf-8"))
+        .decrypt(row[0].encode("utf-8"))
+        .decode("utf-8")
+    )
 
 
-def _upsert_managed_secret(connection: psycopg.Connection, encryption_key: str, secret_ref: str, value: str) -> None:
-    encrypted = Fernet(encryption_key.encode("utf-8")).encrypt(value.encode("utf-8")).decode("utf-8")
+def _upsert_managed_secret(
+    connection: psycopg.Connection, encryption_key: str, secret_ref: str, value: str
+) -> None:
+    encrypted = (
+        Fernet(encryption_key.encode("utf-8"))
+        .encrypt(value.encode("utf-8"))
+        .decode("utf-8")
+    )
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -557,11 +647,17 @@ def _local_coolify_server_and_destination() -> tuple[str, str]:
     return server_uuid.strip(), destination_uuid.strip()
 
 
-def _ensure_project_and_environment(token: str, tenant: TenantPlane, coolify_local_api_base_url: str) -> str:
-    configured_uuid = str(tenant.deployment_plane_config.get("coolify_project_uuid") or "").strip()
+def _ensure_project_and_environment(
+    token: str, tenant: TenantPlane, coolify_local_api_base_url: str
+) -> str:
+    configured_uuid = str(
+        tenant.deployment_plane_config.get("coolify_project_uuid") or ""
+    ).strip()
     project_uuid = configured_uuid or _coolify_uuid()
     project_name = _safe_name(tenant.name or tenant.tenant_id)
-    environment_name = str(tenant.deployment_plane_config.get("coolify_environment_name") or "production")
+    environment_name = str(
+        tenant.deployment_plane_config.get("coolify_environment_name") or "production"
+    )
     environment_uuid = _coolify_uuid()
     _run_coolify_db_sql(
         f"""
@@ -588,7 +684,9 @@ def _ensure_project_and_environment(token: str, tenant: TenantPlane, coolify_loc
         raise_on_error=False,
     )
     if status != 200:
-        raise RuntimeError(f"Coolify project {project_uuid} was not readable after bootstrap")
+        raise RuntimeError(
+            f"Coolify project {project_uuid} was not readable after bootstrap"
+        )
     return project_uuid
 
 
@@ -601,12 +699,18 @@ def _ensure_github_app(
     coolify_local_api_base_url: str,
 ) -> str:
     app_id_ref = str(tenant.github_config.get("app_id_ref") or "GITHUB_APP_ID")
-    private_key_ref = str(tenant.github_config.get("private_key_ref") or "GITHUB_APP_PRIVATE_KEY")
+    private_key_ref = str(
+        tenant.github_config.get("private_key_ref") or "GITHUB_APP_PRIVATE_KEY"
+    )
     app_id = _managed_secret(connection, encryption_key, _platform_ref(app_id_ref))
-    private_key = _managed_secret(connection, encryption_key, _platform_ref(private_key_ref))
+    private_key = _managed_secret(
+        connection, encryption_key, _platform_ref(private_key_ref)
+    )
     installation_id = str(tenant.github_config.get("installation_id") or "").strip()
     if not app_id or not private_key or not installation_id:
-        raise RuntimeError(f"Tenant {tenant.tenant_id} is missing GitHub App configuration required by local Coolify")
+        raise RuntimeError(
+            f"Tenant {tenant.tenant_id} is missing GitHub App configuration required by local Coolify"
+        )
 
     status, apps = _coolify_request(
         token=token,
@@ -631,7 +735,9 @@ def _ensure_github_app(
         coolify_local_api_base_url=coolify_local_api_base_url,
         private_key=private_key,
     )
-    client_secret = _managed_secret(connection, encryption_key, "GITHUB_CLIENT_SECRET") or secrets.token_urlsafe(32)
+    client_secret = _managed_secret(
+        connection, encryption_key, "GITHUB_CLIENT_SECRET"
+    ) or secrets.token_urlsafe(32)
     status, created = _coolify_request(
         token=token,
         base_url=coolify_local_api_base_url,
@@ -706,7 +812,9 @@ def _coolify_request(
     if payload is not None:
         headers["Content-Type"] = "application/json"
         body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(f"{base_url.rstrip('/')}{path}", data=body, headers=headers, method=method)
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{path}", data=body, headers=headers, method=method
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             response_body = response.read().decode("utf-8")
@@ -715,11 +823,15 @@ def _coolify_request(
         response_body = exc.read().decode("utf-8")
         parsed = _json_or_text(response_body)
         if raise_on_error:
-            raise RuntimeError(f"Coolify API {method} {path} failed with status {exc.code}")
+            raise RuntimeError(
+                f"Coolify API {method} {path} failed with status {exc.code}"
+            )
         return exc.code, parsed
 
 
-def _update_tenant_deployment_plane(connection: psycopg.Connection, tenant_id: str, plane: dict[str, Any]) -> None:
+def _update_tenant_deployment_plane(
+    connection: psycopg.Connection, tenant_id: str, plane: dict[str, Any]
+) -> None:
     with connection.cursor() as cursor:
         cursor.execute(
             "update tenants set deployment_plane_config=%s, updated_at=now() where tenant_id=%s",
@@ -738,7 +850,9 @@ def _json_or_text(response_body: str) -> Any:
 
 
 def _platform_ref(secret_ref: str) -> str:
-    return secret_ref if secret_ref.startswith("platform/") else f"platform/{secret_ref}"
+    return (
+        secret_ref if secret_ref.startswith("platform/") else f"platform/{secret_ref}"
+    )
 
 
 def _github_organization(tenant: TenantPlane) -> str:

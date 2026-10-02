@@ -58,14 +58,18 @@ class CommandPipelineTests(unittest.TestCase):
             normalized_user_id="u-1",
             normalized_channel_id="c-1",
             flags={},
-            scope=CommandScope(project_id="project-a", project_keys=("TP",), channel_id="c-1"),
+            scope=CommandScope(
+                project_id="project-a", project_keys=("TP",), channel_id="c-1"
+            ),
         )
         self.assertEqual(context.scope.project_id, "project-a")
         self.assertEqual(context.scope.project_keys, ("TP",))
 
     def test_parse_ingress_source_contract(self) -> None:
         self.assertEqual(parse_ingress_source("discord"), IngressSource.DISCORD)
-        self.assertEqual(parse_ingress_source("jira_comment"), IngressSource.JIRA_COMMENT)
+        self.assertEqual(
+            parse_ingress_source("jira_comment"), IngressSource.JIRA_COMMENT
+        )
         with self.assertRaises(ValueError):
             parse_ingress_source("slack")
 

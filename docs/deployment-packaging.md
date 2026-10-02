@@ -1,5 +1,7 @@
 # Deployment Packaging Plan
 
+Status: this document records design targets. Provider provisioning and availability are not verified release support; see [the support matrix](support-matrix.md).
+
 This document is the execution contract for infrastructure packaging across providers.
 
 ## Decisions Locked

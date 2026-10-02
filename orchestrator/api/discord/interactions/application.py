@@ -87,7 +87,9 @@ async def build_discord_interaction_ingress_result(
     )
 
 
-def build_default_discord_interaction_dispatch_deps(*, task_scheduler, logger) -> DiscordInteractionDispatchDeps:  # noqa: ANN001
+def build_default_discord_interaction_dispatch_deps(
+    *, task_scheduler, logger
+) -> DiscordInteractionDispatchDeps:  # noqa: ANN001
     return DiscordInteractionDispatchDeps(
         transport_source="discord_http",
         ask_reply_open_custom_id=ASK_REPLY_OPEN_CUSTOM_ID,
@@ -116,9 +118,13 @@ def build_default_discord_interaction_dispatch_deps(*, task_scheduler, logger) -
     )
 
 
-def require_discord_interaction_context(action: DiscordInteractionResponseAction) -> tuple[str, str]:
+def require_discord_interaction_context(
+    action: DiscordInteractionResponseAction,
+) -> tuple[str, str]:
     interaction_id = str(action.interaction_id or "").strip()
     interaction_token = str(action.interaction_token or "").strip()
     if not interaction_id or not interaction_token:
-        raise HTTPException(status_code=400, detail="Missing Discord interaction context")
+        raise HTTPException(
+            status_code=400, detail="Missing Discord interaction context"
+        )
     return interaction_id, interaction_token

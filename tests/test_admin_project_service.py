@@ -35,7 +35,7 @@ class _Session:
             scalars=lambda: SimpleNamespace(
                 all=lambda: self._projects,
                 first=lambda: self._projects[0] if self._projects else None,
-            )
+            ),
         )
 
     def add(self, obj):  # noqa: ANN001
@@ -80,7 +80,9 @@ def _ensure_project_repository_checkout(*, session, tenant, project) -> None:  #
     _ = session, tenant, project
 
 
-def _resolve_project_run_board_id(*, session, tenant, jira_project_key: str, settings) -> int | None:  # noqa: ANN001
+def _resolve_project_run_board_id(
+    *, session, tenant, jira_project_key: str, settings
+) -> int | None:  # noqa: ANN001
     _ = session, tenant, jira_project_key, settings
     return None
 
@@ -102,7 +104,10 @@ def _service() -> AdminProjectService:
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -184,12 +189,16 @@ def test_update_project_policy_rejects_qa_demo_without_preview_deployments() -> 
             session=session,
             tenant_id="t1",
             project_id="p1",
-            payload=SimpleNamespace(policy_overrides={"qa_demo_recording_enabled": True}),
+            payload=SimpleNamespace(
+                policy_overrides={"qa_demo_recording_enabled": True}
+            ),
         )
         assert False, "expected HTTPException"
     except HTTPException as exc:
         assert exc.status_code == 409
-        assert "QA demo recording requires preview deployments to be enabled" in str(exc.detail)
+        assert "QA demo recording requires preview deployments to be enabled" in str(
+            exc.detail
+        )
 
     assert session.commits == 0
     assert project.policy_overrides == {}
@@ -199,7 +208,9 @@ def test_create_project_clones_repository_after_commit() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
-    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    session.set(
+        Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    )
     checkout_calls: list[tuple[str, str, int]] = []
     service = AdminProjectService(
         normalize_project_repo=lambda value: value.strip(),
@@ -208,13 +219,20 @@ def test_create_project_clones_repository_after_commit() -> None:
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        ensure_project_repository_checkout=lambda *, session, tenant, project: checkout_calls.append(
-            (tenant.tenant_id, project.github_repository, session.commits)
+        ensure_project_repository_checkout=lambda *, session, tenant, project: (
+            checkout_calls.append(
+                (tenant.tenant_id, project.github_repository, session.commits)
+            )
         ),
-        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: 11,
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (
+            11
+        ),
         project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -244,7 +262,9 @@ def test_create_project_rejects_qa_demo_without_preview_deployments() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
-    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    session.set(
+        Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    )
     payload = SimpleNamespace(
         name="Sample",
         github_repository="https://github.com/example/repo",
@@ -261,7 +281,9 @@ def test_create_project_rejects_qa_demo_without_preview_deployments() -> None:
         assert False, "expected HTTPException"
     except HTTPException as exc:
         assert exc.status_code == 409
-        assert "QA demo recording requires preview deployments to be enabled" in str(exc.detail)
+        assert "QA demo recording requires preview deployments to be enabled" in str(
+            exc.detail
+        )
 
     assert session.added == []
     assert session.commits == 0
@@ -271,7 +293,9 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
     from orchestrator.storage.models import Tenant
 
     session = _Session()
-    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    session.set(
+        Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    )
     service = AdminProjectService(
         normalize_project_repo=lambda value: value.strip(),
         normalize_project_key=lambda value: value.strip().upper(),
@@ -279,13 +303,18 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
-        ensure_project_repository_checkout=lambda *, session, tenant, project: (_ for _ in ()).throw(
-            ProjectRepoCheckoutError("clone failed")
+        ensure_project_repository_checkout=lambda *, session, tenant, project: (
+            _ for _ in ()
+        ).throw(ProjectRepoCheckoutError("clone failed")),
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (
+            22
         ),
-        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: 22,
         project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -312,7 +341,9 @@ def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> No
     assert isinstance(deleted, Project)
 
 
-def test_create_project_auto_binds_discord_channel_when_tenant_discord_is_installed() -> None:
+def test_create_project_auto_binds_discord_channel_when_tenant_discord_is_installed() -> (
+    None
+):
     from orchestrator.storage.models import Tenant
 
     session = _Session()
@@ -325,7 +356,9 @@ def test_create_project_auto_binds_discord_channel_when_tenant_discord_is_instal
     session.set(Tenant, "t1", tenant)
     resolve_calls: list[tuple[str, str]] = []
 
-    def _resolve_channel(*, session, settings, tenant, project, discord_config: dict) -> dict:  # noqa: ANN001
+    def _resolve_channel(
+        *, session, settings, tenant, project, discord_config: dict
+    ) -> dict:  # noqa: ANN001
         _ = session, settings
         resolve_calls.append((tenant.tenant_id, project.project_id))
         return {**discord_config, "channel_id": "discord-channel-123"}
@@ -337,7 +370,10 @@ def test_create_project_auto_binds_discord_channel_when_tenant_discord_is_instal
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_channel,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -368,7 +404,13 @@ def test_create_project_persists_architecture_docs_configuration() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
-    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None, discord_config={}))
+    session.set(
+        Tenant,
+        "t1",
+        SimpleNamespace(
+            tenant_id="t1", policy_config={}, updated_at=None, discord_config={}
+        ),
+    )
     service = AdminProjectService(
         normalize_project_repo=lambda value: value.strip(),
         normalize_project_key=lambda value: value.strip().upper(),
@@ -376,7 +418,10 @@ def test_create_project_persists_architecture_docs_configuration() -> None:
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=normalize_project_architecture_docs_config,
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -412,11 +457,19 @@ def test_create_project_persists_architecture_docs_configuration() -> None:
     }
 
 
-def test_create_project_rejects_confluence_architecture_config_without_space_key() -> None:
+def test_create_project_rejects_confluence_architecture_config_without_space_key() -> (
+    None
+):
     from orchestrator.storage.models import Tenant
 
     session = _Session()
-    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None, discord_config={}))
+    session.set(
+        Tenant,
+        "t1",
+        SimpleNamespace(
+            tenant_id="t1", policy_config={}, updated_at=None, discord_config={}
+        ),
+    )
     service = AdminProjectService(
         normalize_project_repo=lambda value: value.strip(),
         normalize_project_key=lambda value: value.strip().upper(),
@@ -424,7 +477,10 @@ def test_create_project_rejects_confluence_architecture_config_without_space_key
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=normalize_project_architecture_docs_config,
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -455,7 +511,9 @@ def test_resolve_project_jira_run_board_returns_502_when_oauth_fails() -> None:
     from orchestrator.storage.models import Tenant
 
     session = _Session()
-    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    session.set(
+        Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    )
     service = AdminProjectService(
         normalize_project_repo=lambda value: value.strip(),
         normalize_project_key=lambda value: value.strip().upper(),
@@ -463,11 +521,16 @@ def test_resolve_project_jira_run_board_returns_502_when_oauth_fails() -> None:
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
-        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (_ for _ in ()).throw(AtlassianOAuthError("oauth unavailable")),
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (
+            (_ for _ in ()).throw(AtlassianOAuthError("oauth unavailable"))
+        ),
         project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -488,11 +551,15 @@ def test_resolve_project_jira_run_board_returns_502_when_oauth_fails() -> None:
     session.set(Project, "p1", existing_project)
 
     try:
-        service.resolve_project_jira_run_board(session=session, tenant_id="t1", project_id="p1")
+        service.resolve_project_jira_run_board(
+            session=session, tenant_id="t1", project_id="p1"
+        )
         assert False, "expected HTTPException"
     except HTTPException as exc:
         assert exc.status_code == 502
-        assert "Unable to resolve Jira board for project TP: oauth unavailable" == str(exc.detail)
+        assert "Unable to resolve Jira board for project TP: oauth unavailable" == str(
+            exc.detail
+        )
 
 
 def test_update_project_configuration_does_not_resolve_jira_board() -> None:
@@ -523,11 +590,16 @@ def test_update_project_configuration_does_not_resolve_jira_board() -> None:
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
-        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (_ for _ in ()).throw(AtlassianOAuthError("token revoked")),
+        resolve_project_run_board_id=lambda *, session, tenant, jira_project_key, settings: (
+            (_ for _ in ()).throw(AtlassianOAuthError("token revoked"))
+        ),
         project_to_schema=_project_to_schema,
         settings_factory=lambda: SimpleNamespace(),
     )
@@ -543,7 +615,9 @@ def test_update_project_configuration_does_not_resolve_jira_board() -> None:
         is_archived=False,
     )
 
-    service.update_project_configuration(session=session, tenant_id="t1", project_id="p1", payload=payload)
+    service.update_project_configuration(
+        session=session, tenant_id="t1", project_id="p1", payload=payload
+    )
 
     assert session.commits == 1
     assert existing_project.name == "Updated"
@@ -580,7 +654,10 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -606,12 +683,14 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     upsert_calls: list[tuple[str, str]] = []
     with patch(
         "orchestrator.core.platform.tenant_secret_service._upsert_managed_secret",
-        side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: upsert_calls.append(
-            (secret_ref, plaintext_value)
-        )
-        or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None),
+        side_effect=lambda session, *, secret_ref, plaintext_value, encryption_key, scope, tenant_id: (
+            upsert_calls.append((secret_ref, plaintext_value))
+            or SimpleNamespace(secret_ref=secret_ref, source="managed", updated_at=None)
+        ),
     ):
-        service.update_project_secret_refs(session=session, tenant_id="t1", project_id="p1", payload=payload)
+        service.update_project_secret_refs(
+            session=session, tenant_id="t1", project_id="p1", payload=payload
+        )
 
     assert existing_project.secret_refs == {
         "SUPABASE_URL": "project/t1/p1/SUPABASE_URL",
@@ -621,7 +700,9 @@ def test_update_project_migrates_inline_secret_values_to_project_managed_refs() 
     assert ("project/t1/p1/APPLE_TEST_PASSWORD", "Ft6ygA&aYkf%hy") in upsert_calls
 
 
-def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_installed() -> None:
+def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_installed() -> (
+    None
+):
     from orchestrator.storage.models import Tenant
 
     session = _Session()
@@ -649,7 +730,9 @@ def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_instal
     session.set(Project, "p1", existing_project)
     resolve_calls: list[tuple[str, str]] = []
 
-    def _resolve_channel(*, session, settings, tenant, project, discord_config: dict) -> dict:  # noqa: ANN001
+    def _resolve_channel(
+        *, session, settings, tenant, project, discord_config: dict
+    ) -> dict:  # noqa: ANN001
         _ = session, settings
         resolve_calls.append((tenant.tenant_id, project.project_id))
         return {**discord_config, "channel_id": "discord-channel-999"}
@@ -661,7 +744,10 @@ def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_instal
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_channel,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -681,7 +767,9 @@ def test_update_project_auto_binds_discord_channel_when_tenant_discord_is_instal
         is_archived=False,
     )
 
-    service.update_project_discord(session=session, tenant_id="t1", project_id="p1", payload=payload)
+    service.update_project_discord(
+        session=session, tenant_id="t1", project_id="p1", payload=payload
+    )
 
     assert existing_project.discord_config == {"channel_id": "discord-channel-999"}
     assert resolve_calls == [("t1", "p1")]
@@ -724,8 +812,12 @@ def test_update_project_preserves_upstream_secret_refs_without_copying() -> None
         is_archived=False,
     )
 
-    with patch("orchestrator.core.platform.tenant_secret_service._upsert_managed_secret") as upsert_mock:
-        service.update_project_secret_refs(session=session, tenant_id="t1", project_id="p1", payload=payload)
+    with patch(
+        "orchestrator.core.platform.tenant_secret_service._upsert_managed_secret"
+    ) as upsert_mock:
+        service.update_project_secret_refs(
+            session=session, tenant_id="t1", project_id="p1", payload=payload
+        )
 
     assert existing_project.secret_refs == {
         "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
@@ -765,7 +857,10 @@ def test_get_project_does_not_mutate_existing_secret_refs() -> None:
         normalize_string_map=lambda value: value or {},
         normalize_project_architecture_docs_config=lambda value: value or {},
         normalize_project_discord_config=lambda value: value or {},
-        with_preserved_discord_system_fields=lambda existing, proposed: {**existing, **proposed},
+        with_preserved_discord_system_fields=lambda existing, proposed: {
+            **existing,
+            **proposed,
+        },
         resolve_project_discord_channel_binding=_resolve_project_discord_channel_binding,
         sync_tenant_jira_project_keys=_sync_tenant_jira_project_keys,
         ensure_project_repository_checkout=_ensure_project_repository_checkout,
@@ -811,7 +906,9 @@ def test_normalize_project_discord_config_preserves_persona_maps() -> None:
     assert normalized["pm_room_channel_ids"] == ["room-1"]
 
 
-def test_with_preserved_discord_system_fields_keeps_only_system_fields_when_user_fields_omitted() -> None:
+def test_with_preserved_discord_system_fields_keeps_only_system_fields_when_user_fields_omitted() -> (
+    None
+):
     merged = with_preserved_discord_system_fields(
         existing={
             "ask_history": [],

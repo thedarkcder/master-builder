@@ -30,6 +30,7 @@ def normalize_codex_model(value: Any) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
 
+
 def normalize_codex_reasoning_effort(value: Any) -> str | None:
     normalized = str(value or "").strip().lower()
     if normalized in _REASONING_EFFORTS:
@@ -37,7 +38,9 @@ def normalize_codex_reasoning_effort(value: Any) -> str | None:
     return None
 
 
-def parse_supported_codex_models(*, default_model: str | None, configured_models: str | None) -> list[CodexModelOption]:
+def parse_supported_codex_models(
+    *, default_model: str | None, configured_models: str | None
+) -> list[CodexModelOption]:
     normalized_default = normalize_codex_model(default_model)
     seen: set[str] = set()
     ordered_model_ids: list[str] = []
@@ -65,9 +68,14 @@ def parse_supported_codex_models(*, default_model: str | None, configured_models
     return options
 
 
-def parse_supported_reasoning_efforts(*, default_effort: str) -> list[CodexReasoningOption]:
+def parse_supported_reasoning_efforts(
+    *, default_effort: str
+) -> list[CodexReasoningOption]:
     normalized_default = normalize_codex_reasoning_effort(default_effort) or "medium"
-    ordered_efforts = [normalized_default, *[effort for effort in _REASONING_EFFORTS if effort != normalized_default]]
+    ordered_efforts = [
+        normalized_default,
+        *[effort for effort in _REASONING_EFFORTS if effort != normalized_default],
+    ]
     descriptions = {
         "low": "Fastest responses with less deliberation",
         "medium": "Balanced depth and speed",
@@ -97,7 +105,9 @@ def resolve_effective_codex_model(
         return tenant_model
     resolved_default = normalize_codex_model(default_model)
     if resolved_default is None:
-        raise ValueError("default_model must be provided when resolving effective codex model")
+        raise ValueError(
+            "default_model must be provided when resolving effective codex model"
+        )
     return resolved_default
 
 
@@ -107,10 +117,14 @@ def resolve_effective_codex_reasoning_effort(
     project_overrides: dict[str, Any] | None,
     default_effort: str,
 ) -> str:
-    project_effort = normalize_codex_reasoning_effort((project_overrides or {}).get("codex_reasoning_effort"))
+    project_effort = normalize_codex_reasoning_effort(
+        (project_overrides or {}).get("codex_reasoning_effort")
+    )
     if project_effort is not None:
         return project_effort
-    tenant_effort = normalize_codex_reasoning_effort((tenant_policy or {}).get("codex_reasoning_effort"))
+    tenant_effort = normalize_codex_reasoning_effort(
+        (tenant_policy or {}).get("codex_reasoning_effort")
+    )
     if tenant_effort is not None:
         return tenant_effort
     return normalize_codex_reasoning_effort(default_effort) or "medium"

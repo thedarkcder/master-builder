@@ -49,13 +49,15 @@ def ask_board_message(
                 effective_scoped_issue_key = candidate_issue_key
                 break
 
-    normalized_issue_key, requested_status, issues, status_counts, history_context = collect_ask_context_with_history_context_fn(
-        session=session,
-        tenant=tenant,
-        user_id=user_id,
-        channel_id=channel_id,
-        question=question,
-        scoped_issue_key=effective_scoped_issue_key,
+    normalized_issue_key, requested_status, issues, status_counts, history_context = (
+        collect_ask_context_with_history_context_fn(
+            session=session,
+            tenant=tenant,
+            user_id=user_id,
+            channel_id=channel_id,
+            question=question,
+            scoped_issue_key=effective_scoped_issue_key,
+        )
     )
 
     settings = get_settings_fn()
@@ -73,7 +75,9 @@ def ask_board_message(
     github_context = collect_github_ask_context_fn(
         session=session,
         tenant=tenant,
-        project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
+        project_keys=[
+            str(key).strip().upper() for key in scoped_project_keys if str(key).strip()
+        ],
     )
     codex_working_dir = resolve_codex_working_dir_fn(
         session=session,
@@ -86,7 +90,11 @@ def ask_board_message(
         message = answer_board_question_with_runtime_fn(
             runtime=runtime,
             question=question,
-            project_keys=[str(key).strip().upper() for key in scoped_project_keys if str(key).strip()],
+            project_keys=[
+                str(key).strip().upper()
+                for key in scoped_project_keys
+                if str(key).strip()
+            ],
             issues=issues,
             status_counts=status_counts,
             invocation_context=AgentInvocationContext(

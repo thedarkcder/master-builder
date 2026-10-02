@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.prompt_templates import render_prompt
@@ -73,7 +76,9 @@ def _required_string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     normalized: list[str] = []
     for item in value:
         if not isinstance(item, str):
-            raise RuntimeError(f"Runtime decision gate evaluation returned invalid {field} item")
+            raise RuntimeError(
+                f"Runtime decision gate evaluation returned invalid {field} item"
+            )
         stripped = item.strip()
         if stripped:
             normalized.append(stripped)
@@ -118,7 +123,9 @@ def _evaluate_decision_gate_with_runtime(
 
     triggered = bool(payload.get("triggered"))
     reason = str(payload.get("reason") or "").strip()
-    missing_sections = _required_string_tuple(payload.get("missing_sections"), field="missing_sections")
+    missing_sections = _required_string_tuple(
+        payload.get("missing_sections"), field="missing_sections"
+    )
     questions = _required_string_tuple(payload.get("questions"), field="questions")
     recommendation = str(payload.get("recommendation") or "").strip()
     tags = _required_string_tuple(payload.get("tags"), field="tags")
@@ -126,7 +133,9 @@ def _evaluate_decision_gate_with_runtime(
     if not reason:
         raise RuntimeError("Runtime decision gate evaluation returned empty reason")
     if not recommendation:
-        raise RuntimeError("Runtime decision gate evaluation returned empty recommendation")
+        raise RuntimeError(
+            "Runtime decision gate evaluation returned empty recommendation"
+        )
 
     return DecisionGateResult(
         triggered=triggered,
@@ -171,7 +180,10 @@ def format_decision_gate_summary(result: DecisionGateResult) -> str:
     ]
     if result.questions:
         lines.append("Questions:")
-        lines.extend(f"{idx}) {question}" for idx, question in enumerate(result.questions[:5], start=1))
+        lines.extend(
+            f"{idx}) {question}"
+            for idx, question in enumerate(result.questions[:5], start=1)
+        )
     if result.tags:
         lines.append("Tags: " + " ".join(result.tags))
     return "\n".join(lines)

@@ -62,6 +62,7 @@ class HandlerWorkflowAdvanceInput:
     retry_max_interval_seconds: int = 0
     retry_backoff_coefficient: float = 1.0
 
+
 @dataclass(frozen=True)
 class HandlerWorkflowAdvanceResult:
     handled: bool

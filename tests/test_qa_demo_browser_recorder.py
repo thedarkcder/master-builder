@@ -125,10 +125,15 @@ module.exports = {{
     assert result.returncode != 0
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["recordings"] == []
-    assert "QA demo browser scenario must stay on preview release origin" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "QA demo browser scenario must stay on preview release origin"
+        in output["failure_evidence"][0]["error_message"]
+    )
 
 
-def test_browser_recorder_writes_failure_evidence_for_app_load_error(tmp_path: Path) -> None:
+def test_browser_recorder_writes_failure_evidence_for_app_load_error(
+    tmp_path: Path,
+) -> None:
     module_root = tmp_path / "modules"
     playwright_dir = module_root / "playwright"
     playwright_dir.mkdir(parents=True)
@@ -220,7 +225,12 @@ module.exports = {{
                     {
                         "name": "App load",
                         "start_path": "/",
-                        "steps": [{"action": "assert_visible", "selector": "text=QA Demo Ready"}],
+                        "steps": [
+                            {
+                                "action": "assert_visible",
+                                "selector": "text=QA Demo Ready",
+                            }
+                        ],
                     }
                 ],
             }
@@ -243,11 +253,16 @@ module.exports = {{
     assert output["recordings"] == []
     assert output["failure_evidence"][0]["name"] == "App load"
     assert "process is not defined" in output["failure_evidence"][0]["error_message"]
-    assert "QA Demo Ready was not visible" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "QA Demo Ready was not visible"
+        in output["failure_evidence"][0]["error_message"]
+    )
     assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
-def test_browser_recorder_includes_failed_http_response_in_load_failure_evidence(tmp_path: Path) -> None:
+def test_browser_recorder_includes_failed_http_response_in_load_failure_evidence(
+    tmp_path: Path,
+) -> None:
     module_root = tmp_path / "modules"
     playwright_dir = module_root / "playwright"
     playwright_dir.mkdir(parents=True)
@@ -353,7 +368,12 @@ module.exports = {{
                     {
                         "name": "App load",
                         "start_path": "/",
-                        "steps": [{"action": "assert_visible", "selector": "text=QA Demo Ready"}],
+                        "steps": [
+                            {
+                                "action": "assert_visible",
+                                "selector": "text=QA Demo Ready",
+                            }
+                        ],
                     }
                 ],
             }
@@ -373,10 +393,15 @@ module.exports = {{
 
     assert result.returncode != 0
     output = json.loads(output_path.read_text(encoding="utf-8"))
-    assert "http 500 GET https://preview.example/" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "http 500 GET https://preview.example/"
+        in output["failure_evidence"][0]["error_message"]
+    )
 
 
-def test_browser_recorder_writes_text_diagnostics_when_failure_video_cannot_be_copied(tmp_path: Path) -> None:
+def test_browser_recorder_writes_text_diagnostics_when_failure_video_cannot_be_copied(
+    tmp_path: Path,
+) -> None:
     module_root = tmp_path / "modules"
     playwright_dir = module_root / "playwright"
     playwright_dir.mkdir(parents=True)
@@ -467,7 +492,12 @@ module.exports = {{
                     {
                         "name": "App load",
                         "start_path": "/",
-                        "steps": [{"action": "assert_visible", "selector": "text=QA Demo Ready"}],
+                        "steps": [
+                            {
+                                "action": "assert_visible",
+                                "selector": "text=QA Demo Ready",
+                            }
+                        ],
                     }
                 ],
             }
@@ -491,13 +521,21 @@ module.exports = {{
     assert failure_path.suffix == ".txt"
     assert failure_path.is_file()
     failure_text = failure_path.read_text(encoding="utf-8")
-    assert "QA Demo Ready was not visible" in output["failure_evidence"][0]["error_message"]
-    assert "pagecrash: browser page crashed" in output["failure_evidence"][0]["error_message"]
+    assert (
+        "QA Demo Ready was not visible"
+        in output["failure_evidence"][0]["error_message"]
+    )
+    assert (
+        "pagecrash: browser page crashed"
+        in output["failure_evidence"][0]["error_message"]
+    )
     assert "failure-evidence-error:" in failure_text
     assert "pagecrash: browser page crashed" in failure_text
 
 
-def test_browser_recorder_routes_public_host_to_recording_host_without_host_header(tmp_path: Path) -> None:
+def test_browser_recorder_routes_public_host_to_recording_host_without_host_header(
+    tmp_path: Path,
+) -> None:
     module_root = tmp_path / "modules"
     playwright_dir = module_root / "playwright"
     playwright_dir.mkdir(parents=True)

@@ -17,12 +17,8 @@ from orchestrator.storage.models import Run, WorkflowCheckpoint
 logger = logging.getLogger(__name__)
 
 _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY = 740_002_611
-_LEGACY_QA_RECORDING_DIGEST_BLOCKER = (
-    "Legacy QA demo recordings predate SHA-256 proof and release context metadata and must be regenerated."
-)
-_LEGACY_PM_DEMO_REQUIREMENT_BLOCKER = (
-    "Legacy PM demo requirements do not satisfy the current QA demo proof contract and must be regenerated."
-)
+_LEGACY_QA_RECORDING_DIGEST_BLOCKER = "Legacy QA demo recordings predate SHA-256 proof and release context metadata and must be regenerated."
+_LEGACY_PM_DEMO_REQUIREMENT_BLOCKER = "Legacy PM demo requirements do not satisfy the current QA demo proof contract and must be regenerated."
 
 
 @dataclass(frozen=True)
@@ -56,7 +52,9 @@ def run_execution_snapshot_startup_bootstrap(
             {"lock_key": _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY},
         )
         try:
-            repaired_runs, repaired_checkpoints = _repair_execution_snapshots(session=session)
+            repaired_runs, repaired_checkpoints = _repair_execution_snapshots(
+                session=session
+            )
             report = _validate_execution_snapshots(session=session)
         finally:
             session.execute(
@@ -120,12 +118,16 @@ def ensure_execution_snapshot_startup_bootstrap(
         )
 
 
-def _validate_execution_snapshots(*, session: Session) -> ExecutionSnapshotStartupReport:
+def _validate_execution_snapshots(
+    *, session: Session
+) -> ExecutionSnapshotStartupReport:
     scanned_runs = 0
     invalid_runs = 0
     invalid_run_ids: list[str] = []
 
-    run_statement = select(Run.run_id, Run.plan).order_by(Run.created_at.asc(), Run.run_id.asc())
+    run_statement = select(Run.run_id, Run.plan).order_by(
+        Run.created_at.asc(), Run.run_id.asc()
+    )
     for run_id, payload in session.execute(run_statement):
         scanned_runs += 1
         if payload is None:
@@ -141,7 +143,9 @@ def _validate_execution_snapshots(*, session: Session) -> ExecutionSnapshotStart
     checkpoint_statement = select(
         WorkflowCheckpoint.checkpoint_id,
         WorkflowCheckpoint.payload_json,
-    ).order_by(WorkflowCheckpoint.created_at.asc(), WorkflowCheckpoint.checkpoint_id.asc())
+    ).order_by(
+        WorkflowCheckpoint.created_at.asc(), WorkflowCheckpoint.checkpoint_id.asc()
+    )
     for checkpoint_id, payload in session.execute(checkpoint_statement):
         scanned_checkpoints += 1
         if payload is None:
@@ -166,7 +170,9 @@ def _validate_execution_snapshots(*, session: Session) -> ExecutionSnapshotStart
 
 def _repair_execution_snapshots(*, session: Session) -> tuple[int, int]:
     run_updates: list[dict[str, object]] = []
-    run_statement = select(Run.run_id, Run.plan).order_by(Run.created_at.asc(), Run.run_id.asc())
+    run_statement = select(Run.run_id, Run.plan).order_by(
+        Run.created_at.asc(), Run.run_id.asc()
+    )
     for run_id, payload in session.execute(run_statement):
         repaired = _repair_execution_snapshot_payload(payload)
         if repaired is None:
@@ -174,14 +180,18 @@ def _repair_execution_snapshots(*, session: Session) -> tuple[int, int]:
         run_updates.append({"run_id": run_id, "plan": repaired})
     for update in run_updates:
         session.execute(
-            Run.__table__.update().where(Run.run_id == update["run_id"]).values(plan=update["plan"]),
+            Run.__table__.update()
+            .where(Run.run_id == update["run_id"])
+            .values(plan=update["plan"]),
         )
 
     checkpoint_updates: list[dict[str, object]] = []
     checkpoint_statement = select(
         WorkflowCheckpoint.checkpoint_id,
         WorkflowCheckpoint.payload_json,
-    ).order_by(WorkflowCheckpoint.created_at.asc(), WorkflowCheckpoint.checkpoint_id.asc())
+    ).order_by(
+        WorkflowCheckpoint.created_at.asc(), WorkflowCheckpoint.checkpoint_id.asc()
+    )
     for checkpoint_id, payload in session.execute(checkpoint_statement):
         repaired = _repair_execution_snapshot_payload(payload)
         if repaired is None:
@@ -197,7 +207,9 @@ def _repair_execution_snapshots(*, session: Session) -> tuple[int, int]:
         session.execute(
             WorkflowCheckpoint.__table__.update()
             .where(WorkflowCheckpoint.checkpoint_id == update["checkpoint_id"])
-            .values(payload_json=update["payload_json"], updated_at=update["updated_at"]),
+            .values(
+                payload_json=update["payload_json"], updated_at=update["updated_at"]
+            ),
         )
     return len(run_updates), len(checkpoint_updates)
 
@@ -211,7 +223,9 @@ def _repair_execution_snapshot_payload(payload: object) -> dict[str, Any] | None
 
     repaired_stages: dict[str, Any] | None = None
     for stage_name, stage_record in stages.items():
-        repaired_stage_record = _repair_execution_stage_record(stage_name=stage_name, stage_record=stage_record)
+        repaired_stage_record = _repair_execution_stage_record(
+            stage_name=stage_name, stage_record=stage_record
+        )
         if repaired_stage_record is None:
             continue
         if repaired_stages is None:
@@ -226,12 +240,18 @@ def _repair_execution_snapshot_payload(payload: object) -> dict[str, Any] | None
     return repaired_payload
 
 
-def _repair_execution_stage_record(*, stage_name: object, stage_record: object) -> dict[str, Any] | None:
+def _repair_execution_stage_record(
+    *, stage_name: object, stage_record: object
+) -> dict[str, Any] | None:
     if not isinstance(stage_record, dict):
         return None
     artifact = stage_record.get("artifact")
-    repaired_artifact = _repair_legacy_pm_demo_requirements(artifact) if stage_name == "pm" else None
-    test_repaired_artifact = _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
+    repaired_artifact = (
+        _repair_legacy_pm_demo_requirements(artifact) if stage_name == "pm" else None
+    )
+    test_repaired_artifact = (
+        _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
+    )
     if test_repaired_artifact is not None:
         repaired_artifact = (
             test_repaired_artifact
@@ -239,7 +259,9 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
             else _merge_artifact_repairs(repaired_artifact, test_repaired_artifact)
         )
     qa_digest_repaired_artifact = (
-        _repair_legacy_qa_recordings_without_content_sha256(artifact) if stage_name == "qa" else None
+        _repair_legacy_qa_recordings_without_content_sha256(artifact)
+        if stage_name == "qa"
+        else None
     )
     if qa_digest_repaired_artifact is not None:
         repaired_artifact = (
@@ -247,18 +269,28 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
             if repaired_artifact is None
             else _merge_artifact_repairs(repaired_artifact, qa_digest_repaired_artifact)
         )
-    qa_scenario_repaired_artifact = _repair_legacy_qa_scenario_capture_targets(artifact) if stage_name == "qa" else None
+    qa_scenario_repaired_artifact = (
+        _repair_legacy_qa_scenario_capture_targets(artifact)
+        if stage_name == "qa"
+        else None
+    )
     if qa_scenario_repaired_artifact is not None:
         repaired_artifact = (
             qa_scenario_repaired_artifact
             if repaired_artifact is None
-            else _merge_artifact_repairs(repaired_artifact, qa_scenario_repaired_artifact)
+            else _merge_artifact_repairs(
+                repaired_artifact, qa_scenario_repaired_artifact
+            )
         )
     capture_target_repaired_artifact = _repair_legacy_mobile_capture_targets(artifact)
     if capture_target_repaired_artifact is not None:
-        repaired_artifact = capture_target_repaired_artifact if repaired_artifact is None else _merge_artifact_repairs(
-            repaired_artifact,
-            capture_target_repaired_artifact,
+        repaired_artifact = (
+            capture_target_repaired_artifact
+            if repaired_artifact is None
+            else _merge_artifact_repairs(
+                repaired_artifact,
+                capture_target_repaired_artifact,
+            )
         )
     if repaired_artifact is None:
         return None
@@ -266,7 +298,10 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
     repaired_stage_record["artifact"] = repaired_artifact
     if stage_name == "pm" and repaired_artifact.get("outcome") == "blocked":
         repaired_stage_record["status"] = "blocked"
-        repaired_stage_record["summary"] = repaired_artifact.get("blocker_message") or _LEGACY_PM_DEMO_REQUIREMENT_BLOCKER
+        repaired_stage_record["summary"] = (
+            repaired_artifact.get("blocker_message")
+            or _LEGACY_PM_DEMO_REQUIREMENT_BLOCKER
+        )
     return repaired_stage_record
 
 
@@ -300,13 +335,26 @@ def _repair_legacy_pm_demo_requirements(artifact: object) -> dict[str, Any] | No
 def _pm_plan_core_fields_are_repairable(artifact: dict[str, Any]) -> bool:
     if _parse_string_list(artifact.get("plan_steps"), require_non_empty=True) is None:
         return False
-    if _parse_string_list(artifact.get("acceptance_criteria"), require_non_empty=True) is None:
+    if (
+        _parse_string_list(artifact.get("acceptance_criteria"), require_non_empty=True)
+        is None
+    ):
         return False
     if _parse_string_list(artifact.get("risks", []), require_non_empty=False) is None:
         return False
-    if _parse_string_list(artifact.get("resolved_prerequisites", []), require_non_empty=False) is None:
+    if (
+        _parse_string_list(
+            artifact.get("resolved_prerequisites", []), require_non_empty=False
+        )
+        is None
+    ):
         return False
-    if _parse_string_list(artifact.get("unresolved_prerequisites", []), require_non_empty=False) is None:
+    if (
+        _parse_string_list(
+            artifact.get("unresolved_prerequisites", []), require_non_empty=False
+        )
+        is None
+    ):
         return False
     if artifact.get("next_stage") not in {"dev", "test"}:
         return False
@@ -330,14 +378,21 @@ def _parse_string_list(value: object, *, require_non_empty: bool) -> list[str] |
     return parsed
 
 
-def _invalid_legacy_demo_requirement_titles(demo_requirements: list[object]) -> list[str]:
+def _invalid_legacy_demo_requirement_titles(
+    demo_requirements: list[object],
+) -> list[str]:
     invalid_titles: list[str] = []
     for index, requirement in enumerate(demo_requirements, start=1):
         if not isinstance(requirement, dict):
             invalid_titles.append(f"requirement {index}")
             continue
-        title = str(requirement.get("title") or f"requirement {index}").strip() or f"requirement {index}"
-        acceptance_criterion = str(requirement.get("acceptance_criterion") or "").strip()
+        title = (
+            str(requirement.get("title") or f"requirement {index}").strip()
+            or f"requirement {index}"
+        )
+        acceptance_criterion = str(
+            requirement.get("acceptance_criterion") or ""
+        ).strip()
         capture_target = str(requirement.get("capture_target") or "").strip()
         variants = requirement.get("variants")
         if (
@@ -358,7 +413,11 @@ def _repair_legacy_test_artifact(artifact: object) -> dict[str, Any] | None:
         return None
     guidance = artifact.get("guidance")
     outcome = artifact.get("outcome")
-    if not isinstance(guidance, list) or not guidance or not all(isinstance(item, str) and item.strip() for item in guidance):
+    if (
+        not isinstance(guidance, list)
+        or not guidance
+        or not all(isinstance(item, str) and item.strip() for item in guidance)
+    ):
         return None
     if not isinstance(outcome, str) or not outcome.strip():
         return None
@@ -367,14 +426,18 @@ def _repair_legacy_test_artifact(artifact: object) -> dict[str, Any] | None:
     return repaired_artifact
 
 
-def _merge_artifact_repairs(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
+def _merge_artifact_repairs(
+    primary: dict[str, Any], secondary: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(primary)
     for key, value in secondary.items():
         merged[key] = value
     return merged
 
 
-def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dict[str, Any] | None:
+def _repair_legacy_qa_recordings_without_content_sha256(
+    artifact: object,
+) -> dict[str, Any] | None:
     if not isinstance(artifact, dict):
         return None
     recordings = artifact.get("recordings")
@@ -391,7 +454,9 @@ def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dic
         return None
 
     summary = artifact.get("summary")
-    if not isinstance(summary, list) or not all(isinstance(item, str) and item.strip() for item in summary):
+    if not isinstance(summary, list) or not all(
+        isinstance(item, str) and item.strip() for item in summary
+    ):
         return None
     repaired_summary = list(summary)
     if _LEGACY_QA_RECORDING_DIGEST_BLOCKER not in repaired_summary:
@@ -405,7 +470,9 @@ def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dic
     return repaired_artifact
 
 
-def _repair_legacy_qa_scenario_capture_targets(artifact: object) -> dict[str, Any] | None:
+def _repair_legacy_qa_scenario_capture_targets(
+    artifact: object,
+) -> dict[str, Any] | None:
     if not isinstance(artifact, dict):
         return None
     scenarios = artifact.get("scenarios")
@@ -432,14 +499,18 @@ def _is_valid_content_sha256(value: object) -> bool:
     if not isinstance(value, str):
         return False
     normalized = value.strip().lower()
-    return len(normalized) == 64 and all(char in "0123456789abcdef" for char in normalized)
+    return len(normalized) == 64 and all(
+        char in "0123456789abcdef" for char in normalized
+    )
 
 
 def _is_valid_commit_sha(value: object) -> bool:
     if not isinstance(value, str):
         return False
     normalized = value.strip().lower()
-    return 7 <= len(normalized) <= 64 and all(char in "0123456789abcdef" for char in normalized)
+    return 7 <= len(normalized) <= 64 and all(
+        char in "0123456789abcdef" for char in normalized
+    )
 
 
 def _repair_legacy_mobile_capture_targets(artifact: object) -> dict[str, Any] | None:

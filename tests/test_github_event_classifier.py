@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.api.webhooks.github_event_classifier import classify_github_trigger_state
+from orchestrator.api.webhooks.github_event_classifier import (
+    classify_github_trigger_state,
+)
 
 
 class GitHubEventClassifierTests(unittest.TestCase):
@@ -41,7 +43,9 @@ class GitHubEventClassifierTests(unittest.TestCase):
         self.assertTrue(state.full_review_trigger)
         self.assertFalse(state.remediation_trigger)
 
-    def test_check_run_event_without_pull_request_context_triggers_remediation_but_not_full_review(self) -> None:
+    def test_check_run_event_without_pull_request_context_triggers_remediation_but_not_full_review(
+        self,
+    ) -> None:
         state = classify_github_trigger_state(
             github_event="check_run",
             normalized_action="completed",
@@ -66,7 +70,9 @@ class GitHubEventClassifierTests(unittest.TestCase):
         self.assertTrue(state.full_review_trigger)
         self.assertFalse(state.remediation_trigger)
 
-    def test_check_suite_event_without_pull_request_context_triggers_remediation_but_not_full_review(self) -> None:
+    def test_check_suite_event_without_pull_request_context_triggers_remediation_but_not_full_review(
+        self,
+    ) -> None:
         state = classify_github_trigger_state(
             github_event="check_suite",
             normalized_action="completed",

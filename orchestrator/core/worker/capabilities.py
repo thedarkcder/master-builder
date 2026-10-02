@@ -8,8 +8,13 @@ from orchestrator.core.worker.capability_normalization import DEFAULT_WORKER_CAP
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.worker.capability_normalization import WorkerCapabilitiesInput
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
-from orchestrator.core.worker.capability_normalization import parse_worker_capabilities_or_raise
-from orchestrator.core.worker.capability_normalization import parse_worker_capabilities_with_diagnostics
+from orchestrator.core.worker.capability_normalization import (
+    parse_worker_capabilities_or_raise,
+)
+from orchestrator.core.worker.capability_normalization import (
+    parse_worker_capabilities_with_diagnostics,
+)
+
 WORKER_CAPABILITY_LABEL_PREFIX = "worker:"
 _APPLE_NATIVE_KEYWORD_PATTERNS = (
     r"\bios\b",
@@ -52,7 +57,9 @@ class WorkerCapabilityContext:
         return tuple(capability.value for capability in self.available)
 
 
-def resolve_worker_capability_context(*, raw_value: WorkerCapabilitiesInput, source: str) -> WorkerCapabilityContext:
+def resolve_worker_capability_context(
+    *, raw_value: WorkerCapabilitiesInput, source: str
+) -> WorkerCapabilityContext:
     parsed = sorted(
         parse_worker_capabilities_or_raise(raw_value, source=source),
         key=lambda capability: capability.value,
@@ -72,14 +79,18 @@ def worker_label_for_capability(capability: object) -> str:
     return f"{WORKER_CAPABILITY_LABEL_PREFIX}{parsed.value}"
 
 
-def parse_worker_capabilities(raw_value: WorkerCapabilitiesInput) -> set[WorkerCapability]:
+def parse_worker_capabilities(
+    raw_value: WorkerCapabilitiesInput,
+) -> set[WorkerCapability]:
     if isinstance(raw_value, Iterable) and not isinstance(raw_value, str):
         values = [item for item in raw_value if isinstance(item, str)]
         return set(parse_worker_capabilities_with_diagnostics(values).capabilities)
     return set(parse_worker_capabilities_with_diagnostics(raw_value).capabilities)
 
 
-def parse_worker_capabilities_strict(raw_value: WorkerCapabilitiesInput, *, source: str) -> set[WorkerCapability]:
+def parse_worker_capabilities_strict(
+    raw_value: WorkerCapabilitiesInput, *, source: str
+) -> set[WorkerCapability]:
     return parse_worker_capabilities_or_raise(raw_value, source=source)
 
 
@@ -105,8 +116,12 @@ def parse_worker_capability_labels(
             invalid_labels.append(label)
             continue
         valid_capabilities.add(parsed)
-    conflicting = tuple(sorted(valid_capabilities, key=lambda capability: capability.value))
-    selected: WorkerCapability | None = conflicting[0] if len(conflicting) == 1 else None
+    conflicting = tuple(
+        sorted(valid_capabilities, key=lambda capability: capability.value)
+    )
+    selected: WorkerCapability | None = (
+        conflicting[0] if len(conflicting) == 1 else None
+    )
     return WorkerLabelParseResult(
         selected_capability=selected,
         invalid_labels=tuple(sorted(set(invalid_labels))),
@@ -120,7 +135,9 @@ def _project_default_worker_capability(raw_value: object | None) -> str:
 
 
 def _text_implies_macos(*parts: str | None) -> bool:
-    text = " ".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+    text = " ".join(
+        str(part or "").strip().lower() for part in parts if str(part or "").strip()
+    )
     if not text:
         return False
     return any(re.search(pattern, text) for pattern in _APPLE_NATIVE_KEYWORD_PATTERNS)
@@ -143,11 +160,15 @@ def infer_required_worker_capability(
     _ = project_id
     _ = issue_key
     _ = run_id
-    normalized_labels = [str(label).strip() for label in (issue_labels or []) if str(label).strip()]
+    normalized_labels = [
+        str(label).strip() for label in (issue_labels or []) if str(label).strip()
+    ]
     label_parse = parse_worker_capability_labels(normalized_labels)
     if label_parse.selected_capability is not None:
         return label_parse.selected_capability.value
-    project_default = _project_default_worker_capability(project_default_worker_capability)
+    project_default = _project_default_worker_capability(
+        project_default_worker_capability
+    )
     if project_default:
         return project_default
     if _text_implies_macos(issue_summary, issue_description):

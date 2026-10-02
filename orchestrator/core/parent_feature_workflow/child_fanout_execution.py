@@ -8,15 +8,22 @@ from orchestrator.core.projects.parent_planning_fanout_service import (
     ParentPlanningFanoutSeedError,
     ParentPlanningFanoutService,
 )
-from orchestrator.core.parent_feature_workflow.operations import PARENT_WU_JIRA_CHILD_FANOUT_EVALUATE
+from orchestrator.core.parent_feature_workflow.operations import (
+    PARENT_WU_JIRA_CHILD_FANOUT_EVALUATE,
+)
 from orchestrator.core.workflow.attempt_ref import WorkflowAttemptRef
-from orchestrator.core.workflow.execution_projection import classify_external_workflow_failure
+from orchestrator.core.workflow.execution_projection import (
+    classify_external_workflow_failure,
+)
 from orchestrator.core.workflow.step_runner import (
     WorkflowStepAttempt,
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
 )
-from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
+from orchestrator.core.workflow.work_units import (
+    run_work_unit,
+    workflow_work_unit_input_fingerprint,
+)
 
 
 class ChildFanoutExecutionError(RuntimeError):
@@ -24,7 +31,9 @@ class ChildFanoutExecutionError(RuntimeError):
 
 
 class ChildFanoutGateway(Protocol):
-    def with_attempt(self, *, attempt_ref: WorkflowAttemptRef) -> ChildFanoutGateway: ...
+    def with_attempt(
+        self, *, attempt_ref: WorkflowAttemptRef
+    ) -> ChildFanoutGateway: ...
 
     def seed_parent_backlog_children(
         self,
@@ -35,7 +44,9 @@ class ChildFanoutGateway(Protocol):
         planning_state: str,
     ) -> dict[str, Any]: ...
 
-    def combined_child_updates(self, *, seed_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]: ...
+    def combined_child_updates(
+        self, *, seed_data: dict[str, Any]
+    ) -> tuple[list[str], list[str], list[str]]: ...
 
 
 @dataclass(frozen=True)
@@ -51,8 +62,12 @@ class ChildFanoutExecutionInput:
     completion_summary: str
 
 
-def execute_child_fanout_step(*, request: ChildFanoutExecutionInput) -> ParentPlanningFanoutResult:
-    child_sync_gateway = request.child_sync_gateway.with_attempt(attempt_ref=request.step.ref)
+def execute_child_fanout_step(
+    *, request: ChildFanoutExecutionInput
+) -> ParentPlanningFanoutResult:
+    child_sync_gateway = request.child_sync_gateway.with_attempt(
+        attempt_ref=request.step.ref
+    )
     try:
         seed_data = child_sync_gateway.seed_parent_backlog_children(
             parent_detail=request.parent_detail,
@@ -93,8 +108,10 @@ def execute_child_fanout_step(*, request: ChildFanoutExecutionInput) -> ParentPl
                 planning_result=request.planning_result,
             ),
             serialize=lambda result: {"seed_evaluation": result.to_payload()},
-            deserialize=lambda payload: request.fanout_service.seed_evaluation_from_payload(
-                payload.get("seed_evaluation")
+            deserialize=lambda payload: (
+                request.fanout_service.seed_evaluation_from_payload(
+                    payload.get("seed_evaluation")
+                )
             ),
         )
         fanout = ParentPlanningFanoutResult(
@@ -124,4 +141,6 @@ def execute_child_fanout_step(*, request: ChildFanoutExecutionInput) -> ParentPl
         category="invalid_model_output",
         message="Engineering child fanout returned clarification questions after PM decision resolution.",
     )
-    raise ChildFanoutExecutionError("Engineering child fanout returned clarification questions after PM decision resolution.")
+    raise ChildFanoutExecutionError(
+        "Engineering child fanout returned clarification questions after PM decision resolution."
+    )

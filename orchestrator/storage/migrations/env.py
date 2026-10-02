@@ -9,7 +9,17 @@ from orchestrator.storage.models import Base
 
 config = context.config
 
-if config.config_file_name is not None and config.attributes.get("configure_logger", True):
+# The orchestrator migration command supplies its configured target explicitly.
+# Direct Alembic use must configure a target rather than use shared credentials.
+if not (config.get_main_option("sqlalchemy.url") or "").strip():
+    raise ValueError(
+        "Configure the database URL using the orchestrator migrate command "
+        "or explicitly set sqlalchemy.url before running Alembic."
+    )
+
+if config.config_file_name is not None and config.attributes.get(
+    "configure_logger", True
+):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
@@ -30,7 +40,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        config.get_section(config.config_ini_section),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

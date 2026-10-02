@@ -198,7 +198,9 @@ def _validate_codex_assets_for_tenant_init() -> None:
 
 def _build_invite_url(*, request: Request, raw_token: str) -> str:
     settings = get_settings()
-    base_url = resolve_public_base_url(request=request, configured_base_url=settings.admin_ui_base_url)
+    base_url = resolve_public_base_url(
+        request=request, configured_base_url=settings.admin_ui_base_url
+    )
     return f"{base_url}/invite/accept?token={raw_token}"
 
 
@@ -223,7 +225,9 @@ def _send_tenant_invite_email_or_raise(
         ) from exc
 
 
-def _invite_to_schema_with_url(invite: object, *, invite_url: str | None = None) -> TenantInviteRead:
+def _invite_to_schema_with_url(
+    invite: object, *, invite_url: str | None = None
+) -> TenantInviteRead:
     return invite_to_schema(invite, invite_url=invite_url)
 
 
@@ -239,7 +243,13 @@ def _team_to_schema(team) -> TenantTeamRead:  # noqa: ANN001
     )
 
 
-def _member_to_schema(*, principal: TenantMembershipPrincipal, user, created_at: datetime, updated_at: datetime) -> TenantMemberRead:  # noqa: ANN001
+def _member_to_schema(
+    *,
+    principal: TenantMembershipPrincipal,
+    user,
+    created_at: datetime,
+    updated_at: datetime,
+) -> TenantMemberRead:  # noqa: ANN001
     return TenantMemberRead(
         membership_id=principal.membership_id,
         tenant_id=principal.tenant_id,
@@ -268,8 +278,12 @@ def _load_membership_principals(
     tenant_id: str,
 ) -> list[TenantMembershipPrincipal]:
     principals: list[TenantMembershipPrincipal] = []
-    for membership, _user in list_memberships_with_users(session=session, tenant_id=tenant_id):
-        loaded_principal = load_tenant_user_principal(session=session, user_id=membership.user_id)
+    for membership, _user in list_memberships_with_users(
+        session=session, tenant_id=tenant_id
+    ):
+        loaded_principal = load_tenant_user_principal(
+            session=session, user_id=membership.user_id
+        )
         membership_principal = loaded_principal.membership_for_tenant(tenant_id)
         if membership_principal is not None:
             principals.append(membership_principal)
@@ -285,12 +299,19 @@ def _discord_client(*, session: Session) -> DiscordApiClient:
     )
     normalized = str(token or "").strip()
     if not normalized:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Discord bot token is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Discord bot token is not configured",
+        )
     return DiscordApiClient(bot_token=normalized)
 
 
-def _resolve_discord_invite_channel_id(*, client: DiscordApiClient, discord_config: dict) -> str:
-    onboarding_channel_id = str(discord_config.get("onboarding_channel_id") or "").strip()
+def _resolve_discord_invite_channel_id(
+    *, client: DiscordApiClient, discord_config: dict
+) -> str:
+    onboarding_channel_id = str(
+        discord_config.get("onboarding_channel_id") or ""
+    ).strip()
     if onboarding_channel_id:
         return onboarding_channel_id
 
@@ -300,14 +321,22 @@ def _resolve_discord_invite_channel_id(*, client: DiscordApiClient, discord_conf
 
     guild_id = str(discord_config.get("guild_id") or "").strip()
     if not guild_id:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant Discord guild is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenant Discord guild is not configured",
+        )
 
     try:
         channels = client.list_text_channels(guild_id=guild_id)
     except DiscordApiError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     if not channels:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No Discord text channels are available for this tenant")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No Discord text channels are available for this tenant",
+        )
     return channels[0].channel_id
 
 
@@ -366,7 +395,11 @@ def get_tenant(
     )
 
 
-@router.post("/tenants/{tenant_id}/invites", response_model=TenantInviteRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tenants/{tenant_id}/invites",
+    response_model=TenantInviteRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_tenant_invite(
     tenant_id: str,
     payload: TenantInviteCreate,
@@ -381,8 +414,12 @@ def create_tenant_invite(
     )
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    ensure_team_ids_exist(session=session, tenant_id=tenant_id, team_ids=payload.team_ids)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    ensure_team_ids_exist(
+        session=session, tenant_id=tenant_id, team_ids=payload.team_ids
+    )
     invite, raw_token = create_invite(
         session=session,
         tenant_id=tenant_id,
@@ -415,10 +452,18 @@ def get_tenant_invites(
         tenant_id=tenant_id,
         permission_key=PERMISSION_PEOPLE_MANAGE,
     )
-    return TenantInviteListRead(items=[_invite_to_schema_with_url(invite) for invite in list_invites(session=session, tenant_id=tenant_id)])
+    return TenantInviteListRead(
+        items=[
+            _invite_to_schema_with_url(invite)
+            for invite in list_invites(session=session, tenant_id=tenant_id)
+        ]
+    )
 
 
-@router.post("/tenants/{tenant_id}/invites/{invite_id}/resend", response_model=TenantInviteActionResult)
+@router.post(
+    "/tenants/{tenant_id}/invites/{invite_id}/resend",
+    response_model=TenantInviteActionResult,
+)
 def resend_tenant_invite(
     tenant_id: str,
     invite_id: str,
@@ -434,8 +479,12 @@ def resend_tenant_invite(
     invite = get_invite(session=session, tenant_id=tenant_id, invite_id=invite_id)
     tenant = session.get(Tenant, tenant_id)
     if invite is None or tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
-    next_invite, raw_token = resend_invite(session=session, invite=invite, invited_by_user_id=principal.user_id)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found"
+        )
+    next_invite, raw_token = resend_invite(
+        session=session, invite=invite, invited_by_user_id=principal.user_id
+    )
     invite_url = _build_invite_url(request=request, raw_token=raw_token)
     _send_tenant_invite_email_or_raise(
         email=next_invite.email,
@@ -444,10 +493,15 @@ def resend_tenant_invite(
         tenant_name=tenant.name,
     )
     session.commit()
-    return TenantInviteActionResult(invite=_invite_to_schema_with_url(next_invite, invite_url=invite_url))
+    return TenantInviteActionResult(
+        invite=_invite_to_schema_with_url(next_invite, invite_url=invite_url)
+    )
 
 
-@router.post("/tenants/{tenant_id}/invites/{invite_id}/revoke", response_model=TenantInviteActionResult)
+@router.post(
+    "/tenants/{tenant_id}/invites/{invite_id}/revoke",
+    response_model=TenantInviteActionResult,
+)
 def revoke_tenant_invite(
     tenant_id: str,
     invite_id: str,
@@ -461,7 +515,9 @@ def revoke_tenant_invite(
     )
     invite = get_invite(session=session, tenant_id=tenant_id, invite_id=invite_id)
     if invite is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found"
+        )
     revoke_invite(session=session, invite=invite)
     session.commit()
     return TenantInviteActionResult(invite=_invite_to_schema_with_url(invite))
@@ -478,10 +534,17 @@ def get_tenant_teams(
         tenant_id=tenant_id,
         permission_key=PERMISSION_PEOPLE_MANAGE,
     )
-    return [_team_to_schema(team) for team in list_teams(session=session, tenant_id=tenant_id)]
+    return [
+        _team_to_schema(team)
+        for team in list_teams(session=session, tenant_id=tenant_id)
+    ]
 
 
-@router.post("/tenants/{tenant_id}/teams", response_model=TenantTeamRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tenants/{tenant_id}/teams",
+    response_model=TenantTeamRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_tenant_team(
     tenant_id: str,
     payload: TenantTeamCreate,
@@ -499,7 +562,9 @@ def create_tenant_team(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown permission keys: {', '.join(unknown_permissions)}",
         )
-    normalized_permission_keys = list(normalize_permission_keys(payload.permission_keys))
+    normalized_permission_keys = list(
+        normalize_permission_keys(payload.permission_keys)
+    )
     team = create_team(
         session=session,
         tenant_id=tenant_id,
@@ -530,7 +595,9 @@ def update_tenant_team(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown permission keys: {', '.join(unknown_permissions)}",
         )
-    normalized_permission_keys = list(normalize_permission_keys(payload.permission_keys))
+    normalized_permission_keys = list(
+        normalize_permission_keys(payload.permission_keys)
+    )
     try:
         team = update_team(
             session=session,
@@ -541,7 +608,9 @@ def update_tenant_team(
             permission_keys=normalized_permission_keys,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     session.commit()
     return _team_to_schema(team)
 
@@ -559,10 +628,14 @@ def get_tenant_members(
     )
     principals_by_id = {
         membership.membership_id: membership
-        for membership in _load_membership_principals(session=session, tenant_id=tenant_id)
+        for membership in _load_membership_principals(
+            session=session, tenant_id=tenant_id
+        )
     }
     members: list[TenantMemberRead] = []
-    for membership, user in list_memberships_with_users(session=session, tenant_id=tenant_id):
+    for membership, user in list_memberships_with_users(
+        session=session, tenant_id=tenant_id
+    ):
         membership_principal = principals_by_id.get(membership.membership_id)
         if membership_principal is None:
             continue
@@ -577,7 +650,9 @@ def get_tenant_members(
     return members
 
 
-@router.put("/tenants/{tenant_id}/members/{membership_id}", response_model=TenantMemberRead)
+@router.put(
+    "/tenants/{tenant_id}/members/{membership_id}", response_model=TenantMemberRead
+)
 def update_tenant_member(
     tenant_id: str,
     membership_id: str,
@@ -590,7 +665,9 @@ def update_tenant_member(
         tenant_id=tenant_id,
         permission_key=PERMISSION_PEOPLE_MANAGE,
     )
-    ensure_team_ids_exist(session=session, tenant_id=tenant_id, team_ids=payload.team_ids)
+    ensure_team_ids_exist(
+        session=session, tenant_id=tenant_id, team_ids=payload.team_ids
+    )
     try:
         update_membership(
             session=session,
@@ -601,18 +678,24 @@ def update_tenant_member(
             is_active=payload.is_active,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     session.commit()
     membership_principal = next(
         (
             item
-            for item in _load_membership_principals(session=session, tenant_id=tenant_id)
+            for item in _load_membership_principals(
+                session=session, tenant_id=tenant_id
+            )
             if item.membership_id == membership_id
         ),
         None,
     )
     if membership_principal is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found"
+        )
     persisted_rows = list_memberships_with_users(session=session, tenant_id=tenant_id)
     for membership, user in persisted_rows:
         if membership.membership_id == membership_id:
@@ -622,10 +705,14 @@ def update_tenant_member(
                 created_at=membership.created_at,
                 updated_at=membership.updated_at,
             )
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found"
+    )
 
 
-@router.get("/tenants/{tenant_id}/discord/identity", response_model=TenantDiscordIdentityRead)
+@router.get(
+    "/tenants/{tenant_id}/discord/identity", response_model=TenantDiscordIdentityRead
+)
 def get_tenant_discord_identity(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
@@ -636,10 +723,14 @@ def get_tenant_discord_identity(
     oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     oauth_configured = discord_oauth_is_configured(config=oauth_config)
     if principal.user_id is None or membership is None:
-        return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
+        return TenantDiscordIdentityRead(
+            linked=False, oauth_configured=oauth_configured
+        )
     identity = get_discord_identity(session=session, user_id=principal.user_id)
     if identity is None:
-        return TenantDiscordIdentityRead(linked=False, oauth_configured=oauth_configured)
+        return TenantDiscordIdentityRead(
+            linked=False, oauth_configured=oauth_configured
+        )
     return TenantDiscordIdentityRead(
         oauth_configured=oauth_configured,
         linked=True,
@@ -651,7 +742,9 @@ def get_tenant_discord_identity(
     )
 
 
-@router.post("/tenants/{tenant_id}/discord/link/start", response_model=TenantDiscordLinkStartRead)
+@router.post(
+    "/tenants/{tenant_id}/discord/link/start", response_model=TenantDiscordLinkStartRead
+)
 def start_tenant_discord_link(
     tenant_id: str,
     redirect_to: str = Query(default="/get-started"),
@@ -660,7 +753,10 @@ def start_tenant_discord_link(
 ) -> TenantDiscordLinkStartRead:
     require_tenant_membership(principal=principal, tenant_id=tenant_id)
     if principal.user_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant user context required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant user context required",
+        )
     settings = get_settings()
     oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     state = issue_discord_oauth_state(
@@ -670,13 +766,20 @@ def start_tenant_discord_link(
         redirect_to=redirect_to,
     )
     try:
-        authorize_url = build_discord_oauth_authorize_url(config=oauth_config, state=state)
+        authorize_url = build_discord_oauth_authorize_url(
+            config=oauth_config, state=state
+        )
     except DiscordOAuthError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     return TenantDiscordLinkStartRead(authorize_url=authorize_url)
 
 
-@router.post("/tenants/{tenant_id}/discord/onboarding-invite", response_model=TenantDiscordInviteRead)
+@router.post(
+    "/tenants/{tenant_id}/discord/onboarding-invite",
+    response_model=TenantDiscordInviteRead,
+)
 def create_tenant_discord_onboarding_invite(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
@@ -685,12 +788,19 @@ def create_tenant_discord_onboarding_invite(
     membership = require_tenant_membership(principal=principal, tenant_id=tenant_id)
     tenant = session.get(Tenant, tenant_id)
     if tenant is None or membership is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     if principal.user_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant user context required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant user context required",
+        )
     discord_config = dict(tenant.discord_config or {})
     client = _discord_client(session=session)
-    channel_id = _resolve_discord_invite_channel_id(client=client, discord_config=discord_config)
+    channel_id = _resolve_discord_invite_channel_id(
+        client=client, discord_config=discord_config
+    )
     expires_in_seconds = discord_config.get("onboarding_invite_expires_in_seconds")
     max_uses = discord_config.get("onboarding_invite_max_uses")
     try:
@@ -700,10 +810,15 @@ def create_tenant_discord_onboarding_invite(
             max_uses=int(max_uses) if max_uses is not None else None,
         )
     except (DiscordApiError, ValueError) as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     code = str(invite.get("code") or "").strip()
     if not code:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Discord invite response missing code")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Discord invite response missing code",
+        )
     expires_at = None
     expires_at_raw = str(invite.get("expires_at") or "").strip()
     if expires_at_raw:
@@ -718,7 +833,9 @@ def create_tenant_discord_onboarding_invite(
         membership_id=membership.membership_id,
         mutate=lambda state: state.update(
             {
-                "linked": bool(get_discord_identity(session=session, user_id=principal.user_id)),
+                "linked": bool(
+                    get_discord_identity(session=session, user_id=principal.user_id)
+                ),
                 "invite_generated": True,
                 "invite_generated_at": datetime.now(UTC).isoformat(),
                 "guild_joined": bool(state.get("guild_joined")),
@@ -735,7 +852,9 @@ def create_tenant_discord_onboarding_invite(
     )
 
 
-@router.get("/tenants/{tenant_id}/delivery-summary", response_model=TenantDeliverySummaryRead)
+@router.get(
+    "/tenants/{tenant_id}/delivery-summary", response_model=TenantDeliverySummaryRead
+)
 def get_tenant_delivery_summary(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
@@ -830,7 +949,10 @@ def list_projects(
     )  # type: ignore[return-value]
 
 
-@router.get("/tenants/{tenant_id}/project-navigation", response_model=list[ProjectNavigationRead])
+@router.get(
+    "/tenants/{tenant_id}/project-navigation",
+    response_model=list[ProjectNavigationRead],
+)
 def list_project_navigation(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
@@ -844,14 +966,22 @@ def list_project_navigation(
     )
 
 
-@router.post("/tenants/{tenant_id}/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tenants/{tenant_id}/projects",
+    response_model=ProjectRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_project(
     tenant_id: str,
     payload: ProjectCreate,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return create_project_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -876,7 +1006,10 @@ def get_project(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/configuration", response_model=ProjectRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/configuration",
+    response_model=ProjectRead,
+)
 def update_project_configuration(
     tenant_id: str,
     project_id: str,
@@ -884,7 +1017,11 @@ def update_project_configuration(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return update_project_configuration_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -894,7 +1031,9 @@ def update_project_configuration(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/policy", response_model=ProjectRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/policy", response_model=ProjectRead
+)
 def update_project_policy(
     tenant_id: str,
     project_id: str,
@@ -902,7 +1041,11 @@ def update_project_policy(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return update_project_policy_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -912,7 +1055,9 @@ def update_project_policy(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/environment", response_model=ProjectRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/environment", response_model=ProjectRead
+)
 def update_project_environment(
     tenant_id: str,
     project_id: str,
@@ -920,7 +1065,11 @@ def update_project_environment(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return update_project_environment_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -930,7 +1079,9 @@ def update_project_environment(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/secrets", response_model=ProjectRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/secrets", response_model=ProjectRead
+)
 def update_project_secret_refs(
     tenant_id: str,
     project_id: str,
@@ -938,7 +1089,11 @@ def update_project_secret_refs(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return update_project_secret_refs_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -948,7 +1103,9 @@ def update_project_secret_refs(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/discord", response_model=ProjectRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/discord", response_model=ProjectRead
+)
 def update_project_discord(
     tenant_id: str,
     project_id: str,
@@ -956,7 +1113,11 @@ def update_project_discord(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return update_project_discord_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -966,7 +1127,9 @@ def update_project_discord(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/archive", response_model=ProjectRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/archive", response_model=ProjectRead
+)
 def update_project_archive_state(
     tenant_id: str,
     project_id: str,
@@ -974,7 +1137,11 @@ def update_project_archive_state(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return update_project_archive_state_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -984,14 +1151,21 @@ def update_project_archive_state(
     )  # type: ignore[return-value]
 
 
-@router.post("/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board", response_model=ProjectRead)
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board",
+    response_model=ProjectRead,
+)
 def resolve_project_jira_run_board(
     tenant_id: str,
     project_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return resolve_project_jira_run_board_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -1010,10 +1184,20 @@ def get_project_installs(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectInstallsRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    installs = list_project_installs(session=session, tenant_id=tenant_id, project_id=project.project_id)
-    return ProjectInstallsRead(installs=[project_install_to_schema(install) for install in installs])
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
+    installs = list_project_installs(
+        session=session, tenant_id=tenant_id, project_id=project.project_id
+    )
+    return ProjectInstallsRead(
+        installs=[project_install_to_schema(install) for install in installs]
+    )
 
 
 @router.post(
@@ -1028,8 +1212,14 @@ def create_project_install_route(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectInstallRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     try:
         install = create_project_install(
             session=session,
@@ -1044,7 +1234,9 @@ def create_project_install_route(
             ),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return project_install_to_schema(install)
 
 
@@ -1060,11 +1252,23 @@ def update_project_install_route(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectInstallRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     install = get_project_install(session=session, install_id=install_id)
-    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
+    if (
+        install is None
+        or install.tenant_id != tenant_id
+        or install.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found"
+        )
     try:
         updated = update_project_install(
             session=session,
@@ -1078,7 +1282,9 @@ def update_project_install_route(
             ),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return project_install_to_schema(updated)
 
 
@@ -1093,11 +1299,23 @@ def delete_project_install_route(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> Response:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     install = get_project_install(session=session, install_id=install_id)
-    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
+    if (
+        install is None
+        or install.tenant_id != tenant_id
+        or install.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found"
+        )
     delete_project_install(session=session, install=install)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1112,10 +1330,20 @@ def get_project_install_requests_route(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectInstallRequestsRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    requests = list_project_install_requests(session=session, tenant_id=tenant_id, project_id=project.project_id)
-    return ProjectInstallRequestsRead(requests=[project_install_request_to_schema(request) for request in requests])
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
+    requests = list_project_install_requests(
+        session=session, tenant_id=tenant_id, project_id=project.project_id
+    )
+    return ProjectInstallRequestsRead(
+        requests=[project_install_request_to_schema(request) for request in requests]
+    )
 
 
 @router.put(
@@ -1130,11 +1358,24 @@ def update_project_install_request_route(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectInstallRequestRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     request = get_project_install_request(session=session, request_id=request_id)
-    if request is None or request.tenant_id != tenant_id or request.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install request not found")
+    if (
+        request is None
+        or request.tenant_id != tenant_id
+        or request.project_id != project_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project install request not found",
+        )
     normalized_status = str(payload.status or "").strip().lower()
     settings = get_settings()
     try:
@@ -1156,12 +1397,16 @@ def update_project_install_request_route(
             )
             return project_install_request_to_schema(updated)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     if normalized_status == "fulfilled":
         matching_install = next(
             (
                 install
-                for install in list_project_installs(session=session, tenant_id=tenant_id, project_id=project_id)
+                for install in list_project_installs(
+                    session=session, tenant_id=tenant_id, project_id=project_id
+                )
                 if install.kind == request.kind and install.label == request.label
             ),
             None,
@@ -1172,19 +1417,29 @@ def update_project_install_request_route(
                 detail="Create a matching project install before marking this request fulfilled",
             )
     try:
-        updated = update_install_request_status(session=session, request=request, status=normalized_status)
+        updated = update_install_request_status(
+            session=session, request=request, status=normalized_status
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     return project_install_request_to_schema(updated)
 
 
-def _get_project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
+def _get_project_for_tenant_or_404(
+    *, session: Session, tenant_id: str, project_id: str
+) -> Project:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+        )
     return project
 
 
@@ -1219,7 +1474,9 @@ def _automation_to_schema(*, automation, executions) -> ProjectAutomationRead:  
         fallback_lookback_hours=automation.fallback_lookback_hours,
         last_successful_window_end_at=automation.last_successful_window_end_at,
         next_run_at=automation.next_run_at,
-        executions=[_automation_execution_to_schema(execution) for execution in executions],
+        executions=[
+            _automation_execution_to_schema(execution) for execution in executions
+        ],
         created_at=automation.created_at,
         updated_at=automation.updated_at,
     )
@@ -1235,7 +1492,9 @@ def get_project_automations(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectAutomationsRead:
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     automations = list_project_automation_definitions(
         session=session,
         tenant_id=tenant_id,
@@ -1267,7 +1526,9 @@ def put_project_automations(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectAutomationsRead:
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     for item in payload.automations:
         normalized = ServiceProjectAutomationWrite(
             kind=item.kind,
@@ -1285,7 +1546,9 @@ def put_project_automations(
                 payload=normalized,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+            ) from exc
     automations = list_project_automation_definitions(
         session=session,
         tenant_id=tenant_id,
@@ -1317,7 +1580,9 @@ def post_project_automation_run_now(
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> ProjectAutomationsRead:
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = _get_project_for_tenant_or_404(
+        session=session, tenant_id=tenant_id, project_id=project_id
+    )
     try:
         enqueue_project_automation_run_now(
             session=session,
@@ -1326,7 +1591,9 @@ def post_project_automation_run_now(
             kind=kind,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     automations = list_project_automation_definitions(
         session=session,
         tenant_id=tenant_id,
@@ -1347,7 +1614,9 @@ def post_project_automation_run_now(
     )
 
 
-@router.get("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
+@router.get(
+    "/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead
+)
 def get_tenant_deployment_plane(
     tenant_id: str,
     _: str = Depends(require_admin),
@@ -1356,17 +1625,24 @@ def get_tenant_deployment_plane(
     return get_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id)
 
 
-@router.put("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
+@router.put(
+    "/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead
+)
 def update_tenant_deployment_plane(
     tenant_id: str,
     payload: TenantDeploymentPlaneWrite,
     _: str = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> TenantDeploymentPlaneRead:
-    return update_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id, payload=payload)
+    return update_tenant_deployment_plane_impl(
+        session=session, tenant_id=tenant_id, payload=payload
+    )
 
 
-@router.get("/tenants/{tenant_id}/projects/{project_id}/apps", response_model=list[ProjectAppRead])
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps",
+    response_model=list[ProjectAppRead],
+)
 def list_project_apps(
     tenant_id: str,
     project_id: str,
@@ -1385,7 +1661,11 @@ def list_project_apps(
     )  # type: ignore[return-value]
 
 
-@router.post("/tenants/{tenant_id}/projects/{project_id}/apps", response_model=ProjectAppRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps",
+    response_model=ProjectAppRead,
+    status_code=status.HTTP_201_CREATED,
+)
 def create_project_app(
     tenant_id: str,
     project_id: str,
@@ -1393,7 +1673,11 @@ def create_project_app(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectAppRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().create_project_app(
         session=session,
         tenant_id=tenant_id,
@@ -1414,7 +1698,11 @@ def start_project_app_analysis(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectAppAnalysisRunRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().start_project_app_analysis_run(
         session=session,
         tenant_id=tenant_id,
@@ -1462,7 +1750,10 @@ def get_project_app_analysis_run(
     )  # type: ignore[return-value]
 
 
-@router.get("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", response_model=ProjectAppRead)
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+    response_model=ProjectAppRead,
+)
 def get_project_app(
     tenant_id: str,
     project_id: str,
@@ -1479,8 +1770,14 @@ def get_project_app(
     )  # type: ignore[return-value]
 
 
-@router.patch("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", response_model=ProjectAppRead)
-@router.put("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", response_model=ProjectAppRead)
+@router.patch(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+    response_model=ProjectAppRead,
+)
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+    response_model=ProjectAppRead,
+)
 def update_project_app(
     tenant_id: str,
     project_id: str,
@@ -1489,7 +1786,11 @@ def update_project_app(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectAppRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().update_project_app(
         session=session,
         tenant_id=tenant_id,
@@ -1499,7 +1800,10 @@ def update_project_app(
     )  # type: ignore[return-value]
 
 
-@router.delete("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 def delete_project_app(
     tenant_id: str,
     project_id: str,
@@ -1507,7 +1811,11 @@ def delete_project_app(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> None:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     admin_project_service().delete_project_app(
         session=session,
         tenant_id=tenant_id,
@@ -1545,7 +1853,11 @@ def update_project_deployment_policy(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentPolicyRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().update_project_deployment_policy(
         session=session,
         tenant_id=tenant_id,
@@ -1566,7 +1878,11 @@ def complete_project_deployment_setup(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentSetupStartRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().complete_project_deployment_setup(
         session=session,
         tenant_id=tenant_id,
@@ -1608,7 +1924,11 @@ def update_project_app_deployment_config(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentConfigRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().update_project_app_deployment_config(
         session=session,
         tenant_id=tenant_id,
@@ -1650,7 +1970,11 @@ def create_project_app_deployment_release(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentReleaseRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().create_project_app_deployment_release(
         session=session,
         tenant_id=tenant_id,
@@ -1718,7 +2042,11 @@ def update_project_app_deployment_release_status(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentReleaseRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().update_project_app_deployment_release_status(
         session=session,
         tenant_id=tenant_id,
@@ -1741,7 +2069,11 @@ def apply_project_app_deployment_resources(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentOperationRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().apply_project_app_deployment_resources(
         session=session,
         tenant_id=tenant_id,
@@ -1763,7 +2095,11 @@ def apply_project_app_deployment_volumes(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentOperationRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().apply_project_app_deployment_volumes(
         session=session,
         tenant_id=tenant_id,
@@ -1785,7 +2121,11 @@ def apply_project_app_deployment_domains(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentOperationRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().apply_project_app_deployment_domains(
         session=session,
         tenant_id=tenant_id,
@@ -1807,7 +2147,11 @@ def apply_project_app_deployment_backups(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentOperationRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().apply_project_app_deployment_backups(
         session=session,
         tenant_id=tenant_id,
@@ -1833,7 +2177,11 @@ def trigger_project_app_deployment_backups(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentOperationRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().trigger_project_app_deployment_backups(
         session=session,
         tenant_id=tenant_id,
@@ -1856,7 +2204,11 @@ def create_project_app_deployment_restore_run(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentRestoreRunRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().restore_project_app_deployment_backup(
         session=session,
         tenant_id=tenant_id,
@@ -1879,7 +2231,11 @@ def list_project_app_deployment_backup_executions(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentBackupExecutionListRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().list_project_app_deployment_backup_executions(
         session=session,
         tenant_id=tenant_id,
@@ -1900,7 +2256,11 @@ def list_project_app_deployment_restore_runs(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[ProjectDeploymentRestoreRunRead]:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().list_project_app_deployment_restore_runs(
         session=session,
         tenant_id=tenant_id,
@@ -1921,7 +2281,11 @@ def get_project_app_deployment_restore_run(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectDeploymentRestoreRunRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
     return admin_project_service().get_project_app_deployment_restore_run(
         session=session,
         tenant_id=tenant_id,
@@ -1931,7 +2295,10 @@ def get_project_app_deployment_restore_run(
     )
 
 
-@router.get("/tenants/{tenant_id}/deployments/overview", response_model=TenantDeploymentsOverviewRead)
+@router.get(
+    "/tenants/{tenant_id}/deployments/overview",
+    response_model=TenantDeploymentsOverviewRead,
+)
 def get_tenant_deployments_overview(
     tenant_id: str,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),

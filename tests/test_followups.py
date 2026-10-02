@@ -20,5 +20,7 @@ class FollowUpDraftTests(unittest.TestCase):
         self.assertFalse(payload["auto_promote"])
         self.assertIn("Why it matters", payload["description"])
         self.assertIn("Origin issue: MAB-1", payload["description"])
-        self.assertIn("Origin PR: https://github.com/example/repo/pull/10", payload["description"])
+        self.assertIn(
+            "Origin PR: https://github.com/example/repo/pull/10", payload["description"]
+        )
         self.assertIn("backlog-only", payload["labels"])

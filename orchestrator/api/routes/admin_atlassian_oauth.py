@@ -15,7 +15,12 @@ from orchestrator.api.admin.tenant_actions import (
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import AtlassianConnectStart, JiraWebhookActionResult
 from orchestrator.core.config import get_settings
-from orchestrator.core.security import AuthenticatedPrincipal, require_admin, require_authenticated_principal, require_tenant_permission
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_admin,
+    require_authenticated_principal,
+    require_tenant_permission,
+)
 from orchestrator.core.platform.access import PERMISSION_WORKSPACE_MANAGE
 from orchestrator.storage.models import Tenant
 
@@ -32,7 +37,11 @@ def start_atlassian_connect(
     if principal.is_platform_super_admin:
         require_admin(principal=principal)
     elif tenant_id:
-        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+        require_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_key=PERMISSION_WORKSPACE_MANAGE,
+        )
     return build_atlassian_connect_start_impl(
         return_to=return_to,
         tenant_id=tenant_id,
@@ -59,7 +68,9 @@ def atlassian_connect_callback(
     return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
 
 
-@router.post("/tenants/{tenant_id}/atlassian/disconnect", response_model=JiraWebhookActionResult)
+@router.post(
+    "/tenants/{tenant_id}/atlassian/disconnect", response_model=JiraWebhookActionResult
+)
 def disconnect_tenant_atlassian(
     tenant_id: str,
     _: str = Depends(require_admin),

@@ -37,7 +37,9 @@ def preview_tenant_ready_gate(
     )
 
 
-@router.post("/tenants/{tenant_id}/test-atlassian", response_model=IntegrationTestResult)
+@router.post(
+    "/tenants/{tenant_id}/test-atlassian", response_model=IntegrationTestResult
+)
 def test_atlassian_connection(
     tenant_id: str,
     _: str = Depends(require_admin),

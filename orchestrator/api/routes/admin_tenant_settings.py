@@ -6,7 +6,9 @@ from sqlalchemy.orm import Session
 from orchestrator.api.admin.config_helpers import (
     validate_codex_assets_for_tenant_init as validate_codex_assets_for_tenant_init_core,
 )
-from orchestrator.api.admin.project_normalization import with_preserved_discord_system_fields
+from orchestrator.api.admin.project_normalization import (
+    with_preserved_discord_system_fields,
+)
 from orchestrator.api.admin.route_helpers import (
     reconcile_tenant_projects,
     with_managed_github_refs,
@@ -47,7 +49,11 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.config import get_settings
 from orchestrator.core.platform.access import PERMISSION_WORKSPACE_MANAGE
-from orchestrator.core.security import AuthenticatedPrincipal, require_authenticated_principal, require_tenant_permission
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_authenticated_principal,
+    require_tenant_permission,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -66,7 +72,11 @@ def update_tenant_configuration(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_configuration_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -84,7 +94,11 @@ def update_tenant_jira(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_jira_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -104,7 +118,11 @@ def update_tenant_github(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_github_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -123,7 +141,11 @@ def update_tenant_repos(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_repos_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -142,7 +164,11 @@ def update_tenant_policy(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_policy_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -160,7 +186,11 @@ def update_tenant_observability(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_observability_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -178,7 +208,11 @@ def update_tenant_discord(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_discord_route_impl(
         session=session,
         tenant_id=tenant_id,
@@ -197,7 +231,11 @@ def update_tenant_experience(
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=tenant_id,
+        permission_key=PERMISSION_WORKSPACE_MANAGE,
+    )
     return update_tenant_experience_route_impl(
         session=session,
         tenant_id=tenant_id,

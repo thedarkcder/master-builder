@@ -16,8 +16,12 @@ from orchestrator.core.workflow.advance import (
     InvalidWorkflowOperationRetryError,
     UnsupportedWorkflowOperationRetryError,
 )
-from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
-from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
+from orchestrator.core.workflow.handler_composition import (
+    build_installed_workflow_handler_registry,
+)
+from orchestrator.core.workflow.operation_service import (
+    WorkflowOperationAttemptAlreadyRunningError,
+)
 from orchestrator.core.workflow.runtime import build_workflow_runtime
 from orchestrator.core.worker.execution_service import build_run_process_kwargs
 from orchestrator.core.worker.process_service import process_claimed_run
@@ -65,18 +69,30 @@ def retry_workflow_operation(
 ):  # noqa: ANN001
     workflow = workflow_by_execution_id(session=session, execution_id=execution_id)
     if workflow is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
+        )
 
     operation = session.get(WorkflowOperation, operation_id)
     if operation is None or operation.workflow_id != workflow.workflow_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow operation not found"
+        )
 
-    attempts_by_operation = workflow_operation_attempts_by_operation(session=session, workflow_id=workflow.workflow_id)
+    attempts_by_operation = workflow_operation_attempts_by_operation(
+        session=session, workflow_id=workflow.workflow_id
+    )
     latest_attempt = (attempts_by_operation.get(operation.operation_id) or [None])[-1]
     if latest_attempt is None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation has no attempt history to retry")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workflow operation has no attempt history to retry",
+        )
     if str(latest_attempt.status or "").strip().lower() not in {"failed", "retrying"}:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow operation is not in a failed state")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Workflow operation is not in a failed state",
+        )
     previous_latest_attempt_id = str(latest_attempt.attempt_id or "").strip()
 
     runtime = build_registered_operation_retry_runtime(
@@ -92,7 +108,9 @@ def retry_workflow_operation(
         UnsupportedWorkflowOperationRetryError,
         WorkflowOperationAttemptAlreadyRunningError,
     ) as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     session.commit()
     refreshed_workflow = workflow_schema(
         session=session,
@@ -100,11 +118,14 @@ def retry_workflow_operation(
         workflow_to_schema_fn=workflow_to_schema_fn,
         run_to_schema_fn=run_to_schema_fn,
     )
-    refreshed_attempts = workflow_operation_attempts(session=session, operation_id=operation.operation_id)
+    refreshed_attempts = workflow_operation_attempts(
+        session=session, operation_id=operation.operation_id
+    )
     latest_attempt = refreshed_attempts[0] if refreshed_attempts else None
     started_attempt = (
         latest_attempt
-        if latest_attempt is not None and str(latest_attempt.attempt_id or "").strip() != previous_latest_attempt_id
+        if latest_attempt is not None
+        and str(latest_attempt.attempt_id or "").strip() != previous_latest_attempt_id
         else None
     )
     if started_attempt is None:

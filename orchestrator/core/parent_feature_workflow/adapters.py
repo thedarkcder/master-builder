@@ -7,9 +7,13 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.projects.architecture_document_service import ArchitectureDocumentService
+from orchestrator.core.projects.architecture_document_service import (
+    ArchitectureDocumentService,
+)
 from orchestrator.core.clarification.questions import ClarificationQuestion
-from orchestrator.core.clarification.projection_service import matching_active_jira_clarification_evidence_id
+from orchestrator.core.clarification.projection_service import (
+    matching_active_jira_clarification_evidence_id,
+)
 from orchestrator.core.pm.followup_context_service import FOLLOWUP_CONTEXT_PM_INTERVIEW
 from orchestrator.core.integrations.atlassian.links import (
     architecture_document_remote_link_spec,
@@ -41,7 +45,9 @@ from orchestrator.core.projects.parent_feature_brief_store import (
     persist_parent_feature_brief_snapshot,
     resolve_parent_feature_brief,
 )
-from orchestrator.core.projects.parent_planning_clarification_service import ClarificationPublishEffects
+from orchestrator.core.projects.parent_planning_clarification_service import (
+    ClarificationPublishEffects,
+)
 from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_QUESTION_PENDING,
@@ -75,9 +81,18 @@ from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_WU_JIRA_CHILD_FANOUT_SEED,
     PARENT_WU_JIRA_CHILD_FANOUT_TESTING_MODEL,
 )
-from orchestrator.core.workflow.execution_projection import resolve_latest_workflow_execution_by_source
-from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
-from orchestrator.storage.models import Project, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.core.workflow.execution_projection import (
+    resolve_latest_workflow_execution_by_source,
+)
+from orchestrator.core.workflow.work_units import (
+    run_work_unit,
+    workflow_work_unit_input_fingerprint,
+)
+from orchestrator.storage.models import (
+    Project,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
 logger = logging.getLogger(__name__)
@@ -101,7 +116,9 @@ class _JiraParentIssueGateway:
         self._post_jira_comment_fn = post_jira_comment_fn
         self._create_jira_comment_fn = create_jira_comment_fn
         self._jira_adapter = None
-        self._architecture_document_service = ArchitectureDocumentService(settings_factory=lambda: self._settings)
+        self._architecture_document_service = ArchitectureDocumentService(
+            settings_factory=lambda: self._settings
+        )
 
     def _jira(self):
         if self._jira_adapter is None:
@@ -123,10 +140,14 @@ class _JiraParentIssueGateway:
     def _project(self) -> Project:
         project_id = str(self._context.project_id or "").strip()
         if not project_id:
-            raise LookupError(f"No scoped project is available for Jira parent workflow {self._context.issue_key}")
+            raise LookupError(
+                f"No scoped project is available for Jira parent workflow {self._context.issue_key}"
+            )
         project = self._session.get(Project, project_id)
         if project is None or project.tenant_id != self._context.tenant_id:
-            raise LookupError(f"Project {project_id} is not available for Jira parent workflow {self._context.issue_key}")
+            raise LookupError(
+                f"Project {project_id} is not available for Jira parent workflow {self._context.issue_key}"
+            )
         return project
 
     def resolve_architecture_gate(
@@ -151,7 +172,9 @@ class _JiraParentIssueGateway:
     def load_issue_detail(self, issue_key: str) -> JiraIssueDetail:
         return self.load_parent_detail(issue_key)
 
-    def load_child_details(self, *, project_key: str, parent_issue_key: str) -> list[JiraIssueDetail]:
+    def load_child_details(
+        self, *, project_key: str, parent_issue_key: str
+    ) -> list[JiraIssueDetail]:
         previews = self._jira().list_child_issue_previews(
             project_key=project_key,
             parent_issue_key=parent_issue_key,
@@ -169,7 +192,9 @@ class _JiraParentIssueGateway:
             project_key=project_key,
         )
 
-    def update_issue_sync_label(self, *, issue_detail: JiraIssueDetail, target_label: str) -> None:
+    def update_issue_sync_label(
+        self, *, issue_detail: JiraIssueDetail, target_label: str
+    ) -> None:
         _update_issue_sync_label(
             oauth=self._oauth_context(),
             issue_detail=issue_detail,
@@ -261,7 +286,10 @@ class _JiraParentIssueGateway:
         if jira_comment_id is None:
             return None
         comments = self._jira().list_issue_comments(issue_id_or_key=issue_key)
-        if not any(str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id for comment in comments):
+        if not any(
+            str(getattr(comment, "comment_id", "") or "").strip() == jira_comment_id
+            for comment in comments
+        ):
             return None
         return ClarificationPublishEffects(
             state_recorded=True,
@@ -286,7 +314,9 @@ class _JiraParentIssueGateway:
             )
         jira_comment_id = _extract_created_comment_id(created_comment)
         if not jira_comment_id:
-            raise RuntimeError(f"Jira clarification projection for {issue_key} did not return a comment id")
+            raise RuntimeError(
+                f"Jira clarification projection for {issue_key} did not return a comment id"
+            )
         jira_comment_created = error is None and created_comment is not None
         posted_to_discord = False
         try:
@@ -307,7 +337,9 @@ class _JiraParentIssueGateway:
             jira_comment_id=jira_comment_id,
         )
 
-    def publish_start_development_link(self, *, issue_key: str, action_url: str) -> tuple[dict[str, Any] | None, str | None]:
+    def publish_start_development_link(
+        self, *, issue_key: str, action_url: str
+    ) -> tuple[dict[str, Any] | None, str | None]:
         return _post_start_development_link_to_jira(
             session=self._session,
             tenant=self._context.tenant,
@@ -414,13 +446,19 @@ class _ParentBriefPlanner:
         operation_id = str(self._context.operation_id or "").strip()
         attempt_id = str(self._context.attempt_id or "").strip()
         if not operation_id or not attempt_id:
-            raise RuntimeError("Parent brief planner work units require operation_id and attempt_id")
+            raise RuntimeError(
+                "Parent brief planner work units require operation_id and attempt_id"
+            )
         operation = self._session.get(WorkflowOperation, operation_id)
         attempt = self._session.get(WorkflowOperationAttempt, attempt_id)
         if operation is None:
-            raise RuntimeError(f"Workflow operation {operation_id} is missing for parent brief planner")
+            raise RuntimeError(
+                f"Workflow operation {operation_id} is missing for parent brief planner"
+            )
         if attempt is None:
-            raise RuntimeError(f"Workflow operation attempt {attempt_id} is missing for parent brief planner")
+            raise RuntimeError(
+                f"Workflow operation attempt {attempt_id} is missing for parent brief planner"
+            )
         return operation, attempt
 
     def resolve_product_brief(
@@ -448,7 +486,9 @@ class _ParentBriefPlanner:
             return PARENT_WU_BACKLOG_PACKAGE_ASSEMBLY
         if operation_type == PARENT_OP_JIRA_CHILD_FANOUT:
             return PARENT_WU_JIRA_CHILD_FANOUT_PACKAGE_ASSEMBLY
-        raise RuntimeError(f"No planning package assembly work unit is declared for {operation_type}")
+        raise RuntimeError(
+            f"No planning package assembly work unit is declared for {operation_type}"
+        )
 
     def _stage_work_unit_keys(self, *, operation_type: str) -> dict[str, str]:
         if operation_type == PARENT_OP_BACKLOG_PLANNING:
@@ -463,7 +503,9 @@ class _ParentBriefPlanner:
                 PLANNING_STATE_SECURITY: PARENT_WU_JIRA_CHILD_FANOUT_SECURITY_MODEL,
                 PLANNING_STATE_TEST: PARENT_WU_JIRA_CHILD_FANOUT_TESTING_MODEL,
             }
-        raise RuntimeError(f"No specialist planning work units are declared for {operation_type}")
+        raise RuntimeError(
+            f"No specialist planning work units are declared for {operation_type}"
+        )
 
     def plan_backlog_parent(
         self,
@@ -523,10 +565,14 @@ class _ParentBriefPlanner:
             self._session,
             operation=operation,
             operation_attempt=attempt,
-            unit_key=self._package_assembly_unit_key(operation_type=operation.operation_type),
+            unit_key=self._package_assembly_unit_key(
+                operation_type=operation.operation_type
+            ),
             idempotency_key=f"{parent_detail.key}:planning_package:{operation.operation_type}:{assembly_hash}",
             input_payload=assembly_input,
-            execute=lambda _context: build_runtime_seed_planning_package(result=planning_result),
+            execute=lambda _context: build_runtime_seed_planning_package(
+                result=planning_result
+            ),
             serialize=lambda result: {"planning_package": result},
             deserialize=lambda payload: dict(payload.get("planning_package") or {}),
         )
@@ -559,8 +605,12 @@ class _ParentBriefPlanner:
                 parent_description=parent_detail.description,
                 product_brief=dict(product_brief),
                 planning_package=planning_package,
-                technical_decisions=tuple(getattr(planning_result, "technical_decisions", ()) or ()),
-                pm_decision_requests=tuple(getattr(planning_result, "pm_decision_requests", ()) or ()),
+                technical_decisions=tuple(
+                    getattr(planning_result, "technical_decisions", ()) or ()
+                ),
+                pm_decision_requests=tuple(
+                    getattr(planning_result, "pm_decision_requests", ()) or ()
+                ),
                 conversation_history=tuple(
                     parent_planning_clarification_history(
                         session=self._session,
@@ -609,13 +659,19 @@ class _ParentChildSyncGateway:
         operation_id = str(self._context.operation_id or "").strip()
         attempt_id = str(self._context.attempt_id or "").strip()
         if not operation_id or not attempt_id:
-            raise RuntimeError("Parent child sync work units require operation_id and attempt_id")
+            raise RuntimeError(
+                "Parent child sync work units require operation_id and attempt_id"
+            )
         operation = self._session.get(WorkflowOperation, operation_id)
         attempt = self._session.get(WorkflowOperationAttempt, attempt_id)
         if operation is None:
-            raise RuntimeError(f"Workflow operation {operation_id} is missing for parent child sync")
+            raise RuntimeError(
+                f"Workflow operation {operation_id} is missing for parent child sync"
+            )
         if attempt is None:
-            raise RuntimeError(f"Workflow operation attempt {attempt_id} is missing for parent child sync")
+            raise RuntimeError(
+                f"Workflow operation attempt {attempt_id} is missing for parent child sync"
+            )
         return operation, attempt
 
     def seed_parent_backlog_children(
@@ -690,7 +746,10 @@ class _ParentChildSyncGateway:
                     changed_fields=changed_fields,
                 ),
                 scoped_project_id=self._context.project_id,
-                force_issue_keys=[self._context.issue_key, *[detail.key for detail in child_details]],
+                force_issue_keys=[
+                    self._context.issue_key,
+                    *[detail.key for detail in child_details],
+                ],
                 allow_create=True,
                 allow_empty_children=True,
                 scoped_project_keys=[project_key],
@@ -726,12 +785,18 @@ class _ParentChildSyncGateway:
         )
 
     @staticmethod
-    def combined_child_updates(*, seed_data: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    def combined_child_updates(
+        *, seed_data: dict[str, Any]
+    ) -> tuple[list[str], list[str], list[str]]:
         return _combined_child_updates(seed_data=seed_data)
 
     @staticmethod
-    def sync_completion_note(*, updated_children: list[str], created_children: list[str]) -> str:
-        return _sync_completion_note(updated_children=updated_children, created_children=created_children)
+    def sync_completion_note(
+        *, updated_children: list[str], created_children: list[str]
+    ) -> str:
+        return _sync_completion_note(
+            updated_children=updated_children, created_children=created_children
+        )
 
     @staticmethod
     def fanout_completion_note(
@@ -765,10 +830,14 @@ def _resolve_parent_product_brief(
     attempt_id: str | None = None,
     refresh: bool = False,
 ) -> tuple[dict[str, object], list[object]]:
-    canonical_brief = None if refresh else resolve_parent_feature_brief(
-        session=session,
-        tenant_id=tenant_id,
-        parent_issue_key=parent_detail.key,
+    canonical_brief = (
+        None
+        if refresh
+        else resolve_parent_feature_brief(
+            session=session,
+            tenant_id=tenant_id,
+            parent_issue_key=parent_detail.key,
+        )
     )
     if canonical_brief is not None:
         return canonical_brief.to_payload(), []
@@ -802,7 +871,11 @@ def _resolve_parent_product_brief(
         ),
     )
     brief_payload = dict(normalization.get("brief") or {})
-    open_questions = [value for value in normalization.get("open_questions", []) if _question_text(value)]
+    open_questions = [
+        value
+        for value in normalization.get("open_questions", [])
+        if _question_text(value)
+    ]
     persist_parent_feature_brief_snapshot(
         session=session,
         tenant_id=tenant_id,
@@ -810,7 +883,9 @@ def _resolve_parent_product_brief(
         parent_issue_key=parent_detail.key,
         source_text=parent_detail.description,
         brief=brief_payload,
-        status=PM_INTERVIEW_STATUS_QUESTION_PENDING if open_questions else PM_INTERVIEW_STATUS_PM_COMPLETED,
+        status=PM_INTERVIEW_STATUS_QUESTION_PENDING
+        if open_questions
+        else PM_INTERVIEW_STATUS_PM_COMPLETED,
         notes={
             "source": "jira_parent_brief_normalization",
             "parent_summary": parent_detail.summary,

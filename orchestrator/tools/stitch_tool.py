@@ -99,7 +99,9 @@ def list_stitch_tools(*, api_key: str) -> list[dict[str, Any]]:
     return out
 
 
-def call_stitch_tool(*, api_key: str, tool: str, arguments: dict[str, Any] | None = None) -> Any:
+def call_stitch_tool(
+    *, api_key: str, tool: str, arguments: dict[str, Any] | None = None
+) -> Any:
     """Invoke a single MCP tool by name, mirroring ``StitchToolClient.callTool``."""
     try:
         with StitchMcpClient(api_key) as client:
@@ -121,7 +123,9 @@ def synthesize_stitch_screen(
     try:
         with StitchMcpClient(api_key, base_url=base_url) as client:
             client.connect()
-            raw_project = client.call_tool("create_project", {"title": project_title[:120]})
+            raw_project = client.call_tool(
+                "create_project", {"title": project_title[:120]}
+            )
             project_id = _normalize_project_id(raw_project)
             if not project_id:
                 raise StitchToolError("create_project did not return a project id")
@@ -149,9 +153,13 @@ def synthesize_stitch_screen(
                 )
                 if isinstance(detail, dict):
                     if not html_url:
-                        html_url = str((detail.get("htmlCode") or {}).get("downloadUrl") or "").strip()
+                        html_url = str(
+                            (detail.get("htmlCode") or {}).get("downloadUrl") or ""
+                        ).strip()
                     if not image_url:
-                        image_url = str((detail.get("screenshot") or {}).get("downloadUrl") or "").strip()
+                        image_url = str(
+                            (detail.get("screenshot") or {}).get("downloadUrl") or ""
+                        ).strip()
             return {
                 "provider": "stitch",
                 "kind": "stitch_tool",
@@ -176,7 +184,9 @@ def _resolve_stitch_api_key_from_tenant_secret(
     This is intentionally done inside the Stitch tool boundary to avoid
     leaking secrets into stage-planning pure logic.
     """
-    secrets_encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
+    secrets_encryption_key = str(
+        getattr(settings, "secrets_encryption_key", "") or ""
+    ).strip()
     if not secrets_encryption_key:
         logger.info("No secrets_encryption_key configured; skipping Stitch tool")
         return None
@@ -193,7 +203,9 @@ def _resolve_stitch_api_key_from_tenant_secret(
             session,
             secret_ref=_STITCH_API_KEY_SECRET_REF,
             tenant_id=str(tenant_id).strip(),
-            project_id=str(project_id).strip() if project_id and str(project_id).strip() else None,
+            project_id=str(project_id).strip()
+            if project_id and str(project_id).strip()
+            else None,
             encryption_key=secrets_encryption_key,
         )
     except Exception as exc:  # noqa: BLE001

@@ -1,3 +1,12 @@
+2026-06-18
+
+- When public ingress appears configured but hostname resolution still fails, inspect `/etc/hosts` and the active system resolver path before concluding the problem is only inside the application or container stack.
+
+2026-06-01
+
+- When the user says to use the markdown file for a ticket/spec, treat the repo feature markdown as the canonical interim source of truth and keep the work moving there even if Jira sync is unavailable. Jira unavailability blocks execution work, not backlog/spec authoring.
+- When the user explicitly tells you to continue without Jira access, do not repeat generic blockers. State the exact repo rule that still forbids execution, name the single missing prerequisite (`MAB-###` key or restored Jira execution access), and stop there.
+
 2026-05-31
 
 - When a detail page can show both production and preview releases, bind the primary action to the selected release kind. A generic deploy action can silently create production releases while the operator is looking at a preview.
@@ -602,3 +611,27 @@
 - 2026-06-01: Do not show "Generate preview" on a run that already has an active preview release. Run-level preview actions should first resolve the current preview and link to it; generation is only for the no-preview state.
 - 2026-06-01: Run detail headers should lead with the business work item title, not the UUID. Put technical identifiers in labelled metadata rows so the primary scan path matches the runs list and user mental model.
 - 2026-06-01: Run timeline bars must render from durable checkpoint state when invocation telemetry is absent. Do not make the visual completion history depend solely on telemetry logs, because successful runs can have completed stage checkpoints with no usable invocation spans.
+- 2026-06-01: Dense settings pages should separate distinct jobs into tabs instead of stacking unrelated forms on one screen. For deployment policy, keep automation, variables, and secret refs as separate surfaces while preserving a single save action.
+- 2026-06-01: Discord webhook failure notifications that mention a Jira issue must include a direct Jira link when the tenant connection can resolve one. A bare issue key makes the next user action harder, especially for GTD/admission failures.
+- 2026-06-01: Do not add fallback labels for run preview actions. The primary target for an existing run preview is the internal preview release page; only show no action when the preview release itself cannot be linked.
+- 2026-06-01: When a user asks to move a sidebar group, preserve the group unless they explicitly ask to merge/remove it. "Move Delivery under Development" means reorder the Delivery group below Development, not move its child links into Development.
+- 2026-06-01: When a workflow feature needs demo evidence, make PM derive what must be demoed from the ticket and persist that contract for downstream stages. Do not push demo-scope discovery back onto the operator if the PM stage can infer it from the issue context.
+- 2026-06-01: If a user says a Jira MCP exists, verify both tool exposure in the current session and local repo MCP config enabled state before concluding Jira is unavailable. A configured-but-disabled MCP server and an unexposed connector require different unblock steps.
+- 2026-06-02: When describing QA demo support, do not use app-specific shorthand like "the same native path" without naming the actual provider contract. State the platform-level rule directly: shared browser/mobile/desktop providers behind one workflow contract, with app-specific proof only referring to the live run that validated that provider.
+- 2026-06-02: When the ticket goal is cross-project QA demo automation, do not treat partial provider coverage as success. The completion bar is the product contract the user asked for: release-owned readiness plus built-in browser, iOS, and Android demo capture that works for any supported project without bespoke per-project setup.
+
+- 2026-10-02: When a user corrects a public account with an explicit URL, use the exact handle in that URL, replace earlier inferred handles in all new artifacts, and never invent a private reporting address.
+
+- Release verification must check free disk before container builds and fresh environments. Bound and deterministically remove only task-owned temporary test databases/runtime directories; preserve failure logs and never prune shared caches or user data to make a check pass. Treat storage errors separately from code failures.
+
+2026-10-02
+
+- Budget free disk space before concurrent verification builds and broad test runs. Disposable per-test databases and runtime trees must be disposed and removed at teardown; retain only required failure evidence. Stop overlapping work when disk pressure invalidates results, clean only identified run-owned artifacts, and report interrupted/disk-failed verification separately from application failures.
+- Restore test environment only after pytest monkeypatch teardown; otherwise a patch can restore a resource path after its database/runtime directory has been deleted. Encode fixture dependency ordering and test the actual resource lifecycle.
+
+- When maintainers explicitly authorize removing an internal integration and sensitive history, execute the scoped deletion instead of leaving the prior design decision pending. Preserve unrelated working changes/stashes, inspect all refs and reflogs, and distinguish local cleanup from remote copies and credential revocation.
+
+- When public container tags become unavailable, inspect the official repository’s source-build path before presenting replacement infrastructure as necessary. Separate image availability, reproducible source builds, and ongoing upstream security maintenance; source-only distribution does not prevent Docker self-hosting.
+
+- When explaining Docker storage setup, distinguish pulling a prebuilt image from building a Docker image. Name the unavailable tags/source-only upstream policy and avoid implying Docker itself is unavailable.
+- Explain binary license compatibility separately from missing tooling. Do not suggest a tool replacement or cryptography rewrite before verifying dependency/build and redistribution options.

@@ -32,7 +32,11 @@ class JiraRouteServiceTests(unittest.TestCase):
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
     def test_list_jira_projects_for_connection_success(self) -> None:
-        connection = SimpleNamespace(connection_id="conn-1", cloud_id="cloud-1", site_url="https://example.atlassian.net")
+        connection = SimpleNamespace(
+            connection_id="conn-1",
+            cloud_id="cloud-1",
+            site_url="https://example.atlassian.net",
+        )
         session = MagicMock()
         session.get.return_value = connection
 
@@ -40,7 +44,7 @@ class JiraRouteServiceTests(unittest.TestCase):
         client = MagicMock()
         client.list_projects.return_value = [
             SimpleNamespace(key="MAB", name="Master Builder"),
-            SimpleNamespace(key="example", name="example"),
+            SimpleNamespace(key="DEMO", name="ExampleApp"),
         ]
         client_factory = MagicMock(return_value=client)
 
@@ -53,19 +57,23 @@ class JiraRouteServiceTests(unittest.TestCase):
             atlassian_oauth_client_fn=client_factory,
         )
 
-        self.assertEqual([p.key for p in projects], ["MAB", "example"])
-        self.assertEqual([p.name for p in projects], ["Master Builder", "example"])
+        self.assertEqual([p.key for p in projects], ["MAB", "DEMO"])
+        self.assertEqual([p.name for p in projects], ["Master Builder", "ExampleApp"])
         refresh_fn.assert_called_once()
-        client.list_projects.assert_called_once_with(access_token="token-1", cloud_id="cloud-1")
+        client.list_projects.assert_called_once_with(
+            access_token="token-1", cloud_id="cloud-1"
+        )
 
     def test_get_jira_webhook_diagnostics(self) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(jira_config={"managed_webhook_ids": [1, 2]})
+        session.get.return_value = SimpleNamespace(
+            jira_config={"managed_webhook_ids": [1, 2]}
+        )
         build_fn = MagicMock(return_value={"ok": True})
 
         payload = jira_webhook_route_service.get_jira_webhook_diagnostics(
             session=session,
-            tenant_id="example",
+            tenant_id="example-workspace",
             within_minutes=30,
             tenant_model=object,
             settings=SimpleNamespace(),
@@ -82,7 +90,7 @@ class JiraRouteServiceTests(unittest.TestCase):
         session.get.return_value = None
 
         with self.assertRaises(HTTPException) as exc_ctx:
-                jira_webhook_route_service.get_jira_webhook_diagnostics(
+            jira_webhook_route_service.get_jira_webhook_diagnostics(
                 session=session,
                 tenant_id="missing",
                 within_minutes=30,
@@ -97,13 +105,15 @@ class JiraRouteServiceTests(unittest.TestCase):
 
     def test_run_tenant_jira_webhook_action(self) -> None:
         session = MagicMock()
-        tenant = SimpleNamespace(tenant_id="example")
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         session.get.return_value = tenant
 
-        result = SimpleNamespace(ok=True, model_dump=lambda: {"ok": True, "action": "provision"})
+        result = SimpleNamespace(
+            ok=True, model_dump=lambda: {"ok": True, "action": "provision"}
+        )
         response = jira_webhook_route_service.run_tenant_jira_webhook_action(
             session=session,
-            tenant_id="example",
+            tenant_id="example-workspace",
             tenant_model=object,
             settings=SimpleNamespace(),
             provision_jira_webhook_fn=MagicMock(return_value=result),
@@ -113,9 +123,11 @@ class JiraRouteServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.body), {"ok": True, "action": "provision"})
 
-    def test_run_tenant_jira_webhook_action_fails_when_provider_does_not_confirm(self) -> None:
+    def test_run_tenant_jira_webhook_action_fails_when_provider_does_not_confirm(
+        self,
+    ) -> None:
         session = MagicMock()
-        session.get.return_value = SimpleNamespace(tenant_id="example")
+        session.get.return_value = SimpleNamespace(tenant_id="example-workspace")
         result = SimpleNamespace(
             ok=False,
             details="Jira webhook creation failed",
@@ -125,7 +137,7 @@ class JiraRouteServiceTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as exc_ctx:
             jira_webhook_route_service.run_tenant_jira_webhook_action(
                 session=session,
-                tenant_id="example",
+                tenant_id="example-workspace",
                 tenant_model=object,
                 settings=SimpleNamespace(),
                 provision_jira_webhook_fn=MagicMock(return_value=result),
@@ -154,8 +166,8 @@ class RunsServiceTests(unittest.TestCase):
 
         rows = runs_service.list_runs(
             session=session,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             status_filter="queued",
             issue_query="GP-113",
             pr_state="none",
@@ -171,8 +183,8 @@ class RunsServiceTests(unittest.TestCase):
 
         self.assertEqual(rows, ["schema-r1", "schema-r2"])
         build_query.assert_called_once_with(
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             status_filter="queued",
             issue_query="GP-113",
             pr_state="none",
@@ -200,8 +212,10 @@ class RunsServiceTests(unittest.TestCase):
 
     def test_get_run_success(self) -> None:
         session = MagicMock()
-        run = SimpleNamespace(run_id="r1", tenant_id="example", issue_key="R1")
-        tenant = SimpleNamespace(tenant_id="example")
+        run = SimpleNamespace(
+            run_id="r1", tenant_id="example-workspace", issue_key="R1"
+        )
+        tenant = SimpleNamespace(tenant_id="example-workspace")
         session.get.side_effect = [run, tenant]
 
         to_schema = MagicMock(return_value={"run_id": "r1", "issue_url": None})
@@ -215,14 +229,20 @@ class RunsServiceTests(unittest.TestCase):
             tenant_jira_issue_url_fn=issue_url_fn,
         )
 
-        self.assertEqual(payload, {"run_id": "r1", "issue_url": "https://jira.example/browse/R1"})
+        self.assertEqual(
+            payload, {"run_id": "r1", "issue_url": "https://jira.example/browse/R1"}
+        )
         to_schema.assert_called_once_with(run, workflow_execution_id=None)
 
 
 class ProjectRoutingTests(unittest.TestCase):
     def test_jira_project_key_from_issue_key(self) -> None:
-        self.assertEqual(project_routing.jira_project_key_from_issue_key("mab-123"), "MAB")
-        self.assertEqual(project_routing.jira_project_key_from_issue_key(" MAB-1 "), "MAB")
+        self.assertEqual(
+            project_routing.jira_project_key_from_issue_key("mab-123"), "MAB"
+        )
+        self.assertEqual(
+            project_routing.jira_project_key_from_issue_key(" MAB-1 "), "MAB"
+        )
         self.assertIsNone(project_routing.jira_project_key_from_issue_key("invalid"))
         self.assertIsNone(project_routing.jira_project_key_from_issue_key(""))
 
@@ -232,7 +252,7 @@ class ProjectRoutingTests(unittest.TestCase):
 
         project = project_routing.find_active_project_for_issue_key(
             session,
-            tenant_id="example",
+            tenant_id="example-workspace",
             issue_key="MAB-22",
         )
         self.assertEqual(project, "project")
@@ -241,7 +261,7 @@ class ProjectRoutingTests(unittest.TestCase):
         session.reset_mock()
         none_project = project_routing.find_active_project_for_issue_key(
             session,
-            tenant_id="example",
+            tenant_id="example-workspace",
             issue_key="invalid",
         )
         self.assertIsNone(none_project)
@@ -256,7 +276,7 @@ class ProjectRoutingTests(unittest.TestCase):
 
         match = project_routing.find_active_project_for_repo_full_name(
             session,
-            tenant_id="example",
+            tenant_id="example-workspace",
             repo_full_name="org/two",
         )
         self.assertIsNotNone(match)
@@ -264,7 +284,7 @@ class ProjectRoutingTests(unittest.TestCase):
 
         no_match = project_routing.find_active_project_for_repo_full_name(
             session,
-            tenant_id="example",
+            tenant_id="example-workspace",
             repo_full_name="org/missing",
         )
         self.assertIsNone(no_match)
@@ -281,8 +301,8 @@ class RunsRouteTests(unittest.TestCase):
             entry_mode="fresh",
             entry_stage="orchestrated",
             entry_checkpoint_id=None,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             issue_key="MAB-1",
             repo_url="https://github.com/org/repo",
             branch="feature/x",
@@ -296,7 +316,7 @@ class RunsRouteTests(unittest.TestCase):
         )
 
         payload = runs_route._run_to_schema(run)
-        self.assertEqual(payload.project_id, "example-default")
+        self.assertEqual(payload.project_id, "example-workspace-default")
         self.assertEqual(payload.issue_key, "MAB-1")
 
     def test_run_to_schema_clears_last_error_when_succeeded(self) -> None:
@@ -309,8 +329,8 @@ class RunsRouteTests(unittest.TestCase):
             entry_mode="fresh",
             entry_stage="orchestrated",
             entry_checkpoint_id=None,
-            tenant_id="example",
-            project_id="example-default",
+            tenant_id="example-workspace",
+            project_id="example-workspace-default",
             issue_key="MAB-2",
             repo_url=None,
             branch=None,

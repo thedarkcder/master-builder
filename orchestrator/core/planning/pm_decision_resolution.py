@@ -6,16 +6,24 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.parent_feature_workflow.operations import PARENT_WU_PM_DECISION_MODEL
+from orchestrator.core.parent_feature_workflow.operations import (
+    PARENT_WU_PM_DECISION_MODEL,
+)
 from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.payload_models import (
     PMDecisionRequest,
     PMDecisionResolutionSet,
     TechnicalDecision,
 )
 from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
-from orchestrator.core.workflow.work_units import run_work_unit, workflow_work_unit_input_fingerprint
+from orchestrator.core.workflow.work_units import (
+    run_work_unit,
+    workflow_work_unit_input_fingerprint,
+)
 from orchestrator.storage.models import WorkflowOperation, WorkflowOperationAttempt
 
 
@@ -60,16 +68,24 @@ class PMDecisionResolutionService:
         if session is None:
             raise RuntimeError("PM decision resolution requires a database session")
         if not request.operation_id or not request.attempt_id:
-            raise RuntimeError("PM decision resolution requires operation_id and attempt_id")
+            raise RuntimeError(
+                "PM decision resolution requires operation_id and attempt_id"
+            )
         operation = session.get(WorkflowOperation, request.operation_id)
         attempt = session.get(WorkflowOperationAttempt, request.attempt_id)
         if operation is None:
-            raise RuntimeError(f"Workflow operation {request.operation_id} is missing for PM decision resolution")
+            raise RuntimeError(
+                f"Workflow operation {request.operation_id} is missing for PM decision resolution"
+            )
         if attempt is None:
-            raise RuntimeError(f"Workflow operation attempt {request.attempt_id} is missing for PM decision resolution")
+            raise RuntimeError(
+                f"Workflow operation attempt {request.attempt_id} is missing for PM decision resolution"
+            )
 
         def _execute() -> PMDecisionResolutionSet:
-            return self._invoke_runtime(runtime=runtime, session=session, request=request)
+            return self._invoke_runtime(
+                runtime=runtime, session=session, request=request
+            )
 
         input_payload = {
             "parent_issue_key": request.parent_issue_key,
@@ -77,8 +93,12 @@ class PMDecisionResolutionService:
             "parent_description": request.parent_description,
             "product_brief": request.product_brief,
             "planning_package": request.planning_package,
-            "technical_decisions": [decision.to_payload() for decision in request.technical_decisions],
-            "pm_decision_requests": [item.to_payload() for item in request.pm_decision_requests],
+            "technical_decisions": [
+                decision.to_payload() for decision in request.technical_decisions
+            ],
+            "pm_decision_requests": [
+                item.to_payload() for item in request.pm_decision_requests
+            ],
             "conversation_history": list(request.conversation_history),
         }
         input_hash = workflow_work_unit_input_fingerprint(input_payload)
@@ -93,7 +113,9 @@ class PMDecisionResolutionService:
             serialize=lambda result: result.to_payload(),
             deserialize=lambda payload: PMDecisionResolutionSet.from_payload(
                 payload,
-                expected_request_ids=tuple(pm_request.request_id for pm_request in request.pm_decision_requests),
+                expected_request_ids=tuple(
+                    pm_request.request_id for pm_request in request.pm_decision_requests
+                ),
                 context="PM decision resolution stored payload",
             ),
         )
@@ -136,15 +158,22 @@ class PMDecisionResolutionService:
                     [decision.to_payload() for decision in request.technical_decisions]
                 ),
                 pm_decision_requests_json=_json_dump(
-                    [pm_request.to_payload() for pm_request in request.pm_decision_requests]
+                    [
+                        pm_request.to_payload()
+                        for pm_request in request.pm_decision_requests
+                    ]
                 ),
-                conversation_history_json=_json_dump(list(request.conversation_history)),
+                conversation_history_json=_json_dump(
+                    list(request.conversation_history)
+                ),
             ),
         )
         try:
             return PMDecisionResolutionSet.from_payload(
                 payload,
-                expected_request_ids=tuple(pm_request.request_id for pm_request in request.pm_decision_requests),
+                expected_request_ids=tuple(
+                    pm_request.request_id for pm_request in request.pm_decision_requests
+                ),
                 context="PM decision resolution payload",
             )
         except RuntimeError as exc:

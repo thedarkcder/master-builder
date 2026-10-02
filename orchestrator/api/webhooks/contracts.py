@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import (
+    tenant_atlassian_oauth_context,
+)
 from orchestrator.api.webhooks.github_payload_contracts import (
     extract_installation_id,
     extract_push_deployment_source,
@@ -68,7 +70,6 @@ __all__ = [
     "resolve_active_project_for_issue",
     "resolve_active_project_for_repo",
     "resolve_global_github_webhook_secret",
-    "resolve_tenant_github_webhook_secret",
     "validate_github_webhook_signature",
     "validate_webhook_auth",
 ]
@@ -83,7 +84,9 @@ def create_jira_comment(
     settings,  # noqa: ANN001
 ) -> tuple[dict | None, str | None]:
     try:
-        oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context(
+            session=session, tenant=tenant, settings=settings
+        )
         created = oauth.client.add_issue_comment(
             access_token=oauth.access_token,
             cloud_id=oauth.connection.cloud_id,
@@ -127,6 +130,7 @@ def post_jira_comment(
     )
     return created is not None or error is None, error
 
+
 def extract_delivery_id(request: Request) -> str | None:
     header_candidates = (
         "X-Atlassian-Webhook-Identifier",
@@ -152,7 +156,10 @@ def validate_webhook_auth(
 ) -> None:  # noqa: ANN001
     webhook_secret_ref = tenant_jira_webhook_secret_ref(tenant)
     if not webhook_secret_ref:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Webhook authentication is misconfigured",
+        )
 
     expected_token = resolve_scoped_secret_ref(
         session,
@@ -173,7 +180,9 @@ def validate_webhook_auth(
         )
 
     presented_token = extract_webhook_token(request)
-    if not presented_token or not secrets.compare_digest(presented_token, expected_token):
+    if not presented_token or not secrets.compare_digest(
+        presented_token, expected_token
+    ):
         logger.warning(
             "jira_webhook_auth_failed request_id=%s tenant_id=%s",
             request_id,
@@ -210,42 +219,15 @@ def resolve_global_github_webhook_secret(
     request_id: str,
     session: Session,
     settings,
-) -> str | None:  # noqa: ANN001
+) -> str:  # noqa: ANN001
     del request_id
     secret_value = resolve_platform_secret_ref(
         session,
         secret_ref=GLOBAL_GITHUB_WEBHOOK_SECRET_REF,
         encryption_key=settings.secrets_encryption_key,
+        allow_environment_fallback=False,
     )
     if not secret_value:
-        return None
-    return secret_value
-
-
-def resolve_tenant_github_webhook_secret(
-    *,
-    tenant: Tenant,
-    request_id: str,
-    session: Session,
-    settings,
-) -> str | None:  # noqa: ANN001
-    webhook_secret_ref = tenant.github_config.get("webhook_secret_ref")
-    if not webhook_secret_ref:
-        return None
-
-    secret_value = resolve_scoped_secret_ref(
-        session,
-        secret_ref=str(webhook_secret_ref),
-        encryption_key=settings.secrets_encryption_key,
-        tenant_id=tenant.tenant_id,
-    )
-    if not secret_value:
-        logger.error(
-            "github_webhook_auth_misconfigured request_id=%s tenant_id=%s secret_ref=%s",
-            request_id,
-            tenant.tenant_id,
-            webhook_secret_ref,
-        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="GitHub webhook authentication is misconfigured",
@@ -273,7 +255,9 @@ def validate_github_webhook_signature(
             detail="Invalid GitHub webhook signature",
         )
 
-    digest = hmac.new(shared_secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
+    digest = hmac.new(
+        shared_secret.encode("utf-8"), payload_bytes, hashlib.sha256
+    ).hexdigest()
     expected_signature = f"sha256={digest}"
     if not secrets.compare_digest(presented_signature, expected_signature):
         logger.warning(
@@ -287,7 +271,9 @@ def validate_github_webhook_signature(
         )
 
 
-def resolve_active_project_for_issue(*, session: Session, tenant_id: str, issue_key: str) -> Project | None:
+def resolve_active_project_for_issue(
+    *, session: Session, tenant_id: str, issue_key: str
+) -> Project | None:
     return find_active_project_for_issue_key(
         session,
         tenant_id=tenant_id,

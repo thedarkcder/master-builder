@@ -27,5 +27,7 @@ class EnforcementContextTests(unittest.TestCase):
     def test_validate_assets_raises_when_required_file_missing(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             repo_root = Path(tmp_dir)
-            with self.assertRaisesRegex(EnforcementAssetsError, "Missing required enforcement file"):
+            with self.assertRaisesRegex(
+                EnforcementAssetsError, "Missing required enforcement file"
+            ):
                 validate_enforcement_assets(repo_root=repo_root)

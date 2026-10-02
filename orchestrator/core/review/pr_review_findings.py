@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 
-from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.invocation import (
+    AgentInvocationContext,
+    invoke_runtime_json,
+)
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.prompt_templates import render_prompt
@@ -37,7 +40,9 @@ def pr_review_findings_clear(findings_result: object) -> bool:
     return state not in _FINDINGS_EVALUATION_FAILURE_STATES
 
 
-def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[dict[str, str | None]]:
+def _workflow_checks_payload(
+    workflow_checks: list[WorkflowCheckSuite],
+) -> list[dict[str, str | None]]:
     return [
         {
             "name": check.name,
@@ -48,7 +53,9 @@ def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[
     ]
 
 
-def _file_changes_payload(changed_files: list[PullRequestFileChange]) -> list[dict[str, str]]:
+def _file_changes_payload(
+    changed_files: list[PullRequestFileChange],
+) -> list[dict[str, str]]:
     payload: list[dict[str, str]] = []
     for change in changed_files[:40]:
         filename = str(change.filename or "").strip()
@@ -96,7 +103,9 @@ def evaluate_pr_review_findings(
                 pr_number=pr_number,
                 pr_title=pr_title,
                 pr_body=pr_body or "",
-                workflow_checks_json=json.dumps(_workflow_checks_payload(workflow_checks)),
+                workflow_checks_json=json.dumps(
+                    _workflow_checks_payload(workflow_checks)
+                ),
                 changed_files_json=json.dumps(_file_changes_payload(changed_files)),
             ),
         )

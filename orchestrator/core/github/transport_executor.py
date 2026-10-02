@@ -68,9 +68,13 @@ class GitHubTransportExecutor:
         if isinstance(action, GitHubPullRequestMergeAction):
             self._execute_pull_request_merge(action=action)
             return
-        raise RuntimeError(f"Unsupported GitHub transport action: {type(action).__name__}")
+        raise RuntimeError(
+            f"Unsupported GitHub transport action: {type(action).__name__}"
+        )
 
-    def _execute_issue_comment_reaction(self, *, action: GitHubIssueCommentReactionAction) -> None:
+    def _execute_issue_comment_reaction(
+        self, *, action: GitHubIssueCommentReactionAction
+    ) -> None:
         try:
             self._github_client.add_issue_comment_reaction(
                 repo_full_name=action.repo_full_name,
@@ -108,7 +112,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_pull_request_reaction(self, *, action: GitHubPullRequestReactionAction) -> None:
+    def _execute_pull_request_reaction(
+        self, *, action: GitHubPullRequestReactionAction
+    ) -> None:
         try:
             self._github_client.sync_pull_request_reaction(
                 repo_full_name=action.repo_full_name,
@@ -125,7 +131,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_pull_request_check_run(self, *, action: GitHubPullRequestCheckRunAction) -> None:
+    def _execute_pull_request_check_run(
+        self, *, action: GitHubPullRequestCheckRunAction
+    ) -> None:
         try:
             self._github_client.create_check_run(
                 repo_full_name=action.repo_full_name,
@@ -147,7 +155,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_sticky_review_comment(self, *, action: GitHubStickyReviewCommentAction) -> None:
+    def _execute_sticky_review_comment(
+        self, *, action: GitHubStickyReviewCommentAction
+    ) -> None:
         try:
             upsert_sticky_review_comment(
                 session=self._session,
@@ -174,7 +184,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_inline_review_batch(self, *, action: GitHubInlineReviewBatchAction) -> None:
+    def _execute_inline_review_batch(
+        self, *, action: GitHubInlineReviewBatchAction
+    ) -> None:
         try:
             publish_inline_review_batch(
                 session=self._session,
@@ -199,7 +211,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_manual_fix_review_thread_reply(self, *, action: GitHubManualFixReviewThreadReplyAction) -> None:
+    def _execute_manual_fix_review_thread_reply(
+        self, *, action: GitHubManualFixReviewThreadReplyAction
+    ) -> None:
         try:
             upsert_manual_fix_review_thread_reply(
                 github_client=self._github_client,
@@ -230,7 +244,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_manual_fix_issue_comment_reply(self, *, action: GitHubManualFixIssueCommentReplyAction) -> None:
+    def _execute_manual_fix_issue_comment_reply(
+        self, *, action: GitHubManualFixIssueCommentReplyAction
+    ) -> None:
         try:
             upsert_manual_fix_issue_comment_reply(
                 github_client=self._github_client,
@@ -261,7 +277,9 @@ class GitHubTransportExecutor:
             if self._raise_on_error:
                 raise
 
-    def _execute_pull_request_merge(self, *, action: GitHubPullRequestMergeAction) -> None:
+    def _execute_pull_request_merge(
+        self, *, action: GitHubPullRequestMergeAction
+    ) -> None:
         try:
             self._github_client.merge_pull_request(
                 repo_full_name=action.repo_full_name,

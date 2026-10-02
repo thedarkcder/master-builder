@@ -23,7 +23,9 @@ class PlatformSettingsService:
             return {}
         return dict(row.value_json)
 
-    def upsert_json(self, *, session: Session, setting_key: str, value_json: dict) -> PlatformSetting:
+    def upsert_json(
+        self, *, session: Session, setting_key: str, value_json: dict
+    ) -> PlatformSetting:
         normalized_key = str(setting_key or "").strip()
         if not normalized_key:
             raise ValueError("setting_key is required")

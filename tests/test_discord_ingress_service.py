@@ -36,7 +36,9 @@ def _deps() -> DiscordIngressDependencies:
 class DiscordIngressServiceTests(unittest.TestCase):
     def test_execute_tenant_command_ingress_commits_after_success(self) -> None:
         session = MagicMock()
-        response = DiscordCommandResponse(ok=True, command="status", message="ok", data={})
+        response = DiscordCommandResponse(
+            ok=True, command="status", message="ok", data={}
+        )
 
         with patch(
             "orchestrator.api.discord.ingress.service.execute_tenant_command",
@@ -44,7 +46,9 @@ class DiscordIngressServiceTests(unittest.TestCase):
         ) as execute_mock:
             result = execute_tenant_command_ingress(
                 tenant_id="tenant-a",
-                payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+                payload=DiscordCommandRequest(
+                    user_id="u1", channel_id="c1", command="!status"
+                ),
                 session=session,
                 deps=_deps(),
             )
@@ -64,7 +68,9 @@ class DiscordIngressServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 execute_tenant_command_ingress(
                     tenant_id="tenant-a",
-                    payload=DiscordCommandRequest(user_id="u1", channel_id="c1", command="!status"),
+                    payload=DiscordCommandRequest(
+                        user_id="u1", channel_id="c1", command="!status"
+                    ),
                     session=session,
                     deps=_deps(),
                 )

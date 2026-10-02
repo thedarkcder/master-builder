@@ -29,7 +29,9 @@ def _column_exists(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(op.get_bind())
     if table_name not in inspector.get_table_names():
         return False
-    return any(column["name"] == column_name for column in inspector.get_columns(table_name))
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
@@ -41,7 +43,9 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
     return {}
 
 
-def checkpoint_stage_from_snapshot(value: Any, current_stage: str | None) -> tuple[str | None, bool]:
+def checkpoint_stage_from_snapshot(
+    value: Any, current_stage: str | None
+) -> tuple[str | None, bool]:
     payload = _coerce_dict(value)
     stages = payload.get("stages")
     if not isinstance(stages, dict) or not isinstance(stages.get("qa"), dict):
@@ -53,7 +57,8 @@ def checkpoint_stage_from_snapshot(value: Any, current_stage: str | None) -> tup
 def upgrade() -> None:
     required_columns = ("checkpoint_id", "checkpoint_kind", "stage", "payload_json")
     if not _table_exists("workflow_checkpoints") or not all(
-        _column_exists("workflow_checkpoints", column_name) for column_name in required_columns
+        _column_exists("workflow_checkpoints", column_name)
+        for column_name in required_columns
     ):
         return
 
@@ -63,17 +68,23 @@ def upgrade() -> None:
         sa.column("checkpoint_id", sa.String()),
         sa.column("stage", sa.String()),
     )
-    rows = bind.execute(
-        sa.text(
-            """
+    rows = (
+        bind.execute(
+            sa.text(
+                """
             SELECT checkpoint_id, checkpoint_kind, stage, payload_json
             FROM workflow_checkpoints
             WHERE checkpoint_kind = 'execution'
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     for row in rows:
-        updated_stage, changed = checkpoint_stage_from_snapshot(row["payload_json"], row["stage"])
+        updated_stage, changed = checkpoint_stage_from_snapshot(
+            row["payload_json"], row["stage"]
+        )
         if not changed or updated_stage is None:
             continue
         bind.execute(

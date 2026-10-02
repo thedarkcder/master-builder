@@ -5,9 +5,14 @@ import re
 
 from sqlalchemy import select
 
-from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.api.atlassian_oauth.service import (
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
+)
 from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
+from orchestrator.core.workflow.execution_snapshot import (
+    require_github_pr_remediation_context_from_plan,
+)
 from orchestrator.storage.models import AtlassianOAuthConnection, Run
 from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput
 
@@ -94,7 +99,9 @@ def run_matches_pr_remediation_head(
     pr_number: int,
     head_sha: str,
 ) -> bool:
-    context = require_github_pr_remediation_context_from_plan(getattr(run, "plan", None))
+    context = require_github_pr_remediation_context_from_plan(
+        getattr(run, "plan", None)
+    )
     if context is None:
         return False
     return context.matches_pr_head(pr_number=pr_number, head_sha=head_sha)
@@ -118,7 +125,9 @@ def create_pr_remediation_bug_issue_key(
     issue_comments: list,
     manual_fix_request: dict[str, object] | None = None,
 ) -> str:
-    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
+    connection_id = tenant_jira_config_text(
+        tenant=tenant, key=JiraConfigKey.CONNECTION_ID
+    )
     if not connection_id:
         raise ValueError("jira_connection_missing")
     connection = session.get(AtlassianOAuthConnection, connection_id)
@@ -211,17 +220,26 @@ def build_pr_remediation_bug_description(
             comment_url = str(requested_comment.get("url") or "").strip()
             if comment_url:
                 lines.append(f"Command comment: {comment_url}")
-            comment_body = truncate(str(requested_comment.get("body") or "").replace("\n", " ").strip(), limit=240)
+            comment_body = truncate(
+                str(requested_comment.get("body") or "").replace("\n", " ").strip(),
+                limit=240,
+            )
             if comment_body:
                 lines.append(f"Comment body: {comment_body}")
-        instruction_text = truncate(str(manual_fix_request.get("instruction_text") or "").strip(), limit=240)
+        instruction_text = truncate(
+            str(manual_fix_request.get("instruction_text") or "").strip(), limit=240
+        )
         if instruction_text:
             lines.append(f"Instruction: {instruction_text}")
         code_context = manual_fix_request.get("code_context")
         if isinstance(code_context, dict):
             path = str(code_context.get("path") or "").strip() or "unknown"
             line_value = code_context.get("line")
-            location = f"{path}:{line_value}" if isinstance(line_value, int) and line_value > 0 else path
+            location = (
+                f"{path}:{line_value}"
+                if isinstance(line_value, int) and line_value > 0
+                else path
+            )
             lines.extend(["", f"Referenced code: {location}"])
             snippet = str(code_context.get("snippet") or "").rstrip()
             if snippet:
@@ -233,14 +251,18 @@ def build_pr_remediation_bug_description(
     failing_checks = [
         f"{str(item.name or '').strip()}: {str(item.conclusion or item.status or '').strip() or 'unknown'}"
         for item in checks
-        if str(getattr(item, "conclusion", "") or "").strip().lower() not in {"", "success", "neutral", "skipped"}
+        if str(getattr(item, "conclusion", "") or "").strip().lower()
+        not in {"", "success", "neutral", "skipped"}
     ]
     if failing_checks:
         lines.extend(["", "Failing checks:"])
         lines.extend(f"- {truncate(item, limit=220)}" for item in failing_checks[:8])
 
     changes_requested = [
-        truncate(str(item.body or "").replace("\n", " ").strip() or "changes requested", limit=240)
+        truncate(
+            str(item.body or "").replace("\n", " ").strip() or "changes requested",
+            limit=240,
+        )
         for item in reviews
         if str(getattr(item, "state", "") or "").strip().upper() == "CHANGES_REQUESTED"
     ]
@@ -253,8 +275,15 @@ def build_pr_remediation_bug_description(
         for item in review_comments[:8]:
             path = str(getattr(item, "path", "") or "").strip() or "unknown"
             line_value = getattr(item, "line", None)
-            location = f"{path}:{line_value}" if isinstance(line_value, int) and line_value > 0 else path
-            body = truncate(str(getattr(item, "body", "") or "").replace("\n", " ").strip(), limit=220)
+            location = (
+                f"{path}:{line_value}"
+                if isinstance(line_value, int) and line_value > 0
+                else path
+            )
+            body = truncate(
+                str(getattr(item, "body", "") or "").replace("\n", " ").strip(),
+                limit=220,
+            )
             if body:
                 lines.append(f"- {location} - {body}")
             else:
@@ -263,7 +292,10 @@ def build_pr_remediation_bug_description(
     if issue_comments:
         lines.extend(["", "Issue comments:"])
         for item in issue_comments[:5]:
-            body = truncate(str(getattr(item, "body", "") or "").replace("\n", " ").strip(), limit=220)
+            body = truncate(
+                str(getattr(item, "body", "") or "").replace("\n", " ").strip(),
+                limit=220,
+            )
             if body:
                 lines.append(f"- {body}")
 

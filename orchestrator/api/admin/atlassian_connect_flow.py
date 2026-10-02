@@ -32,7 +32,9 @@ def build_atlassian_connect_start(
             detail="tenant_id is required when return_to=edit",
         )
     if tenant_id and session.get(Tenant, tenant_id) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
 
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
     state_token = create_atlassian_oauth_state_token(
@@ -42,9 +44,13 @@ def build_atlassian_connect_start(
         tenant_id=tenant_id,
     )
     try:
-        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+        client = atlassian_oauth_client_fn(
+            session=session, settings=settings, tenant_id=tenant_id
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     authorize_url = client.build_authorize_url(state=state_token)
     return AtlassianConnectStart(authorize_url=authorize_url, expires_at=expires_at)
 
@@ -64,15 +70,23 @@ def handle_atlassian_connect_callback(
             secret=settings.atlassian_oauth_state_secret,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     set_platform_system_rls_context(session, system_purpose="atlassian_oauth_callback")
     try:
-        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=state.tenant_id)
+        client = atlassian_oauth_client_fn(
+            session=session, settings=settings, tenant_id=state.tenant_id
+        )
         token_set = client.exchange_code(code=code)
-        resources = client.list_accessible_resources(access_token=token_set.access_token)
+        resources = client.list_accessible_resources(
+            access_token=token_set.access_token
+        )
     except (ValueError, AtlassianOAuthError) as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     if not resources:
         raise HTTPException(
@@ -107,7 +121,9 @@ def handle_atlassian_connect_callback(
     if state.return_to == "edit" and state.tenant_id:
         tenant = session.get(Tenant, state.tenant_id)
         if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+            )
         jira_config = dict(tenant.jira_config)
         jira_config["connection_id"] = connection.connection_id
         tenant.jira_config = jira_config
