@@ -646,3 +646,5 @@
 - 2026-10-03: When the maintainer moves repository tracking to GitHub, remove contributor and agent requirements for private Jira. Verify source-project access before importing; an accessible Jira site with no matching project is a migration blocker, not an empty backlog. Distinguish repository backlog cutover from replacing the application's tenant Jira intake, and resolve that scope before changing product contracts.
 
 - 2026-10-03: A technical homepage must explain user tasks across the actual product, not substitute component names for capabilities. Lead with planning, execution, inspection/token usage, team access, knowledge and integrations; keep architecture secondary. Audit implementation before turning roadmap titles into feature claims. State the actual supported automation kinds and experimental prerequisites.
+
+- 2026-10-03: Use the maintainer’s chosen category, “open-source software factory,” consistently in public headings, metadata and introductory documentation. Describe agents and lifecycle tasks concretely; do not substitute “AI-assisted development” or imply feature parity with commercial reference products.

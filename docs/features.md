@@ -1,8 +1,8 @@
 # What Master Builder includes
 
-Master Builder provides a workspace for planning work, running configured agent
-workflows and inspecting their results. This guide describes interfaces present
-in the source code at version `0.1.0`; it does not certify a complete production
+Master Builder is an open-source software factory for planning, development,
+testing and review with configurable agents and workflows. This guide describes
+interfaces present in the source code at version `0.1.0`; it does not certify a complete production
 delivery workflow. Permissions are route-specific. The
 [support matrix](support-matrix.md#validation-boundaries) records platform and
 provider validation limits, and the [readiness report](../OPEN_SOURCE_READINESS_REPORT.md)

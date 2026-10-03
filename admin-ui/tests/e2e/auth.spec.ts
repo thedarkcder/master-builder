@@ -833,10 +833,10 @@ test("keeps the public home page available without redirecting to login", async 
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "AI-assisted software delivery orchestration" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Open-source software factory" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "What’s included" })).toBeVisible();
   await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Planning, workflow execution, project knowledge, team access, token usage, GitHub review and optional delivery integrations. Features and source setup for Master Builder.");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Master Builder is an open-source software factory for planning, development, testing and GitHub review, with project knowledge and configurable agent workflows.");
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 

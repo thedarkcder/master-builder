@@ -1,6 +1,6 @@
 # Master Builder
 
-Master Builder is a self-hosted, multi-tenant service that coordinates AI-assisted software delivery from Jira work items. It connects Jira and GitHub, queues work for execution workers, records workflow state and evidence, and provides a Next.js administration interface. Optional integrations support Discord, knowledge search, deployment previews and QA recordings.
+Master Builder is an open-source software factory. Self-host it to coordinate planning, development, testing and review with configurable agents and workflows across projects and teams. It connects Jira and GitHub, queues work for execution workers, records workflow state and evidence, and provides a Next.js administration interface. Optional integrations support Discord, knowledge search, deployment previews and QA recordings.
 
 This is an early project (`0.1.0`). Read the [readiness report](OPEN_SOURCE_READINESS_REPORT.md) before publishing or deploying it. API schemas and extension interfaces are provisional. Workers execute repository code and development tools: use isolated machines and grant credentials only for repositories you authorize.
 

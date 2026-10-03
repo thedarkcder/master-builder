@@ -15,7 +15,7 @@ const manrope = Manrope({
 
 export const metadata: Metadata = {
   title: "Master Builder",
-  description: "Jira intake, governed execution workers, workflow state, QA evidence and GitHub review. Technical overview, architecture and source setup for Master Builder."
+  description: "Master Builder is an open-source software factory for planning, development, testing and GitHub review, with project knowledge and configurable agent workflows."
 };
 
 export const viewport: Viewport = {

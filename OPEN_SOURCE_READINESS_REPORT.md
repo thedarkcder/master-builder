@@ -140,7 +140,8 @@ historical whitespace/empty values, validates the batch before writing and rejec
 malformed data without logging values. Tests use actually created project IDs and
 real webhook credentials instead of implicit-project assumptions.
 
-The public homepage now documents concrete user features across planning, workflow
+Master Builder is described as an open-source software factory in its public
+heading, metadata, README and feature guide. The public homepage documents concrete user features across planning, workflow
 execution, run inspection/token usage, projects/teams, knowledge, GitHub review,
 previews/QA, Discord and scheduled team briefings. A source-backed feature guide
 records current roles and prerequisites; a compact delivery journey replaces the

@@ -16,8 +16,8 @@ const sectionStyle = "border-t border-slate-200 py-12 sm:py-16";
 const codeStyle = "min-w-0 overflow-x-auto rounded-md border border-[#263b59] bg-[#14243b] p-5 font-mono text-xs leading-7 text-[#e2eaf5] sm:text-sm";
 
 export const metadata: Metadata = {
-  title: "Master Builder — AI-assisted software delivery orchestration",
-  description: "Planning, workflow execution, project knowledge, team access, token usage, GitHub review and optional delivery integrations. Features and source setup for Master Builder.",
+  title: "Master Builder — Open-source software factory",
+  description: "Master Builder is an open-source software factory for planning, development, testing and GitHub review, with project knowledge and configurable agent workflows.",
 };
 
 const features = [
@@ -115,8 +115,8 @@ export default async function HomePage() {
           <div className={`${containerStyle} grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_18rem]`}>
             <div className="min-w-0">
               <p className="inline-block border-l-2 border-[#245ac7] bg-white px-3 py-1 font-mono text-xs text-[#4c6587]">Master Builder / technical overview</p>
-              <h1 className="mt-5 max-w-3xl text-3xl font-semibold leading-tight tracking-tight sm:text-[2.75rem]">AI-assisted software delivery orchestration</h1>
-              <p className="mt-6 max-w-3xl text-base leading-8 text-slate-600">A self-hosted workspace for planning work, running AI-assisted delivery workflows and reviewing changes in GitHub. Manage projects and teams, build project knowledge, inspect execution and token usage, and connect optional deployment, QA and Discord tools.</p>
+              <h1 className="mt-5 max-w-3xl text-3xl font-semibold leading-tight tracking-tight sm:text-[2.75rem]">Open-source software factory</h1>
+              <p className="mt-6 max-w-3xl text-base leading-8 text-slate-600">Plan, build, test and review software with configurable agents and workflows. Self-host your factory and review changes in GitHub. Manage projects and teams, build project knowledge, inspect execution and token usage, and connect optional deployment, QA and Discord tools.</p>
               <div className="mt-7 flex flex-wrap items-center gap-5 text-sm">
                 <a href={repositoryUrl} className="inline-flex items-center gap-2 rounded-md bg-[#245ac7] px-5 py-3 font-semibold text-white hover:bg-[#1d489e] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#245ac7]">Get Started<ArrowRight aria-hidden="true" className="h-4 w-4" /></a>
                 <a href="#source-setup" className={linkStyle}>Local setup</a>

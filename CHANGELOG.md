@@ -28,6 +28,8 @@ No public releases have been published by this preparation task.
   retain the existing local routing policy.
 - Reject malformed authentication sessions in JWT/session callbacks and the BFF;
   remove inferred administrator identity and require reauthentication.
+- Describe Master Builder as an open-source software factory in the homepage,
+  page metadata, README and feature guide.
 - Replace the promotional homepage with a feature-first technical overview and
   source setup: planning, workflow execution, run inspection/token usage, project
   access, knowledge and delivery/collaboration integrations. Keep a compact delivery

@@ -86,7 +86,7 @@ for (const width of [375, 1440]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1, name: "AI-assisted software delivery orchestration" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Open-source software factory" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "From work item to reviewed change" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Source setup" })).toBeVisible();
     await expect(page.getByRole("link", { name: "AGPL-3.0-only", exact: true }).first()).toBeVisible();
@@ -169,7 +169,10 @@ test("unlisted license paths still require authentication", async ({ page }) => 
 test("homepage documents user capabilities and delivery boundaries without a blog", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "AI-assisted software delivery orchestration" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Open-source software factory" })).toBeVisible();
+  await expect(page).toHaveTitle("Master Builder — Open-source software factory");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Master Builder is an open-source software factory for planning, development, testing and GitHub review, with project knowledge and configurable agent workflows.");
+  await expect(page.getByRole("main")).not.toContainText(/AI-assisted/i);
   for (const heading of ["Work planning and human decisions", "Workflow execution", "Run inspection and token usage", "Projects and team access", "Project knowledge", "Code review in GitHub", "Deployment previews and QA", "Discord collaboration", "Scheduled team briefings", "From work item to reviewed change", "Source setup", "Status and boundaries", "License"]) {
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
