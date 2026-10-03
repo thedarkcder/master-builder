@@ -21,7 +21,7 @@ requires no data migration. Credential validation and tenant authorization remai
 separate contracts.
 
 The original real-session regression and archived-link regression failed before
-their fixes. The final combined browser gate passed 126 tests, including 21 local
+their fixes. The final combined browser gate passed 127 tests, including 21 local
 navigation tests without mocking session verification or the proxy. All 113 UI
 unit tests passed, including rejection before provider side effects.
 These checks establish navigation validation, not live backend login or complete
@@ -43,7 +43,7 @@ safely repaired into identity: reauthentication is the stateless-session migrati
 no database migration applies.
 
 All nine signed-cookie browser regressions passed against a fresh production
-build; the combined browser gate passed 126 tests and the unit gate passed 113.
+build; the combined browser gate passed 127 tests and the unit gate passed 113.
 The six malformed-cookie regressions failed before the fix; three valid identity
 controls passed. Regression checks exercise actual signed cookies, Auth.js session
 handling, proxy routing and BFF rejection. They also verify that malformed identity is rejected

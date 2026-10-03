@@ -17,72 +17,73 @@ const codeStyle = "min-w-0 overflow-x-auto rounded-md border border-[#263b59] bg
 
 export const metadata: Metadata = {
   title: "Master Builder — AI-assisted software delivery orchestration",
-  description: "Jira intake, governed execution workers, workflow state, QA evidence and GitHub review. Technical overview, architecture and source setup for Master Builder.",
+  description: "Planning, workflow execution, project knowledge, team access, token usage, GitHub review and optional delivery integrations. Features and source setup for Master Builder.",
 };
 
-const mechanisms = [
+const features = [
   {
-    id: "jira-intake",
-    title: "Jira intake",
-    body: "A workspace connects its Jira OAuth application and selects authorized projects. Ingress checks project scope and execution readiness before enqueueing a run. Delivery deduplication, issue locks and tenant concurrency limits govern admission.",
-    links: [
-      { label: "Jira onboarding", path: "docs/github-app-oauth-onboarding.md#jira--github-flow-summary" },
-      { label: "Run decisions", path: "docs/run-decision-engine.md#enqueue-decision-matrix" },
-    ],
+    id: "work-planning",
+    title: "Work planning and human decisions",
+    status: "Requires Jira and an agent runtime",
+    body: "Start planning from the project board, inspect engineering tasks, and answer clarification questions in connected Jira or Discord follow-ups before work continues. Review planning progress, recorded decisions and blocked questions in the administration UI.",
+    links: [{ label: "Planning and decision rules", path: "docs/run-decision-engine.md#decision-gate-contract" }],
   },
   {
-    id: "worker-profiles",
-    title: "Worker and runtime profiles",
-    body: "Runtime configuration selects the agent adapter, model and execution settings. Workers require their own authenticated runtime, authorized repository tools and platform toolchains. Worker processes are started separately from the API; an API health check does not establish execution readiness.",
-    links: [
-      { label: "Runtime requirements", path: "docs/support-matrix.md#validation-boundaries" },
-      { label: "Adapter and tool contracts", path: "docs/public-contracts.md#extensions-and-protocols" },
-    ],
+    id: "workflow-execution",
+    title: "Workflow execution",
+    status: "Requires configured workers",
+    body: "Run configured planning, development, test and review operations with selected agent profiles. Inspect each attempt, resume eligible executions, retry failed operations or start a fresh rerun through the controls available for that run.",
+    links: [{ label: "Runtime requirements", path: "docs/support-matrix.md#validation-boundaries" }],
   },
   {
-    id: "workflow-state",
-    title: "Workflow state and decisions",
-    body: "Runs persist queue status, stage checkpoints, decisions and outcomes. Worker selection rechecks readiness and concurrency before execution. Planning, development, test and review stages produce recorded results; blocked or failed work remains visible for operator action.",
-    links: [
-      { label: "Worker start decisions", path: "docs/run-decision-engine.md#worker-start-decision-matrix" },
-      { label: "Command-line contracts", path: "docs/public-contracts.md#command-line" },
-    ],
+    id: "run-inspection",
+    title: "Run inspection and token usage",
+    status: "Run views and platform analytics",
+    body: "Inspect run timelines, operation attempts, logs, tool calls and review evidence. Compare recorded input, cached and output token usage across runs, stages and models. Usage views depend on the telemetry recorded for each execution.",
+    links: [],
   },
   {
-    id: "qa-evidence",
-    title: "QA and evidence",
-    body: "Run records retain stage results and review evidence. Optional QA workflows capture recordings against configured previews and worker platforms. Stored recordings are delivered through authenticated routes with tenant, project and run checks. Preview, browser and mobile proof require their own setup and validation.",
-    links: [
-      { label: "QA artifact access", path: "docs/configuration.md#qa-artifact-visibility" },
-      { label: "QA validation boundaries", path: "docs/support-matrix.md#validation-boundaries" },
-    ],
+    id: "project-access",
+    title: "Projects and team access",
+    status: "Administration UI and API",
+    body: "Create projects, connect authorized repositories, invite members and manage teams, roles and project access requests. Configure delivery policy and managed secret references for each project, with access governed by workspace permissions.",
+    links: [{ label: "Configuration guide", path: "docs/configuration.md#required-core-settings" }],
   },
   {
-    id: "github-review",
-    title: "GitHub review",
-    body: "A GitHub App installation and repository allowlists define the repositories available to a workspace. Delivery runs use branches and pull requests, with checks and review feedback feeding the workflow. Project policy controls automation; review the policy before authorizing execution or merging.",
-    links: [
-      { label: "GitHub App setup", path: "docs/github-app-oauth-onboarding.md#github-app-creation-checklist" },
-      { label: "Delivery workflow setup", path: "README.md#using-delivery-workflows" },
-    ],
+    id: "project-knowledge",
+    title: "Project knowledge",
+    status: "Platform administration",
+    body: "Upload project documents, review knowledge assets and browse their extracted chunks and facts. Configure supported external sources and inspect synchronization results. Search and retrieval use the configured knowledge and embedding services.",
+    links: [],
   },
   {
-    id: "workspace-policy",
-    title: "Workspace and policy",
-    body: "Workspaces represent tenants with memberships, projects and repository scope. Administration configures project policy, integrations and managed secret references. Permissions are enforced by the relevant routes; configuration identifiers are separate from encrypted secret values.",
-    links: [
-      { label: "Configuration and persistence", path: "docs/public-contracts.md#configuration-and-persistence" },
-      { label: "Core configuration", path: "docs/configuration.md#required-core-settings" },
-    ],
+    id: "code-review",
+    title: "Code review in GitHub",
+    status: "Requires a GitHub App installation",
+    body: "Connect GitHub repositories, create delivery branches and pull requests, and bring check results and review feedback back into the workflow. Repository allowlists and project policy govern which code an execution can access and how changes are reviewed.",
+    links: [{ label: "GitHub App setup", path: "docs/github-app-oauth-onboarding.md#github-app-creation-checklist" }],
   },
-];
-
-const components = [
-  { name: "Administration UI", implementation: "Next.js · Auth.js", contract: "Browser sessions, workspace configuration and run inspection; server-side requests to the backend." },
-  { name: "API", implementation: "FastAPI", contract: "Authentication, route validation, integration ingress and operator interfaces. The running backend exposes /docs and /openapi.json." },
-  { name: "Operational state", implementation: "PostgreSQL · SQLAlchemy · Alembic", contract: "Durable run and configuration state. Apply supported migrations; database tables are internal contracts." },
-  { name: "Execution workers", implementation: "Python · runtime adapters · repository tools", contract: "Queue selection and governed execution with configured runtime adapters and platform toolchains. Operators must isolate repository execution." },
-  { name: "Optional services", implementation: "ClickHouse · OpenTelemetry · S3-compatible storage", contract: "Telemetry and private QA artifacts. Temporal, voice and deployment integrations have separate prerequisites." },
+  {
+    id: "preview-qa",
+    title: "Deployment previews and QA",
+    status: "Experimental integration",
+    body: "Configure deployment targets, inspect preview and release attempts, and collect browser or mobile QA recordings against configured builds. Review evidence through authenticated run links. Provider deployment, recording and recovery require separate toolchains and live validation.",
+    links: [{ label: "Deployment and QA status", path: "docs/support-matrix.md#validation-boundaries" }],
+  },
+  {
+    id: "discord-collaboration",
+    title: "Discord collaboration",
+    status: "Requires a configured Discord application",
+    body: "Connect project channels, receive delivery notifications and use permission-checked commands to inspect or control work. Clarification threads let people answer questions associated with a run. Available commands depend on the workspace’s configured integrations and permissions.",
+    links: [{ label: "Discord command contracts", path: "docs/run-decision-engine.md#discord-commands" }],
+  },
+  {
+    id: "team-briefings",
+    title: "Scheduled team briefings",
+    status: "Experimental integration",
+    body: "Schedule stand-up and retrospective voice briefings with a timezone and reporting window. Enable, disable or manually trigger the configured briefing and inspect its workflow history. Briefings are delivered as audio attachments in a Discord project channel. This requires configured text-to-speech models and separate end-to-end validation.",
+    links: [{ label: "Briefing prerequisites", path: "docs/configuration.md#optional-integrations" }],
+  },
 ];
 
 export default async function HomePage() {
@@ -100,8 +101,8 @@ export default async function HomePage() {
         <div className={`${containerStyle} flex flex-wrap items-center justify-between gap-4 py-5`}>
           <Link href="/" className={`inline-flex items-center gap-3 font-mono text-sm tracking-tight ${linkStyle} no-underline`}><span className="flex h-8 w-8 items-center justify-center rounded border border-[#c8d7ee] bg-[#edf3fc] text-[#245ac7]"><Blocks aria-hidden="true" className="h-4 w-4" /></span>Master Builder</Link>
           <nav aria-label="Main navigation" className="flex flex-wrap items-center gap-4 text-sm sm:gap-5">
-            <a href="#capabilities" className={`${linkStyle} no-underline`}>Capabilities</a>
-            <a href="#architecture" className={`${linkStyle} no-underline`}>Architecture</a>
+            <a href="#capabilities" className={`${linkStyle} no-underline`}>Features</a>
+            <a href="#architecture" className={`${linkStyle} no-underline`}>How it works</a>
             <a href={`${sourceUrl}/README.md`} className={`${linkStyle} no-underline`}>Documentation</a>
             <Link href={accountHref} className={`${linkStyle} no-underline`}>{accountLabel}</Link>
             <GitHubStars />
@@ -115,7 +116,7 @@ export default async function HomePage() {
             <div className="min-w-0">
               <p className="inline-block border-l-2 border-[#245ac7] bg-white px-3 py-1 font-mono text-xs text-[#4c6587]">Master Builder / technical overview</p>
               <h1 className="mt-5 max-w-3xl text-3xl font-semibold leading-tight tracking-tight sm:text-[2.75rem]">AI-assisted software delivery orchestration</h1>
-              <p className="mt-6 max-w-3xl text-base leading-8 text-slate-600">A self-hosted service for Jira work intake, agent execution and GitHub review. Configure workspace policy and worker runtimes, then inspect persisted run state, stage results and evidence through the API and administration UI.</p>
+              <p className="mt-6 max-w-3xl text-base leading-8 text-slate-600">A self-hosted workspace for planning work, running AI-assisted delivery workflows and reviewing changes in GitHub. Manage projects and teams, build project knowledge, inspect execution and token usage, and connect optional deployment, QA and Discord tools.</p>
               <div className="mt-7 flex flex-wrap items-center gap-5 text-sm">
                 <a href={repositoryUrl} className="inline-flex items-center gap-2 rounded-md bg-[#245ac7] px-5 py-3 font-semibold text-white hover:bg-[#1d489e] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#245ac7]">Get Started<ArrowRight aria-hidden="true" className="h-4 w-4" /></a>
                 <a href="#source-setup" className={linkStyle}>Local setup</a>
@@ -136,16 +137,17 @@ export default async function HomePage() {
 
         <section id="capabilities" className={sectionStyle}>
           <div className={containerStyle}>
-            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-[#4c6587]">01 / Capabilities</p>
-            <h2 className="text-2xl font-semibold tracking-tight">Delivery mechanisms</h2>
-            <nav aria-label="Capability navigation" className="mt-5 flex flex-wrap gap-2 text-sm">
-              {mechanisms.map((item) => <a key={item.id} href={`#${item.id}`} className={`${linkStyle} border border-[#cfdaea] bg-white px-3 py-2 text-xs no-underline`}>{item.title}</a>)}
+            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-[#4c6587]">01 / Features</p>
+            <h2 className="text-2xl font-semibold tracking-tight">What’s included</h2>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">These are the user-facing capabilities included in the codebase. Delivery and external integrations require their own configuration; experimental features are marked below.</p>
+            <nav aria-label="Feature navigation" className="mt-5 flex flex-wrap gap-2 text-sm">
+              {features.map((item) => <a key={item.id} href={`#${item.id}`} className={`${linkStyle} border border-[#cfdaea] bg-white px-3 py-2 text-xs no-underline`}>{item.title}</a>)}
             </nav>
             <div className="mt-8 divide-y divide-slate-200">
-              {mechanisms.map((item, index) => (
+              {features.map((item, index) => (
                 <article id={item.id} key={item.id} className="grid grid-cols-1 gap-4 py-7 md:grid-cols-[15rem_minmax(0,1fr)] md:gap-10">
-                  <div><p className="font-mono text-xs text-[#245ac7]">MODULE / 0{index + 1}</p><h3 className="mt-2 text-lg font-semibold">{item.title}</h3></div>
-                  <div><p className="max-w-3xl text-sm leading-7 text-slate-600">{item.body}</p><div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm">{item.links.map((link) => <a key={link.path} href={`${sourceUrl}/${link.path}`} className={linkStyle}>{link.label}</a>)}</div></div>
+                  <div><p className="font-mono text-xs text-[#245ac7]">FEATURE / 0{index + 1}</p><h3 className="mt-2 text-lg font-semibold">{item.title}</h3></div>
+                  <div><p className="mb-3 inline-block border border-[#cfdaea] bg-white px-2 py-1 font-mono text-[11px] text-[#4c6587]">{item.status}</p><p className="max-w-3xl text-sm leading-7 text-slate-600">{item.body}</p><div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm"><a href={`${sourceUrl}/docs/features.md#${item.id}`} className={linkStyle}>Feature details</a>{item.links.map((link) => <a key={link.path} href={`${sourceUrl}/${link.path}`} className={linkStyle}>{link.label}</a>)}</div></div>
                 </article>
               ))}
             </div>
@@ -154,21 +156,14 @@ export default async function HomePage() {
 
         <section id="architecture" className={`${sectionStyle} bg-[#edf2f8]`}>
           <div className={containerStyle}>
-            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-[#4c6587]">02 / System layout</p>
-            <h2 className="text-2xl font-semibold tracking-tight">Components and data flow</h2>
-            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">The API owns route validation and ingress. PostgreSQL stores operational state. Workers select eligible runs and execute repository tools; the UI reads results through authenticated backend routes.</p>
-            <ol aria-label="Run data flow" className="mt-7 grid grid-cols-1 gap-3 rounded-md border border-[#263b59] bg-[#14243b] p-5 text-sm text-[#e2eaf5] sm:grid-cols-5">
-              {["Jira event or operator command", "Scope and readiness checks", "Persisted run queue", "Worker stages and artifacts", "Run inspection and GitHub review"].map((step, index) => <li key={step} className="min-w-0 border-l border-[#42628a] pl-3"><span className="block font-mono text-xs text-[#9ebbf5]">0{index + 1}</span><span className="mt-2 block leading-6">{step}</span></li>)}
+            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-[#4c6587]">02 / How it works</p>
+            <h2 className="text-2xl font-semibold tracking-tight">From work item to reviewed change</h2>
+            <p className="mt-4 max-w-3xl text-sm leading-7 text-slate-600">Connect a project to its work tracker and repositories, choose a workflow and agent runtime, and inspect the results at each step. Human questions, blocked operations and failed attempts remain available for review and action.</p>
+            <ol aria-label="Delivery workflow" className="mt-7 grid grid-cols-1 gap-3 rounded-md border border-[#263b59] bg-[#14243b] p-5 text-sm text-[#e2eaf5] sm:grid-cols-5">
+              {["Select project and work", "Plan and resolve questions", "Run configured agent stages", "Inspect tests and evidence", "Review the GitHub pull request"].map((step, index) => <li key={step} className="min-w-0 border-l border-[#42628a] pl-3"><span className="block font-mono text-xs text-[#9ebbf5]">0{index + 1}</span><span className="mt-2 block leading-6">{step}</span></li>)}
             </ol>
-            <p className="mt-3 font-mono text-xs text-[#4c6587]">Schematic / governed run flow · no worker readiness implied</p>
-            <div className="mt-7 overflow-x-auto rounded-md border border-[#cfdaea] bg-white p-4">
-              <table className="w-full min-w-[640px] text-left text-sm">
-                <caption className="sr-only">Master Builder component responsibilities</caption>
-                <thead><tr className="border-b border-slate-300"><th scope="col" className="py-3 pr-5 font-semibold">Component</th><th scope="col" className="py-3 pr-5 font-semibold">Implementation</th><th scope="col" className="py-3 font-semibold">Responsibility</th></tr></thead>
-                <tbody>{components.map((component) => <tr key={component.name} className="border-b border-slate-200 align-top"><th scope="row" className="py-4 pr-5 font-medium">{component.name}</th><td className="py-4 pr-5 text-slate-600">{component.implementation}</td><td className="max-w-md py-4 leading-7 text-slate-600">{component.contract}</td></tr>)}</tbody>
-              </table>
-            </div>
-            <div className="mt-6 flex flex-wrap gap-5 text-sm"><a href={`${sourceUrl}/README.md#architecture`} className={linkStyle}>Source layout</a><a href={`${sourceUrl}/docs/public-contracts.md#http-interfaces`} className={linkStyle}>HTTP interfaces</a></div>
+            <p className="mt-3 text-xs leading-6 text-[#4c6587]">Typical delivery journey. The configured workflow determines its operations and gates; a step can require human input or stop on failure.</p>
+            <div className="mt-6 flex flex-wrap gap-5 text-sm"><a href={`${sourceUrl}/docs/features.md`} className={linkStyle}>Complete feature guide</a><a href={`${sourceUrl}/README.md#architecture`} className={linkStyle}>Source architecture</a><a href={`${sourceUrl}/docs/public-contracts.md#http-interfaces`} className={linkStyle}>HTTP interfaces</a></div>
           </div>
         </section>
 

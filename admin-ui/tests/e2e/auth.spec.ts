@@ -834,9 +834,9 @@ test("keeps the public home page available without redirecting to login", async 
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "AI-assisted software delivery orchestration" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Delivery mechanisms" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What’s included" })).toBeVisible();
   await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Jira intake, governed execution workers, workflow state, QA evidence and GitHub review. Technical overview, architecture and source setup for Master Builder.");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Planning, workflow execution, project knowledge, team access, token usage, GitHub review and optional delivery integrations. Features and source setup for Master Builder.");
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 

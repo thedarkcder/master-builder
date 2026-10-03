@@ -139,10 +139,12 @@ uv build
 
 Frontend checks:
 
-The public homepage documents Jira intake, worker/runtime configuration, workflow
-decisions, QA evidence and GitHub review, with links to the source documentation,
-component responsibilities and local setup. **Get Started** links to this
-repository. Its GitHub star control reads the public repository count directly
+The public homepage leads with [what Master Builder includes](docs/features.md):
+planning and human decisions, workflow execution, run inspection/token usage,
+project/team access, knowledge, GitHub review, previews/QA, Discord collaboration
+and scheduled team briefings. A compact delivery journey, source links and local
+setup follow the feature catalogue; experimental integrations are labelled.
+**Get Started** links to this repository. Its GitHub star control reads the public repository count directly
 from GitHub without credentials or cookies. It displays loading or **Stars
 unavailable** when the repository is private, the response is invalid, or GitHub
 cannot be reached; no substitute count is shown. The [privacy page](admin-ui/app/privacy/page.tsx)
