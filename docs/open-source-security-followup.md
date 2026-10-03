@@ -21,11 +21,34 @@ requires no data migration. Credential validation and tenant authorization remai
 separate contracts.
 
 The original real-session regression and archived-link regression failed before
-their fixes. The final combined browser gate passed 117 tests, including 21 local
-navigation tests without mocking session verification or the proxy. All 45 UI
+their fixes. The final combined browser gate passed 126 tests, including 21 local
+navigation tests without mocking session verification or the proxy. All 113 UI
 unit tests passed, including rejection before provider side effects.
 These checks establish navigation validation, not live backend login or complete
 worker isolation. The readiness report records the final combined UI checks.
+
+## Authentication session identity validation
+
+The UI previously inferred a platform administrator when a signed session lacked
+its principal. A local, correctly signed malformed cookie reproduced that UI
+identity and protected-page admission. Backend authentication independently
+rejected the invalid bearer; backend privilege escalation was not demonstrated.
+
+Current credential producers supply a backend bearer and a principal. JWT/session
+callbacks and the BFF now share a pure validator for that contract. Invalid cookies
+cannot infer a role, enter protected routes or forward an authenticated backend
+request. Auth.js clears the invalid session and requires sign-in. Valid platform,
+tenant and onboarding identities retain their routing. Cookie contents cannot be
+safely repaired into identity: reauthentication is the stateless-session migration;
+no database migration applies.
+
+All nine signed-cookie browser regressions passed against a fresh production
+build; the combined browser gate passed 126 tests and the unit gate passed 113.
+The six malformed-cookie regressions failed before the fix; three valid identity
+controls passed. Regression checks exercise actual signed cookies, Auth.js session
+handling, proxy routing and BFF rejection. They also verify that malformed identity is rejected
+before the BFF performs a backend fetch. This evidence establishes the owned
+session boundary, not an actual backend login or complete authorization audit.
 
 ## 0. Reality model
 The reviewed baseline exposed anonymous account creation, password-based login and reset endpoints without shared admission budgets. Four API workers make a process-local limiter insufficient. MinIO initialization granted anonymous downloads. Runtime PostgreSQL used the same credential as the migration owner, which can bypass RLS. The actual fresh PostgreSQL catalog check identified missing forced RLS on `workflow_executable_work_items`. These are configuration and authorization defects, not project-lifecycle defects. The API owns identity admission, storage owns database privilege validation, and QA storage owns object retrieval. No live environment or deployed data is changed by this work.

@@ -31,11 +31,22 @@ function loadAuthConfig(environment) {
       if (name === "next-auth") return { default: (value) => { configuration = value; return {}; } };
       if (name === "next-auth/providers/credentials") return { default: (value) => value };
       if (name === "@/lib/auth-secret") return loadSecretPolicy(environment);
+      if (name === "@/lib/auth-session") return loadSessionPolicy();
       if (name === "@/lib/server-api") return { SERVER_API_BASE_URL: "http://localhost:60001" };
       throw new Error(`Unexpected dependency ${name}`);
     }
   });
   return configuration;
+}
+
+function loadSessionPolicy() {
+  const source = fs.readFileSync(path.join(__dirname, "../../lib/auth-session.ts"), "utf8");
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
+  }).outputText;
+  const exports = {};
+  vm.runInNewContext(compiled, { exports });
+  return exports;
 }
 
 for (const environment of [
@@ -68,6 +79,7 @@ function loadBff(environment) {
       if (name === "next/server") return { NextResponse: { json: (body, options) => ({ body, status: options.status }) } };
       if (name === "next-auth/jwt") return { getToken: async () => null };
       if (name === "@/lib/auth-secret") return loadSecretPolicy(environment);
+      if (name === "@/lib/auth-session") return loadSessionPolicy();
       if (name === "@/lib/server-api") return { SERVER_API_BASE_URL: "http://localhost:60001" };
       throw new Error(`Unexpected dependency ${name}`);
     }

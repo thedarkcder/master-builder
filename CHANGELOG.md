@@ -22,6 +22,8 @@ No public releases have been published by this preparation task.
 - Reject unsafe supplied navigation destinations before sign-in redirects,
   credential submission or archived-workspace continuation. Missing destinations
   retain the existing local routing policy.
+- Reject malformed authentication sessions in JWT/session callbacks and the BFF;
+  remove inferred administrator identity and require reauthentication.
 - Replace the promotional homepage with a technical overview, source-document
   links, component responsibilities and local setup. Remove the blog and apply a
   navy, blue and cool-gray design with responsive code blocks.

@@ -3,6 +3,7 @@ import { getToken } from "next-auth/jwt";
 
 import { SERVER_API_BASE_URL } from "@/lib/server-api";
 import { requireAuthSecret } from "@/lib/auth-secret";
+import { requireAuthSession } from "@/lib/auth-session";
 
 function buildBackendUrl(request: NextRequest, path: string[]): string {
   const base = SERVER_API_BASE_URL.replace(/\/$/, "");
@@ -19,8 +20,10 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     req: request,
     secret: requireAuthSecret(),
   });
-  const accessToken = typeof token?.accessToken === "string" ? token.accessToken : "";
-  if (!accessToken) {
+  let accessToken: string;
+  try {
+    accessToken = requireAuthSession(token).accessToken;
+  } catch {
     return NextResponse.json({ detail: "Authentication required" }, { status: 401 });
   }
 
