@@ -110,6 +110,15 @@
       "source_url": "https://raw.githubusercontent.com/seaweedfs/seaweedfs/530be3e37337488ecc34d58441e0bc476e121c93/LICENSE",
       "sha256": "d789d433cc11da163273d1e39be2e8fa67642f9a58ef220d3f258fa9c14ef613",
       "scope": "Exact upstream root license; does not clear all constituents of the published OCI image."
+    },
+    {
+      "component": "manrope-4.504",
+      "revision": "8f9a401dbb3793e0d1264b15d96aa253f05280f5",
+      "path": "third_party/licenses/manrope-4.504/OFL.txt",
+      "source_url": "https://raw.githubusercontent.com/google/fonts/8f9a401dbb3793e0d1264b15d96aa253f05280f5/ofl/manrope/OFL.txt",
+      "sha256": "e01b637272e0cbdfb240184dd98ea5cc671556d9894dae2668d92ab2c906787c",
+      "public_mirror": "admin-ui/public/licenses/manrope-OFL.txt",
+      "scope": "Exact unmodified official OFL/copyright text; independent of project AGPL. Companion NOTICE preserves actual source/built-font 2019 copyright."
     }
   ],
   "libdave_release": {
@@ -486,5 +495,206 @@
     "upstream_license": "Apache-2.0",
     "binary_platform_observed": "linux/arm64",
     "status": "Upstream license/source identity recorded; complete image component inventory and redistribution rights remain unverified."
+  },
+  "manrope_ui_font": {
+    "status": "Observed version/source metadata and exact font notices preserved; exact Google CDN derivation and future builds remain unverified",
+    "license_spdx": "OFL-1.1",
+    "pinned_reviewed_source": {
+      "revision": "8f9a401dbb3793e0d1264b15d96aa253f05280f5",
+      "url": "https://raw.githubusercontent.com/google/fonts/8f9a401dbb3793e0d1264b15d96aa253f05280f5/ofl/manrope/Manrope%5Bwght%5D.ttf",
+      "sha256": "d0639be45d0af36e798172419d7bd173c4bd4f29e2b76cbb69db1d11bf8b0a40",
+      "metadata": {
+        "head_revision": 4.503997802734375,
+        "names": {
+          "0": [
+            "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+          ],
+          "1": [
+            "Manrope ExtraLight"
+          ],
+          "5": [
+            "Version 4.504"
+          ],
+          "6": [
+            "Manrope-ExtraLight"
+          ],
+          "13": [
+            "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL"
+          ],
+          "14": [
+            "http://scripts.sil.org/OFL"
+          ]
+        }
+      }
+    },
+    "inspector": {
+      "fontTools": "4.66.1",
+      "Brotli": "1.2.0"
+    },
+    "built_woff2": [
+      {
+        "filename": "58c4895d0a0ef7cc-s.2vhvl9vrvk-va.woff2",
+        "sha256": "40af11327fe5308166c6cb5787808b042db6da889abf602f0a4876c49675d87e",
+        "bytes": 9360,
+        "metadata": {
+          "head_revision": 4.503997802734375,
+          "names": {
+            "0": [
+              "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+            ],
+            "1": [
+              "Manrope ExtraLight"
+            ],
+            "5": [
+              "Version 4.504"
+            ],
+            "6": [
+              "Manrope-ExtraLight"
+            ],
+            "13": [],
+            "14": [
+              "http://scripts.sil.org/OFL"
+            ]
+          }
+        }
+      },
+      {
+        "filename": "6ab0db14f70d8ed6-s.13hnt-xgp82zk.woff2",
+        "sha256": "ce093b341d9c10658ee1eaa85c5f8042ff3307bc6ccfc5f405616eb437f0009e",
+        "bytes": 15240,
+        "metadata": {
+          "head_revision": 4.503997802734375,
+          "names": {
+            "0": [
+              "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+            ],
+            "1": [
+              "Manrope ExtraLight"
+            ],
+            "5": [
+              "Version 4.504"
+            ],
+            "6": [
+              "Manrope-ExtraLight"
+            ],
+            "13": [],
+            "14": [
+              "http://scripts.sil.org/OFL"
+            ]
+          }
+        }
+      },
+      {
+        "filename": "a342834df7752944-s.3hd2l7bm32o7k.woff2",
+        "sha256": "e8c0b39992f06b3dc9a9834494088014859f363bf6ca8792b6bb07e17c7965f3",
+        "bytes": 2592,
+        "metadata": {
+          "head_revision": 4.503997802734375,
+          "names": {
+            "0": [
+              "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+            ],
+            "1": [
+              "Manrope ExtraLight"
+            ],
+            "5": [
+              "Version 4.504"
+            ],
+            "6": [
+              "Manrope-ExtraLight"
+            ],
+            "13": [],
+            "14": [
+              "http://scripts.sil.org/OFL"
+            ]
+          }
+        }
+      },
+      {
+        "filename": "a343f882a40d2cc9-s.p.1sj6eobyi31rd.woff2",
+        "sha256": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f",
+        "bytes": 24576,
+        "metadata": {
+          "head_revision": 4.503997802734375,
+          "names": {
+            "0": [
+              "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+            ],
+            "1": [
+              "Manrope ExtraLight"
+            ],
+            "5": [
+              "Version 4.504"
+            ],
+            "6": [
+              "Manrope-ExtraLight"
+            ],
+            "13": [],
+            "14": [
+              "http://scripts.sil.org/OFL"
+            ]
+          }
+        }
+      },
+      {
+        "filename": "bfc7db5c00d21bc5-s.173xwsdme27n8.woff2",
+        "sha256": "bab757f8a0a1bc04055ee98cb5777f3254aab11f6d222366e1f40a36f390506a",
+        "bytes": 8492,
+        "metadata": {
+          "head_revision": 4.503997802734375,
+          "names": {
+            "0": [
+              "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+            ],
+            "1": [
+              "Manrope ExtraLight"
+            ],
+            "5": [
+              "Version 4.504"
+            ],
+            "6": [
+              "Manrope-ExtraLight"
+            ],
+            "13": [],
+            "14": [
+              "http://scripts.sil.org/OFL"
+            ]
+          }
+        }
+      },
+      {
+        "filename": "d3fe2f289711ac3f-s.1l2zhvq5eocqf.woff2",
+        "sha256": "95a493061fe0a8d0d027c2892747134ba747141112d3be4d5022e70ab7d3a1a6",
+        "bytes": 14544,
+        "metadata": {
+          "head_revision": 4.503997802734375,
+          "names": {
+            "0": [
+              "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)"
+            ],
+            "1": [
+              "Manrope ExtraLight"
+            ],
+            "5": [
+              "Version 4.504"
+            ],
+            "6": [
+              "Manrope-ExtraLight"
+            ],
+            "13": [],
+            "14": [
+              "http://scripts.sil.org/OFL"
+            ]
+          }
+        }
+      }
+    ],
+    "copyright_notice": {
+      "path": "third_party/licenses/manrope-4.504/NOTICE.txt",
+      "public_mirror": "admin-ui/public/licenses/manrope-NOTICE.txt",
+      "sha256": "70df3e58385fb8c4c804cd1de5c78174b9e3859b127db10b0426d469439582f2"
+    },
+    "built_license_name_records": "All six inspected WOFF2 subsets omit license description name ID13 but retain the OFL URL in name ID14; full license and copyright are delivered as separate public text files.",
+    "distribution_scope": "Notices accompany current repository/UI fonts; not a blanket license clearance for complete images or all dependencies."
   }
 }

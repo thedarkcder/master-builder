@@ -25,6 +25,8 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
     pathname === "/forgot-password" ||
     pathname === "/reset-password" ||
     pathname === "/privacy" ||
+    pathname === "/licenses/manrope-OFL.txt" ||
+    pathname === "/licenses/manrope-NOTICE.txt" ||
     pathname === "/blog" ||
     pathname.startsWith("/blog/") ||
     pathname.startsWith("/invite/accept") ||

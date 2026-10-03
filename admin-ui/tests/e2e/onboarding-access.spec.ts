@@ -952,7 +952,7 @@ test("formats Jira webhook timestamps on the tenant Jira settings page", async (
   await expect(lastReceivedRow).not.toContainText(rawTimestamp);
 });
 
-test("opens the tenant workspace from the selector for tenant users", async ({ page }) => {
+test("routes tenant users from the selector to their workspace", async ({ page }) => {
   const membership = makeMembership({
     tenant_id: "example-workspace",
     role: "business_member",
@@ -999,10 +999,7 @@ test("opens the tenant workspace from the selector for tenant users", async ({ p
   ]);
 
   await page.goto("/tenants/select");
-  await Promise.all([
-    page.waitForURL(/\/example-workspace\/dashboard$/, { timeout: 15000, waitUntil: "domcontentloaded" }),
-    page.getByRole("link", { name: /Example Workspace/ }).click(),
-  ]);
+  await expect(page).toHaveURL(/\/example-workspace\/dashboard$/, { timeout: 15000 });
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
 });
 
@@ -1677,7 +1674,7 @@ test("shows a standalone tenant archive confirmation page and moves the tenant i
   await expect(archivedWorkspacesLink).toHaveAttribute("href", "/tenants/select");
   await page.goto("/tenants/select", { waitUntil: "domcontentloaded" });
   await expect(page).toHaveURL(/\/tenants\/select$/);
-  await expect(page.getByText("Active workspaces")).toBeVisible();
+  await expect(page.getByText("Active workspaces", { exact: true })).toBeVisible();
   await expect(page.getByText("Archived workspaces", { exact: true })).toBeVisible();
   await expect(
     page.locator('a[href="/auth-workspace-one-1774668649405-k03pkj/settings/config"]'),

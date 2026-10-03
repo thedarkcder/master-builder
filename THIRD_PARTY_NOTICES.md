@@ -218,3 +218,25 @@ with source revision, image identity and notice checksum in the distribution man
 This server is separate third-party material; its full image dependency inventory
 and redistribution obligations require review before mirroring or repackaging.
 The `minio` Python SDK is an S3 client and does not bundle the removed MinIO server.
+
+## Manrope UI font
+
+The administration UI uses the third-party Manrope font through `next/font/google`.
+The observed build contains six WOFF2 subsets reporting version **4.504** and
+`Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)`.
+Their family/version/copyright match the reviewed official Google Fonts source at
+commit `8f9a401dbb3793e0d1264b15d96aa253f05280f5`.
+
+The exact unmodified upstream [OFL/copyright file](third_party/licenses/manrope-4.504/OFL.txt)
+and [companion font notice](third_party/licenses/manrope-4.504/NOTICE.txt) are retained.
+The OFL file's original 2018 notice and the actual font metadata's 2019 notice are
+both preserved. Public UI mirrors are `public/licenses/manrope-OFL.txt` and
+`public/licenses/manrope-NOTICE.txt` within `admin-ui`; keep them with the fonts in
+UI/container distributions. Manrope remains under **SIL Open Font License 1.1**;
+the first-party AGPL declaration does not replace its terms. The OFL governs font
+bundling and redistribution independently of the application's commercial-use grant.
+
+The source/font hashes and observed metadata are recorded in the distribution
+manifest. Google Fonts uses an unversioned download endpoint, so matching metadata
+does not establish an exact CDN transformation receipt or provenance for future
+builds. This notice does not clear all constituents of a final image.

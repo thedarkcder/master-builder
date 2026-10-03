@@ -137,6 +137,14 @@ uv build
 
 Frontend checks:
 
+The public homepage introduces delivery features and links **Get Started** to this
+repository. Its GitHub star control reads the public repository count directly
+from GitHub without credentials or cookies. It displays loading or **Stars
+unavailable** when the repository is private, the response is invalid, or GitHub
+cannot be reached; no substitute count is shown. The [privacy page](admin-ui/app/privacy/page.tsx)
+describes this browser request. Homepage browser tests mock only the external
+GitHub response and navigation destination.
+
 Use the UI configuration generated in the quick start. Existing checkouts must add
 `ORCHESTRATOR_API_BASE_URL=http://localhost:60001` to their private
 `admin-ui/.env.local` before building; missing configuration stops the build.

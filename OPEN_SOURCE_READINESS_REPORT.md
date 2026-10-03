@@ -1,6 +1,6 @@
 # Open-Source Readiness Report
 
-Review date: **2026-10-02**. **Public release remains blocked.** This report covers
+Review date: **2026-10-03**. **Public release remains blocked.** This report covers
 current source, configuration, tests, documentation, deployment recipes, imported
 material and locally available Git history. Passing checks are evidence for their
 stated boundaries, not exhaustive security, confidentiality or legal clearance.
@@ -39,7 +39,7 @@ or external message was performed.
    not establish filesystem, network or resource isolation. Enforce the tenant
    threat model or exclude unsafe capabilities. An agent CLI sandbox option is not
    proof of orchestrator isolation. See [decision gates](docs/open-source-decision-gates.md).
-3. **Full backend verification.** [Hosted CI on the reviewed source](https://github.com/thedarkcder/master-builder/actions/runs/37036197180)
+3. **Full backend verification.** Hosted CI on the reviewed source
    completed with **3,086 passed, 65 failed, 85 errors, seven skipped and eight
    subtests passed**. This supersedes the earlier partial local run that stopped
    at a CPython parser error. Failures include the API architecture allowlist,
@@ -139,6 +139,14 @@ historical whitespace/empty values, validates the batch before writing and rejec
 malformed data without logging values. Tests use actually created project IDs and
 real webhook credentials instead of implicit-project assumptions.
 
+The public homepage now explains documented delivery features, configuration and
+source setup, keeping the Master Builder name. Get Started links to the selected
+GitHub repository. Stars come only from a validated public GitHub response;
+private, invalid, unavailable and timed-out responses display an explicit
+unavailable state. The anonymous browser request is disclosed on the privacy page.
+The repository is still private, so anonymous GitHub navigation and live numeric
+statistics are not yet usable. No publication or hosted deployment was performed.
+
 ## Licensing and attribution concerns
 
 Third-party MIT/Apache/BSD/Boost/LGPL/MPL/CC grants and notices remain intact; root
@@ -148,6 +156,13 @@ OpenSSL 3, upstream libdave/JSON MIT, MLSPP BSD and bundled MPark.Variant Boost
 notices. Do not redistribute historical BoringSSL voice binaries merely because
 the current recipe changed. A deleted historical Apache frontend skill still
 needs its original provenance/notices for any distribution containing that history.
+
+The existing Manrope UI font retains its separate **OFL-1.1** license. Exact
+official license text and actual font copyright notices now accompany repository
+and UI copies; only those two named public legal files bypass UI authentication.
+All six current built font hashes match the evidence manifest. Their observed
+version/copyright match reviewed upstream source, but the exact Google Fonts CDN
+transformation and future-build provenance remain unverified.
 
 See [notices](THIRD_PARTY_NOTICES.md), [inventory](docs/third-party-licenses.md),
 [distribution material](docs/distribution-material.md) and
@@ -175,6 +190,8 @@ below. No complete hosted CI success is claimed.
 | Native arm64 compilation/linkage | Actual source build and CGo binary linked only `libcrypto.so.3`, OpenSSL **3.5.7**, Debian packages **3.5.7-1~deb13u3**, Go **1.25.14**. Eight installed-file and three source-archive hashes checked; all 19 retained Go source/lock files match. |
 | Native crypto/startup | **18 native-tagged Go tests passed** offline with bounded memory/CPU, including real independent nonempty signed MLS key packages using production's transient-key contract. Network-disabled EOF startup emits `transport_ready` and exits 0. Final Docker gate/export, amd64/runtime/live audio remain unverified. |
 | UI | **17 unit tests passed**, route type generation/TypeScript and production build **passed**. The final build supplied the documented loopback backend origin and an ephemeral randomly generated AUTH_SECRET without overwriting private configuration. Earlier attempts correctly rejected missing origin/weak local secret. |
+| Public homepage and UI regression suite | **93 default Chromium tests passed**, zero failures/skips/retries, including **22 homepage tests**. An independent five-test run passed GitHub navigation, actual font delivery, protection of unlisted legal paths and corrected workspace journeys after a fresh production build. Two existing assertions were corrected for intentional automatic workspace routing and an exact section label; an added test now resolves relative HTTP redirect locations correctly. Broader dashboard tests use backend mocks and produce missing-backend SSR warnings; this is frontend evidence, not live backend verification. Local port contention was resolved by selecting an unused test port without stopping another application. |
+| UI font attribution | **22 attribution/distribution tests passed**. Pinned official source/license hashes, both canonical/public notice mirrors and all six current built font hashes verified. First-party staged whitespace checks pass; the two byte-exact OFL copies retain one original upstream trailing space. Manrope remains OFL-1.1; complete images and future font downloads are not cleared. |
 | Python packaging | Fresh wheel/sdist build passed; 844 wheel/1,235 sdist entries and 759 Python sources byte-matched at inspection, migration0137 included, exact GNU license text and `License-Expression: AGPL-3.0-only`; no private env/runtime/node_modules paths. |
 | Full Python suite | Latest hosted run: **3,086 passed, 65 failed, 85 errors, seven skipped, eight subtests passed**. Earlier partial local run: 262 passed, one CPython parser failure; isolated parser test then passed. The completed hosted result establishes broader unresolved failures. No release or passing full-suite claim. |
 | Global lint/format/quality | Ruff lint **passed**; **1,108 files already formatted**. Compatibility-shim, dead-code and TODO policy checks **passed**. First-party staged whitespace check passed; the full staged check flags original trailing whitespace in three byte-exact upstream license files, deliberately preserved rather than editing their text. **28 YAML / 3 TOML** documents parsed; **7 shell** files passed syntax; root-document local links resolved. |

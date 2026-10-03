@@ -1,546 +1,186 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
-import {
-  ArrowRight,
-  BadgeCheck,
-  ClipboardCheck,
-  FileQuestion,
-  Landmark,
-  LockKeyhole,
-  Scale,
-  ShieldCheck,
-  Workflow,
-} from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import type { Metadata } from "next";
+import { ArrowRight, Blocks, ClipboardCheck, GitPullRequest, Layers3, ListChecks, LockKeyhole, Settings2, Workflow } from "lucide-react";
 
 import { auth } from "@/auth";
 import { blogPosts } from "@/app/blog/posts";
+import { GitHubStars } from "@/components/landing/github-stars";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { getLastWorkspaceCookieName } from "@/lib/workspace-preference";
+import { REPOSITORY_URL as repositoryUrl } from "@/lib/public-repository";
 
-type IconItem = {
-  title: string;
-  body: string;
-  icon: LucideIcon;
+
+const sourceUrl = `${repositoryUrl}/blob/main`;
+const buttonStyle = "inline-flex items-center justify-center gap-2 rounded-lg bg-[#203c2b] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#315c43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#315c43]";
+const linkStyle = "rounded-sm font-semibold underline decoration-[#a1b6a7] underline-offset-4 hover:text-[#315c43] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#315c43]";
+const containerStyle = "mx-auto w-full max-w-7xl px-5 sm:px-8 lg:px-12";
+
+export const metadata: Metadata = {
+  title: "Master Builder — open-source AI-assisted software delivery",
+  description: "Coordinate Jira work, agent execution and GitHub review in a self-hosted software delivery workflow.",
 };
 
-const breakpoints = [
-  "Product intent gets lost in prompts",
-  "Context lives in private agent sessions",
-  "Tickets are interpreted differently",
-  "Review bottlenecks increase",
-  "Teams generate more code than they can validate",
-  "Standards become inconsistent",
-  "Decisions and assumptions become difficult to trace",
-  "Jira no longer reflects the real reasoning behind the implementation",
+const features = [
+  { title: "Connect work to repositories", body: "Link Jira projects and GitHub repositories, then configure which work your agents may execute.", icon: GitPullRequest },
+  { title: "Coordinate delivery stages", body: "Track planning, development, testing and review as explicit workflow stages with recorded outcomes.", icon: Workflow },
+  { title: "Keep evidence with the work", body: "Inspect run history, decisions, test results and review feedback in the administration UI.", icon: ClipboardCheck },
+  { title: "Configure agent execution", body: "Assign runtime profiles and execution workers to your delivery workflows. Authenticate your own runtime.", icon: Settings2 },
+  { title: "Separate workspaces and projects", body: "Manage tenant access, repository allowlists and project policies from one administration interface.", icon: Layers3 },
+  { title: "Make review a visible step", body: "Follow pull requests and workflow feedback while keeping merge decisions with your team.", icon: ListChecks },
 ];
-
-const ambiguityCosts = [
-  "Wrong scope is built faster",
-  "Reviewers reverse-engineer intent from code",
-  "Product teams lose visibility over assumptions",
-  "Engineers correct decisions that should have been clarified upfront",
-  "Audit trails miss key reasoning",
+const stages = [
+  { title: "Connect", body: "Authorize your Jira projects, GitHub repositories and agent runtime." },
+  { title: "Configure", body: "Set project policies, ready statuses and execution workers." },
+  { title: "Run", body: "Queue work and follow planning, implementation, tests and review." },
+  { title: "Review", body: "Inspect evidence and the pull request before deciding to merge." },
 ];
-
-const solutionPoints: IconItem[] = [
-  {
-    title: "Clarify product intent before execution",
-    body: "Turn requests into shared, reviewable delivery intent before agents begin implementation.",
-    icon: FileQuestion,
-  },
-  {
-    title: "Run delivery through governed stages",
-    body: "Move work through planning, implementation, test, evidence, review, and approval gates.",
-    icon: Workflow,
-  },
-  {
-    title: "Capture evidence for every handoff",
-    body: "Keep decisions, assumptions, outputs, tests, and approvals connected to Jira and GitHub.",
-    icon: ClipboardCheck,
-  },
-  {
-    title: "Keep humans in control",
-    body: "Use AI to increase delivery capacity while preserving engineering judgement and merge accountability.",
-    icon: ShieldCheck,
-  },
-];
-
-const workflowStages = [
-  "Product request",
-  "Clarification",
-  "Jira work",
-  "Planning stage",
-  "Agent development",
-  "Test stage",
-  "Review evidence",
-  "GitHub PR",
-  "Human approval",
-];
-
-const evidenceQuestions = [
-  "What product intent did the agent work from?",
-  "What context and standards were applied?",
-  "What assumptions were made?",
-  "What tests and checks ran?",
-  "Who reviewed and approved the work?",
-  "Why is this safe to merge?",
-];
-
-const audiences: IconItem[] = [
-  {
-    title: "CTOs and engineering leaders",
-    body: "Need confidence that AI-assisted delivery can scale without weakening quality, review, or accountability.",
-    icon: Landmark,
-  },
-  {
-    title: "Product teams",
-    body: "Need unresolved intent clarified before AI-generated implementation turns ambiguity into code.",
-    icon: FileQuestion,
-  },
-  {
-    title: "Engineering teams",
-    body: "Need structured workflows, reviewable outputs, and fewer private agent sessions to supervise.",
-    icon: BadgeCheck,
-  },
-  {
-    title: "Platform teams",
-    body: "Need standards, auditability, and operating controls across AI-assisted engineering workflows.",
-    icon: LockKeyhole,
-  },
-];
-
-const comparisonRows = [
-  {
-    category: "Coding copilots",
-    role: "Help individuals write code faster.",
-    limit: "They do not create shared delivery control.",
-  },
-  {
-    category: "Agent platforms",
-    role: "Help teams run agents.",
-    limit: "They do not make software delivery accountable by default.",
-  },
-  {
-    category: "Master Builder",
-    role: "Helps organisations govern AI software delivery.",
-    limit: "It connects intent, execution, evidence, review, and approval.",
-  },
-];
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-xs font-semibold uppercase text-[#4d6b5f]">{children}</p>;
-}
-
-function DeliveryMap() {
-  return (
-    <div className="pointer-events-none absolute inset-y-0 -right-28 hidden w-[52%] overflow-hidden opacity-80 lg:block">
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(244,246,242,0)_0%,rgba(244,246,242,0.82)_35%,rgba(244,246,242,1)_100%)]" />
-      <div className="absolute right-12 top-28 w-[720px] border-l border-[#b7c1b8]">
-        {["Intent", "Delivery", "Approval"].map((lane, laneIndex) => (
-          <div key={lane} className="relative flex min-h-32 border-t border-[#b7c1b8]">
-            <span className="absolute -left-3 top-5 h-6 w-6 rounded-full border border-[#6f8d7e] bg-[#f4f6f2]" />
-            <p className="w-28 px-5 py-5 text-xs font-semibold uppercase text-[#50605a]">{lane}</p>
-            <div className="grid flex-1 grid-cols-3 gap-px bg-[#c8d0c8]">
-              {Array.from({ length: 3 }).map((_, index) => {
-                const active = laneIndex === 0 ? index < 2 : laneIndex === 1 ? index !== 0 : index === 2;
-                return (
-                  <div key={`${lane}-${index}`} className="bg-[#eef1ec] p-5">
-                    <div className={`h-2 w-24 ${active ? "bg-[#587766]" : "bg-[#d8ded8]"}`} />
-                    <div className={`mt-4 h-2 w-36 ${active ? "bg-[#a88748]" : "bg-[#d8ded8]"}`} />
-                    <div className="mt-8 flex items-center gap-2">
-                      <span className={`h-6 w-6 rounded-full ${active ? "bg-[#17221f]" : "bg-[#cfd7d0]"}`} />
-                      <span className={`h-px flex-1 ${active ? "bg-[#17221f]" : "bg-[#cfd7d0]"}`} />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 export default async function HomePage() {
   const session = await auth();
   const cookieStore = await cookies();
   const preferredTenantId = cookieStore.get(getLastWorkspaceCookieName())?.value ?? null;
   const authenticatedHref = getDefaultAuthenticatedRoute(session?.user?.principal, { preferredTenantId });
-  const primaryHref = session ? authenticatedHref : "/login";
+  const accountHref = session ? authenticatedHref : "/login";
+  const accountLabel = session ? "Open dashboard" : "Sign in";
 
   return (
-    <main className="min-h-screen overflow-x-hidden bg-[#f4f6f2] text-[#17221f]">
-      <header className="sticky top-0 z-50 border-b border-[#d8ded8] bg-[#f4f6f2]/92 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between px-5 py-4 sm:px-8 lg:px-12">
-          <Link href="/" className="text-base font-semibold text-[#17221f]">
-            Master Builder
-          </Link>
-          <nav className="hidden items-center gap-7 text-sm font-medium text-[#52625b] md:flex">
-            <a href="#problem" className="transition-colors hover:text-[#17221f]">
-              Problem
-            </a>
-            <a href="#platform" className="transition-colors hover:text-[#17221f]">
-              Platform
-            </a>
-            <a href="#governance" className="transition-colors hover:text-[#17221f]">
-              Governance
-            </a>
-            <Link href="/blog" className="transition-colors hover:text-[#17221f]">
-              Blog
-            </Link>
+    <div className="min-h-screen bg-[#f8faf7] text-[#192c21]">
+      <a href="#main-content" className="sr-only z-[60] rounded-lg bg-[#203c2b] px-5 py-3 text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4">Skip to content</a>
+      <header className="border-b border-[#dce4db] bg-[#f8faf7]">
+        <div className={`${containerStyle} flex flex-wrap items-center justify-between gap-4 py-5`}>
+          <Link href="/" className={`inline-flex items-center gap-2 text-base ${linkStyle} no-underline`}><Blocks aria-hidden="true" className="h-5 w-5" />Master Builder</Link>
+          <nav aria-label="Main navigation" className="flex flex-wrap items-center gap-5 text-sm">
+            <a href="#features" className={`${linkStyle} hidden no-underline md:inline`}>Features</a>
+            <a href="#workflow" className={`${linkStyle} hidden no-underline md:inline`}>How it works</a>
+            <Link href={accountHref} className={`${linkStyle} no-underline`}>{accountLabel}</Link>
+            <GitHubStars />
           </nav>
-          <div className="flex items-center gap-3">
-            <Link href={primaryHref} className="hidden text-sm font-medium text-[#52625b] transition-colors hover:text-[#17221f] sm:inline-flex">
-              {session ? "Open dashboard" : "Sign in"}
-            </Link>
-            <a
-              href="#book-demo"
-              className="inline-flex items-center gap-2 rounded-md bg-[#17221f] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#2f4139]"
-            >
-              Book a demo
-              <ArrowRight className="h-4 w-4" />
-            </a>
-          </div>
         </div>
       </header>
 
-      <section className="relative isolate overflow-hidden border-b border-[#d8ded8]">
-        <DeliveryMap />
-        <div className="relative mx-auto flex w-full max-w-[1440px] flex-col justify-center px-5 py-16 sm:px-8 sm:py-20 lg:px-12 lg:py-24">
-          <div className="max-w-4xl">
-            <p className="text-sm font-semibold uppercase text-[#4d6b5f]">Governed AI software delivery</p>
-            <h1 className="mt-6 max-w-4xl text-5xl font-semibold leading-none text-[#101816] sm:text-6xl lg:text-7xl">
-              AI scales code faster than organisations scale control.
-            </h1>
-            <p className="mt-8 max-w-3xl text-xl leading-9 text-[#4d5c56]">
-              Coding agents can generate implementation in minutes. Production software still depends on product clarity,
-              shared context, review, standards, approvals, and traceability.
-            </p>
-            <div className="mt-10 flex flex-wrap items-center gap-4">
-              <a
-                href="#book-demo"
-                className="inline-flex items-center gap-2 rounded-md bg-[#17221f] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#2f4139]"
-              >
-                Book a demo
-                <ArrowRight className="h-4 w-4" />
-              </a>
-              <a
-                href="#workflow"
-                className="inline-flex items-center gap-2 rounded-md border border-[#9aa89d] px-5 py-3 text-sm font-semibold text-[#17221f] transition hover:border-[#17221f]"
-              >
-                See how governed delivery works
-              </a>
+      <main id="main-content" tabIndex={-1}>
+        <section className="border-b border-[#dce4db] bg-[radial-gradient(ellipse_at_top_right,_#e8f1e3,_transparent_65%)] py-16 sm:py-24">
+          <div className={`${containerStyle} grid items-center gap-14 lg:grid-cols-[1.3fr_0.7fr]`}>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#42634b]">Open-source software delivery</p>
+              <h1 className="mt-6 text-[2.75rem] font-semibold leading-[1.09] tracking-tight sm:text-6xl lg:text-[4.5rem]">AI-assisted delivery. A workflow you can inspect.</h1>
+              <p className="mt-7 max-w-2xl text-lg leading-8 text-[#526454]">Connect Jira work to agent execution and GitHub review. Master Builder gives your team a shared place to configure delivery workflows, follow progress and inspect the evidence.</p>
+              <div className="mt-9 flex flex-wrap items-center gap-5">
+                <a href={repositoryUrl} className={buttonStyle}>Get Started<ArrowRight aria-hidden="true" className="h-4 w-4" /></a>
+                <a href="#features" className={`text-sm ${linkStyle}`}>Explore the features</a>
+              </div>
+              <p className="mt-6 text-sm text-[#526454]">Self-hosted · Jira + GitHub · GNU AGPLv3</p>
+            </div>
+            <div className="rounded-2xl border border-[#cad8c6] bg-white p-6 shadow-[0_16px_60px_-35px_#203c2b] sm:p-8">
+              <p className="text-xs font-semibold uppercase tracking-widest text-[#526454]">The delivery loop</p>
+              <ol className="mt-6 space-y-0">
+                {["A ready work item", "Agent planning & development", "Tests & review evidence", "A pull request for your team"].map((step, index) => (
+                  <li key={step} className="flex items-center gap-4 border-b border-[#e4eae1] py-5 last:border-0">
+                    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#edf3e9] text-xs font-semibold text-[#315c43]">{index + 1}</span>
+                    <span className="text-sm font-semibold leading-6">{step}</span>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-5 text-xs leading-6 text-[#526454]">Workflow overview. Your project policy determines what runs.</p>
             </div>
           </div>
-          <div className="mt-14 hidden max-w-5xl border-y border-[#c7d0c8] md:grid md:grid-cols-3">
-            {[
-              ["Product intent", "Clarified before implementation starts."],
-              ["Review control", "Evidence moves with every stage."],
-              ["Human approval", "Teams decide what reaches production."],
-            ].map(([title, body]) => (
-              <div key={title} className="border-[#c7d0c8] py-5 pr-8 md:border-r md:pl-6 first:pl-0 last:border-r-0">
-                <p className="font-semibold text-[#17221f]">{title}</p>
-                <p className="mt-2 text-sm leading-6 text-[#5d6b65]">{body}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section id="problem" className="border-b border-[#d8ded8] bg-white py-24">
-        <div className="mx-auto grid w-full max-w-[1440px] gap-16 px-5 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-12">
-          <div>
-            <SectionLabel>What breaks at team scale</SectionLabel>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight text-[#17221f] sm:text-5xl">
-              AI coding works for individuals. Enterprises need governed delivery.
-            </h2>
-            <p className="mt-6 text-lg leading-8 text-[#52625b]">
-              The problem is no longer whether AI can write code. The problem is whether an organisation can trust,
-              govern, review, and coordinate AI-generated software delivery across teams.
-            </p>
-          </div>
-          <div className="grid gap-px bg-[#d8ded8] md:grid-cols-2">
-            {breakpoints.map((item) => (
-              <div key={item} className="bg-[#fbfcfa] p-6 transition-colors hover:bg-[#eef1ec]">
-                <p className="text-base font-medium leading-7 text-[#17221f]">{item}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="mx-auto mt-16 w-full max-w-[1440px] px-5 sm:px-8 lg:px-12">
-          <p className="border-l-4 border-[#a88748] pl-5 text-2xl font-semibold leading-9 text-[#17221f]">
-            The team gains code generation, but loses shared control.
-          </p>
-        </div>
-      </section>
-
-      <section className="border-b border-[#d8ded8] py-24">
-        <div className="mx-auto grid w-full max-w-[1440px] gap-14 px-5 sm:px-8 lg:grid-cols-2 lg:px-12">
-          <div>
-            <SectionLabel>The shift</SectionLabel>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight sm:text-5xl">
-              The bottleneck is no longer writing code.
-            </h2>
-          </div>
-          <div className="text-lg leading-8 text-[#52625b]">
-            <p>
-              It is validating intent, quality, and trust. Before AI, ambiguity moved at human speed:
-              product managers clarified requirements, engineers asked questions, and reviewers checked fit,
-              security, maintainability, and standards.
-            </p>
-            <p className="mt-6">
-              AI compresses that loop. A vague request can become implementation before the team has agreed what
-              should actually be built.
-            </p>
-            <div className="mt-10 grid grid-cols-2 gap-px bg-[#c7d0c8] text-base text-[#17221f] sm:grid-cols-5">
-              {["More code", "More assumptions", "More review pressure", "More rework", "Less traceability"].map((item) => (
-                <div key={item} className="bg-[#eef1ec] p-4">
-                  {item}
-                </div>
+        <section id="features" className="py-16 sm:py-24">
+          <div className={containerStyle}>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#42634b]">What you can do</p>
+            <h2 className="mt-4 max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">Bring the moving parts of delivery together.</h2>
+            <p className="mt-5 max-w-2xl leading-8 text-[#526454]">Work items, workers, workflow state and review evidence belong in a shared system your team can inspect.</p>
+            <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {features.map(({ title, body, icon: Icon }) => (
+                <article key={title} className="rounded-xl border border-[#dce4db] bg-white p-7">
+                  <Icon aria-hidden="true" className="h-6 w-6 text-[#42634b]" />
+                  <h3 className="mt-6 text-lg font-semibold">{title}</h3>
+                  <p className="mt-3 text-sm leading-7 text-[#526454]">{body}</p>
+                </article>
               ))}
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="border-b border-[#d8ded8] bg-[#17221f] py-24 text-white">
-        <div className="mx-auto grid w-full max-w-[1440px] gap-16 px-5 sm:px-8 lg:grid-cols-[1fr_0.9fr] lg:px-12">
-          <div>
-            <p className="text-xs font-semibold uppercase text-[#b6c8bd]">Product ambiguity</p>
-            <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight sm:text-5xl">
-              AI makes unresolved product ambiguity look like progress.
-            </h2>
-            <p className="mt-7 max-w-3xl text-lg leading-8 text-[#d7dfd8]">
-              When intent is unclear, coding agents fill in the gaps. That can create the appearance of momentum
-              while pushing product decisions downstream into engineering review.
-            </p>
-            <p className="mt-8 text-2xl font-semibold text-[#f0cf8a]">Master Builder puts clarification before execution.</p>
+        <section id="workflow" className="border-y border-[#dce4db] bg-[#edf3e9] py-16 sm:py-24">
+          <div className={containerStyle}>
+            <h2 className="max-w-3xl text-3xl font-semibold tracking-tight sm:text-4xl">From work item to reviewed pull request</h2>
+            <p className="mt-5 max-w-2xl leading-8 text-[#526454]">Start with the tools your team already uses. Configure the workflow before handing work to an execution worker.</p>
+            <ol className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+              {stages.map((stage, index) => (
+                <li key={stage.title} className="rounded-xl border border-[#cad8c6] bg-[#f8faf7] p-6">
+                  <p className="text-xs font-semibold text-[#42634b]">0{index + 1}</p>
+                  <h3 className="mt-4 text-xl font-semibold">{stage.title}</h3>
+                  <p className="mt-3 text-sm leading-7 text-[#526454]">{stage.body}</p>
+                </li>
+              ))}
+            </ol>
           </div>
-          <div className="self-end border-t border-[#596962]">
-            {ambiguityCosts.map((item) => (
-              <div key={item} className="border-b border-[#596962] py-5">
-                <p className="text-lg leading-7 text-[#f4f6f2]">{item}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section id="platform" className="border-b border-[#d8ded8] bg-white py-24">
-        <div className="mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-12">
-          <div className="max-w-4xl">
-            <SectionLabel>The platform</SectionLabel>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight text-[#17221f] sm:text-5xl">
-              Master Builder turns AI coding into governed software delivery.
-            </h2>
-            <p className="mt-6 text-lg leading-8 text-[#52625b]">
-              Master Builder gives software organisations a structured way to move from product request to reviewed
-              production pull request using AI agents without losing control of the delivery process.
-            </p>
-          </div>
-          <div className="mt-16 grid gap-px bg-[#d8ded8] md:grid-cols-2 lg:grid-cols-4">
-            {solutionPoints.map(({ title, body, icon: Icon }) => (
-              <div key={title} className="bg-[#fbfcfa] p-6 transition-colors hover:bg-[#eef1ec]">
-                <Icon className="h-6 w-6 text-[#587766]" />
-                <h3 className="mt-8 text-lg font-semibold text-[#17221f]">{title}</h3>
-                <p className="mt-4 text-sm leading-7 text-[#5d6b65]">{body}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="workflow" className="border-b border-[#d8ded8] py-24">
-        <div className="mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-12">
-          <div className="grid gap-12 lg:grid-cols-[0.72fr_1.28fr]">
+        <section id="open-source" className="py-16 sm:py-24">
+          <div className={`${containerStyle} grid gap-12 lg:grid-cols-2`}>
             <div>
-              <SectionLabel>How governed delivery works</SectionLabel>
-              <h2 className="mt-5 text-4xl font-semibold leading-tight sm:text-5xl">
-                Same delivery process. More control.
-              </h2>
-              <p className="mt-6 text-lg leading-8 text-[#52625b]">
-                Master Builder does not replace Jira, GitHub, or engineering judgement. It adds the governed workflow
-                layer between product intent and AI execution.
-              </p>
-            </div>
-            <div className="overflow-x-auto">
-              <div className="grid min-w-[860px] grid-cols-9 gap-px bg-[#bfc9c1]">
-                {workflowStages.map((stage, index) => (
-                  <div key={stage} className="group bg-white p-4 transition-colors hover:bg-[#eef1ec]">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[#6b7a73]">{String(index + 1).padStart(2, "0")}</span>
-                      {index < workflowStages.length - 1 ? <ArrowRight className="h-4 w-4 text-[#8b9a91]" /> : <Scale className="h-4 w-4 text-[#a88748]" />}
-                    </div>
-                    <p className="mt-10 min-h-14 text-sm font-semibold leading-6 text-[#17221f]">{stage}</p>
-                  </div>
-                ))}
+              <LockKeyhole aria-hidden="true" className="h-7 w-7 text-[#42634b]" />
+              <h2 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl">Your infrastructure. Your source code.</h2>
+              <p className="mt-5 leading-8 text-[#526454]">Run Master Builder from a full source checkout, configure your own integrations and inspect how work is handled. PostgreSQL stores operational state; the Next.js UI gives your team a view into it.</p>
+              <p className="mt-5 leading-8 text-[#526454]">Licensed under <a href={`${sourceUrl}/LICENSE`} className={linkStyle}>AGPL-3.0-only</a>. Commercial use is permitted. The license includes corresponding-source requirements, including for certain modified versions used over a network. The license text governs.</p>
+              <div className="mt-6 flex flex-wrap gap-5 text-sm">
+                <a href={`${sourceUrl}/CONTRIBUTING.md`} className={linkStyle}>Contribute</a>
+                <a href={`${sourceUrl}/docs/support-matrix.md`} className={linkStyle}>Read the support matrix</a>
               </div>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="governance" className="border-b border-[#d8ded8] bg-white py-24">
-        <div className="mx-auto grid w-full max-w-[1440px] gap-16 px-5 sm:px-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-12">
-          <div>
-            <SectionLabel>Trust and governance</SectionLabel>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight text-[#17221f] sm:text-5xl">
-              Built for teams that need to trust the output.
-            </h2>
-            <p className="mt-6 text-lg leading-8 text-[#52625b]">
-              Enterprise software teams need answers before AI-generated code reaches production. Master Builder
-              keeps those answers attached to the work.
-            </p>
-            <p className="mt-8 text-2xl font-semibold text-[#17221f]">AI delivery needs evidence, not just output.</p>
-          </div>
-          <div className="grid gap-px bg-[#d8ded8] md:grid-cols-2">
-            {evidenceQuestions.map((question) => (
-              <div key={question} className="bg-[#fbfcfa] p-6">
-                <ShieldCheck className="h-5 w-5 text-[#587766]" />
-                <p className="mt-6 text-base font-medium leading-7 text-[#17221f]">{question}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="border-b border-[#d8ded8] py-24">
-        <div className="mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-12">
-          <div className="max-w-4xl">
-            <SectionLabel>Who it is for</SectionLabel>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight sm:text-5xl">
-              For software organisations moving from AI experimentation to AI delivery.
-            </h2>
-          </div>
-          <div className="mt-16 grid gap-px bg-[#d8ded8] md:grid-cols-2 lg:grid-cols-4">
-            {audiences.map(({ title, body, icon: Icon }) => (
-              <div key={title} className="bg-[#f9faf7] p-6">
-                <Icon className="h-6 w-6 text-[#587766]" />
-                <h3 className="mt-8 text-lg font-semibold">{title}</h3>
-                <p className="mt-4 text-sm leading-7 text-[#52625b]">{body}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section className="border-b border-[#d8ded8] bg-[#101816] py-24 text-white">
-        <div className="mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-12">
-          <div className="max-w-4xl">
-            <p className="text-xs font-semibold uppercase text-[#b6c8bd]">Positioning</p>
-            <h2 className="mt-5 text-4xl font-semibold leading-tight sm:text-5xl">Not another coding agent.</h2>
-            <p className="mt-6 text-lg leading-8 text-[#d7dfd8]">
-              Plugins, agents, and coding tools increase capability. Master Builder increases organisational control.
-            </p>
-          </div>
-          <div className="mt-14 border-t border-[#596962]">
-            {comparisonRows.map((row) => (
-              <div key={row.category} className="grid gap-6 border-b border-[#596962] py-7 md:grid-cols-[0.42fr_0.58fr_0.7fr]">
-                <p className="text-lg font-semibold text-white">{row.category}</p>
-                <p className="text-[#d7dfd8]">{row.role}</p>
-                <p className="text-[#f0cf8a]">{row.limit}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="blog" className="border-b border-[#d8ded8] bg-white py-24">
-        <div className="mx-auto w-full max-w-[1440px] px-5 sm:px-8 lg:px-12">
-          <div className="flex flex-col justify-between gap-8 md:flex-row md:items-end">
-            <div className="max-w-3xl">
-              <SectionLabel>Category thinking</SectionLabel>
-              <h2 className="mt-5 text-4xl font-semibold leading-tight text-[#17221f] sm:text-5xl">
-                Thinking about governed AI delivery
-              </h2>
-              <p className="mt-6 text-lg leading-8 text-[#52625b]">
-                Notes on software delivery, coding agents, review bottlenecks, product ambiguity, and the operating
-                model shift from traditional engineering teams to AI-assisted delivery organisations.
-              </p>
+            <div className="rounded-xl border border-[#dce4db] bg-white p-7">
+              <p className="text-xs font-semibold uppercase tracking-widest text-[#42634b]">Start with the source</p>
+              <pre className="mt-6 whitespace-pre-wrap break-all rounded-lg bg-[#192c21] p-5 text-xs leading-7 text-[#e8f1e3]"><code>{`git clone ${repositoryUrl}.git
+cd master-builder
+uv sync --frozen --extra dev
+uv run --frozen --extra dev python scripts/init_local_env.py`}</code></pre>
+              <p className="mt-5 text-sm leading-7 text-[#526454]">The README walks through local services, UI setup and your first health check. Running a delivery workflow also requires your own integrations and an authenticated agent runtime.</p>
+              <a href={repositoryUrl} className={`mt-6 ${buttonStyle}`}>Get Started<ArrowRight aria-hidden="true" className="h-4 w-4" /></a>
             </div>
-            <Link href="/blog" className="inline-flex items-center gap-2 text-sm font-semibold text-[#17221f] underline underline-offset-4">
-              Read the blog
-              <ArrowRight className="h-4 w-4" />
-            </Link>
           </div>
-          <div className="mt-14 grid gap-px bg-[#d8ded8] md:grid-cols-3">
-            {blogPosts.slice(0, 3).map((post) => (
-              <Link key={post.title} href={`/blog/${post.slug}`} className="group bg-[#fbfcfa] p-6 transition-colors hover:bg-[#eef1ec]">
-                <p className="text-xl font-semibold leading-8 text-[#17221f]">{post.title}</p>
-                <p className="mt-5 text-sm leading-7 text-[#52625b]">{post.summary}</p>
-                <span className="mt-8 inline-flex items-center gap-2 text-sm font-semibold text-[#587766]">
-                  Read note
-                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-                </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      </section>
+          <aside className={`${containerStyle} mt-12`}>
+            <div className="rounded-xl border border-[#dce4db] bg-[#edf3e9] p-6 text-sm leading-7 text-[#526454]">
+              <p className="font-semibold text-[#192c21]">An early project, with explicit boundaries.</p>
+              <p className="mt-2">Master Builder is at version 0.1.0. Public interfaces are provisional. Mobile QA, voice and provider deployment integrations are experimental. Review the support matrix and readiness report before deploying; isolate workers that execute repository code.</p>
+              <a href={`${sourceUrl}/OPEN_SOURCE_READINESS_REPORT.md`} className={`mt-3 inline-block ${linkStyle}`}>Read the readiness report</a>
+            </div>
+          </aside>
+        </section>
 
-      <section id="book-demo" className="bg-[#f4f6f2] py-24">
-        <div className="mx-auto grid w-full max-w-[1440px] gap-12 px-5 sm:px-8 lg:grid-cols-[1fr_0.7fr] lg:px-12">
-          <div>
-            <SectionLabel>Next step</SectionLabel>
-            <h2 className="mt-5 max-w-4xl text-4xl font-semibold leading-tight sm:text-5xl">
-              Ready to scale AI-assisted engineering without losing control?
-            </h2>
-            <p className="mt-6 max-w-3xl text-lg leading-8 text-[#52625b]">
-              Master Builder helps software teams move from ad hoc coding-agent usage to governed delivery workflows
-              built around product intent, review, traceability, and human approval.
-            </p>
+        <section className="border-t border-[#dce4db] bg-white py-16">
+          <div className={containerStyle}>
+            <div className="flex flex-wrap items-center justify-between gap-5">
+              <h2 className="text-2xl font-semibold tracking-tight">Notes on AI-assisted delivery</h2>
+              <Link href="/blog" className={`text-sm ${linkStyle}`}>Read the blog</Link>
+            </div>
+            <div className="mt-8 grid gap-6 md:grid-cols-3">
+              {blogPosts.slice(0, 3).map((post) => (
+                <Link key={post.slug} href={`/blog/${post.slug}`} className="rounded-lg border border-[#dce4db] p-6 transition hover:bg-[#f8faf7] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#315c43]">
+                  <h3 className="text-lg font-semibold leading-7">{post.title}</h3>
+                  <p className="mt-3 text-sm leading-7 text-[#526454]">{post.summary}</p>
+                  <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-[#42634b]">Read note<ArrowRight aria-hidden="true" className="h-4 w-4" /></span>
+                </Link>
+              ))}
+            </div>
           </div>
-          <div className="flex flex-col justify-end gap-4">
-            <Link
-              href="/register?intent=demo"
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-[#17221f] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#2f4139]"
-            >
-              Book a demo
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-            <Link
-              href={primaryHref}
-              className="inline-flex items-center justify-center rounded-md border border-[#9aa89d] px-5 py-3 text-sm font-semibold text-[#17221f] transition hover:border-[#17221f]"
-            >
-              {session ? "Open dashboard" : "Sign in"}
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <footer className="border-t border-[#d8ded8] bg-[#101816] py-14 text-white">
-        <div className="mx-auto grid w-full max-w-[1440px] gap-10 px-5 sm:px-8 md:grid-cols-3 lg:px-12">
-          <div>
-            <p className="text-base font-semibold">Master Builder</p>
-            <p className="mt-4 max-w-sm text-sm leading-7 text-[#b6c8bd]">
-              Governed AI software delivery for teams that need product intent, review evidence, traceability, and human approval.
-            </p>
-          </div>
-          <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase text-[#d7dfd8]">Platform</p>
-            <a href="#problem" className="block text-sm text-[#b6c8bd] transition hover:text-white">
-              Problem
-            </a>
-            <a href="#workflow" className="block text-sm text-[#b6c8bd] transition hover:text-white">
-              How it works
-            </a>
-            <Link href="/blog" className="block text-sm text-[#b6c8bd] transition hover:text-white">
-              Blog
-            </Link>
-          </div>
-          <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase text-[#d7dfd8]">Account</p>
-            <Link href={primaryHref} className="block text-sm text-[#b6c8bd] transition hover:text-white">
-              {session ? "Open dashboard" : "Sign in"}
-            </Link>
-            <Link href="/privacy" className="block text-sm text-[#b6c8bd] transition hover:text-white">
-              Privacy policy
-            </Link>
-          </div>
+        </section>
+      </main>
+      <footer className="border-t border-[#dce4db] py-8">
+        <div className={`${containerStyle} flex flex-wrap items-center justify-between gap-6 text-sm text-[#526454]`}>
+          <p className="font-semibold text-[#192c21]">Master Builder</p>
+          <nav aria-label="Footer navigation" className="flex flex-wrap gap-6">
+            <a href={repositoryUrl} className={linkStyle}>GitHub</a>
+            <Link href={accountHref} className={linkStyle}>{accountLabel}</Link>
+            <Link href="/privacy" className={linkStyle}>Privacy</Link>
+            <a href="/licenses/manrope-OFL.txt" className={linkStyle}>Font license</a>
+            <a href="/licenses/manrope-NOTICE.txt" className={linkStyle}>Font notice</a>
+          </nav>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }

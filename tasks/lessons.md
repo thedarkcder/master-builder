@@ -635,3 +635,6 @@
 
 - When explaining Docker storage setup, distinguish pulling a prebuilt image from building a Docker image. Name the unavailable tags/source-only upstream policy and avoid implying Docker itself is unavailable.
 - Explain binary license compatibility separately from missing tooling. Do not suggest a tool replacement or cryptography rewrite before verifying dependency/build and redistribution options.
+
+- 2026-10-03: When a maintainer keeps GitHub Actions for a public release but asks to delete workflows in the context of historical logs/artifacts, remove run history and artifacts while retaining workflow definitions. Inventory current counts afresh, pause generation during cleanup, and restore the exact prior Actions settings after verification.
+- 2026-10-03: An open-source homepage should explain verified capabilities and source setup before making marketing claims. Keep the existing project name unless a rename is confirmed, and show community statistics only from an authoritative public response.

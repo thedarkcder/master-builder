@@ -10,6 +10,13 @@ import {
 
 test.describe.configure({ mode: "serial" });
 
+// The public homepage observer reads only this external repository boundary.
+test.beforeEach(async ({ page }) => {
+  await page.route("https://api.github.com/repos/thedarkcder/master-builder", (route) =>
+    route.fulfill({ status: 404, json: { message: "Not Found" } })
+  );
+});
+
 
 type RuntimeMatrixEntry = {
   runtimeKind: string;
@@ -826,10 +833,10 @@ test("keeps the public home page available without redirecting to login", async 
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "AI scales code faster than organisations scale control." })).toBeVisible();
-  await expect(page.getByText("Master Builder turns AI coding into governed software delivery.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "AI-assisted delivery. A workflow you can inspect." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Bring the moving parts of delivery together." })).toBeVisible();
   await expect(page.getByRole("link", { name: "Read the blog" })).toBeVisible();
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Governed AI software delivery for enterprise teams");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Coordinate Jira work, agent execution and GitHub review in a self-hosted software delivery workflow.");
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 

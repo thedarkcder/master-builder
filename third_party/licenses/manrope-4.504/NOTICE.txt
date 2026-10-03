@@ -1,0 +1,20 @@
+Manrope font — observed version 4.504
+
+Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)
+
+The copyright above is preserved from the name-table metadata of the observed
+source font and all six built WOFF2 subsets. The official accompanying OFL.txt
+also preserves its own upstream 2018 copyright notice without modification.
+Manrope remains licensed under the SIL Open Font License, Version 1.1;
+the project's AGPL-3.0-only license does not relicense this font.
+
+Full license: OFL.txt in the repository's third-party directory, or
+manrope-OFL.txt alongside this notice in the public UI distribution.
+
+Reviewed official source:
+https://github.com/google/fonts/tree/8f9a401dbb3793e0d1264b15d96aa253f05280f5/ofl/manrope
+
+The inspected source TTF and built WOFF2 files match family, version and copyright
+metadata. Google Fonts supplies subsets through an unversioned download endpoint;
+this metadata match does not prove their exact CDN transformation/source receipt.
+Review each final UI build and preserve these notices with redistributed font files.
