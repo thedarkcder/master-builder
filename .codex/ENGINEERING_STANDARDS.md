@@ -147,7 +147,7 @@ Forbidden unless explicitly approved:
 - UI placeholders without behavior where behavior is part of acceptance criteria
 
 If partial work is unavoidable:
-- Create a follow-up Jira issue in **Backlog** describing exactly what remains (file paths, behavior).
+- For Master Builder development, create or update a GitHub issue describing exactly what remains (file paths, behavior). Configured tenant automation uses its authorized target tracker.
 - Mark current run **blocked** and stop.
 
 Don't leave dead code around
@@ -189,7 +189,7 @@ Before PR open/update:
 - Run the relevant full suite for the affected repo/service.
 - If full suite fails/skip/not-run: stop and do not open/update PR.
 
-Required evidence in PR/Jira update:
+Required evidence in the pull request and Master Builder GitHub issue (or configured tenant tracker):
 - Exact targeted command(s) and exact full-suite command(s).
 - Pass/fail outcome for each command.
 - Short mapping: changed behavior -> targeted test command.
@@ -207,7 +207,7 @@ Discord “PR Ready” message:
 - 3 steps: how to test
 - questions (only if Decision Gate items remain)
 
-Jira final comment:
+Master Builder GitHub issue / configured tenant tracker final update:
 - PR link
 - summary
 - acceptance criteria ✅/⚠️/❌

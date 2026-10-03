@@ -4,6 +4,10 @@ No public releases have been published by this preparation task.
 
 ## Unreleased
 
+- Make GitHub Issues the repository development backlog and remove private Jira
+  access requirements from contributor and agent guidance. Historical issue import
+  remains pending verified source-project access.
+
 - Declare first-party software as `AGPL-3.0-only`; add license and third-party review.
 - Add external setup, contribution, configuration, security and public-contract docs.
 - Require configured authentication keys and canonical origins for security links.

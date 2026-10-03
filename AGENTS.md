@@ -13,7 +13,7 @@ In this repo, always remove fallback behavior when touching a codepath and do a 
 - Read `.codex/ENGINEERING_STANDARDS.md`.
 - Read `.codex/OPERATING.md`.
 - Apply `.codex/skills/staff-engineer-review/SKILL.md`.
-- Apply `.codex/skills/jira-feature-flow/SKILL.md`.
+- Track repository work in GitHub Issues; link the relevant issue when present. Direct maintainer tasks remain authorized without a ticket.
 - Read the most relevant language file from `.codex/policy_pack.*.json`.
 - If requirements or design/NFR trade-offs are unclear, run a Decision Gate using `.codex/DECISION_GATE_TEMPLATE.md` and stop coding.
 
@@ -33,7 +33,7 @@ In this repo, always remove fallback behavior when touching a codepath and do a 
 - Read `.codex/ENGINEERING_STANDARDS.md`.
 - Read `.codex/OPERATING.md`.
 - Apply `.codex/skills/staff-engineer-review/SKILL.md`.
-- Apply `.codex/skills/jira-feature-flow/SKILL.md`.
+- Track repository work in GitHub Issues; link the relevant issue when present. Direct maintainer tasks remain authorized without a ticket.
 - Read `.codex/skills/verification-before-completion/SKILL.md`.
 - Read the most relevant language file from `.codex/policy_pack.*.json`.
 - If the proposed solution does not meet the coding standard, re-engineer your implementation coding.

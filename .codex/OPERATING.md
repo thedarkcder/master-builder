@@ -3,6 +3,7 @@
 This repo is worked on by automated agents and humans. Agents must follow this guide and `.codex/POLICY.md` at all times.
 
 ## 1) How work is triggered
+- Master Builder development uses GitHub Issues for bugs, proposals and outstanding work. Direct maintainer tasks are authorized without a ticket. Private Jira access is not required for Master Builder contributions.
 - Configured Jira-driven automated execution only runs for Jira issues in **To Do** (Backlog is non-executable).
 - Maintainer-authorized public issues, pull requests and direct tasks can be implemented without access to a private Jira project. Apply the same scope, acceptance, risk and verification checks; Jira admission and status updates apply only when work is actually tied to a configured Jira ticket.
 - Code review automation runs on GitHub PR events (opened/updated/CI failure).
@@ -70,8 +71,8 @@ uv run --frozen ruff format --check orchestrator tests scripts
 In `admin-ui`, `npm run lint` runs route type generation and TypeScript checks. Report exact outcomes; passing a subset is not a passing full suite.
 
 ## 4) Branch & PR conventions
-- Jira automation branch: `jira/<ISSUE_KEY>-<short-slug>`; Jira PR title: `<ISSUE_KEY>: <summary>`.
-- Public/direct tasks: use a descriptive branch (default `codex/<short-slug>`) and PR title, linking the public issue when available.
+- Master Builder development tasks: use a descriptive branch (default `codex/<short-slug>`) and PR title, linking the GitHub issue when available.
+- A configured tenant Jira execution may use `jira/<ISSUE_KEY>-<short-slug>` and `<ISSUE_KEY>: <summary>` within its target repository; this is an application integration, not a prerequisite for contributing here.
 - PR body must include:
   - Summary (3 bullets max)
   - How to test (commands + steps)
@@ -115,4 +116,4 @@ In `admin-ui`, `npm run lint` runs route type generation and TypeScript checks. 
   - Use `.codex/DECISION_GATE_TEMPLATE.md`
   - Ask questions and STOP.
 - If you must create a follow-up:
-  - Create a Jira issue in Backlog with links and exact work remaining.
+  - Create or update a GitHub issue with links and exact work remaining for Master Builder development. Configured tenant automation uses its authorized target tracker.

@@ -10,7 +10,9 @@ The core API/UI can run without Jira or GitHub access. Workflows that contact th
 
 ## Scope a change
 
-Describe the problem, expected behavior and how to reproduce it in an issue or pull request. Keep changes focused. Discuss breaking contracts, migrations, architecture changes and significant security trade-offs before implementation. Contributor proposals need not have access to a private Jira project; maintainers may link them to their own tracking systems.
+Use [GitHub Issues](https://github.com/thedarkcder/master-builder/issues) for repository bugs, proposals and outstanding development work. Search existing issues before opening one. Describe the problem, expected behavior, scope and how to reproduce or verify it; omit credentials, private infrastructure and personal/customer data. Keep changes focused. Discuss breaking contracts, migrations, architecture changes and significant security trade-offs before implementation. Link pull requests to the relevant GitHub issue. Private Jira access is not a contribution requirement. An open or imported issue does not authorize automatic execution; maintainers must approve scope, acceptance criteria and dependencies before implementation.
+
+The application's Jira integration is a separate delivery capability. Moving this repository's development backlog to GitHub does not change a configured workspace's Jira intake.
 
 Read [AGENTS.md](AGENTS.md), `.codex/POLICY.md`, `.codex/ENGINEERING_STANDARDS.md` and `.codex/OPERATING.md` for repository engineering expectations. Direct maintainer instructions take precedence over internal workflow defaults. Keep core decisions testable, side effects at integration boundaries and lifecycle transitions explicit. Do not introduce silent fallbacks, compatibility shims or placeholder production paths.
 

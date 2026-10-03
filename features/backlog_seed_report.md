@@ -1,8 +1,11 @@
 # Backlog Seed Report
 
 Generated: 2026-02-06
+
+Historical seeding record only. This is not a current backlog or evidence of
+outstanding issue status. Master Builder development is now tracked in GitHub
+Issues; current Jira import remains pending source-project access.
 Project: `MAB` (Multi Agent Builder)
-Cloud ID: `911b46e8-71e0-4d5c-a2d3-a5a97f28918f`
 
 ## Summary
 - Extracted backlog items from `features/v0.1.md` through `features/v0.6.md`.

@@ -4,8 +4,8 @@
 
 2026-06-01
 
-- When the user says to use the markdown file for a ticket/spec, treat the repo feature markdown as the canonical interim source of truth and keep the work moving there even if Jira sync is unavailable. Jira unavailability blocks execution work, not backlog/spec authoring.
-- When the user explicitly tells you to continue without Jira access, do not repeat generic blockers. State the exact repo rule that still forbids execution, name the single missing prerequisite (`MAB-###` key or restored Jira execution access), and stop there.
+- When the user says to use the markdown file for a ticket/spec, treat the repo feature markdown as the canonical interim source of truth and keep the work moving there even if Jira sync is unavailable. Missing Jira access blocks only work that needs that configured integration; Master Builder repository development uses GitHub Issues and direct maintainer authorization.
+- Direct maintainer authorization and GitHub issues are sufficient for Master Builder repository development. Missing source Jira access blocks a Jira import or tenant integration action, not unrelated authorized code or documentation work.
 
 2026-05-31
 
@@ -642,3 +642,5 @@
 - 2026-10-03: When a maintainer asks for a technical homepage, use direct capability nouns, concrete mechanisms, component responsibilities, prerequisites and source-document links. Benefit-oriented feature cards, slogans and editorial articles do not satisfy that request. Remove a rejected blog completely (routes, post data, links and public exemptions); preserve only negative regression coverage. Borrow information organization, not copy or unsupported capabilities, from reference sites.
 
 - 2026-10-03: When a user rejects the palette and general design, create a deliberate visual identity rather than only defending existing styles. For this technical homepage use navy, cool gray, blue, monospaced labels and a clearly labeled source-backed schematic; remove green from every homepage component without changing its behavior. Show a freshly built preview after verification so feedback is not based on an obsolete page. Diagnose mobile overflow from real element widths and constrain intrinsic grid content instead of hiding overflow or weakening tests.
+
+- 2026-10-03: When the maintainer moves repository tracking to GitHub, remove contributor and agent requirements for private Jira. Verify source-project access before importing; an accessible Jira site with no matching project is a migration blocker, not an empty backlog. Distinguish repository backlog cutover from replacing the application's tenant Jira intake, and resolve that scope before changing product contracts.

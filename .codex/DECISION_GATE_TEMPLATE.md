@@ -1,6 +1,6 @@
 # Decision Gate (Ask Before Building)
 
-Use this when requirements are unclear or design trade-offs matter. Post to Jira + Discord (signal-only).
+Use this when requirements are unclear or design trade-offs matter. Record the decision in the linked GitHub issue for Master Builder development or the configured target tracker for tenant execution. Send notifications only when explicitly authorized.
 
 ## Why a decision is required
 - (1–2 sentences describing the ambiguity or trade-off)

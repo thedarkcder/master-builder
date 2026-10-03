@@ -21,7 +21,7 @@ Before opening PR, confirm:
 
 ## Documentation
 - [ ] PR description includes summary, risks, how to test
-- [ ] Jira comment includes PR link and acceptance criteria status
+- [ ] The linked GitHub issue includes the PR link and acceptance criteria status for Master Builder development; tenant execution uses its configured target tracker
 
 ## Decision Gate
 - [ ] If NFR/design trade-offs exist, Decision Gate resolved before coding

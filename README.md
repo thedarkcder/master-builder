@@ -125,6 +125,8 @@ and the [support matrix](docs/support-matrix.md) before building or distributing
 
 ## Development and checks
 
+Track repository bugs, proposals and development work in [GitHub Issues](https://github.com/thedarkcder/master-builder/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) for scope, verification and pull request guidance. Contributors do not need access to a private Jira project. Report vulnerabilities through [SECURITY.md](SECURITY.md).
+
 ```bash
 uv run --frozen pytest
 uv run --frozen ruff check orchestrator tests scripts

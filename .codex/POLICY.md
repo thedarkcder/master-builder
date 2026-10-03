@@ -15,7 +15,7 @@ These rules apply to both agents and humans. Violations should block the PR.
 - If design choice affects NFRs (MVP vs scale-ready), trigger Decision Gate and STOP.
 - Keep diffs minimal; do not reformat unrelated files.
 - Update/add tests when behavior changes.
-- Provide “How to test” in PR and Jira.
+- Provide “How to test” in the pull request and linked GitHub issue for Master Builder development work; configured tenant runs use their authorized target tracker.
 - No placeholders or TODO stubs in production paths.
   - If partial work unavoidable: create Backlog follow-up issue and stop.
 - Tests must validate the owned layer where the behavior actually lives.
@@ -24,7 +24,12 @@ These rules apply to both agents and humans. Violations should block the PR.
 - UI workflow tests must hit the real backend API.
 - For bug fixes, add a regression test that reproduces the failure mode.
 
-## Allowed Jira actions (default)
+## Repository tracking
+- Use GitHub Issues for Master Builder's own bugs, proposals and development backlog.
+- Do not require private Jira access or create Jira tickets for Master Builder development.
+- Tenant delivery integrations retain their explicitly configured tracker contracts.
+
+## Configured tenant Jira actions (default)
 - Add comments
 - Add/remove labels (if configured)
 - Create follow-up issues in Backlog
