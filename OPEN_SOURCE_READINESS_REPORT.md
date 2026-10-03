@@ -139,13 +139,23 @@ historical whitespace/empty values, validates the batch before writing and rejec
 malformed data without logging values. Tests use actually created project IDs and
 real webhook credentials instead of implicit-project assumptions.
 
-The public homepage now explains documented delivery features, configuration and
-source setup, keeping the Master Builder name. Get Started links to the selected
+The public homepage now documents delivery mechanisms, component responsibilities,
+configuration and source setup, keeping the Master Builder name. The blog, its
+post data and public-route exceptions were removed. The revised visual style uses
+navy, blue, cool gray and monospace labels with responsive code blocks.
+Get Started links to the selected
 GitHub repository. Stars come only from a validated public GitHub response;
 private, invalid, unavailable and timed-out responses display an explicit
 unavailable state. The anonymous browser request is disclosed on the privacy page.
 The repository is still private, so anonymous GitHub navigation and live numeric
 statistics are not yet usable. No publication or hosted deployment was performed.
+
+Local navigation now shares one canonical root-relative URL validator across the
+sign-in proxy, login page, authentication provider and archived-workspace page.
+Real regressions reproduced an external sign-in redirect and an unsafe archived
+continuation link. Invalid supplied destinations fail explicitly before credential
+submission or navigation; absent destinations retain the existing route policy.
+No persisted navigation data required migration.
 
 ## Licensing and attribution concerns
 
@@ -190,7 +200,7 @@ below. No complete hosted CI success is claimed.
 | Native arm64 compilation/linkage | Actual source build and CGo binary linked only `libcrypto.so.3`, OpenSSL **3.5.7**, Debian packages **3.5.7-1~deb13u3**, Go **1.25.14**. Eight installed-file and three source-archive hashes checked; all 19 retained Go source/lock files match. |
 | Native crypto/startup | **18 native-tagged Go tests passed** offline with bounded memory/CPU, including real independent nonempty signed MLS key packages using production's transient-key contract. Network-disabled EOF startup emits `transport_ready` and exits 0. Final Docker gate/export, amd64/runtime/live audio remain unverified. |
 | UI | **17 unit tests passed**, route type generation/TypeScript and production build **passed**. The final build supplied the documented loopback backend origin and an ephemeral randomly generated AUTH_SECRET without overwriting private configuration. Earlier attempts correctly rejected missing origin/weak local secret. |
-| Public homepage and UI regression suite | **93 default Chromium tests passed**, zero failures/skips/retries, including **22 homepage tests**. An independent five-test run passed GitHub navigation, actual font delivery, protection of unlisted legal paths and corrected workspace journeys after a fresh production build. Two existing assertions were corrected for intentional automatic workspace routing and an exact section label; an added test now resolves relative HTTP redirect locations correctly. Broader dashboard tests use backend mocks and produce missing-backend SSR warnings; this is frontend evidence, not live backend verification. Local port contention was resolved by selecting an unused test port without stopping another application. |
+| Public homepage and UI regression suite | **117 default Chromium tests passed**, zero failures/skips/retries, including **24 homepage tests** and **21 local navigation tests**. All **45 UI unit tests**, type/lint checks and a fresh production build passed. Technical section navigation, source links, deleted blog routes, real font delivery, malformed destinations, valid local navigation and 375/1440px keyboard/layout checks pass. A prior combined run passed 116 tests and failed mobile overflow; explicit grid containment fixed the measured code-block width without hiding page overflow or relaxing tests. Navigation tests exercise real Auth.js sessions and owned routes. Broader dashboard tests use backend mocks and produce missing-backend SSR warnings; this is frontend evidence, not live backend verification. An unused test port was selected without stopping another application. |
 | UI font attribution | **22 attribution/distribution tests passed**. Pinned official source/license hashes, both canonical/public notice mirrors and all six current built font hashes verified. First-party staged whitespace checks pass; the two byte-exact OFL copies retain one original upstream trailing space. Manrope remains OFL-1.1; complete images and future font downloads are not cleared. |
 | Python packaging | Fresh wheel/sdist build passed; 844 wheel/1,235 sdist entries and 759 Python sources byte-matched at inspection, migration0137 included, exact GNU license text and `License-Expression: AGPL-3.0-only`; no private env/runtime/node_modules paths. |
 | Full Python suite | Latest hosted run: **3,086 passed, 65 failed, 85 errors, seven skipped, eight subtests passed**. Earlier partial local run: 262 passed, one CPython parser failure; isolated parser test then passed. The completed hosted result establishes broader unresolved failures. No release or passing full-suite claim. |

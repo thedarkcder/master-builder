@@ -51,7 +51,7 @@ export function GitHubStars() {
     <a
       href={REPOSITORY_URL}
       aria-label="Star on GitHub"
-      className="inline-flex items-center gap-2 rounded-lg border border-[#d7ddd7] bg-white px-3 py-2 text-xs font-semibold text-[#24352b] transition hover:border-[#698673] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#315c43] sm:text-sm"
+      className="inline-flex items-center gap-2 rounded-md border border-[#c9d5e6] bg-[#f5f8fd] px-3 py-2 text-xs font-semibold text-[#203754] transition hover:border-[#245ac7] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#245ac7] sm:text-sm"
     >
       <Github aria-hidden="true" className="h-4 w-4 shrink-0" />
       <span className="sr-only">Star on GitHub</span>

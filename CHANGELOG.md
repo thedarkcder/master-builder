@@ -19,6 +19,12 @@ No public releases have been published by this preparation task.
   retain native dependency/source evidence and experimental voice status.
 - Expose and preserve the Discord command signing-secret reference in authenticated
   configuration; migration 0137 normalizes existing references without guessing them.
+- Reject unsafe supplied navigation destinations before sign-in redirects,
+  credential submission or archived-workspace continuation. Missing destinations
+  retain the existing local routing policy.
+- Replace the promotional homepage with a technical overview, source-document
+  links, component responsibilities and local setup. Remove the blog and apply a
+  navy, blue and cool-gray design with responsive code blocks.
 
 For each release, record user-visible changes, security fixes, migration requirements,
 supported platforms and known limitations. Follow [release guidance](docs/releases.md).

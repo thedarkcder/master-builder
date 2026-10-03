@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { getLocalNavigationDestination, INVALID_LOCAL_NAVIGATION_DESTINATION } from "@/lib/local-navigation-destination";
 
 
 export default function ArchivedWorkspacePage() {
@@ -31,7 +32,12 @@ function ArchivedWorkspacePageInner() {
   const destination = searchParams.get("destination");
   const next = searchParams.get("next");
   const purgeAfter = searchParams.get("purge_after");
-  const href = next && next.startsWith("/") ? next : "/tenants/select";
+  let href: string | null;
+  try {
+    href = getLocalNavigationDestination(next) ?? "/tenants/select";
+  } catch {
+    href = null;
+  }
   const buttonLabel =
     destination === "setup" ? "Open archived workspace settings" : "View archived workspaces";
   const purgeDate = purgeAfter
@@ -59,9 +65,13 @@ function ArchivedWorkspacePageInner() {
           {purgeDate ? (
             <p className="text-sm text-muted-foreground">This workspace is scheduled for permanent deletion on {purgeDate}.</p>
           ) : null}
-          <Button asChild>
-            <Link href={href}>{buttonLabel}</Link>
-          </Button>
+          {href === null ? (
+            <p role="alert" className="text-sm text-destructive">{INVALID_LOCAL_NAVIGATION_DESTINATION}</p>
+          ) : (
+            <Button asChild>
+              <Link href={href}>{buttonLabel}</Link>
+            </Button>
+          )}
         </div>
       </div>
     </div>

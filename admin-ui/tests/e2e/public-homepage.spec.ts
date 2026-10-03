@@ -86,12 +86,12 @@ for (const width of [375, 1440]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
     await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1, name: "AI-assisted delivery. A workflow you can inspect." })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "From work item to reviewed pull request" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Your infrastructure. Your source code." })).toBeVisible();
-    await expect(page.getByText("AGPL-3.0-only", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "AI-assisted software delivery orchestration" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Components and data flow" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Source setup" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "AGPL-3.0-only", exact: true }).first()).toBeVisible();
     await expect(page.getByText(/Mobile QA, voice and provider deployment integrations are experimental/)).toBeVisible();
-    await expect(page.getByRole("link", { name: "Read the blog", exact: true })).toBeVisible();
+    await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Sign in", exact: true }).first()).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.keyboard.press("Tab");
@@ -163,4 +163,58 @@ test("unlisted license paths still require authentication", async ({ page }) => 
   const response = await page.request.get("/licenses/unlisted-file.txt", { maxRedirects: 0 });
   expect(response.status()).toBe(307);
   expect(new URL(response.headers().location, response.url()).pathname).toBe("/login");
+});
+
+
+test("homepage documents delivery mechanisms and component boundaries without a blog", async ({ page }) => {
+  await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1, name: "AI-assisted software delivery orchestration" })).toBeVisible();
+  for (const heading of ["Jira intake", "Worker and runtime profiles", "Workflow state and decisions", "QA and evidence", "GitHub review", "Workspace and policy", "Components and data flow", "Source setup", "Status and boundaries", "License"]) {
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+  }
+  await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
+  await expect(page.getByText("Bring the moving parts of delivery together.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Your infrastructure. Your source code.", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Jira onboarding", exact: true })).toHaveAttribute("href", `${repositoryUrl}/blob/main/docs/github-app-oauth-onboarding.md#jira--github-flow-summary`);
+  await expect(page.getByRole("link", { name: "Runtime requirements", exact: true })).toHaveAttribute("href", `${repositoryUrl}/blob/main/docs/support-matrix.md#validation-boundaries`);
+  await expect(page.getByRole("link", { name: "Run decisions", exact: true })).toHaveAttribute("href", `${repositoryUrl}/blob/main/docs/run-decision-engine.md#enqueue-decision-matrix`);
+  await expect(page.getByRole("link", { name: "HTTP interfaces", exact: true })).toHaveAttribute("href", `${repositoryUrl}/blob/main/docs/public-contracts.md#http-interfaces`);
+  for (const [label, fragment] of [
+    ["Jira intake", "jira-intake"],
+    ["Worker and runtime profiles", "worker-profiles"],
+    ["Workflow state and decisions", "workflow-state"],
+    ["QA and evidence", "qa-evidence"],
+    ["GitHub review", "github-review"],
+    ["Workspace and policy", "workspace-policy"],
+  ]) {
+    const anchor = page.getByRole("navigation", { name: "Capability navigation" }).getByRole("link", { name: label, exact: true });
+    await expect(anchor).toHaveAttribute("href", `#${fragment}`);
+    await anchor.click();
+    await expect(page).toHaveURL(new RegExp(`#${fragment}$`));
+    await expect(page.locator(`#${fragment}`).getByRole("heading", { name: label, exact: true })).toBeInViewport();
+  }
+  await expect(page.getByRole("link", { name: "Complete quick start", exact: true })).toHaveAttribute("href", `${repositoryUrl}/blob/main/README.md#quick-start`);
+  await expect(page.getByText("curl --fail http://localhost:60001/health", { exact: false })).toBeVisible();
+  await expect(page.getByText(/Operators must isolate repository execution/)).toBeVisible();
+});
+
+
+test("section navigation exposes architecture, worker requirements and local setup", async ({ page }) => {
+  await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Architecture", exact: true }).click();
+  await expect(page).toHaveURL(/#architecture$/);
+  await expect(page.getByRole("heading", { name: "Components and data flow", exact: true })).toBeInViewport();
+  await expect(page.getByRole("table", { name: "Master Builder component responsibilities" })).toBeVisible();
+
+  await page.getByRole("navigation", { name: "Capability navigation" }).getByRole("link", { name: "Worker and runtime profiles", exact: true }).click();
+  await expect(page).toHaveURL(/#worker-profiles$/);
+  await expect(page.locator("#worker-profiles").getByRole("heading", { name: "Worker and runtime profiles", exact: true })).toBeInViewport();
+  await expect(page.getByRole("link", { name: "Runtime requirements", exact: true })).toBeVisible();
+
+  await page.getByRole("link", { name: "Local setup", exact: true }).click();
+  await expect(page).toHaveURL(/#source-setup$/);
+  await expect(page.getByRole("heading", { name: "Source setup", exact: true })).toBeInViewport();
+  await expect(page.getByRole("link", { name: "Complete quick start", exact: true })).toBeVisible();
 });

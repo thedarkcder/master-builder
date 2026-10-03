@@ -1,5 +1,32 @@
 # Security follow-up design and evidence
 
+## Local navigation destination validation
+
+The UI previously accepted a slash followed by a backslash as a local `next`
+destination. An actual Auth.js-signed request reproduced a redirect to an external
+origin. The archived-workspace continuation link also accepted protocol-relative
+destinations. The proxy, login page, authentication provider and archived-workspace
+page now share one pure URL
+validator: supplied destinations must resolve to a canonical root-relative local
+path. Backslashes, controls, malformed escapes and authority forms are rejected
+with a fixed diagnostic. Invalid supplied values never select an alternative
+route; absent values retain the existing default routing policy.
+
+The provider validates before changing authentication state or submitting
+credentials. The login page displays an error and disables submission; signed-in
+login/register requests return HTTP 400 without a redirect. Invalid archived-page
+destinations display an error without a continuation link. Valid local queries
+and fragments remain supported. No destinations are persisted, so this correction
+requires no data migration. Credential validation and tenant authorization remain
+separate contracts.
+
+The original real-session regression and archived-link regression failed before
+their fixes. The final combined browser gate passed 117 tests, including 21 local
+navigation tests without mocking session verification or the proxy. All 45 UI
+unit tests passed, including rejection before provider side effects.
+These checks establish navigation validation, not live backend login or complete
+worker isolation. The readiness report records the final combined UI checks.
+
 ## 0. Reality model
 The reviewed baseline exposed anonymous account creation, password-based login and reset endpoints without shared admission budgets. Four API workers make a process-local limiter insufficient. MinIO initialization granted anonymous downloads. Runtime PostgreSQL used the same credential as the migration owner, which can bypass RLS. The actual fresh PostgreSQL catalog check identified missing forced RLS on `workflow_executable_work_items`. These are configuration and authorization defects, not project-lifecycle defects. The API owns identity admission, storage owns database privilege validation, and QA storage owns object retrieval. No live environment or deployed data is changed by this work.
 

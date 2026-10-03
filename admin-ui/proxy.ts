@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import type { AuthenticatedPrincipalRecord } from "@/lib/api";
 import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
 import { getLastWorkspaceCookieName } from "@/lib/workspace-preference";
+import { getLocalNavigationDestination, INVALID_LOCAL_NAVIGATION_DESTINATION } from "@/lib/local-navigation-destination";
 
 function defaultRouteForSession(session: Session | null, preferredTenantId?: string | null): string {
   return getDefaultAuthenticatedRoute(
@@ -27,8 +28,6 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
     pathname === "/privacy" ||
     pathname === "/licenses/manrope-OFL.txt" ||
     pathname === "/licenses/manrope-NOTICE.txt" ||
-    pathname === "/blog" ||
-    pathname.startsWith("/blog/") ||
     pathname.startsWith("/invite/accept") ||
     tenantScopedSurface === "start" ||
     tenantScopedSurface === "start-engineering";
@@ -47,11 +46,16 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
   }
 
   if (session && (pathname === "/login" || pathname === "/register")) {
-    const nextPath = request.nextUrl.searchParams.get("next");
-    if (nextPath?.startsWith("/") && !nextPath.startsWith("//")) {
-      return NextResponse.redirect(new URL(nextPath, request.url));
+    let nextPath: string | null;
+    try {
+      nextPath = getLocalNavigationDestination(request.nextUrl.searchParams.get("next"));
+    } catch {
+      return new NextResponse(INVALID_LOCAL_NAVIGATION_DESTINATION, {
+        status: 400,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
     }
-    return NextResponse.redirect(new URL(defaultRouteForSession(session, preferredTenantId), request.url));
+    return NextResponse.redirect(new URL(nextPath ?? defaultRouteForSession(session, preferredTenantId), request.url));
   }
 
   if (

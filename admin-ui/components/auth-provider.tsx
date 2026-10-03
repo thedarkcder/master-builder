@@ -9,6 +9,7 @@ import {
   type Credentials
 } from "@/lib/api";
 import { clearLogoutRedirectBarrier, setLogoutRedirectBarrier } from "@/lib/auth-redirect-barrier";
+import { getLocalNavigationDestination } from "@/lib/local-navigation-destination";
 
 type AuthLoginInput = {
   identifier: string;
@@ -104,6 +105,7 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
       ready: status !== "loading",
       needsOnboarding: hasPendingOnboarding(principal),
       login: async ({ identifier, password, redirectTo }) => {
+        const destination = getLocalNavigationDestination(redirectTo);
         setPrincipal(null);
         setPrincipalReady(false);
         setSessionRevoked(false);
@@ -118,11 +120,7 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
         }
         clearLogoutRedirectBarrier();
         if (typeof window !== "undefined") {
-          const target =
-            redirectTo && redirectTo.startsWith("/") && !redirectTo.startsWith("//")
-              ? redirectTo
-              : "/platform/dashboard";
-          window.location.assign(target);
+          window.location.assign(destination ?? "/platform/dashboard");
         }
       },
       logout: async () => {

@@ -11,6 +11,7 @@ import { clearLogoutRedirectBarrier, hasLogoutRedirectBarrier } from "@/lib/auth
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
+import { getLocalNavigationDestination, INVALID_LOCAL_NAVIGATION_DESTINATION } from "@/lib/local-navigation-destination";
 
 export default function LoginPage() {
   return (
@@ -39,6 +40,14 @@ function LoginPageInner() {
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const nextPath = searchParams.get("next");
+  let destination: string | null = null;
+  let destinationError: string | null = null;
+  try {
+    destination = getLocalNavigationDestination(nextPath);
+  } catch {
+    destinationError = INVALID_LOCAL_NAVIGATION_DESTINATION;
+  }
 
   function normalizeAuthErrorMessage(message: string | null | undefined): string | null {
     if (!message) {
@@ -57,7 +66,7 @@ function LoginPageInner() {
   }, [credentials, ready]);
 
   useEffect(() => {
-    if (ready && credentials && principal) {
+    if (!destinationError && ready && credentials && principal) {
       if (hasLogoutRedirectBarrier()) {
         return;
       }
@@ -65,10 +74,10 @@ function LoginPageInner() {
       router.replace(
         needsOnboarding
           ? "/get-started"
-          : getDefaultAuthenticatedRoute(principal, { preferredTenantId }),
+          : destination ?? getDefaultAuthenticatedRoute(principal, { preferredTenantId }),
       );
     }
-  }, [credentials, needsOnboarding, principal, ready, router]);
+  }, [credentials, destination, destinationError, needsOnboarding, principal, ready, router]);
 
   useEffect(() => {
     const authError = searchParams.get("error");
@@ -79,18 +88,17 @@ function LoginPageInner() {
   }, [searchParams]);
 
   const resetSucceeded = searchParams.get("reset") === "success";
-  const nextPath = searchParams.get("next");
-  const safeNextPath = nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//") ? nextPath : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (destinationError) return;
     setErrorMessage(null);
     setIsSubmitting(true);
     try {
       await login({
         identifier: identifier.trim(),
         password,
-        redirectTo: safeNextPath,
+        redirectTo: destination,
       });
     } catch (error) {
       const message = normalizeAuthErrorMessage(error instanceof Error ? error.message : "Invalid credentials");
@@ -163,9 +171,9 @@ function LoginPageInner() {
               </Link>
             </div>
 
-          {errorMessage ? (
+          {destinationError || errorMessage ? (
             <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400" role="alert">
-              {errorMessage}
+              {destinationError ?? errorMessage}
             </p>
           ) : null}
           {resetSucceeded ? (
@@ -177,7 +185,7 @@ function LoginPageInner() {
           <Button
               className="w-full bg-indigo-600 text-white hover:bg-indigo-500 focus-visible:ring-indigo-500"
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || destinationError !== null}
             >
               {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>

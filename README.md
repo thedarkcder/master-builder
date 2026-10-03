@@ -137,7 +137,9 @@ uv build
 
 Frontend checks:
 
-The public homepage introduces delivery features and links **Get Started** to this
+The public homepage documents Jira intake, worker/runtime configuration, workflow
+decisions, QA evidence and GitHub review, with links to the source documentation,
+component responsibilities and local setup. **Get Started** links to this
 repository. Its GitHub star control reads the public repository count directly
 from GitHub without credentials or cookies. It displays loading or **Stars
 unavailable** when the repository is private, the response is invalid, or GitHub

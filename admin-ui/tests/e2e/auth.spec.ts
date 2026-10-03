@@ -833,23 +833,26 @@ test("keeps the public home page available without redirecting to login", async 
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "AI-assisted delivery. A workflow you can inspect." })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Bring the moving parts of delivery together." })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Read the blog" })).toBeVisible();
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Coordinate Jira work, agent execution and GitHub review in a self-hosted software delivery workflow.");
+  await expect(page.getByRole("heading", { name: "AI-assisted software delivery orchestration" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Delivery mechanisms" })).toBeVisible();
+  await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Jira intake, governed execution workers, workflow state, QA evidence and GitHub review. Technical overview, architecture and source setup for Master Builder.");
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 
-test("keeps the public blog available for category education", async ({ page }) => {
-  await page.goto("/blog");
+for (const path of ["/blog", "/blog/ai-scales-code-faster-than-organisations-scale-control"]) {
+  test(`removed blog content is unavailable at ${path}`, async ({ page }) => {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
-  await expect(page.getByRole("heading", { name: "Thinking for teams scaling AI-assisted engineering responsibly." })).toBeVisible();
-  await expect(page.getByRole("link", { name: /AI scales code faster than organisations scale control/ })).toBeVisible();
-
-  await page.getByRole("link", { name: /AI scales code faster than organisations scale control/ }).click();
-  await expect(page).toHaveURL(/\/blog\/ai-scales-code-faster-than-organisations-scale-control$/);
-  await expect(page.getByRole("heading", { name: "AI scales code faster than organisations scale control" })).toBeVisible();
-});
+    await seedAdminSession(page);
+    const response = await page.goto(path);
+    expect(response?.status()).toBe(404);
+    await expect(page.getByRole("heading", { name: "AI scales code faster than organisations scale control" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Thinking for teams scaling AI-assisted engineering responsibly." })).toHaveCount(0);
+  });
+}
 
 test("keeps auth pages linked back to the public home page", async ({ page }) => {
   await page.goto("/login");
