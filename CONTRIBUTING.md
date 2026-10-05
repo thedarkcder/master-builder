@@ -98,8 +98,8 @@ See [CHANGELOG.md](CHANGELOG.md) and [OPEN_SOURCE_READINESS_REPORT.md](OPEN_SOUR
 
 ## Public website
 
-The Open Factory project website is built separately in `public-site`. It has no
+The Master Builder project website is built separately in `public-site`. It has no
 application login or backend configuration. See its [development guide](public-site/README.md)
-for static build, artifact validation and browser checks. Changes on `main` deploy
-the tested static export through the Public website GitHub Actions workflow.
+for static build, artifact validation and browser checks. The Public website
+workflow runs these checks; Vercel deploys the separate `public-site` project from `main`.
 Dashboard and worker changes remain part of the self-hosted application.

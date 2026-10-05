@@ -234,7 +234,7 @@ The OFL file's original 2018 notice and the actual font metadata's 2019 notice a
 both preserved. Public UI mirrors are `public/licenses/manrope-OFL.txt` and
 `public/licenses/manrope-NOTICE.txt` within both `admin-ui` and `public-site`; keep
 them with the fonts in UI/container and static-site distributions. The public-site
-artifact serves these notices under `/master-builder/licenses/`. Manrope remains under **SIL Open Font License 1.1**;
+artifact serves these notices under `/licenses/`. Manrope remains under **SIL Open Font License 1.1**;
 the first-party AGPL declaration does not replace its terms. The OFL governs font
 bundling and redistribution independently of the application's commercial-use grant.
 

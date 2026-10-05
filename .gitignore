@@ -49,3 +49,4 @@ public-site/node_modules/
 public-site/.next/
 public-site/out/
 public-site/playwright-report/
+public-site/.vercel/

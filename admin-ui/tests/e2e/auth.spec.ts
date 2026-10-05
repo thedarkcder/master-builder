@@ -852,7 +852,7 @@ for (const path of ["/blog", "/blog/ai-scales-code-faster-than-organisations-sca
 test("self-hosted authentication pages link to the separate public website", async ({ page }) => {
   for (const path of ["/login", "/register", "/forgot-password", "/reset-password?token=sample-token"]) {
     await page.goto(path);
-    await expect(page.getByRole("link", { name: "Public website", exact: true })).toHaveAttribute("href", "https://thedarkcder.github.io/master-builder/");
+    await expect(page.getByRole("link", { name: "Public website", exact: true })).toHaveAttribute("href", "https://master-builder.vercel.app/");
     await expect(page.getByRole("link", { name: "Back to home" })).toHaveCount(0);
   }
 });

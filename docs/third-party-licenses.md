@@ -819,7 +819,7 @@ Added **5 October 2026** from `public-site/package-lock.json`. This separate
 static-site package does not include the dashboard or its authentication
 dependencies. All resolved archives use the public npm registry. Registry license
 labels below include development and optional platform packages; they do not
-certify every compiled dependency. The GitHub Pages artifact contains only
+certify every compiled dependency. The Vercel website artifact contains only
 `public-site/out`, not `node_modules`, Sharp/libvips or native build tools.
 Preserve the client component notices and the Manrope OFL/copyright files, and
 review the actual generated files when changing dependencies. An npm lockfile

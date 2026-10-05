@@ -45,7 +45,7 @@ local modifications and artifact hashes at import time.
 | Source checkout/archive | Exact project LICENSE, THIRD_PARTY_NOTICES, imported-material manifests, upstream notices, source/build scripts and modifications |
 | Python wheel/sdist | Packaged project license/notices; its dependencies are separately installed artifacts, not automatically covered by the project declaration |
 | Backend `app-runtime-base` | Debian packages/fonts, Python native wheels, Node tooling, Codex, Playwright/Chromium, uv and first-party source/build material |
-| Static `public-site/out` GitHub Pages artifact | First-party AGPL source, public npm client components, Manrope OFL/copyright notices and actual built asset provenance; no server, dashboard, private environment or container files |
+| Static `public-site/out` Vercel website artifact | First-party AGPL source, public npm client components, Manrope OFL/copyright notices and actual built asset provenance; no server, dashboard, private environment or container files |
 | `admin-ui` image or emitted web bundle | Node/Alpine packages, npm code/data, Sharp/libvips, client template/library attribution and covered source; container notices alone may not accompany a separately served/downloaded bundle |
 | Android worker image | Everything in the backend plus JDK/Maven/Android packages and separately licensed Google SDK components; public image redistribution remains blocked until component rights are established |
 | Voice worker/transport binary | Go modules, pinned OpenSSL 3 libdave/native constituents, FFmpeg/Opus, Python wheels including Torch/CUDA, models and voice samples; exact final artifact rights/interoperability remain to verify |

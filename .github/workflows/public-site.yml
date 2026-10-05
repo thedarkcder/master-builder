@@ -1,0 +1,39 @@
+name: Public website
+
+on:
+  push:
+    branches: [main]
+    paths: ['public-site/**', '.github/workflows/public-site.yml']
+  pull_request:
+    paths: ['public-site/**', '.github/workflows/public-site.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-site-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: public-site
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: public-site/package-lock.json
+      - run: npm ci
+      - run: npm audit
+      - run: npm run lint
+      - run: npm run build
+      - run: npm run test:static
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e -- --workers=1 --retries=0

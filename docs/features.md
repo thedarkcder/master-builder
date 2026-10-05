@@ -1,6 +1,6 @@
-# What Open Factory includes
+# What Master Builder includes
 
-Open Factory is an open-source software factory for designing cloud-based
+Master Builder is an open-source software factory for designing cloud-based
 engineering automation around your practices, with configurable workflows,
 policies, agent profiles and review gates. This guide describes
 interfaces present in the source code at version `0.1.0`; it does not certify a complete production

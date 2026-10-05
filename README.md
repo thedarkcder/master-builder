@@ -1,50 +1,33 @@
-# Open Factory
+# Master Builder
 
-Open Factory is an open-source software factory: a framework for building your own
-cloud-based engineering automation around the way your team works.
+Master Builder is an open-source software factory for cloud-based engineering automation.
 
-Define your engineering practices as workflows, policies, agent profiles and
-review gates, then run them across your projects and repositories on infrastructure
-you control. The project supplies the orchestration, administration and integration
-tools to build on: work planning, configurable execution workers, project knowledge,
-run inspection, GitHub review and optional deployment, QA and Discord integrations.
+Define your team’s workflows, tools, engineering rules and human review gates.
+Automate planning, development, testing and review on infrastructure you control.
+Extend the supplied orchestration, knowledge and integration tools to fit your practices.
 
-The factory is yours to design and extend. Choose the work it can accept, the tools
-and repositories agents can access, the evidence each stage must produce and the
-points where people must make a decision. Host the API, dashboard and workers in
-your own cloud environment; local development uses the same source-based setup.
-The public website contains project information, while the authenticated dashboard
-belongs to each self-hosted installation.
-
-This is an early project (`0.1.0`). Extension contracts are provisional, and cloud
-provisioning and optional providers need their own validation. Read the
-[readiness report](OPEN_SOURCE_READINESS_REPORT.md) before deploying it. Workers
-execute repository code and development tools: isolate their environments and grant
-credentials only for repositories you authorize. Installation/package identifiers
-currently remain `master-builder`.
+**Early project (`0.1.0`).** Extension contracts are provisional; cloud provisioning
+and optional integrations need separate validation. Isolate workers and limit their
+repository access. See the [readiness report](OPEN_SOURCE_READINESS_REPORT.md).
 
 ## Design your factory
 
 | What you decide | Building blocks included |
 | --- | --- |
-| How your team turns work into a reviewed change | Planning, development, test and review workflows with recorded operations, attempts and human decisions |
-| Which engineering practices agents must follow | Project policy, repository scope, required evidence and instruction resources |
-| How work runs on your infrastructure | Worker processes, agent runtime profiles, governed tool access and platform-specific toolchains |
-| What agents know about each project | Documents, knowledge assets, extracted facts and configured search/retrieval services |
-| How people supervise the factory | Project/team access, run inspection, token telemetry, GitHub pull requests and configured Discord collaboration |
-| What your factory does next | Source extension points for workflow handlers, stages, runtime adapters and QA recorder commands |
+| Delivery process | Planning, development, testing, review and human decisions |
+| Engineering practices | Project policy, repository scope, instructions and required evidence |
+| Runtime environment | Workers, agent profiles, tool access and platform toolchains |
+| Project knowledge | Documents, extracted facts and configured retrieval services |
+| Oversight | Team access, run inspection, token usage and GitHub/Discord integration |
+| Extensions | Workflow handlers, stages, runtime adapters and QA recorder commands |
 
-Start with the supplied interfaces and adapt them to your own engineering process.
-Extensions currently require reviewing and changing source; there is no promise of
-a stable plugin marketplace or a no-code factory designer. See
-[what is included](docs/features.md), the [extension contracts](docs/public-contracts.md#extensions-and-protocols)
-and [configuration](docs/configuration.md). Keep authorization, evidence and state
-transition contracts intact when adding new automation.
+Extend workflows, stages and runtime adapters in source. Interfaces are provisional;
+there is no stable plugin marketplace or no-code designer. See
+[features](docs/features.md), [extension contracts](docs/public-contracts.md#extensions-and-protocols)
+and [configuration](docs/configuration.md).
 
-Use the [local quick start](#quick-start) to learn the system before moving workers
-and backing services into your cloud. The [support matrix](docs/support-matrix.md)
-distinguishes supplied deployment tools from unvalidated integrations and design-only
-cloud packages; the current release is not a managed cloud service.
+Start with the [local quick start](#quick-start). Check the
+[support matrix](docs/support-matrix.md) before deploying in your cloud.
 
 ## Requirements
 
@@ -197,7 +180,7 @@ Run `npm run build` before either browser suite: Playwright starts the productio
 ## Public website
 
 The public project website is a separate static application in [`public-site`](public-site/README.md),
-deployed from `main` to [GitHub Pages](https://thedarkcder.github.io/master-builder/).
+deployed from `main` to [Vercel](https://master-builder.vercel.app/).
 It has no login, session checks, backend connection or hosted dashboard. People run
 the authenticated application on their own infrastructure. The project website
 contains the factory overview, [feature catalogue](docs/features.md), source setup,
@@ -214,14 +197,10 @@ npm run test:e2e
 npm run preview
 ```
 
-Open `http://127.0.0.1:60003/master-builder/`. The generated `public-site/out/`
+Open `http://127.0.0.1:60003/`. The generated `public-site/out/`
 directory is the deployable artifact. The build requires no application credentials.
 GitHub stars use an anonymous request to GitHub, with loading/unavailable states
 and no invented counts. The public privacy page documents hosting logs and that request.
-
-The public brand is **Open Factory**. Repository URLs, clone commands and runtime
-identifiers currently retain `master-builder`; this website cutover does not rename
-installed packages, database records or configuration keys.
 
 ## Architecture
 
@@ -231,7 +210,7 @@ installed packages, database records or configuration keys.
 - `orchestrator/tools`: governed Jira, GitHub, Git and repository bootstrap tools.
 - `orchestrator/prompts`: packaged agent prompt templates.
 - `admin-ui`: self-hosted Next.js UI, Auth.js sessions and backend proxy routes.
-- `public-site`: standalone static project website deployed to GitHub Pages.
+- `public-site`: standalone static project website deployed to Vercel.
 - `discord_live_voice_transport`: optional Go voice transport.
 - `deploy` and `ops`: deployment contracts and observability configuration.
 

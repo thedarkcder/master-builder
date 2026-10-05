@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { test } from "node:test";
-import { BASE_PATH } from "../site.config.mjs";
 
 const output = new URL("../out/", import.meta.url);
 const source = new URL("../", import.meta.url);
@@ -19,14 +18,13 @@ test("exported homepage and privacy are complete static documents without sessio
   }
 });
 
-test("HTML script and stylesheet URLs use the project base path", async () => {
+test("HTML script and stylesheet URLs use the public domain root", async () => {
   for (const name of ["index.html", "privacy/index.html"]) {
     const html = await readFile(new URL(name, output), "utf8");
     const assets = [...html.matchAll(/(?:src|href)="([^\"]*\/_next\/[^\"]+)"/g)];
     assert.ok(assets.length > 0, "Expected emitted scripts and styles");
-    for (const [, path] of assets) assert.ok(path.startsWith(`${BASE_PATH}/_next/`), path);
+    for (const [, path] of assets) assert.ok(path.startsWith("/_next/"), path);
   }
-  assert.equal(await readFile(new URL(".nojekyll", output), "utf8"), "");
 });
 
 test("export contains no application routes, environment files or runtime server bundle", async () => {

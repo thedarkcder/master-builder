@@ -7,7 +7,7 @@ const publicRepository = { full_name: "thedarkcder/master-builder", private: fal
 test("Get Started opens the actual source repository", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
   await page.route(repositoryUrl, (route) => route.fulfill({ contentType: "text/html", body: "<h1>Repository destination</h1>" }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   const start = page.getByRole("link", { name: "Get Started", exact: true }).first();
   await expect(start).toHaveAttribute("href", repositoryUrl);
   await start.click();
@@ -21,7 +21,7 @@ test("GitHub stars show the verified external count and remain a repository link
     expect(route.request().headers().cookie).toBeUndefined();
     await route.fulfill({ json: publicRepository });
   });
-  await page.goto("/master-builder/");
+  await page.goto("/");
   const stars = page.getByRole("link", { name: "Star on GitHub" });
   await expect(stars).toHaveAttribute("href", repositoryUrl);
   await expect(stars).toContainText("137 stars");
@@ -30,14 +30,14 @@ test("GitHub stars show the verified external count and remain a repository link
 
 test("a verified zero star count is shown as zero", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ json: { ...publicRepository, stargazers_count: 0 } }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await expect(page.getByRole("link", { name: "Star on GitHub" })).toContainText("0 stars");
 });
 
 for (const status of [404, 429, 503]) {
   test(`GitHub HTTP ${status} explicitly reports stars unavailable`, async ({ page }) => {
     await page.route(githubApiUrl, (route) => route.fulfill({ status, json: { message: "Unavailable" } }));
-    await page.goto("/master-builder/");
+    await page.goto("/");
     await expect(page.getByRole("link", { name: "Star on GitHub" })).toContainText("Stars unavailable");
     await expect(page.getByRole("link", { name: "Get Started", exact: true }).first()).toBeVisible();
   });
@@ -53,7 +53,7 @@ for (const [name, response] of [
 ] as const) {
   test(`${name} cannot supply a public star count`, async ({ page }) => {
     await page.route(githubApiUrl, (route) => route.fulfill({ json: response }));
-    await page.goto("/master-builder/");
+    await page.goto("/");
     const stars = page.getByRole("link", { name: "Star on GitHub" });
     await expect(stars).toContainText("Stars unavailable");
     await expect(stars).not.toContainText("137 stars");
@@ -63,7 +63,7 @@ for (const [name, response] of [
 
 test("offline GitHub explicitly reports stars unavailable", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.abort("internetdisconnected"));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await expect(page.getByRole("link", { name: "Star on GitHub" })).toContainText("Stars unavailable");
 });
 
@@ -74,7 +74,7 @@ test("pending GitHub evidence shows loading until the external response arrives"
     await responseReady;
     await route.fulfill({ json: publicRepository });
   });
-  await page.goto("/master-builder/", { waitUntil: "domcontentloaded" });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   const stars = page.getByRole("link", { name: "Star on GitHub" });
   await expect(stars).toContainText("Loading stars");
   release();
@@ -85,12 +85,12 @@ for (const width of [375, 1440]) {
   test(`homepage is readable and keyboard navigable at ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 1000 });
     await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
-    await page.goto("/master-builder/");
+    await page.goto("/");
     await expect(page.getByRole("heading", { level: 1, name: "Open-source software factory" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "From work item to reviewed change" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Source setup" })).toBeVisible();
     await expect(page.getByRole("link", { name: "AGPL-3.0-only", exact: true }).first()).toBeVisible();
-    await expect(page.getByText(/Mobile QA, voice and provider deployment integrations are experimental/)).toBeVisible();
+    await expect(page.getByText(/Mobile QA, voice and provider deployment are experimental/)).toBeVisible();
     await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Sign in", exact: true })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -107,15 +107,15 @@ for (const width of [375, 1440]) {
 
 test("a GitHub response that never arrives reaches an explicit unavailable state", async ({ page }) => {
   await page.route(githubApiUrl, () => { /* The external boundary intentionally never responds. */ });
-  await page.goto("/master-builder/", { waitUntil: "domcontentloaded" });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("link", { name: "Star on GitHub" })).toContainText("Stars unavailable", { timeout: 10_000 });
 });
 
 test("homepage privacy navigation explains the anonymous statistics request", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await page.getByRole("link", { name: "Privacy", exact: true }).click();
-  await expect(page).toHaveURL(/\/master-builder\/privacy\/$/);
+  await expect(page).toHaveURL(/\/privacy\/$/);
   await expect(page.getByRole("heading", { name: "Public homepage statistics" })).toBeVisible();
   await expect(page.getByText(/No credentials or cookies are sent with this request/)).toBeVisible();
   await expect(page.getByText(/GitHub receives normal network metadata, such as your IP address/)).toBeVisible();
@@ -124,33 +124,33 @@ test("homepage privacy navigation explains the anonymous statistics request", as
 
 test("malformed GitHub JSON cannot supply a public star count", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ contentType: "application/json", body: "{invalid" }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await expect(page.getByRole("link", { name: "Star on GitHub" })).toContainText("Stars unavailable");
 });
 
 test("leaving the homepage aborts its pending GitHub request", async ({ page }) => {
   await page.route(githubApiUrl, () => { /* Leave the external response pending to observe cancellation. */ });
   const requested = page.waitForRequest(githubApiUrl);
-  await page.goto("/master-builder/", { waitUntil: "domcontentloaded" });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await requested;
   const cancelled = page.waitForEvent("requestfailed", { predicate: (request) => request.url() === githubApiUrl });
   await page.getByRole("link", { name: "Privacy", exact: true }).click();
-  await expect(page).toHaveURL(/\/master-builder\/privacy\/$/);
+  await expect(page).toHaveURL(/\/privacy\/$/);
   expect((await cancelled).failure()?.errorText).toContain("ERR_ABORTED");
   await expect(page.getByRole("link", { name: "Star on GitHub" })).toHaveCount(0);
 });
 
 test("the homepage font notice opens the actual served license", async ({ page }) => {
-  const available = await page.request.get("/master-builder/licenses/manrope-OFL.txt", { maxRedirects: 0 });
+  const available = await page.request.get("/licenses/manrope-OFL.txt", { maxRedirects: 0 });
   expect(available.status()).toBe(200);
-  const copyright = await page.request.get("/master-builder/licenses/manrope-NOTICE.txt", { maxRedirects: 0 });
+  const copyright = await page.request.get("/licenses/manrope-NOTICE.txt", { maxRedirects: 0 });
   expect(copyright.status()).toBe(200);
   expect(await copyright.text()).toContain("Copyright 2019 The Manrope Project Authors");
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   const notice = page.getByRole("link", { name: "Font license", exact: true });
-  await expect(notice).toHaveAttribute("href", "/master-builder/licenses/manrope-OFL.txt");
-  const response = page.waitForResponse((response) => response.url().endsWith("/master-builder/licenses/manrope-OFL.txt"));
+  await expect(notice).toHaveAttribute("href", "/licenses/manrope-OFL.txt");
+  const response = page.waitForResponse((response) => response.url().endsWith("/licenses/manrope-OFL.txt"));
   await notice.click();
   expect((await response).status()).toBe(200);
   await expect(page).toHaveURL(/\/licenses\/manrope-OFL\.txt$/);
@@ -160,7 +160,7 @@ test("the homepage font notice opens the actual served license", async ({ page }
 });
 
 test("unlisted license paths return a real static 404", async ({ page }) => {
-  const response = await page.request.get("/master-builder/licenses/unlisted-file.txt", { maxRedirects: 0 });
+  const response = await page.request.get("/licenses/unlisted-file.txt", { maxRedirects: 0 });
   expect(response.status()).toBe(404);
   expect(response.headers().location).toBeUndefined();
 });
@@ -168,10 +168,10 @@ test("unlisted license paths return a real static 404", async ({ page }) => {
 
 test("homepage documents user capabilities and delivery boundaries without a blog", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Open-source software factory" })).toBeVisible();
-  await expect(page).toHaveTitle("Open Factory — Open-source software factory");
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Open Factory is an extensible open-source software factory. Encode your engineering practices in configurable workflows, agent profiles, policies and review gates; plan, build, test and review software in your own environment.");
+  await expect(page).toHaveTitle("Master Builder — Open-source software factory");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "An open-source software factory. Define your engineering practices and automate planning, development, testing and review in your own cloud.");
   await expect(page.getByRole("main")).not.toContainText(/AI-assisted/i);
   for (const heading of ["Work planning and human decisions", "Workflow execution", "Run inspection and token usage", "Projects and team access", "Project knowledge", "Code review in GitHub", "Deployment previews and QA", "Discord collaboration", "Scheduled team briefings", "From work item to reviewed change", "Source setup", "Status and boundaries", "License"]) {
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
@@ -207,7 +207,7 @@ test("homepage documents user capabilities and delivery boundaries without a blo
 
 test("section navigation exposes delivery flow, worker requirements and local setup", async ({ page }) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "How it works", exact: true }).click();
   await expect(page).toHaveURL(/#architecture$/);
   await expect(page.getByRole("heading", { name: "From work item to reviewed change", exact: true })).toBeInViewport();
@@ -227,7 +227,7 @@ test("section navigation exposes delivery flow, worker requirements and local se
 
 test("homepage feature catalogue explains user tasks across the product", async ({ page }, testInfo) => {
   await page.route(githubApiUrl, (route) => route.fulfill({ status: 404, json: { message: "Not Found" } }));
-  await page.goto("/master-builder/");
+  await page.goto("/");
   await expect(page.getByRole("heading", { name: "What’s included", exact: true })).toBeVisible();
   const catalogue = page.getByRole("navigation", { name: "Feature navigation" });
   for (const [name, id] of [

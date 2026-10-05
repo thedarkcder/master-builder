@@ -140,22 +140,22 @@ historical whitespace/empty values, validates the batch before writing and rejec
 malformed data without logging values. Tests use actually created project IDs and
 real webhook credentials instead of implicit-project assumptions.
 
-The public name is now Open Factory. Its heading, metadata, README and feature
+The project name remains Master Builder. Its heading, metadata, README and feature
 guide describe an extensible open-source software factory for designing
 cloud-based automation around a team’s engineering practices. The public homepage documents concrete user features across planning, workflow
 execution, run inspection/token usage, projects/teams, knowledge, GitHub review,
 previews/QA, Discord and scheduled team briefings. A source-backed feature guide
 records current roles and prerequisites; a compact delivery journey replaces the
 component inventory. The core stack and source setup remain; repository and
-runtime identifiers still use `master-builder` pending a separate rename decision. The blog, its post data and public-route exceptions were removed.
+runtime identifiers use `master-builder`. The blog, its post data and public-route exceptions were removed.
 The revised visual style uses navy, blue, cool gray and monospace labels with responsive code blocks.
 Get Started links to the selected GitHub repository. Stars come only from a
 validated public GitHub response; private, invalid, unavailable and timed-out responses display an explicit
 unavailable state. The anonymous browser request is disclosed on the privacy page.
-At the October 5 check the repository is public. The public website is now
-separate from the self-hosted authenticated application and deployed on GitHub
-Pages. The matched previous public Vercel project has been retired; verification
-evidence below records the completed cutover.
+At the October 5 check the repository is public. The public website is separate
+from the self-hosted authenticated application. An earlier GitHub Pages cutover
+is recorded below; the maintainer subsequently selected Vercel to avoid a personal
+GitHub hostname. The root-path static Vercel replacement is awaiting hosted verification.
 This migration does not change repository visibility or clear remaining runtime
 security, licensing and provider-validation concerns.
 

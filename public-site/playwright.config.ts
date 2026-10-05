@@ -1,5 +1,4 @@
 import { defineConfig, devices } from "@playwright/test";
-import { BASE_PATH } from "./site.config.mjs";
 
 const port = process.env.PUBLIC_SITE_TEST_PORT ?? "4603";
 if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
@@ -16,7 +15,7 @@ export default defineConfig({
   use: { baseURL: origin, trace: "retain-on-failure", screenshot: "only-on-failure", video: "retain-on-failure" },
   webServer: {
     command: "node scripts/serve.mjs",
-    url: `${origin}${BASE_PATH}/`,
+    url: `${origin}/`,
     reuseExistingServer: false,
     env: { PUBLIC_SITE_PORT: port },
   },

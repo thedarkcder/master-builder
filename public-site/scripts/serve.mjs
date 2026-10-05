@@ -1,10 +1,9 @@
-// Local preview of the exact exported files, using the GitHub project Pages URL.
+// Local preview of the exact exported files, at the public domain root.
 // Unknown files return 404; this is not an SPA or application server.
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BASE_PATH } from "../site.config.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../out");
 await stat(join(root, "index.html"));
@@ -36,15 +35,11 @@ const server = createServer(async (request, response) => {
     response.writeHead(400).end("Invalid URL");
     return;
   }
-  if (path === BASE_PATH) {
-    response.writeHead(308, { Location: `${BASE_PATH}/` }).end();
-    return;
-  }
-  if (!path.startsWith(`${BASE_PATH}/`) || path.includes("\\") || path.includes("\0") || path.split("/").includes("..")) {
+  if (path.includes("\\") || path.includes("\0") || path.split("/").includes("..")) {
     response.writeHead(404).end("Not found");
     return;
   }
-  const relative = path.slice(BASE_PATH.length + 1);
+  const relative = path.slice(1);
   const file = resolve(root, relative.endsWith("/") || relative === "" ? `${relative}index.html` : relative);
   if (!file.startsWith(`${root}${sep}`)) {
     response.writeHead(404).end("Not found");
@@ -65,4 +60,4 @@ const server = createServer(async (request, response) => {
     response.end(request.method === "HEAD" ? undefined : notFound);
   }
 });
-server.listen(Number(rawPort), "127.0.0.1", () => console.log(`Static preview: http://127.0.0.1:${rawPort}${BASE_PATH}/`));
+server.listen(Number(rawPort), "127.0.0.1", () => console.log(`Static preview: http://127.0.0.1:${rawPort}/`));
