@@ -152,9 +152,10 @@ The revised visual style uses navy, blue, cool gray and monospace labels with re
 Get Started links to the selected GitHub repository. Stars come only from a
 validated public GitHub response; private, invalid, unavailable and timed-out responses display an explicit
 unavailable state. The anonymous browser request is disclosed on the privacy page.
-At the October 5 check the repository is public. The public website is being
-separated from the self-hosted authenticated application and migrated to GitHub
-Pages; hosted deployment verification is pending.
+At the October 5 check the repository is public. The public website is now
+separate from the self-hosted authenticated application and deployed on GitHub
+Pages. The matched previous public Vercel project has been retired; verification
+evidence below records the completed cutover.
 This migration does not change repository visibility or clear remaining runtime
 security, licensing and provider-validation concerns.
 
@@ -205,7 +206,7 @@ below. No complete hosted CI success is claimed.
 
 | Check | Result |
 | --- | --- |
-| Public website separation (October 5) | Independent post-install production export and route type/TypeScript checks passed; **35 Chromium browser tests**, **6 static artifact tests**, zero failures/skips/retries; npm audit of all site dependencies reports **0 vulnerabilities**. Six reviewed font hashes and byte-exact notices match. Dashboard production build/type checks, **107 browser tests** and **113 unit tests** pass; the browser suite uses backend mocks except actual auth/session/routing checks and does not prove live backend delivery. **37 attribution/distribution/native manifest regressions** pass. Candidate Gitleaks scan: **1,638 files / 17.64MB**, zero findings. Hosted Pages deployment is pending. |
+| Public website separation (October 5) | Independent post-install production export and route type/TypeScript checks passed; **35 Chromium browser tests**, **6 static artifact tests**, zero failures/skips/retries; npm audit of all site dependencies reports **0 vulnerabilities**. Six reviewed font hashes and byte-exact notices match. Dashboard production build/type checks, **107 browser tests** and **113 unit tests** pass; the browser suite uses backend mocks except actual auth/session/routing checks and does not prove live backend delivery. **37 attribution/distribution/native manifest regressions** pass. Candidate Gitleaks scan: **1,638 files / 17.64MB**, zero findings. Hosted [Pages run 37282067537](https://github.com/thedarkcder/master-builder/actions/runs/37282067537) passed build and deployment on source `51501f3c`. Actual HTTPS homepage/privacy, ten script/style/preload assets and six font hashes passed; no Set-Cookie/account links, and five absent application/blog paths returned 404. GitHub repository homepage now points to Pages. Exact matched old Vercel project deletion returned 204; project API and its former public URL returned 404. Other Vercel projects were not touched. The Pages upload action emits an upstream Node20 deprecation warning; the runner executes it on Node24 and deployment succeeded. These results do not clear the separately recorded backend suite failures or distribution blockers. |
 | Native/source/material/package contract regressions | **75 passed** in the final combined eight-file run. |
 | Admission/security/configuration/Maven/source contracts | **110 passed**, two dependency deprecation warnings; separate actual-scanner canaries **3 passed**. |
 | Discord public API and persisted JSON | **11 webhook tests passed** with three validation subtests; **9 migration tests passed**; Alembic checks passed. Tests include omission/null/replay, unauthorized use and no partial write on malformed later records. |
