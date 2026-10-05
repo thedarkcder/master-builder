@@ -2,6 +2,11 @@
 
 No public releases have been published by this preparation task.
 
+- Use Open Factory as the public name and explain how teams design and extend
+  cloud-based engineering automation using workflows, policy, agents and gates.
+- Separate the static public website from the self-hosted dashboard; deploy only
+  `public-site/out` to GitHub Pages and retain application authentication privately.
+
 ## Unreleased
 
 - Make GitHub Issues the repository development backlog and remove private Jira

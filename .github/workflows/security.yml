@@ -109,9 +109,12 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    strategy:
+      matrix:
+        package: [admin-ui, public-site]
     defaults:
       run:
-        working-directory: admin-ui
+        working-directory: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

@@ -221,7 +221,8 @@ The `minio` Python SDK is an S3 client and does not bundle the removed MinIO ser
 
 ## Manrope UI font
 
-The administration UI uses the third-party Manrope font through `next/font/google`.
+The administration UI and standalone public site use the third-party Manrope font
+through `next/font/google`.
 The observed build contains six WOFF2 subsets reporting version **4.504** and
 `Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)`.
 Their family/version/copyright match the reviewed official Google Fonts source at
@@ -231,8 +232,9 @@ The exact unmodified upstream [OFL/copyright file](third_party/licenses/manrope-
 and [companion font notice](third_party/licenses/manrope-4.504/NOTICE.txt) are retained.
 The OFL file's original 2018 notice and the actual font metadata's 2019 notice are
 both preserved. Public UI mirrors are `public/licenses/manrope-OFL.txt` and
-`public/licenses/manrope-NOTICE.txt` within `admin-ui`; keep them with the fonts in
-UI/container distributions. Manrope remains under **SIL Open Font License 1.1**;
+`public/licenses/manrope-NOTICE.txt` within both `admin-ui` and `public-site`; keep
+them with the fonts in UI/container and static-site distributions. The public-site
+artifact serves these notices under `/master-builder/licenses/`. Manrope remains under **SIL Open Font License 1.1**;
 the first-party AGPL declaration does not replace its terms. The OFL governs font
 bundling and redistribution independently of the application's commercial-use grant.
 

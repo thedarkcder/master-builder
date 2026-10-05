@@ -1,0 +1,1 @@
+export { BASE_PATH, REPOSITORY_NAME, REPOSITORY_URL, REPOSITORY_API_URL } from "../site.config.mjs";

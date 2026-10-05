@@ -1,0 +1,33 @@
+{
+  "name": "master-builder-public-site",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev --webpack -p 60003",
+    "lint": "next typegen && tsc --noEmit",
+    "build": "next build",
+    "preview": "node scripts/serve.mjs",
+    "test:e2e": "playwright test",
+    "test:static": "node --test tests/static-export.test.mjs"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "lucide-react": "0.469.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2",
+    "@types/node": "22.19.10",
+    "@types/react": "18.3.28",
+    "@types/react-dom": "18.3.7",
+    "tailwindcss": "4.3.3",
+    "postcss": "8.5.23",
+    "typescript": "5.9.3",
+    "@tailwindcss/postcss": "4.3.3"
+  }
+}

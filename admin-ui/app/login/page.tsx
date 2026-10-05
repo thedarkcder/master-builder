@@ -1,5 +1,7 @@
 "use client";
 
+import { PUBLIC_SITE_URL } from "@/lib/public-site";
+
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -118,8 +120,8 @@ function LoginPageInner() {
 
       <div className="relative w-full max-w-md">
         <div className="mb-6">
-          <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
-            Back to home
+          <Link href={PUBLIC_SITE_URL} className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+            Public website
           </Link>
         </div>
 

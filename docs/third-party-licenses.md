@@ -286,7 +286,7 @@ native code licenses; inspect actual release wheels before redistribution.
 | yarl | 1.23.0 | Apache-2.0 |
 
 
-## npm lock inventory
+## Administration UI npm lock inventory
 
 Optional/platform packages and development dependencies are included.
 
@@ -811,3 +811,126 @@ Includes transitive/test modules in the module graph; licenses inspected in down
 | golang.org/x/term | v0.40.0 | BSD-3-Clause |
 | golang.org/x/text | v0.34.0 | BSD-3-Clause |
 | gopkg.in/yaml.v3 | v3.0.1 | MIT AND Apache-2.0 (different portions) |
+
+
+## Public website npm lock inventory
+
+Added **5 October 2026** from `public-site/package-lock.json`. This separate
+static-site package does not include the dashboard or its authentication
+dependencies. All resolved archives use the public npm registry. Registry license
+labels below include development and optional platform packages; they do not
+certify every compiled dependency. The GitHub Pages artifact contains only
+`public-site/out`, not `node_modules`, Sharp/libvips or native build tools.
+Preserve the client component notices and the Manrope OFL/copyright files, and
+review the actual generated files when changing dependencies. An npm lockfile
+inventory does not by itself satisfy artifact attribution obligations.
+
+| Package installation path | Locked version | Declared license |
+| --- | --- | --- |
+| @alloc/quick-lru | 5.3.0 | MIT |
+| @emnapi/runtime | 1.11.3 | MIT |
+| @img/colour | 1.1.0 | MIT |
+| @img/sharp-darwin-arm64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-darwin-x64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-freebsd-wasm32 | 0.35.5 | Apache-2.0 |
+| @img/sharp-libvips-darwin-arm64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-darwin-x64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-arm | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-arm64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-ppc64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-riscv64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-s390x | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linux-x64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linuxmusl-arm64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-libvips-linuxmusl-x64 | 1.3.4 | LGPL-3.0-or-later |
+| @img/sharp-linux-arm | 0.35.5 | Apache-2.0 |
+| @img/sharp-linux-arm64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-linux-ppc64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-linux-riscv64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-linux-s390x | 0.35.5 | Apache-2.0 |
+| @img/sharp-linux-x64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-linuxmusl-arm64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-linuxmusl-x64 | 0.35.5 | Apache-2.0 |
+| @img/sharp-wasm32 | 0.35.5 | Apache-2.0 AND LGPL-3.0-or-later AND MIT |
+| @img/sharp-webcontainers-wasm32 | 0.35.5 | Apache-2.0 |
+| @img/sharp-win32-arm64 | 0.35.5 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-win32-ia32 | 0.35.5 | Apache-2.0 AND LGPL-3.0-or-later |
+| @img/sharp-win32-x64 | 0.35.5 | Apache-2.0 AND LGPL-3.0-or-later |
+| @jridgewell/gen-mapping | 0.3.13 | MIT |
+| @jridgewell/remapping | 2.3.5 | MIT |
+| @jridgewell/resolve-uri | 3.1.2 | MIT |
+| @jridgewell/sourcemap-codec | 1.6.0 | MIT |
+| @jridgewell/trace-mapping | 0.3.31 | MIT |
+| @next/env | 16.3.8 | MIT |
+| @next/swc-darwin-arm64 | 16.3.8 | MIT |
+| @next/swc-darwin-x64 | 16.3.8 | MIT |
+| @next/swc-linux-arm64-gnu | 16.3.8 | MIT |
+| @next/swc-linux-arm64-musl | 16.3.8 | MIT |
+| @next/swc-linux-x64-gnu | 16.3.8 | MIT |
+| @next/swc-linux-x64-musl | 16.3.8 | MIT |
+| @next/swc-win32-arm64-msvc | 16.3.8 | MIT |
+| @next/swc-win32-x64-msvc | 16.3.8 | MIT |
+| @playwright/test | 1.58.2 | Apache-2.0 |
+| @swc/helpers | 0.5.23 | Apache-2.0 |
+| @tailwindcss/node | 4.3.3 | MIT |
+| @tailwindcss/oxide | 4.3.3 | MIT |
+| @tailwindcss/oxide-android-arm64 | 4.3.3 | MIT |
+| @tailwindcss/oxide-darwin-arm64 | 4.3.3 | MIT |
+| @tailwindcss/oxide-darwin-x64 | 4.3.3 | MIT |
+| @tailwindcss/oxide-freebsd-x64 | 4.3.3 | MIT |
+| @tailwindcss/oxide-linux-arm-gnueabihf | 4.3.3 | MIT |
+| @tailwindcss/oxide-linux-arm64-gnu | 4.3.3 | MIT |
+| @tailwindcss/oxide-linux-arm64-musl | 4.3.3 | MIT |
+| @tailwindcss/oxide-linux-x64-gnu | 4.3.3 | MIT |
+| @tailwindcss/oxide-linux-x64-musl | 4.3.3 | MIT |
+| @tailwindcss/oxide-wasm32-wasi | 4.3.3 | MIT |
+| @tailwindcss/oxide-win32-arm64-msvc | 4.3.3 | MIT |
+| @tailwindcss/oxide-win32-x64-msvc | 4.3.3 | MIT |
+| @tailwindcss/postcss | 4.3.3 | MIT |
+| @types/node | 22.19.10 | MIT |
+| @types/prop-types | 15.7.15 | MIT |
+| @types/react | 18.3.28 | MIT |
+| @types/react-dom | 18.3.7 | MIT |
+| baseline-browser-mapping | 2.11.27 | Apache-2.0 |
+| caniuse-lite | 1.0.30001814 | CC-BY-4.0 |
+| client-only | 0.0.1 | MIT |
+| csstype | 3.2.3 | MIT |
+| detect-libc | 2.1.2 | Apache-2.0 |
+| enhanced-resolve | 5.26.0 | MIT |
+| fsevents | 2.3.2 | MIT |
+| graceful-fs | 4.2.11 | ISC |
+| jiti | 2.7.0 | MIT |
+| js-tokens | 4.0.0 | MIT |
+| lightningcss | 1.32.0 | MPL-2.0 |
+| lightningcss-android-arm64 | 1.32.0 | MPL-2.0 |
+| lightningcss-darwin-arm64 | 1.32.0 | MPL-2.0 |
+| lightningcss-darwin-x64 | 1.32.0 | MPL-2.0 |
+| lightningcss-freebsd-x64 | 1.32.0 | MPL-2.0 |
+| lightningcss-linux-arm-gnueabihf | 1.32.0 | MPL-2.0 |
+| lightningcss-linux-arm64-gnu | 1.32.0 | MPL-2.0 |
+| lightningcss-linux-arm64-musl | 1.32.0 | MPL-2.0 |
+| lightningcss-linux-x64-gnu | 1.32.0 | MPL-2.0 |
+| lightningcss-linux-x64-musl | 1.32.0 | MPL-2.0 |
+| lightningcss-win32-arm64-msvc | 1.32.0 | MPL-2.0 |
+| lightningcss-win32-x64-msvc | 1.32.0 | MPL-2.0 |
+| loose-envify | 1.4.0 | MIT |
+| lucide-react | 0.469.0 | ISC |
+| magic-string | 0.30.21 | MIT |
+| nanoid | 3.3.19 | MIT |
+| next | 16.3.8 | MIT |
+| picocolors | 1.1.1 | ISC |
+| playwright | 1.58.2 | Apache-2.0 |
+| playwright-core | 1.58.2 | Apache-2.0 |
+| postcss | 8.5.23 | MIT |
+| react | 18.3.1 | MIT |
+| react-dom | 18.3.1 | MIT |
+| scheduler | 0.23.2 | MIT |
+| semver | 7.8.5 | ISC |
+| sharp | 0.35.5 | Apache-2.0 |
+| source-map-js | 1.2.2 | BSD-3-Clause |
+| styled-jsx | 5.1.6 | MIT |
+| tailwindcss | 4.3.3 | MIT |
+| tapable | 2.3.3 | MIT |
+| tslib | 2.8.1 | 0BSD |
+| typescript | 5.9.3 | Apache-2.0 |
+| undici-types | 6.21.0 | MIT |

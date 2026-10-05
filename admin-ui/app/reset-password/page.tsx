@@ -1,5 +1,7 @@
 "use client";
 
+import { PUBLIC_SITE_URL } from "@/lib/public-site";
+
 import Link from "next/link";
 import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -56,8 +58,8 @@ function ResetPasswordPageInner() {
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 px-4 py-8">
       <div className="relative w-full max-w-md rounded-2xl border border-white/10 bg-white/5 p-8 shadow-2xl backdrop-blur-xl">
-        <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
-          Back to home
+        <Link href={PUBLIC_SITE_URL} className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+          Public website
         </Link>
         <h1 className="mt-6 text-xl font-semibold text-white">Choose a new password</h1>
         <p className="mt-2 text-sm text-slate-400">Set a new password for your Master Builder account.</p>

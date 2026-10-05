@@ -37,3 +37,7 @@ tmp
 *.log
 *.pid
 *.bkp
+
+public-site/node_modules
+public-site/.next
+public-site/out

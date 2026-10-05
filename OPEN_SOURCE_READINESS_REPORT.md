@@ -140,19 +140,23 @@ historical whitespace/empty values, validates the batch before writing and rejec
 malformed data without logging values. Tests use actually created project IDs and
 real webhook credentials instead of implicit-project assumptions.
 
-Master Builder is described as an open-source software factory in its public
-heading, metadata, README and feature guide. The public homepage documents concrete user features across planning, workflow
+The public name is now Open Factory. Its heading, metadata, README and feature
+guide describe an extensible open-source software factory for designing
+cloud-based automation around a team’s engineering practices. The public homepage documents concrete user features across planning, workflow
 execution, run inspection/token usage, projects/teams, knowledge, GitHub review,
 previews/QA, Discord and scheduled team briefings. A source-backed feature guide
 records current roles and prerequisites; a compact delivery journey replaces the
-component inventory. The core stack and source setup remain, keeping the Master
-Builder name. The blog, its post data and public-route exceptions were removed.
+component inventory. The core stack and source setup remain; repository and
+runtime identifiers still use `master-builder` pending a separate rename decision. The blog, its post data and public-route exceptions were removed.
 The revised visual style uses navy, blue, cool gray and monospace labels with responsive code blocks.
 Get Started links to the selected GitHub repository. Stars come only from a
 validated public GitHub response; private, invalid, unavailable and timed-out responses display an explicit
 unavailable state. The anonymous browser request is disclosed on the privacy page.
-The repository is still private, so anonymous GitHub navigation and live numeric
-statistics are not yet usable. No publication or hosted deployment was performed.
+At the October 5 check the repository is public. The public website is being
+separated from the self-hosted authenticated application and migrated to GitHub
+Pages; hosted deployment verification is pending.
+This migration does not change repository visibility or clear remaining runtime
+security, licensing and provider-validation concerns.
 
 Local navigation now shares one canonical root-relative URL validator across the
 sign-in proxy, login page, authentication provider and archived-workspace page.
@@ -201,6 +205,7 @@ below. No complete hosted CI success is claimed.
 
 | Check | Result |
 | --- | --- |
+| Public website separation (October 5) | Independent post-install production export and route type/TypeScript checks passed; **35 Chromium browser tests**, **6 static artifact tests**, zero failures/skips/retries; npm audit of all site dependencies reports **0 vulnerabilities**. Six reviewed font hashes and byte-exact notices match. Dashboard production build/type checks, **107 browser tests** and **113 unit tests** pass; the browser suite uses backend mocks except actual auth/session/routing checks and does not prove live backend delivery. **37 attribution/distribution/native manifest regressions** pass. Candidate Gitleaks scan: **1,638 files / 17.64MB**, zero findings. Hosted Pages deployment is pending. |
 | Native/source/material/package contract regressions | **75 passed** in the final combined eight-file run. |
 | Admission/security/configuration/Maven/source contracts | **110 passed**, two dependency deprecation warnings; separate actual-scanner canaries **3 passed**. |
 | Discord public API and persisted JSON | **11 webhook tests passed** with three validation subtests; **9 migration tests passed**; Alembic checks passed. Tests include omission/null/replay, unauthorized use and no partial write on malformed later records. |

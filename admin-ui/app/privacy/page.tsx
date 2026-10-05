@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-const LAST_UPDATED = "October 3, 2026";
+const LAST_UPDATED = "October 5, 2026";
 
 export default function PrivacyPage() {
   return (
@@ -32,14 +32,6 @@ export default function PrivacyPage() {
             <p>
               Secrets are referenced via server-side environment variables and OAuth tokens are stored encrypted at
               rest. Do not enter raw secrets directly into tenant forms.
-            </p>
-          </section>
-          <section>
-            <h2 className="font-medium text-foreground">Public homepage statistics</h2>
-            <p>
-              Your browser contacts api.github.com to read the public Master Builder repository&apos;s star count.
-              No credentials or cookies are sent with this request. GitHub receives normal network metadata, such as your IP address.
-              See the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" className="text-primary underline underline-offset-2">GitHub privacy statement</a> for its data practices.
             </p>
           </section>
           <section>

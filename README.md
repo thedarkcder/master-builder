@@ -1,8 +1,50 @@
-# Master Builder
+# Open Factory
 
-Master Builder is an open-source software factory. Self-host it to coordinate planning, development, testing and review with configurable agents and workflows across projects and teams. It connects Jira and GitHub, queues work for execution workers, records workflow state and evidence, and provides a Next.js administration interface. Optional integrations support Discord, knowledge search, deployment previews and QA recordings.
+Open Factory is an open-source software factory: a framework for building your own
+cloud-based engineering automation around the way your team works.
 
-This is an early project (`0.1.0`). Read the [readiness report](OPEN_SOURCE_READINESS_REPORT.md) before publishing or deploying it. API schemas and extension interfaces are provisional. Workers execute repository code and development tools: use isolated machines and grant credentials only for repositories you authorize.
+Define your engineering practices as workflows, policies, agent profiles and
+review gates, then run them across your projects and repositories on infrastructure
+you control. The project supplies the orchestration, administration and integration
+tools to build on: work planning, configurable execution workers, project knowledge,
+run inspection, GitHub review and optional deployment, QA and Discord integrations.
+
+The factory is yours to design and extend. Choose the work it can accept, the tools
+and repositories agents can access, the evidence each stage must produce and the
+points where people must make a decision. Host the API, dashboard and workers in
+your own cloud environment; local development uses the same source-based setup.
+The public website contains project information, while the authenticated dashboard
+belongs to each self-hosted installation.
+
+This is an early project (`0.1.0`). Extension contracts are provisional, and cloud
+provisioning and optional providers need their own validation. Read the
+[readiness report](OPEN_SOURCE_READINESS_REPORT.md) before deploying it. Workers
+execute repository code and development tools: isolate their environments and grant
+credentials only for repositories you authorize. Installation/package identifiers
+currently remain `master-builder`.
+
+## Design your factory
+
+| What you decide | Building blocks included |
+| --- | --- |
+| How your team turns work into a reviewed change | Planning, development, test and review workflows with recorded operations, attempts and human decisions |
+| Which engineering practices agents must follow | Project policy, repository scope, required evidence and instruction resources |
+| How work runs on your infrastructure | Worker processes, agent runtime profiles, governed tool access and platform-specific toolchains |
+| What agents know about each project | Documents, knowledge assets, extracted facts and configured search/retrieval services |
+| How people supervise the factory | Project/team access, run inspection, token telemetry, GitHub pull requests and configured Discord collaboration |
+| What your factory does next | Source extension points for workflow handlers, stages, runtime adapters and QA recorder commands |
+
+Start with the supplied interfaces and adapt them to your own engineering process.
+Extensions currently require reviewing and changing source; there is no promise of
+a stable plugin marketplace or a no-code factory designer. See
+[what is included](docs/features.md), the [extension contracts](docs/public-contracts.md#extensions-and-protocols)
+and [configuration](docs/configuration.md). Keep authorization, evidence and state
+transition contracts intact when adding new automation.
+
+Use the [local quick start](#quick-start) to learn the system before moving workers
+and backing services into your cloud. The [support matrix](docs/support-matrix.md)
+distinguishes supplied deployment tools from unvalidated integrations and design-only
+cloud packages; the current release is not a managed cloud service.
 
 ## Requirements
 
@@ -137,23 +179,7 @@ uv run --frozen python scripts/quality/check_no_todo_markers.py
 uv build
 ```
 
-Frontend checks:
-
-The public homepage leads with [what Master Builder includes](docs/features.md):
-planning and human decisions, workflow execution, run inspection/token usage,
-project/team access, knowledge, GitHub review, previews/QA, Discord collaboration
-and scheduled team briefings. A compact delivery journey, source links and local
-setup follow the feature catalogue; experimental integrations are labelled.
-**Get Started** links to this repository. Its GitHub star control reads the public repository count directly
-from GitHub without credentials or cookies. It displays loading or **Stars
-unavailable** when the repository is private, the response is invalid, or GitHub
-cannot be reached; no substitute count is shown. The [privacy page](admin-ui/app/privacy/page.tsx)
-describes this browser request. Homepage browser tests mock only the external
-GitHub response and navigation destination.
-
-Use the UI configuration generated in the quick start. Existing checkouts must add
-`ORCHESTRATOR_API_BASE_URL=http://localhost:60001` to their private
-`admin-ui/.env.local` before building; missing configuration stops the build.
+Self-hosted dashboard checks:
 
 ```bash
 cd admin-ui
@@ -167,6 +193,36 @@ npm run test:e2e
 
 Run `npm run build` before either browser suite: Playwright starts the production build with `next start` and fails if that build is absent. The default Playwright suite mocks backend responses; it validates frontend behavior, not end-to-end backend correctness. `npm run test:e2e:live` exercises a real disposable backend and database; read [CONTRIBUTING.md](CONTRIBUTING.md) before running it. Some baseline checks may fail; the readiness report records verification results and publication blockers.
 
+
+## Public website
+
+The public project website is a separate static application in [`public-site`](public-site/README.md),
+deployed from `main` to [GitHub Pages](https://thedarkcder.github.io/master-builder/).
+It has no login, session checks, backend connection or hosted dashboard. People run
+the authenticated application on their own infrastructure. The project website
+contains the factory overview, [feature catalogue](docs/features.md), source setup,
+GitHub links and public-site privacy information.
+
+```bash
+cd public-site
+npm ci
+npm run lint
+npm run build
+npm run test:static
+npx playwright install chromium
+npm run test:e2e
+npm run preview
+```
+
+Open `http://127.0.0.1:60003/master-builder/`. The generated `public-site/out/`
+directory is the deployable artifact. The build requires no application credentials.
+GitHub stars use an anonymous request to GitHub, with loading/unavailable states
+and no invented counts. The public privacy page documents hosting logs and that request.
+
+The public brand is **Open Factory**. Repository URLs, clone commands and runtime
+identifiers currently retain `master-builder`; this website cutover does not rename
+installed packages, database records or configuration keys.
+
 ## Architecture
 
 - `orchestrator/api`: FastAPI routes, authentication and request schemas.
@@ -174,7 +230,8 @@ Run `npm run build` before either browser suite: Playwright starts the productio
 - `orchestrator/storage`: SQLAlchemy models, PostgreSQL persistence and Alembic migrations.
 - `orchestrator/tools`: governed Jira, GitHub, Git and repository bootstrap tools.
 - `orchestrator/prompts`: packaged agent prompt templates.
-- `admin-ui`: Next.js UI, Auth.js sessions and backend proxy routes.
+- `admin-ui`: self-hosted Next.js UI, Auth.js sessions and backend proxy routes.
+- `public-site`: standalone static project website deployed to GitHub Pages.
 - `discord_live_voice_transport`: optional Go voice transport.
 - `deploy` and `ops`: deployment contracts and observability configuration.
 

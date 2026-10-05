@@ -1,5 +1,7 @@
 "use client";
 
+import { PUBLIC_SITE_URL } from "@/lib/public-site";
+
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -56,8 +58,8 @@ export default function RegisterPage() {
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.22),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(59,130,246,0.22),_transparent_40%),linear-gradient(135deg,#0f172a,#111827,#1f2937)] px-4 py-8">
       <div className="relative w-full max-w-lg">
         <div className="mb-6">
-          <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
-            Back to home
+          <Link href={PUBLIC_SITE_URL} className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+            Public website
           </Link>
         </div>
 

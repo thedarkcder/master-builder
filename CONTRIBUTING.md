@@ -95,3 +95,11 @@ Contributions are accepted under **AGPL-3.0-only**, the project's existing licen
 ## Releases
 
 See [CHANGELOG.md](CHANGELOG.md) and [OPEN_SOURCE_READINESS_REPORT.md](OPEN_SOURCE_READINESS_REPORT.md). Maintainers should verify a fresh checkout, resolve licensing/attribution and history blockers, update both package versions, record compatibility and migration notes, and tag the reviewed commit. Publishing a tag or source archive does not automatically publish a Python/npm package or deployment.
+
+## Public website
+
+The Open Factory project website is built separately in `public-site`. It has no
+application login or backend configuration. See its [development guide](public-site/README.md)
+for static build, artifact validation and browser checks. Changes on `main` deploy
+the tested static export through the Public website GitHub Actions workflow.
+Dashboard and worker changes remain part of the self-hosted application.

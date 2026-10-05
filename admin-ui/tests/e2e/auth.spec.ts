@@ -10,14 +10,6 @@ import {
 
 test.describe.configure({ mode: "serial" });
 
-// The public homepage observer reads only this external repository boundary.
-test.beforeEach(async ({ page }) => {
-  await page.route("https://api.github.com/repos/thedarkcder/master-builder", (route) =>
-    route.fulfill({ status: 404, json: { message: "Not Found" } })
-  );
-});
-
-
 type RuntimeMatrixEntry = {
   runtimeKind: string;
   createModelValue: string;
@@ -829,15 +821,18 @@ test("redirects unauthenticated access to login for protected routes", async ({ 
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
-test("keeps the public home page available without redirecting to login", async ({ page }) => {
+test("self-hosted dashboard root sends anonymous visitors to its own login", async ({ page }) => {
   await page.goto("/");
+  await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Open-source software factory" })).toHaveCount(0);
+});
 
-  await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Open-source software factory" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What’s included" })).toBeVisible();
-  await expect(page.locator('a[href^="/blog"]')).toHaveCount(0);
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Master Builder is an open-source software factory for planning, development, testing and GitHub review, with project knowledge and configurable agent workflows.");
-  await expect(page.locator('a[href="/login"]').first()).toBeVisible();
+test("self-hosted dashboard root sends a signed administrator to its dashboard", async ({ page }) => {
+  await seedAdminSession(page);
+  await installBffApiMocks(page, []);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/platform\/dashboard$/);
 });
 
 for (const path of ["/blog", "/blog/ai-scales-code-faster-than-organisations-scale-control"]) {
@@ -854,19 +849,19 @@ for (const path of ["/blog", "/blog/ai-scales-code-faster-than-organisations-sca
   });
 }
 
-test("keeps auth pages linked back to the public home page", async ({ page }) => {
-  await page.goto("/login");
-  await expect(page.getByRole("link", { name: "Back to home" })).toBeVisible();
-  await expect(page.getByText("AI Orchestration Platform")).toHaveCount(0);
-  await page.getByRole("link", { name: "Back to home" }).click();
-  await expect(page).toHaveURL(/\/$/);
+test("self-hosted authentication pages link to the separate public website", async ({ page }) => {
+  for (const path of ["/login", "/register", "/forgot-password", "/reset-password?token=sample-token"]) {
+    await page.goto(path);
+    await expect(page.getByRole("link", { name: "Public website", exact: true })).toHaveAttribute("href", "https://thedarkcder.github.io/master-builder/");
+    await expect(page.getByRole("link", { name: "Back to home" })).toHaveCount(0);
+  }
+});
 
-  await page.goto("/register");
-  await expect(page.getByRole("link", { name: "Back to home" })).toBeVisible();
-
-  await page.goto("/forgot-password");
-  await expect(page.getByRole("link", { name: "Back to home" })).toBeVisible();
-
-  await page.goto("/reset-password?token=sample-token");
-  await expect(page.getByRole("link", { name: "Back to home" })).toBeVisible();
+test("admin font notices remain available and unknown notice paths require authentication", async ({ page }) => {
+  const notice = await page.request.get("/licenses/manrope-OFL.txt", { maxRedirects: 0 });
+  expect(notice.status()).toBe(200);
+  expect(await notice.text()).toContain("SIL OPEN FONT LICENSE Version 1.1");
+  const unknown = await page.request.get("/licenses/private.txt", { maxRedirects: 0 });
+  expect(unknown.status()).toBe(307);
+  expect(new URL(unknown.headers().location, unknown.url()).pathname).toBe("/login");
 });

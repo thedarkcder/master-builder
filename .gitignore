@@ -43,3 +43,9 @@ admin-ui/.next-playwright
 
 # Python distribution build staging (wheel/sdist are in dist/).
 /build/
+
+# Standalone static public website build and browser artifacts.
+public-site/node_modules/
+public-site/.next/
+public-site/out/
+public-site/playwright-report/
